@@ -72,6 +72,12 @@ class GNWorkstation(WorkstationBase):
         super().__init__(deck=deck, **kwargs)
         self._url = url
 
+        if self.deck is None or isinstance(self.deck, dict):
+            from unilabos.devices.workstation.GN.decks import GN_deck
+
+            self.deck = GN_deck(name="GN_deck", setup=True)
+            logger.info("✓ GN Deck 已按默认 WareHouse 布局初始化")
+
         # 预热 PLC 单例：子设备再调用 GnPlcClient.get_or_create(url) 会命中此实例
         self.plc: GnPlcClient = GnPlcClient.get_or_create(
             url=url,
@@ -161,6 +167,31 @@ class GNWorkstation(WorkstationBase):
     # ==================================================================
     # WorkstationBase 契约（暂未实现整站级工作流；由子设备各自 @action 组合）
     # ==================================================================
+
+    @not_action
+    def post_init(self, ros_node) -> None:
+        super().post_init(ros_node)
+        self._ros_node = ros_node
+        if self.deck is not None and hasattr(self.deck, "setup") and not getattr(self.deck, "children", None):
+            self.deck.setup()
+            logger.info("✓ GN Deck 子物料为空，已执行 setup() 填充 WareHouse")
+
+        if not (hasattr(ros_node, "resource_tracker") and ros_node.resource_tracker):
+            logger.warning("resource_tracker 不存在，无法注册 GN Deck")
+            return
+
+        ros_node.resource_tracker.add_resource(self.deck)
+        try:
+            from unilabos.ros.nodes.base_device_node import ROS2DeviceNode
+
+            ROS2DeviceNode.run_async_func(
+                ros_node.update_resource,
+                True,
+                resources=[self.deck],
+            )
+            logger.info("GN Deck 已上传到云端")
+        except Exception as exc:
+            logger.error(f"GN Deck 上传失败: {exc}")
 
     @not_action
     def _execute_workflow_impl(self, workflow_name: str, parameters):
