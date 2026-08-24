@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
+
+import pytest
 
 from unilabos.app.edge_control.client import (
     EdgeControlClient,
@@ -84,8 +87,17 @@ def test_edge_control_settings_derives_split_scheduler_address(
 
 class FakeHostNode:
     def __init__(self) -> None:
+        """初始化协议测试所需的 HostNode 行为记录器。
+
+        参数和返回值为空；各列表分别记录动作派发、执行未知处置和物理结算
+        退役身份，``dispatch_block_reasons`` 保存设备当前阻断投影。
+        """
+
         self.started: List[Dict[str, Any]] = []
+        self.cancel_requests: List[str] = []
+        self.cancelable_jobs: set[str] = set()
         self.unknown_resolutions: List[Dict[str, str]] = []
+        self.retired_commands: List[str] = []
         self.dispatch_block_reasons: Dict[str, str] = {}
 
     def send_goal(
@@ -105,6 +117,16 @@ class FakeHostNode:
                 "server_info": server_info,
             }
         )
+
+    def cancel_goal(self, job_uuid: str) -> bool:
+        """记录对运行中工作流节点作业的取消请求。
+
+        ``job_uuid`` 是作业身份；测试显式标记可取消时返回 ``True``，
+        否则模拟重启后内存 goal 映射丢失。
+        """
+
+        self.cancel_requests.append(job_uuid)
+        return job_uuid in self.cancelable_jobs
 
     def resolve_unknown_device_command(
         self,
@@ -134,9 +156,23 @@ class FakeHostNode:
         return self.dispatch_block_reasons.get(device_id, "")
 
     def device_unknown_command_ids(self, device_id: str) -> List[str]:
+        """从展示阻断投影还原测试设备的结构化 UNKNOWN 命令集合。
+
+        ``device_id`` 是本地设备身份；返回尚未完成物理结算的命令列表。
+        """
+
         reason = self.device_dispatch_block_reason(device_id)
         prefix = "unresolved_unknown_command:"
         return reason.removeprefix(prefix).split(",") if reason.startswith(prefix) else []
+
+    def retire_settled_device_command(self, device_command_id: str) -> int:
+        """记录 Backend ACK 触发的设备账本退役广播。
+
+        ``device_command_id`` 是稳定物理命令身份；返回一个模拟退役计数。
+        """
+
+        self.retired_commands.append(device_command_id)
+        return 1
 
 
 class FakeRegistrationResources:
@@ -185,6 +221,11 @@ class FakeRegistrationHostNode:
         return ""
 
     def device_unknown_command_ids(self, device_id: str) -> List[str]:
+        """返回注册竞态测试中指定设备的结构化 UNKNOWN 命令集合。
+
+        ``device_id`` 是注册资源身份；已知机器人返回一条稳定命令，其余返回空列表。
+        """
+
         if device_id == "robot-01":
             return ["workflow-node-job:00000000-0000-4000-8000-000000000001"]
         return []
@@ -665,16 +706,45 @@ def test_material_changed_is_acknowledged_without_dropping_connection(
 def test_unknown_resolution_is_committed_locally_before_edge_ack(
     tmp_path: Path,
 ) -> None:
+    """验证执行未知处置先本地落账，并在 Backend ACK 后完成设备退役。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。重复对账恢复命令不得
+    再次调用驱动或生成第二份处置事件，最终 ACK 同时结算子命令和根命令。
+    """
+
     async def scenario() -> None:
+        """运行一次执行未知处置、ACK 和重复命令场景；参数与返回值为空。"""
+
         path = tmp_path / "runtime.db"
         store = EdgeControlStore(str(path))
         host_node = FakeHostNode()
         client = EdgeControlClient(
             _settings(path), store=store, host_node_provider=lambda: host_node
         )
+        # 当前作业、人工对账下行命令和设备子命令的稳定身份。
         command_uuid = str(uuid.uuid4())
         job_uuid = str(uuid.uuid4())
         device_command_id = f"workflow-node-job:{job_uuid}:atomic-transfer-place"
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+            },
+            str(uuid.uuid4()),
+        )
+        assert store.save_pending_outcome(
+            job_uuid,
+            "failed",
+            {},
+            [{"message": "物理结果未知"}],
+            [device_command_id],
+        )
+        outcome_event_uuid = store.complete_pending_outcome(
+            job_uuid, {"job_uuid": job_uuid}
+        )
+        store.acknowledge_event(outcome_event_uuid)
         await client._handle_envelope(
             {
                 "protocol_version": 1,
@@ -713,8 +783,20 @@ def test_unknown_resolution_is_committed_locally_before_edge_ack(
             "resolution": "canceled",
             "previous_state": "UNKNOWN",
             "current_state": "CANCELED",
+            "unknown_command_ids": [],
             "dispatch_block_reason": "",
         }
+        await client._handle_envelope(
+            {
+                "type": "event.ack",
+                "payload": {"event_uuid": events[0].event_uuid},
+            }
+        )
+        assert host_node.retired_commands == [
+            device_command_id,
+            f"workflow-node-job:{job_uuid}",
+        ]
+        assert store.get_job(job_uuid) is None
         await client._handle_envelope(
             {
                 "protocol_version": 1,
@@ -731,13 +813,310 @@ def test_unknown_resolution_is_committed_locally_before_edge_ack(
                 },
             }
         )
-        assert len(store.pending_events(float("inf"))) == 2
+        remaining_events = store.pending_events(float("inf"))
+        assert [event.event_type for event in remaining_events] == ["command.ack"]
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_running_job_cancel_without_memory_goal_stays_unsettled(
+    tmp_path: Path,
+) -> None:
+    """重启后找不到内存 goal 不得误报作业已物理取消。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。已进入设备边界的
+    作业在 HostNode 无 goal 映射时仅记录取消请求，等待 Backend 将其
+    收敛为执行未知（execution_unknown）。
+    """
+
+    async def scenario() -> None:
+        """运行内存 goal 丢失的取消场景；参数和返回值为空。"""
+
+        database_path = tmp_path / "cancel-running.db"
+        store = EdgeControlStore(str(database_path))
+        data_plane = FakeDataPlane()
+        host_node = FakeHostNode()
+        client = EdgeControlClient(
+            _settings(database_path),
+            store=store,
+            data_plane=data_plane,  # type: ignore[arg-type]
+            host_node_provider=lambda: host_node,
+        )
+        # 作业 UUID 定位取消超时后必须人工对账的运行行。
+        job_uuid = str(uuid.uuid4())
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+            },
+            str(uuid.uuid4()),
+        )
+        store.set_job_status(job_uuid, "running")
+
+        # 取消命令 UUID 是 Backend 下行取消的幂等身份。
+        cancel_command_uuid = str(uuid.uuid4())
+        await client._handle_envelope(
+            {
+                "message_uuid": cancel_command_uuid,
+                "sequence": 31,
+                "type": "job.cancel",
+                "payload": {"job_uuid": job_uuid},
+            }
+        )
+
+        assert host_node.cancel_requests == [job_uuid]
+        assert data_plane.outcomes == []
+        canceled_job = store.get_job(job_uuid)
+        assert canceled_job is not None
+        assert canceled_job.status == "cancel_requested"
+        assert [event.event_type for event in store.pending_events(float("inf"))] == [
+            "command.ack"
+        ]
+
+        # Backend 超时收敛后会为同一作业逐条下发人工对账命令；
+        # 当前作业仍有 UNKNOWN 时不得提前结算，其他作业的 UNKNOWN
+        # 也不得阻止当前作业在自己的最后一条回执后完成结算。
+        other_job_uuid = str(uuid.uuid4())
+        first_device_command_id = f"workflow-node-job:{job_uuid}:atomic-transfer-pick"
+        second_device_command_id = f"workflow-node-job:{job_uuid}:atomic-transfer-place"
+        host_node.dispatch_block_reasons["heater-01"] = (
+            "unresolved_unknown_command:"
+            f"{second_device_command_id},workflow-node-job:{other_job_uuid}"
+        )
+        first_resolution_command_uuid = str(uuid.uuid4())
+        await client._handle_envelope(
+            {
+                "message_uuid": first_resolution_command_uuid,
+                "sequence": 32,
+                "type": "job.resolve_unknown",
+                "payload": {
+                    "job_uuid": job_uuid,
+                    "local_device_id": "heater-01",
+                    "device_command_id": first_device_command_id,
+                    "resolution": "canceled",
+                    "reason": "操作员确认取料动作已物理复位",
+                },
+            }
+        )
+        first_resolution_event = next(
+            event
+            for event in store.pending_events(float("inf"))
+            if event.event_type == "job.unknown_resolution_committed"
+        )
+        assert first_resolution_event.payload["unknown_command_ids"] == [
+            second_device_command_id,
+            f"workflow-node-job:{other_job_uuid}",
+        ]
+        partially_settled_job = store.get_job(job_uuid)
+        assert partially_settled_job is not None
+        assert partially_settled_job.status == "cancel_requested"
+
+        await client._handle_envelope(
+            {
+                "type": "event.ack",
+                "payload": {"event_uuid": first_resolution_event.event_uuid},
+            }
+        )
+
+        host_node.dispatch_block_reasons["heater-01"] = (
+            f"unresolved_unknown_command:workflow-node-job:{other_job_uuid}"
+        )
+        second_resolution_command_uuid = str(uuid.uuid4())
+        await client._handle_envelope(
+            {
+                "message_uuid": second_resolution_command_uuid,
+                "sequence": 33,
+                "type": "job.resolve_unknown",
+                "payload": {
+                    "job_uuid": job_uuid,
+                    "local_device_id": "heater-01",
+                    "device_command_id": second_device_command_id,
+                    "resolution": "canceled",
+                    "reason": "操作员确认放料动作已物理复位",
+                },
+            }
+        )
+        second_resolution_event = next(
+            event
+            for event in store.pending_events(float("inf"))
+            if event.event_type == "job.unknown_resolution_committed"
+        )
+        assert second_resolution_event.payload["unknown_command_ids"] == [
+            f"workflow-node-job:{other_job_uuid}"
+        ]
+        pending_final_job = store.get_job(job_uuid)
+        assert pending_final_job is not None
+        assert pending_final_job.job_access_token == ""
+        assert pending_final_job.status == (
+            f"outcome_resolution_pending_final:{second_resolution_event.event_uuid}"
+        )
+
+        await client._handle_envelope(
+            {
+                "type": "event.ack",
+                "payload": {"event_uuid": second_resolution_event.event_uuid},
+            }
+        )
+        assert host_node.retired_commands == [
+            first_device_command_id,
+            second_device_command_id,
+            f"workflow-node-job:{job_uuid}",
+        ]
+        assert store.get_job(job_uuid) is None
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_not_dispatched_job_cancel_commits_canceled_outcome(tmp_path: Path) -> None:
+    """确定未下发的工作流节点作业可直接提交取消结果。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。作业仍处于
+    ``received`` 时尚未进入设备边界，因此不需要制造执行未知。
+    """
+
+    async def scenario() -> None:
+        """运行未下发作业的取消场景；参数和返回值为空。"""
+
+        database_path = tmp_path / "cancel-received.db"
+        store = EdgeControlStore(str(database_path))
+        data_plane = FakeDataPlane()
+        host_node = FakeHostNode()
+        client = EdgeControlClient(
+            _settings(database_path),
+            store=store,
+            data_plane=data_plane,  # type: ignore[arg-type]
+            host_node_provider=lambda: host_node,
+        )
+        # 作业 UUID 定位仍处于 ``received`` 的未下发运行行。
+        job_uuid = str(uuid.uuid4())
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+            },
+            str(uuid.uuid4()),
+        )
+
+        # 取消命令 UUID 是 Backend 下行取消的幂等身份。
+        cancel_command_uuid = str(uuid.uuid4())
+        await client._handle_envelope(
+            {
+                "message_uuid": cancel_command_uuid,
+                "sequence": 32,
+                "type": "job.cancel",
+                "payload": {"job_uuid": job_uuid},
+            }
+        )
+
+        assert host_node.cancel_requests == []
+        assert len(data_plane.outcomes) == 1
+        assert data_plane.outcomes[0]["outcome"] == "canceled"
+        assert data_plane.outcomes[0]["unknown_command_ids"] == []
+        canceled_job = store.get_job(job_uuid)
+        assert canceled_job is not None
+        assert canceled_job.status == "outcome_committed"
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_fetch_failure_cannot_revive_job_canceled_concurrently(tmp_path: Path) -> None:
+    """取参失败与取消并发时不得用重试状态复活作业。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。取参线程在
+    取消结果已持久化后才抛错，调度协程必须退出而不再设置
+    ``fetch_retry`` 或下发设备。
+    """
+
+    class FetchFailsAfterCancelDataPlane(FakeDataPlane):
+        """模拟被并发取消截断后才失败的 Backend 取参请求。"""
+
+        def __init__(self) -> None:
+            """初始化取参已开始/可释放同步信号；参数和返回值为空。"""
+
+            super().__init__()
+            self.fetch_started = threading.Event()
+            self.release_fetch = threading.Event()
+
+        def fetch_job(self, job: StoredJob) -> Dict[str, Any]:
+            """等待测试完成取消后抛出取参错误。
+
+            ``job`` 是当前工作流节点作业；方法无正常返回，未在一秒内
+            收到释放信号或收到信号后均抛出 ``RuntimeError``。
+            """
+
+            self.fetched_jobs.append(job)
+            self.fetch_started.set()
+            if not self.release_fetch.wait(timeout=1):
+                raise RuntimeError("测试未释放取参请求")
+            raise RuntimeError("取参失败")
+
+    async def scenario() -> None:
+        """运行取参失败与取消的竞态场景；参数和返回值为空。"""
+
+        database_path = tmp_path / "cancel-fetch-race.db"
+        store = EdgeControlStore(str(database_path))
+        data_plane = FetchFailsAfterCancelDataPlane()
+        host_node = FakeHostNode()
+        client = EdgeControlClient(
+            _settings(database_path),
+            store=store,
+            data_plane=data_plane,  # type: ignore[arg-type]
+            host_node_provider=lambda: host_node,
+        )
+        client._connected.set()
+        # 作业/任务/节点 UUID 绑定未下发运行行，命令 UUID 绑定 job.start。
+        job_uuid = str(uuid.uuid4())
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+            },
+            str(uuid.uuid4()),
+        )
+        execution_task = asyncio.create_task(client._execute_job(job_uuid))
+        assert await asyncio.to_thread(data_plane.fetch_started.wait, 1)
+
+        # 取消命令 UUID 是与取参线程竞态的 Backend 下行幂等身份。
+        cancel_command_uuid = str(uuid.uuid4())
+        await client._handle_envelope(
+            {
+                "message_uuid": cancel_command_uuid,
+                "sequence": 41,
+                "type": "job.cancel",
+                "payload": {"job_uuid": job_uuid},
+            }
+        )
+        data_plane.release_fetch.set()
+        await asyncio.wait_for(execution_task, timeout=1)
+
+        assert len(data_plane.fetched_jobs) == 1
+        assert host_node.started == []
+        settled_job = store.get_job(job_uuid)
+        assert settled_job is not None
+        assert settled_job.status == "outcome_committed"
         store.close()
 
     asyncio.run(scenario())
 
 
 def test_http_data_plane_uses_three_uuid_identity() -> None:
+    """验证生产结果请求同时携带三重身份和执行未知命令集合。
+
+    参数：无。返回：无；断言边缘执行镜像（EdgeExecutionMirror）不会在
+    HTTP 适配器边界丢失对账恢复（Reconciliation）所需的物理命令身份。
+    """
+
+    # 设备子命令身份及作业/任务/节点/下行命令四重协议身份。
+    unknown_command_id = "workflow-node-job:00000000-0000-4000-8000-000000000001:place"
     job = StoredJob(
         job_uuid=str(uuid.uuid4()),
         task_uuid=str(uuid.uuid4()),
@@ -756,7 +1135,13 @@ def test_http_data_plane_uses_three_uuid_identity() -> None:
     plane._session = session  # type: ignore[assignment]
 
     plane.fetch_job(job)
-    plane.commit_outcome(job, "succeeded", {"suc": True}, [])
+    plane.commit_outcome(
+        job,
+        "failed",
+        {"state": "UNKNOWN"},
+        [{"message": "物理结果未知"}],
+        [unknown_command_id],
+    )
 
     fetch = session.calls[0]
     assert fetch["params"] == {
@@ -770,7 +1155,7 @@ def test_http_data_plane_uses_three_uuid_identity() -> None:
     outcome = session.calls[1]
     assert outcome["json"]["task_uuid"] == job.task_uuid
     assert outcome["json"]["node_uuid"] == job.node_uuid
-    assert "unknown_command_ids" not in outcome["json"]
+    assert outcome["json"]["unknown_command_ids"] == [unknown_command_id]
     assert outcome["headers"]["Idempotency-Key"] == f"{job.job_uuid}:outcome:v1"
 
 
@@ -848,7 +1233,15 @@ def test_http_data_plane_injects_w3c_trace_headers(monkeypatch) -> None:
 def test_job_start_fetches_http_payload_and_outcome_precedes_notification(
     tmp_path: Path,
 ) -> None:
+    """验证作业取参、结果持久化和执行未知 ACK 的安全顺序。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。结果携带 UNKNOWN
+    设备命令时，Backend 的结果 ACK 不得被解释为物理结算。
+    """
+
     async def scenario() -> None:
+        """运行一次含执行未知结果的完整 Edge 作业闭环；参数与返回值为空。"""
+
         data_plane = FakeDataPlane()
         host_node = FakeHostNode()
         store = EdgeControlStore(str(tmp_path / "runtime.db"))
@@ -859,6 +1252,7 @@ def test_job_start_fetches_http_payload_and_outcome_precedes_notification(
             host_node_provider=lambda: host_node,
         )
         client._connected.set()
+        # 工作流节点作业、任务、节点与 job.start 下行命令的稳定身份。
         job_uuid = str(uuid.uuid4())
         task_uuid = str(uuid.uuid4())
         node_uuid = str(uuid.uuid4())
@@ -920,8 +1314,126 @@ def test_job_start_fetches_http_payload_and_outcome_precedes_notification(
         ]
         assert all(event.traceparent == traceparent for event in events)
         assert all(event.tracestate == "vendor=value" for event in events)
-        assert store.get_job(job_uuid).status == "outcome_committed"  # type: ignore[union-attr]
+        assert (
+            store.get_job(job_uuid).status == "outcome_committed_unknown"  # type: ignore[union-attr]
+        )
         assert store.get_pending_outcome(job_uuid) is None
+        await client._handle_envelope(
+            {
+                "type": "event.ack",
+                "payload": {"event_uuid": events[-1].event_uuid},
+            }
+        )
+        assert host_node.retired_commands == []
+        unresolved_job = store.get_job(job_uuid)
+        assert unresolved_job is not None
+        assert unresolved_job.status == "outcome_committed_unknown"
+        await asyncio.wait_for(
+            client._commit_feedback(job_uuid, {"late": True}), timeout=0.2
+        )
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_acknowledged_settled_outcome_retires_device_journal_and_runtime(
+    tmp_path: Path,
+) -> None:
+    """验证无执行未知事实的结果 ACK 会退役设备账本与作业镜像。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。Backend ACK 证明普通
+    工作流节点作业（WorkflowNodeJob）完成物理结算后，根命令和终态运行行
+    都应安全删除。
+    """
+
+    async def scenario() -> None:
+        """运行一次无 UNKNOWN 的结果 ACK 退役场景；参数与返回值为空。"""
+
+        database_path = tmp_path / "settled-runtime.db"
+        store = EdgeControlStore(str(database_path))
+        host_node = FakeHostNode()
+        client = EdgeControlClient(
+            _settings(database_path),
+            store=store,
+            host_node_provider=lambda: host_node,
+        )
+        # 作业 UUID 定位无 UNKNOWN 的结果事件，事件 UUID 定位本次 ACK。
+        job_uuid = str(uuid.uuid4())
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+            },
+            str(uuid.uuid4()),
+        )
+        assert store.save_pending_outcome(job_uuid, "succeeded", {}, [])
+        outcome_event_uuid = store.complete_pending_outcome(
+            job_uuid,
+            {"job_uuid": job_uuid},
+        )
+
+        await client._handle_envelope(
+            {
+                "type": "event.ack",
+                "payload": {"event_uuid": outcome_event_uuid},
+            }
+        )
+
+        assert host_node.retired_commands == [f"workflow-node-job:{job_uuid}"]
+        assert store.get_job(job_uuid) is None
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_outcome_ack_waits_when_device_retirement_adapter_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    """HostNode 未就绪时不得丢失待退役的物理结算事件。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。设备账本
+    退役适配器缺失时抛出 ``RuntimeError``，发件箱和作业镜像保留
+    以便重连后幂等重试。
+    """
+
+    async def scenario() -> None:
+        """运行 HostNode 未就绪的结果 ACK 场景；参数和返回值为空。"""
+
+        database_path = tmp_path / "host-unavailable.db"
+        store = EdgeControlStore(str(database_path))
+        client = EdgeControlClient(
+            _settings(database_path),
+            store=store,
+            host_node_provider=lambda: None,
+        )
+        # 作业 UUID 定位待退役镜像，结果事件 UUID 必须在失败后保留。
+        job_uuid = str(uuid.uuid4())
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+            },
+            str(uuid.uuid4()),
+        )
+        assert store.save_pending_outcome(job_uuid, "succeeded", {}, [])
+        outcome_event_uuid = store.complete_pending_outcome(
+            job_uuid, {"job_uuid": job_uuid}
+        )
+
+        with pytest.raises(RuntimeError, match="HostNode is not ready"):
+            await client._handle_envelope(
+                {
+                    "type": "event.ack",
+                    "payload": {"event_uuid": outcome_event_uuid},
+                }
+            )
+
+        assert store.event_for_ack(outcome_event_uuid) is not None
+        assert store.get_job(job_uuid) is not None
         store.close()
 
     asyncio.run(scenario())
@@ -930,7 +1442,15 @@ def test_job_start_fetches_http_payload_and_outcome_precedes_notification(
 def test_terminal_job_token_rejection_retires_pending_outcome(
     tmp_path: Path,
 ) -> None:
+    """Backend 拒绝失效作业 Token 后完整退役边缘执行镜像。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。权威端已明确
+    终结的作业不再承担恢复职责，因此不应永久留下运行行。
+    """
+
     class RevokedJobDataPlane(FakeDataPlane):
+        """模拟 Backend 已权威撤销作业访问 Token 的数据面。"""
+
         def commit_outcome(
             self,
             job: StoredJob,
@@ -939,6 +1459,8 @@ def test_terminal_job_token_rejection_retires_pending_outcome(
             error_info: List[Dict[str, Any]],
             unknown_command_ids: List[str] | None = None,
         ) -> Dict[str, Any]:
+            """拒绝结果提交；参数与生产接口一致且总是抛出未授权异常。"""
+
             self.outcomes.append({"job": job, "outcome": outcome})
             raise EdgeProtocolHTTPError(
                 "Job token was revoked after manual reconciliation",
@@ -946,8 +1468,11 @@ def test_terminal_job_token_rejection_retires_pending_outcome(
             )
 
     async def scenario() -> None:
+        """运行失效 Token 结果退役场景；参数和返回值为空。"""
+
         path = tmp_path / "runtime.db"
         store = EdgeControlStore(str(path))
+        # 作业/任务/节点 UUID 定位被终结的执行，命令 UUID 定位原始下发。
         job_uuid = str(uuid.uuid4())
         task_uuid = str(uuid.uuid4())
         node_uuid = str(uuid.uuid4())
@@ -973,9 +1498,7 @@ def test_terminal_job_token_rejection_retires_pending_outcome(
 
         assert len(data_plane.outcomes) == 1
         assert store.get_pending_outcome(job_uuid) is None
-        stored_job = store.get_job(job_uuid)
-        assert stored_job is not None
-        assert stored_job.status == "outcome_retired"
+        assert store.get_job(job_uuid) is None
         store.close()
 
     asyncio.run(scenario())

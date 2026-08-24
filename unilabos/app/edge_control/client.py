@@ -71,7 +71,12 @@ def _device_dispatch_state(host_node: Any, device_id: str) -> tuple[str, List[st
 
 
 def _device_command_belongs_to_job(device_command_id: str, job_uuid: str) -> bool:
-    """校验设备命令属于目标 Job；允许受控组合动作追加一层子命令身份。"""
+    """校验设备命令属于目标工作流节点作业（WorkflowNodeJob）。
+
+    ``device_command_id`` 是设备命令身份，``job_uuid`` 是作业身份；
+    根命令或仅追加一层受控 ASCII 子命令时返回 ``True``，否则返回
+    ``False``，不抛出异常。
+    """
 
     root_command_id = f"workflow-node-job:{job_uuid}"
     if device_command_id == root_command_id:
@@ -545,13 +550,25 @@ class EdgeControlClient(BaseCommunicationClient):
             await asyncio.sleep(0.2)
 
     async def _handle_envelope(self, envelope: Dict[str, Any]) -> None:
+        """处理一个已解码的 Backend 控制信封。
+
+        ``envelope`` 包含事件 ACK、心跳或持久 Edge 命令及其稳定身份；返回
+        为空。非法载荷抛出 ``ValueError``，命令处理异常向连接循环传播以触发
+        安全重连。重复 ACK 和重复命令依赖 ``EdgeControlStore``/
+        设备账本保持幂等。
+        """
+
         message_type = str(envelope.get("type") or "")
         payload = envelope.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("control payload must be an object")
         if message_type == "event.ack":
+            # 事件 UUID 精确定位 Edge 发件箱中被 Backend 确认的事实。
             event_uuid = str(payload.get("event_uuid") or "")
             if event_uuid:
+                event = self.store.event_for_ack(event_uuid)
+                if event is not None:
+                    self._retire_settled_device_command(event)
                 self.store.acknowledge_event(event_uuid)
             return
         if message_type == "ping":
@@ -567,6 +584,7 @@ class EdgeControlClient(BaseCommunicationClient):
             "material.changed",
         }:
             raise ValueError(f"unsupported Edge command {message_type!r}")
+        # 命令 UUID 是 Backend 下行投递的稳定幂等身份，不是作业身份。
         command_uuid = str(uuid.UUID(str(envelope["message_uuid"])))
         command_trace = _message_trace_carrier(envelope)
         parent_context = extract_trace_context(command_trace)
@@ -597,6 +615,62 @@ class EdgeControlClient(BaseCommunicationClient):
                 )
             else:
                 self._accept_material_changed(command_uuid, payload, command_trace)
+
+    def _retire_settled_device_command(self, event: StoredEvent) -> None:
+        """把 Backend ACK 转成设备执行账本的显式物理结算清理信号。
+
+        ``event`` 是尚未从 Edge 发件箱退役的事件快照；返回为空。普通工作流
+        节点作业（WorkflowNodeJob）结果按稳定身份清理；携带执行未知
+        的结果必须保留到对账恢复（Reconciliation）完成。UNKNOWN 人工处置
+        先清理精确设备命令，最后一条处置再清理根命令。重复 ACK 依赖驱动
+        退役接口幂等；HostNode 适配器缺失时抛出 ``RuntimeError``，
+        驱动异常向连接循环传播，事件仍保留并可安全重试。
+        """
+
+        # 设备命令身份是设备执行账本的稳定物理效果键；一个最终对账 ACK
+        # 可能同时结算精确子命令和工作流节点作业根命令。
+        device_command_ids: List[str] = []
+        if event.event_type == "job.outcome_committed":
+            try:
+                job_uuid = str(uuid.UUID(str(event.payload.get("job_uuid") or "")))
+            except (AttributeError, TypeError, ValueError):
+                return
+            job = self.store.get_job(job_uuid)
+            if job is not None and (
+                job.status == "outcome_committed_unknown"
+                or job.status.startswith("outcome_resolution_pending_final:")
+            ):
+                return
+            device_command_ids.append(f"workflow-node-job:{job_uuid}")
+        elif event.event_type == "job.unknown_resolution_committed":
+            device_command_id = str(
+                event.payload.get("device_command_id") or ""
+            ).strip()
+            if device_command_id:
+                device_command_ids.append(device_command_id)
+            try:
+                job_uuid = str(uuid.UUID(str(event.payload.get("job_uuid") or "")))
+            except (AttributeError, TypeError, ValueError):
+                job_uuid = ""
+            # 只有结构化 UNKNOWN 集合已在本地状态中证明为空，
+            # 且 ACK 精确匹配最后一条处置事件，才结算工作流节点
+            # 作业根命令；展示文本不承担安全语义。
+            job = self.store.get_job(job_uuid) if job_uuid else None
+            if job is not None and job.status == (
+                f"outcome_resolution_pending_final:{event.event_uuid}"
+            ):
+                device_command_ids.append(f"workflow-node-job:{job_uuid}")
+        if not device_command_ids:
+            return
+
+        host_node = self._host_node_provider()
+        retire = getattr(host_node, "retire_settled_device_command", None)
+        if not callable(retire):
+            raise RuntimeError(
+                "HostNode is not ready to retire settled device commands"
+            )
+        for device_command_id in dict.fromkeys(device_command_ids):
+            retire(device_command_id)
 
     async def _send_pong(
         self, ping_uuid: str, parent_carrier: Dict[str, str]
@@ -678,6 +752,14 @@ class EdgeControlClient(BaseCommunicationClient):
         payload: Dict[str, Any],
         command_trace: Dict[str, str],
     ) -> None:
+        """接收工作流节点作业（WorkflowNodeJob）取消命令。
+
+        ``command_uuid`` 是取消命令身份，``payload`` 必须携带作业身份，
+        ``command_trace`` 传递追踪上下文；返回为空。未下发作业可直接结算，
+        已进入设备边界但找不到运行中 ROS goal 时保持待核实，由
+        Backend 超时收敛为执行未知（execution_unknown）。
+        """
+
         job_uuid = str(payload.get("job_uuid") or "")
         if not job_uuid:
             raise ValueError("job.cancel job_uuid is required")
@@ -690,15 +772,30 @@ class EdgeControlClient(BaseCommunicationClient):
         job = self.store.get_job(job_uuid)
         if job is None:
             return
+        # 取消前状态用于区分“确定未下发”与“可能已产生物理效果”。
+        previous_status = job.status
+        if previous_status not in {
+            "received",
+            "fetch_retry",
+            "dispatching",
+            "running",
+            "cancel_requested",
+        }:
+            return
         self.store.set_job_status(job_uuid, "cancel_requested")
-        host_node = self._host_node_provider()
-        if host_node is None or not host_node.cancel_goal(job_uuid):
+        if previous_status in {"received", "fetch_retry"}:
             await self._commit_terminal_status(
                 job_uuid,
                 "canceled",
                 {},
-                {"message": "Job canceled before a running ROS goal was found"},
+                {"message": "工作流节点作业在设备下发前已取消"},
             )
+            return
+
+        host_node = self._host_node_provider()
+        # 返回 False 仅说明内存中无可取消 goal，不能证明设备未执行。
+        if host_node is not None:
+            host_node.cancel_goal(job_uuid)
 
     async def _accept_unknown_resolution(
         self,
@@ -706,6 +803,13 @@ class EdgeControlClient(BaseCommunicationClient):
         payload: Dict[str, Any],
         command_trace: Dict[str, str],
     ) -> None:
+        """在设备执行账本提交一条 UNKNOWN 命令的人工处置。
+
+        ``command_uuid`` 是幂等处置命令，``payload`` 定位作业、设备和子命令，
+        ``command_trace`` 传递追踪上下文；驱动未返回经验证的物理结算证据时
+        抛出异常，成功时原子持久化对账事件与命令 ACK；返回为空。
+        """
+
         expected_fields = {
             "job_uuid",
             "local_device_id",
@@ -747,6 +851,16 @@ class EdgeControlClient(BaseCommunicationClient):
             raise RuntimeError(
                 f"device rejected UNKNOWN resolution: {result!r}"
             )
+        # 结构化 UNKNOWN 集合是物理结算事实；设备可能同时保留
+        # 其他作业的 UNKNOWN，因此必须先按当前作业稳定身份过滤。
+        _, remaining_unknown_command_ids = _device_dispatch_state(
+            host_node, local_device_id
+        )
+        remaining_job_unknown_command_ids = [
+            command_id
+            for command_id in remaining_unknown_command_ids
+            if _device_command_belongs_to_job(command_id, job_uuid)
+        ]
         self.store.complete_unknown_resolution(
             command_uuid,
             {
@@ -756,11 +870,13 @@ class EdgeControlClient(BaseCommunicationClient):
                 "resolution": "canceled",
                 "previous_state": "UNKNOWN",
                 "current_state": "CANCELED",
+                "unknown_command_ids": remaining_unknown_command_ids,
                 "dispatch_block_reason": str(
                     host_node.device_dispatch_block_reason(local_device_id) or ""
                 ).strip(),
             },
             _current_trace_carrier(fallback=command_trace),
+            remaining_job_unknown_command_ids,
         )
 
     async def _resume_received_jobs(self) -> None:
@@ -772,6 +888,13 @@ class EdgeControlClient(BaseCommunicationClient):
             self._spawn(self._commit_pending_outcome(outcome.job_uuid))
 
     async def _execute_job(self, job_uuid: str) -> None:
+        """拉取作业参数并将工作流节点作业下发到本地设备。
+
+        ``job_uuid`` 是作业稳定身份；返回为空。方法保证同一作业仅有一个
+        调度协程，并在设备下发前再次核对取消状态；拉取可重试，其他异常
+        被转换为待提交的失败结果。
+        """
+
         with self._active_jobs_lock:
             if job_uuid in self._scheduled_jobs or job_uuid in self._active_jobs:
                 return
@@ -791,12 +914,26 @@ class EdgeControlClient(BaseCommunicationClient):
                 },
             ):
                 while self._connected.is_set() and not self._stopping.is_set():
+                    current_job = self.store.get_job(job_uuid)
+                    if current_job is None or current_job.status not in {
+                        "received",
+                        "fetch_retry",
+                    }:
+                        return
                     try:
                         payload = await asyncio.to_thread(
                             self.data_plane.fetch_job, job
                         )
                         break
                     except Exception as exc:
+                        # 取参异常可与取消并发；不得用 fetch_retry 覆盖
+                        # 已持久化的取消结果，否则下一轮会误下发已取消作业。
+                        current_job = self.store.get_job(job_uuid)
+                        if current_job is None or current_job.status not in {
+                            "received",
+                            "fetch_retry",
+                        }:
+                            return
                         self.store.set_job_status(job_uuid, "fetch_retry")
                         logger.warning(
                             f"[EdgeControl] 拉取 Job {job_uuid[:8]} 运行参数失败，"
@@ -808,6 +945,13 @@ class EdgeControlClient(BaseCommunicationClient):
                 else:
                     return
                 _validate_job_payload(job, payload)
+                # 拉取参数期间可能收到取消；只有仍处于可下发状态才进入设备边界。
+                latest_job = self.store.get_job(job_uuid)
+                if latest_job is None or latest_job.status not in {
+                    "received",
+                    "fetch_retry",
+                }:
+                    return
                 host_node = self._host_node_provider()
                 if host_node is None:
                     raise RuntimeError("HostNode is not ready")
@@ -862,8 +1006,24 @@ class EdgeControlClient(BaseCommunicationClient):
     async def _commit_feedback(
         self, job_uuid: str, feedback: Dict[str, Any]
     ) -> None:
+        """持久化一条工作流节点作业运行反馈。
+
+        ``job_uuid`` 是作业身份，``feedback`` 是 Edge 观测样本；返回为空。
+        已进入结果提交或物理结算阶段的作业忽略迟到反馈；其他
+        传输异常按原有间隔重试，进程停止时结束。
+        """
+
         job = self.store.get_job(job_uuid)
-        if job is None or job.status in {"outcome_committed", "completed"}:
+        if (
+            job is None
+            or job.status in {
+                "outcome_pending",
+                "outcome_committed",
+                "outcome_committed_unknown",
+                "completed",
+            }
+            or job.status.startswith("outcome_resolution_pending_final:")
+        ):
             return
         sequence = self.store.next_feedback_sequence(job_uuid)
         observed_at = _utc_now()

@@ -12,9 +12,10 @@ import sqlite3
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,17 @@ class StoredOutcome:
 class EdgeControlStore:
     """线程安全的 SQLite Command/Outbox 存储。"""
 
+    SCHEMA_VERSION = 1
+
     def __init__(self, path: str) -> None:
+        """打开并迁移边缘控制投递存储（Edge Control Delivery Store）。
+
+        ``path`` 是当前 Edge 实例的 SQLite 文件路径；构造函数返回初始化后的
+        ``EdgeControlStore``。数据库版本高于当前实现时抛出 ``RuntimeError``，
+        迁移或初始化
+        失败时原样抛出 SQLite 异常，禁止以未知 Schema 继续写入。
+        """
+
         expanded = Path(path).expanduser().resolve()
         expanded.parent.mkdir(parents=True, exist_ok=True)
         self.path = str(expanded)
@@ -66,6 +77,15 @@ class EdgeControlStore:
         with self._lock:
             self._connection.execute("PRAGMA journal_mode=WAL")
             self._connection.execute("PRAGMA synchronous=FULL")
+            schema_version = int(
+                self._connection.execute("PRAGMA user_version").fetchone()[0]
+            )
+            if schema_version > self.SCHEMA_VERSION:
+                self._connection.close()
+                raise RuntimeError(
+                    f"edge_control schema {schema_version} is newer than supported "
+                    f"version {self.SCHEMA_VERSION}"
+                )
             self._connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS edge_control_meta (
@@ -84,6 +104,8 @@ class EdgeControlStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_edge_command_sequence
                     ON edge_command(sequence);
+                CREATE INDEX IF NOT EXISTS idx_edge_command_status_sequence
+                    ON edge_command(status, sequence);
                 CREATE TABLE IF NOT EXISTS edge_event_outbox (
                     event_uuid TEXT PRIMARY KEY,
                     type TEXT NOT NULL,
@@ -116,26 +138,32 @@ class EdgeControlStore:
                     unknown_command_ids_json TEXT NOT NULL DEFAULT '[]',
                     updated_at REAL NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS idx_edge_job_status_updated
+                    ON edge_job_runtime(status, updated_at);
+                CREATE INDEX IF NOT EXISTS idx_edge_outcome_updated
+                    ON edge_job_outcome_pending(updated_at);
                 """
             )
-            # 已存在的状态库原地补列，避免 Edge 升级后丢失未完成任务。
-            self._ensure_column(
-                "edge_event_outbox", "traceparent", "TEXT NOT NULL DEFAULT ''"
-            )
-            self._ensure_column(
-                "edge_event_outbox", "tracestate", "TEXT NOT NULL DEFAULT ''"
-            )
-            self._ensure_column(
-                "edge_job_runtime", "traceparent", "TEXT NOT NULL DEFAULT ''"
-            )
-            self._ensure_column(
-                "edge_job_runtime", "tracestate", "TEXT NOT NULL DEFAULT ''"
-            )
-            self._ensure_column(
-                "edge_job_outcome_pending",
-                "unknown_command_ids_json",
-                "TEXT NOT NULL DEFAULT '[]'",
-            )
+            if schema_version == 0:
+                # 版本 0 是引入迁移所有者前的状态库。只在这条显式迁移中补列，
+                # 后续版本不再通过启动期猜测 Schema。
+                self._migrate_legacy_column(
+                    "edge_event_outbox", "traceparent", "TEXT NOT NULL DEFAULT ''"
+                )
+                self._migrate_legacy_column(
+                    "edge_event_outbox", "tracestate", "TEXT NOT NULL DEFAULT ''"
+                )
+                self._migrate_legacy_column(
+                    "edge_job_runtime", "traceparent", "TEXT NOT NULL DEFAULT ''"
+                )
+                self._migrate_legacy_column(
+                    "edge_job_runtime", "tracestate", "TEXT NOT NULL DEFAULT ''"
+                )
+                self._migrate_legacy_column(
+                    "edge_job_outcome_pending",
+                    "unknown_command_ids_json",
+                    "TEXT NOT NULL DEFAULT '[]'",
+                )
             # Pong only answers a ping from the current WebSocket session. Older
             # versions persisted it as a durable business event, which allowed a
             # stale pong to be replayed into a new session and closed by the
@@ -143,9 +171,34 @@ class EdgeControlStore:
             self._connection.execute(
                 "DELETE FROM edge_event_outbox WHERE type = 'pong'"
             )
+            self._connection.execute(
+                """
+                INSERT OR IGNORE INTO edge_control_meta(key, value)
+                SELECT 'last_ack_command_sequence',
+                       CAST(COALESCE(MAX(sequence), 0) AS TEXT)
+                FROM edge_command WHERE status = 'completed'
+                """
+            )
+            acknowledged_events = self._connection.execute(
+                """
+                SELECT event_uuid, type, payload_json
+                FROM edge_event_outbox WHERE acked_at IS NOT NULL
+                """
+            ).fetchall()
+            for acknowledged_event in acknowledged_events:
+                self._retire_event_locked(acknowledged_event)
+            self._connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._connection.commit()
 
-    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+    def _migrate_legacy_column(
+        self, table: str, column: str, definition: str
+    ) -> None:
+        """把迁移前数据库缺失的列补入显式版本 0→1 迁移。
+
+        ``table``、``column`` 和 ``definition`` 只由本模块固定调用点提供；返回
+        为空。SQLite 拒绝迁移时异常上抛，使边缘执行镜像关闭失败。
+        """
+
         columns = {
             str(row["name"])
             for row in self._connection.execute(f"PRAGMA table_info({table})")
@@ -155,44 +208,50 @@ class EdgeControlStore:
                 f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
             )
 
+    @contextmanager
+    def _immediate_transaction(self) -> Iterator[None]:
+        """提供异常必回滚的 SQLite 立即事务边界。
+
+        参数为空；yield 后由调用方执行同一连接上的状态转换，正常返回时提交，
+        任意异常时回滚并原样抛出。
+        """
+
+        self._connection.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+        except BaseException:
+            self._connection.rollback()
+            raise
+        else:
+            self._connection.commit()
+
     def close(self) -> None:
         with self._lock:
             self._connection.close()
 
     def reset_transient_state(self) -> None:
-        """Clear recoverable protocol work while preserving the Edge identity.
+        """清空可恢复协议工作但保留 Edge 实例身份。
 
-        Managed Local exposes this only through the explicit ``local.reset-state``
-        operation, after the Edge process has stopped.  It is intentionally not
-        part of an ordinary Edge restart: command/outcome durability must survive
-        those restarts.
+        参数和返回值为空。Managed Local 仅在 Edge 进程停止后通过显式
+        ``local.reset-state`` 调用；普通重启不得调用，否则会破坏投递重放。
         """
 
         with self._lock:
-            try:
-                self._connection.execute("BEGIN IMMEDIATE")
+            with self._immediate_transaction():
                 self._clear_transient_state_locked()
-                self._connection.commit()
-            except BaseException:
-                self._connection.rollback()
-                raise
 
     def adopt_authority_edge_uuid(self, edge_uuid: str) -> bool:
-        """Bind recovery state to the Edge identity assigned by the Backend.
+        """把恢复状态绑定到 Backend 分配的 Edge 权威身份。
 
-        A rebuilt Backend can reuse the same URL and Edge key while assigning a
-        new Edge UUID. Commands, ACK cursors, jobs, and outbox rows from the old
-        authority must not be replayed into that new identity. The first call is
-        migration-safe and only records the identity; later identity changes
-        atomically retire transient protocol state.
-
-        Returns ``True`` when an authority change caused a reset.
+        ``edge_uuid`` 是 Backend 当前认可的 Edge UUID；身份首次出现时只记录，
+        与既有值不同时原子清空旧命令、ACK 游标、作业和发件箱，防止跨权威
+        投递重放（DeliveryReplay）。返回是否因身份变化执行了清理；非法 UUID
+        抛出 ``ValueError``，数据库失败时事务回滚并原样抛出。
         """
 
         normalized = str(uuid.UUID(edge_uuid))
         with self._lock:
-            try:
-                self._connection.execute("BEGIN IMMEDIATE")
+            with self._immediate_transaction():
                 row = self._connection.execute(
                     "SELECT value FROM edge_control_meta WHERE key = 'authority_edge_uuid'"
                 ).fetchone()
@@ -208,17 +267,26 @@ class EdgeControlStore:
                     """,
                     (normalized,),
                 )
-                self._connection.commit()
                 return changed
-            except BaseException:
-                self._connection.rollback()
-                raise
 
     def _clear_transient_state_locked(self) -> None:
+        """清空当前权威下可重建的协议状态并复位投递高水位。
+
+        参数和返回值为空。调用方必须持有进程锁和写事务；Edge 实例身份等
+        非瞬态 meta 保留，命令、作业、结果和事件发件箱全部清空。
+        """
+
         self._connection.execute("DELETE FROM edge_job_outcome_pending")
         self._connection.execute("DELETE FROM edge_job_runtime")
         self._connection.execute("DELETE FROM edge_event_outbox")
         self._connection.execute("DELETE FROM edge_command")
+        self._connection.execute(
+            """
+            INSERT INTO edge_control_meta(key, value)
+            VALUES ('last_ack_command_sequence', '0')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+        )
 
     def get_or_create_instance_uuid(self, configured: str = "") -> str:
         configured = configured.strip()
@@ -286,31 +354,53 @@ class EdgeControlStore:
         return str(row["status"]) if row is not None else ""
 
     def mark_command_completed(self, command_uuid: str) -> None:
+        """完成命令并原子推进已确认命令序号高水位。
+
+        ``command_uuid`` 是 Backend 下行命令稳定身份；返回为空。命令不存在时
+        保持幂等，高水位不变化。
+        """
+
         with self._lock:
-            self._connection.execute(
-                "UPDATE edge_command SET status = 'completed' WHERE command_uuid = ?",
-                (command_uuid,),
-            )
-            self._connection.commit()
+            with self._immediate_transaction():
+                self._connection.execute(
+                    "UPDATE edge_command SET status = 'completed' WHERE command_uuid = ?",
+                    (command_uuid,),
+                )
+                self._advance_command_highwater_locked(command_uuid)
 
     def complete_unknown_resolution(
         self,
         command_uuid: str,
         resolution_payload: Dict[str, Any],
         trace_context: Optional[Dict[str, str]] = None,
+        remaining_unknown_command_ids: Optional[List[str]] = None,
     ) -> None:
-        """原子持久化 UNKNOWN 处置回执、通用 ACK 和命令完成状态。"""
+        """原子持久化 UNKNOWN 处置回执、通用 ACK 和命令完成状态。
+
+        ``command_uuid`` 是对账恢复（Reconciliation）命令身份，
+        ``resolution_payload`` 是设备已审计落账后的物理证据摘要，
+        ``trace_context`` 是可选 W3C 追踪上下文；
+        ``remaining_unknown_command_ids`` 是处置后驱动仍报告的结构化执行未知
+        身份，``None`` 表示旧调用方无法证明集合。返回为空。任意序列化或
+        SQLite 异常都会回滚，禁止只完成部分回执或凭展示文案推断结算。
+        """
 
         trace_context = trace_context or {}
         created_at = _utc_now()
+        # 最终物理结算必须绑定到确切的处置事件，不能让同作业
+        # 早先一条处置的 ACK 误删尚未被 Backend 确认的最后一条。
+        resolution_event_uuid = str(uuid.uuid4())
         events = (
-            ("job.unknown_resolution_committed", resolution_payload),
-            ("command.ack", {"command_uuid": command_uuid}),
+            (
+                resolution_event_uuid,
+                "job.unknown_resolution_committed",
+                resolution_payload,
+            ),
+            (str(uuid.uuid4()), "command.ack", {"command_uuid": command_uuid}),
         )
         with self._lock:
-            try:
-                self._connection.execute("BEGIN IMMEDIATE")
-                for event_type, payload in events:
+            with self._immediate_transaction():
+                for event_uuid, event_type, payload in events:
                     self._connection.execute(
                         """
                         INSERT INTO edge_event_outbox(
@@ -319,7 +409,7 @@ class EdgeControlStore:
                         ) VALUES (?, ?, ?, ?, ?, ?)
                         """,
                         (
-                            str(uuid.uuid4()),
+                            event_uuid,
                             event_type,
                             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                             created_at,
@@ -331,20 +421,75 @@ class EdgeControlStore:
                     "UPDATE edge_command SET status = 'completed' WHERE command_uuid = ?",
                     (command_uuid,),
                 )
-                self._connection.commit()
-            except Exception:
-                self._connection.rollback()
-                raise
+                self._advance_command_highwater_locked(command_uuid)
+                job_uuid = str(resolution_payload.get("job_uuid") or "")
+                if job_uuid and remaining_unknown_command_ids == []:
+                    # 结构化剩余集合明确为空，表示本次是该工作流节点作业
+                    # （WorkflowNodeJob）的最后一条 UNKNOWN 处置；该事实既可来自
+                    # 结果上报，也可来自取消超时后的对账恢复。仍须等待
+                    # Backend ACK 后才能真正退役根命令和作业镜像。
+                    self._connection.execute(
+                        """
+                        UPDATE edge_job_runtime
+                        SET status = ?, job_access_token = '', updated_at = ?
+                        WHERE job_uuid = ?
+                          AND status IN (
+                              'outcome_committed_unknown',
+                              'outcome_pending',
+                              'cancel_requested',
+                              'running',
+                              'dispatching'
+                          )
+                        """,
+                        (
+                            f"outcome_resolution_pending_final:{resolution_event_uuid}",
+                            time.time(),
+                            job_uuid,
+                        ),
+                    )
+
+    def _advance_command_highwater_locked(self, command_uuid: str) -> None:
+        """按已完成命令推进持久投递重放高水位。
+
+        ``command_uuid`` 定位本事务刚完成的命令；返回为空。调用方必须持有锁
+        和写事务，缺失命令不会降低既有高水位。
+        """
+
+        command = self._connection.execute(
+            "SELECT sequence FROM edge_command WHERE command_uuid = ? AND status = 'completed'",
+            (command_uuid,),
+        ).fetchone()
+        if command is None:
+            return
+        stored = self._connection.execute(
+            "SELECT value FROM edge_control_meta WHERE key = 'last_ack_command_sequence'"
+        ).fetchone()
+        current = int(stored["value"]) if stored is not None else 0
+        sequence = max(current, int(command["sequence"]))
+        self._connection.execute(
+            """
+            INSERT INTO edge_control_meta(key, value)
+            VALUES ('last_ack_command_sequence', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str(sequence),),
+        )
 
     def last_ack_command_sequence(self) -> int:
+        """返回可向 Backend 证明已完成的连续命令高水位。
+
+        参数为空；返回持久序号。该值独立于命令明细，因此安全退役明细后仍能
+        阻止旧命令投递重放。
+        """
+
         with self._lock:
             row = self._connection.execute(
                 """
-                SELECT COALESCE(MAX(sequence), 0) AS sequence
-                FROM edge_command WHERE status = 'completed'
+                SELECT value FROM edge_control_meta
+                WHERE key = 'last_ack_command_sequence'
                 """
             ).fetchone()
-        return int(row["sequence"])
+        return int(row["value"]) if row is not None else 0
 
     def enqueue_event(
         self,
@@ -409,13 +554,119 @@ class EdgeControlStore:
             )
             self._connection.commit()
 
-    def acknowledge_event(self, event_uuid: str) -> None:
+    def event_for_ack(self, event_uuid: str) -> Optional[StoredEvent]:
+        """读取即将被 Backend ACK 的事件，供物理结算后清理设备账本。
+
+        ``event_uuid`` 是发件箱事件身份；返回尚未退役的事件快照，缺失时返回
+        ``None``。该方法不修改数据，调用方完成设备侧结算清理后再确认事件。
+        """
+
         with self._lock:
-            self._connection.execute(
-                "UPDATE edge_event_outbox SET acked_at = ? WHERE event_uuid = ?",
-                (time.time(), event_uuid),
-            )
-            self._connection.commit()
+            row = self._connection.execute(
+                """
+                SELECT event_uuid, type, payload_json, created_at,
+                       traceparent, tracestate
+                FROM edge_event_outbox WHERE event_uuid = ?
+                """,
+                (event_uuid,),
+            ).fetchone()
+        if row is None:
+            return None
+        return StoredEvent(
+            event_uuid=str(row["event_uuid"]),
+            event_type=str(row["type"]),
+            payload=json.loads(str(row["payload_json"])),
+            created_at=str(row["created_at"]),
+            traceparent=str(row["traceparent"]),
+            tracestate=str(row["tracestate"]),
+        )
+
+    def acknowledge_event(self, event_uuid: str) -> None:
+        """接收 Backend 事件 ACK 并原子退役已证明可恢复的本地明细。
+
+        ``event_uuid`` 是 Edge 发件箱事件身份；返回为空。重复 ACK 幂等。命令
+        ACK 会退役对应已完成命令；结果 ACK 只退役已经完成物理结算的终态
+        工作流节点作业（WorkflowNodeJob）。
+        """
+
+        with self._lock:
+            with self._immediate_transaction():
+                event = self._connection.execute(
+                    """
+                    SELECT event_uuid, type, payload_json
+                    FROM edge_event_outbox WHERE event_uuid = ?
+                    """,
+                    (event_uuid,),
+                ).fetchone()
+                if event is not None:
+                    self._retire_event_locked(event)
+
+    def _retire_event_locked(self, event: sqlite3.Row) -> None:
+        """按已确认事件类型退役发件箱及其边缘执行镜像明细。
+
+        ``event`` 提供事件身份、类型和 JSON 载荷；返回为空。调用方必须持有锁
+        和事务，非法旧载荷只删除已 ACK 事件而不猜测关联身份。
+        """
+
+        try:
+            payload = json.loads(str(event["payload_json"]))
+        except (TypeError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        event_type = str(event["type"])
+        if event_type == "command.ack":
+            command_uuid = str(payload.get("command_uuid") or "")
+            if command_uuid:
+                self._connection.execute(
+                    """
+                    DELETE FROM edge_command
+                    WHERE command_uuid = ? AND status = 'completed'
+                      AND sequence <= CAST((
+                          SELECT value FROM edge_control_meta
+                          WHERE key = 'last_ack_command_sequence'
+                      ) AS INTEGER)
+                    """,
+                    (command_uuid,),
+                )
+        elif event_type == "job.outcome_committed":
+            job_uuid = str(payload.get("job_uuid") or "")
+            if job_uuid:
+                self._connection.execute(
+                    """
+                    DELETE FROM edge_job_runtime
+                    WHERE job_uuid = ?
+                      AND status IN ('outcome_committed', 'outcome_retired')
+                      AND NOT EXISTS (
+                          SELECT 1 FROM edge_job_outcome_pending
+                          WHERE edge_job_outcome_pending.job_uuid = edge_job_runtime.job_uuid
+                      )
+                    """,
+                    (job_uuid,),
+                )
+        elif event_type == "job.unknown_resolution_committed":
+            job_uuid = str(payload.get("job_uuid") or "")
+            if job_uuid:
+                self._connection.execute(
+                    """
+                    DELETE FROM edge_job_runtime
+                    WHERE job_uuid = ?
+                      AND status = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM edge_job_outcome_pending
+                          WHERE edge_job_outcome_pending.job_uuid = edge_job_runtime.job_uuid
+                      )
+                    """,
+                    (
+                        job_uuid,
+                        "outcome_resolution_pending_final:"
+                        f"{str(event['event_uuid'])}",
+                    ),
+                )
+        self._connection.execute(
+            "DELETE FROM edge_event_outbox WHERE event_uuid = ?",
+            (str(event["event_uuid"]),),
+        )
 
     def save_job_start(
         self,
@@ -516,26 +767,30 @@ class EdgeControlStore:
             self._connection.commit()
 
     def next_feedback_sequence(self, job_uuid: str) -> int:
+        """原子分配作业反馈序号。
+
+        ``job_uuid`` 是 Edge 作业镜像身份；返回下一个正整数序号。作业不存在时
+        抛出 ``KeyError``，任意数据库异常都会回滚。
+        """
+
         with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            row = self._connection.execute(
-                "SELECT feedback_sequence FROM edge_job_runtime WHERE job_uuid = ?",
-                (job_uuid,),
-            ).fetchone()
-            if row is None:
-                self._connection.rollback()
-                raise KeyError(job_uuid)
-            sequence = int(row["feedback_sequence"]) + 1
-            self._connection.execute(
-                """
-                UPDATE edge_job_runtime
-                SET feedback_sequence = ?, updated_at = ?
-                WHERE job_uuid = ?
-                """,
-                (sequence, time.time(), job_uuid),
-            )
-            self._connection.commit()
-            return sequence
+            with self._immediate_transaction():
+                row = self._connection.execute(
+                    "SELECT feedback_sequence FROM edge_job_runtime WHERE job_uuid = ?",
+                    (job_uuid,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(job_uuid)
+                sequence = int(row["feedback_sequence"]) + 1
+                self._connection.execute(
+                    """
+                    UPDATE edge_job_runtime
+                    SET feedback_sequence = ?, updated_at = ?
+                    WHERE job_uuid = ?
+                    """,
+                    (sequence, time.time(), job_uuid),
+                )
+                return sequence
 
     def save_pending_outcome(
         self,
@@ -545,37 +800,58 @@ class EdgeControlStore:
         error_info: List[Dict[str, Any]],
         unknown_command_ids: Optional[List[str]] = None,
     ) -> bool:
-        """原子保存待提交终态，重复设备回调以第一次终态为准。"""
+        """原子保存待提交终态，重复设备回调以第一次终态为准。
+
+        ``job_uuid`` 是边缘执行镜像（EdgeExecutionMirror）中的作业身份；
+        ``outcome``、``return_info`` 和 ``error_info`` 是待提交结果；
+        ``unknown_command_ids`` 是尚未物理结算的设备命令身份。首次保存返回
+        ``True``，重复回调或作业镜像已退役时返回 ``False``；
+        序列化或数据库失败时完整回滚。已进入结果提交/物理结算的
+        作业拒绝迟到回调，禁止重建失效 Token 待办。
+        """
 
         with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            cursor = self._connection.execute(
-                """
-                INSERT OR IGNORE INTO edge_job_outcome_pending(
-                    job_uuid, outcome, return_info_json, error_info_json,
-                    unknown_command_ids_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    job_uuid,
-                    outcome,
-                    json.dumps(return_info, ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(error_info, ensure_ascii=False, separators=(",", ":")),
-                    json.dumps(unknown_command_ids or [], ensure_ascii=False, separators=(",", ":")),
-                    time.time(),
-                ),
-            )
-            if cursor.rowcount == 1:
-                self._connection.execute(
+            with self._immediate_transaction():
+                runtime = self._connection.execute(
+                    "SELECT status FROM edge_job_runtime WHERE job_uuid = ?",
+                    (job_uuid,),
+                ).fetchone()
+                if runtime is None:
+                    return False
+                runtime_status = str(runtime["status"])
+                if runtime_status in {
+                    "outcome_pending",
+                    "outcome_committed",
+                    "outcome_committed_unknown",
+                    "outcome_retired",
+                } or runtime_status.startswith("outcome_resolution_pending_final:"):
+                    return False
+                cursor = self._connection.execute(
                     """
-                    UPDATE edge_job_runtime
-                    SET status = 'outcome_pending', updated_at = ?
-                    WHERE job_uuid = ?
+                    INSERT OR IGNORE INTO edge_job_outcome_pending(
+                        job_uuid, outcome, return_info_json, error_info_json,
+                        unknown_command_ids_json, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (time.time(), job_uuid),
+                    (
+                        job_uuid,
+                        outcome,
+                        json.dumps(return_info, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(error_info, ensure_ascii=False, separators=(",", ":")),
+                        json.dumps(unknown_command_ids or [], ensure_ascii=False, separators=(",", ":")),
+                        time.time(),
+                    ),
                 )
-            self._connection.commit()
-            return cursor.rowcount == 1
+                if cursor.rowcount == 1:
+                    self._connection.execute(
+                        """
+                        UPDATE edge_job_runtime
+                        SET status = 'outcome_pending', updated_at = ?
+                        WHERE job_uuid = ?
+                        """,
+                        (time.time(), job_uuid),
+                    )
+                return cursor.rowcount == 1
 
     def get_pending_outcome(self, job_uuid: str) -> Optional[StoredOutcome]:
         with self._lock:
@@ -606,91 +882,136 @@ class EdgeControlStore:
         event_payload: Dict[str, Any],
         trace_context: Optional[Dict[str, str]] = None,
     ) -> str:
-        """原子清除 HTTP 待办并创建最终 WebSocket 通知。"""
+        """原子清除 HTTP 待办并创建最终 WebSocket 通知。
+
+        ``job_uuid`` 定位已被 Backend 持久化的结果，``event_payload`` 是严格
+        ``job.outcome_committed`` 线协议（wire）载荷，
+        ``trace_context`` 是可选追踪上下文。
+        返回新事件 UUID；待办不存在时返回空字符串。携带执行未知命令的作业
+        保留独立本地状态，直到对账恢复（Reconciliation）完成物理结算。
+        UNKNOWN JSON 不是列表时抛出 ``ValueError``；序列化或 SQLite
+        异常原样抛出且整个状态转换回滚。
+        """
 
         event_uuid = str(uuid.uuid4())
         created_at = _utc_now()
         trace_context = trace_context or {}
         with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            pending = self._connection.execute(
-                "SELECT 1 FROM edge_job_outcome_pending WHERE job_uuid = ?",
-                (job_uuid,),
-            ).fetchone()
-            if pending is None:
-                self._connection.rollback()
-                return ""
-            traceparent = str(trace_context.get("traceparent") or "")
-            tracestate = str(trace_context.get("tracestate") or "")
-            if not traceparent and not tracestate:
-                runtime = self._connection.execute(
+            with self._immediate_transaction():
+                pending = self._connection.execute(
                     """
-                    SELECT traceparent, tracestate FROM edge_job_runtime
-                    WHERE job_uuid = ?
+                    SELECT unknown_command_ids_json
+                    FROM edge_job_outcome_pending WHERE job_uuid = ?
                     """,
                     (job_uuid,),
                 ).fetchone()
-                if runtime is not None:
-                    traceparent = str(runtime["traceparent"])
-                    tracestate = str(runtime["tracestate"])
-            self._connection.execute(
-                """
-                INSERT INTO edge_event_outbox(
-                    event_uuid, type, payload_json, created_at,
-                    traceparent, tracestate
-                ) VALUES (?, 'job.outcome_committed', ?, ?, ?, ?)
-                """,
-                (
-                    event_uuid,
-                    json.dumps(
-                        event_payload, ensure_ascii=False, separators=(",", ":")
+                if pending is None:
+                    return ""
+                # 该集合是工作流任务业务终态之外的物理不确定事实；非空时
+                # Backend 结果 ACK 不能被解释成物理结算（PhysicalSettlement）。
+                pending_unknown_command_ids = json.loads(
+                    str(pending["unknown_command_ids_json"])
+                )
+                if not isinstance(pending_unknown_command_ids, list):
+                    raise ValueError("pending outcome unknown command IDs must be a list")
+                runtime_status = (
+                    "outcome_committed_unknown"
+                    if pending_unknown_command_ids
+                    else "outcome_committed"
+                )
+                traceparent = str(trace_context.get("traceparent") or "")
+                tracestate = str(trace_context.get("tracestate") or "")
+                if not traceparent and not tracestate:
+                    runtime = self._connection.execute(
+                        """
+                        SELECT traceparent, tracestate FROM edge_job_runtime
+                        WHERE job_uuid = ?
+                        """,
+                        (job_uuid,),
+                    ).fetchone()
+                    if runtime is not None:
+                        traceparent = str(runtime["traceparent"])
+                        tracestate = str(runtime["tracestate"])
+                self._connection.execute(
+                    """
+                    INSERT INTO edge_event_outbox(
+                        event_uuid, type, payload_json, created_at,
+                        traceparent, tracestate
+                    ) VALUES (?, 'job.outcome_committed', ?, ?, ?, ?)
+                    """,
+                    (
+                        event_uuid,
+                        json.dumps(
+                            event_payload, ensure_ascii=False, separators=(",", ":")
+                        ),
+                        created_at,
+                        traceparent,
+                        tracestate,
                     ),
-                    created_at,
-                    traceparent,
-                    tracestate,
-                ),
-            )
-            self._connection.execute(
-                """
-                UPDATE edge_job_runtime
-                SET status = 'outcome_committed', updated_at = ?
-                WHERE job_uuid = ?
-                """,
-                (time.time(), job_uuid),
-            )
-            self._connection.execute(
-                "DELETE FROM edge_job_outcome_pending WHERE job_uuid = ?",
-                (job_uuid,),
-            )
-            self._connection.commit()
+                )
+                self._connection.execute(
+                    """
+                    UPDATE edge_job_runtime
+                    SET status = CASE
+                            WHEN status LIKE 'outcome_resolution_pending_final:%'
+                            THEN status ELSE ?
+                        END,
+                        job_access_token = '', updated_at = ?
+                    WHERE job_uuid = ?
+                    """,
+                    (runtime_status, time.time(), job_uuid),
+                )
+                self._connection.execute(
+                    "DELETE FROM edge_job_outcome_pending WHERE job_uuid = ?",
+                    (job_uuid,),
+                )
         return event_uuid
 
     def retire_pending_outcome(self, job_uuid: str) -> bool:
-        """退役 Backend 已明确拒绝的结果，避免永久重放失效 Job Token。"""
+        """退役 Backend 已明确拒绝的结果，避免永久重放失效作业 Token。
+
+        ``job_uuid`` 是被 Backend 权威终结的作业身份；实际删除待办时返回
+        ``True``，不存在时返回 ``False``。待办与不再承担恢复职责的作业镜像
+        在同一事务删除；若最终 UNKNOWN 事件仍等待 ACK，则保留其精确事件标记，
+        由 ACK 完成设备根命令退役后再删除。失败时完整回滚。
+        """
 
         with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            pending = self._connection.execute(
-                "SELECT 1 FROM edge_job_outcome_pending WHERE job_uuid = ?",
-                (job_uuid,),
-            ).fetchone()
-            if pending is None:
-                self._connection.rollback()
-                return False
-            self._connection.execute(
-                """
-                UPDATE edge_job_runtime
-                SET status = 'outcome_retired', updated_at = ?
-                WHERE job_uuid = ?
-                """,
-                (time.time(), job_uuid),
-            )
-            self._connection.execute(
-                "DELETE FROM edge_job_outcome_pending WHERE job_uuid = ?",
-                (job_uuid,),
-            )
-            self._connection.commit()
-            return True
+            with self._immediate_transaction():
+                pending = self._connection.execute(
+                    "SELECT 1 FROM edge_job_outcome_pending WHERE job_uuid = ?",
+                    (job_uuid,),
+                ).fetchone()
+                if pending is None:
+                    return False
+                self._connection.execute(
+                    "DELETE FROM edge_job_outcome_pending WHERE job_uuid = ?",
+                    (job_uuid,),
+                )
+                runtime = self._connection.execute(
+                    "SELECT status FROM edge_job_runtime WHERE job_uuid = ?",
+                    (job_uuid,),
+                ).fetchone()
+                keep_for_final_ack = False
+                if runtime is not None:
+                    status = str(runtime["status"])
+                    prefix = "outcome_resolution_pending_final:"
+                    if status.startswith(prefix):
+                        final_event_uuid = status.removeprefix(prefix)
+                        keep_for_final_ack = self._connection.execute(
+                            """
+                            SELECT 1 FROM edge_event_outbox
+                            WHERE event_uuid = ?
+                              AND type = 'job.unknown_resolution_committed'
+                            """,
+                            (final_event_uuid,),
+                        ).fetchone() is not None
+                if not keep_for_final_ack:
+                    self._connection.execute(
+                        "DELETE FROM edge_job_runtime WHERE job_uuid = ?",
+                        (job_uuid,),
+                    )
+                return True
 
 
 def _stored_job(row: sqlite3.Row) -> StoredJob:

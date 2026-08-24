@@ -1337,6 +1337,29 @@ class HostNode(BaseROS2DeviceNode):
             return []
         return [str(command_id).strip() for command_id in reader() if str(command_id).strip()]
 
+    def retire_settled_device_command(self, device_command_id: str) -> int:
+        """向所有持久设备驱动广播 Backend 已确认的物理结算身份。
+
+        ``device_command_id`` 是工作流节点作业（WorkflowNodeJob）派生的稳定
+        设备命令身份；返回实际退役记录数。重复 ACK 必须保持幂等；驱动拥有
+        自己的账本语义，UNKNOWN 和非终态记录必须拒删，驱动异常原样传播以便
+        上层保留事件并重试。
+        """
+
+        command_id = str(device_command_id).strip()
+        if not command_id:
+            return 0
+        retired = 0
+        for device_id in list(self.devices_instances):
+            retire = getattr(
+                self._device_driver(str(device_id)),
+                "retire_settled_command",
+                None,
+            )
+            if callable(retire) and bool(retire(command_id)):
+                retired += 1
+        return retired
+
     def _device_driver(self, device_id: str) -> Any:
         """隐藏 HostNode 设备包装器的内部导航并返回底层驱动实例。"""
 

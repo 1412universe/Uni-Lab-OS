@@ -131,10 +131,17 @@ class EdgeDataPlane:
         error_info: List[Dict[str, Any]],
         unknown_command_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        # Backend 是共享 API 合同的权威；unknown command 集合通过 Edge
-        # registration 上报，不能混入严格校验的 Job outcome 请求体。
-        # 该参数仅由 LocalEdgeAuthority 用于本地不确定命令对账。
-        _ = unknown_command_ids
+        """提交作业结果以及仍待对账恢复的物理命令身份。
+
+        ``job`` 提供 Backend 工作流节点作业（WorkflowNodeJob）、
+        工作流任务（WorkflowTask）、节点和命令身份；``outcome``、
+        ``return_info`` 与 ``error_info`` 描述 Edge 观察结果；
+        ``unknown_command_ids`` 标识尚未完成物理结算（PhysicalSettlement）的
+        设备命令。返回 Backend 的持久结果对象；鉴权、冲突和传输错误由
+        :meth:`_request` 以 ``EdgeProtocolHTTPError`` 抛出。固定
+        ``Idempotency-Key`` 使同一作业的重试只创建一个结果。
+        """
+
         headers = _job_headers(job)
         headers["Idempotency-Key"] = f"{job.job_uuid}:outcome:v1"
         return self._request(
@@ -149,6 +156,7 @@ class EdgeDataPlane:
                 "outcome": outcome,
                 "return_info": return_info,
                 "error_info": error_info,
+                "unknown_command_ids": unknown_command_ids or [],
             },
         )
 
