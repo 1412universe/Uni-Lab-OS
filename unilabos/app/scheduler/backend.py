@@ -137,6 +137,7 @@ class JobExecutionBackend:
             start_time=time.time(),
             action_type=payload.get("action_type", ""),
             action_args=payload.get("action_args", {}) or {},
+            always_free=bool(payload.get("always_free", False)),
             sample_material=payload.get("sample_material", {}) or {},
             server_info=payload.get("server_info"),
             trace_context=None,

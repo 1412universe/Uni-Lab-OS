@@ -2675,6 +2675,7 @@ class HostNode(BaseROS2DeviceNode):
         target_device: DeviceSlot,
         mount_resource: "ResourceSlot",
         site: str = "",
+        site_uuid: str = "",
     ) -> TransferResourceReturn:
         """把已经物理就位的物料在系统中改挂到目标设备孔位。
 
@@ -2684,11 +2685,13 @@ class HostNode(BaseROS2DeviceNode):
         复用 base_device_node.transfer_resource_to_another（移除来源 → 云端改父 → 增加到目标）。
         transfer 只负责"系统记账"，物理搬运由前序节点（manual_confirm/机械臂 pick+place）保证。
 
+        site_uuid：目标库位的稳定身份，优先于 ``site``。当只提供 UUID 时，OS
+        从本地库存权威读取规范库位名供设备执行；同时提供时二者必须指向同一库位。
         site：目标父级（carrier/deck/plate 等带 _ordering 的容器）上的库位名，显式指定物料落在哪个库位；
         目标端通过 resolve_site_spot（与 set_substance 同一套 slot/site 解析：int 索引 / "A1" 标签 /
-        名称匹配）换算成 assign_child_resource 的 spot。空串视作不指定（由父级默认排布）。注意：若物料 extra
-        里带了前端隐式写入的 update_resource_site，目标端会用 extra 的值覆盖此处显式 site
-        （见 base_device_node.transfer_to_new_resource）。
+        名称匹配）换算成 assign_child_resource 的 spot。空串视作不指定（由父级默认排布）。
+        若物料 extra 里带了前端隐式写入的 ``update_resource_site``，它只在未显式
+        指定 ``site`` 时作为旧调用兜底，不能覆盖已经按稳定身份校验的目标。
 
         注意：底层按"运行该动作的节点"作为来源执行本地移除，host 运行时来源即 host（根节点）。
         若物料此前已被 apply_deduct_resource 挂到某边缘设备，该设备的本地副本不会在此处被移除，
@@ -2699,25 +2702,56 @@ class HostNode(BaseROS2DeviceNode):
             target_device: 接收物料的目标设备身份；可带 ``/devices/`` 前缀。
             mount_resource: 目标设备上承载该物料的父物料实例。
             site: 目标父物料中的库位（Site）名称；空串表示使用默认排布。
+            site_uuid: 可选库位稳定身份；非空时优先使用并校验归属、名称与占用。
 
         Returns:
             返回四键字典；物料和目标父物料使用规范 ``ResourceSlot`` UUID 引用，
             ``site`` 回传库位名，``result`` 是底层转移结果的稳定字符串。
 
         Raises:
-            ValueError: 待转移物料或目标父物料缺失，或底层转移拒绝时抛出。
+            ValueError: 必需物料缺失、库位不存在/归属不符/已占用，或底层转移
+                拒绝时抛出。
         """
         if resource is None:
             raise ValueError("转移失败：未接收到待转移物料")
         if mount_resource is None:
             raise ValueError("转移失败：未指定挂载目标孔位")
         target_id = str(target_device).split("/")[-1]
-        result = await self.transfer_resource_to_another(
-            [resource], target_id, [mount_resource], [site if site else None]
-        )
         from unilabos.app.scheduler.integration import get_inventory_service
 
         inventory = get_inventory_service()
+        if site_uuid or site:
+            store = getattr(inventory, "store", None)
+            if callable(getattr(store, "query_one", None)):
+                from unilabos.app.scheduler.site_target import (
+                    SiteTargetResolutionError,
+                    resolve_site_target,
+                )
+
+                try:
+                    target_site = resolve_site_target(
+                        inventory,
+                        owner_material_uuid=_stable_resource_uuid(mount_resource),
+                        site_uuid=site_uuid,
+                        site_name=site,
+                        occupant_material_uuid=_stable_resource_uuid(resource),
+                    )
+                except SiteTargetResolutionError as error:
+                    if site_uuid or error.code != "site_not_found":
+                        raise
+                    self.lab_logger().warning(
+                        "[transfer_resource] 旧库位名称未进入本地 Site 投影，"
+                        f"沿用设备侧名称执行 site={site}"
+                    )
+                else:
+                    site = target_site.name
+            elif site_uuid:
+                raise ValueError(
+                    "转移失败：提供 site_uuid 时必须先初始化本地库存权威"
+                )
+        result = await self.transfer_resource_to_another(
+            [resource], target_id, [mount_resource], [site if site else None]
+        )
         if inventory is not None:
             inventory.move_instance(
                 _stable_resource_uuid(resource),
@@ -2748,6 +2782,7 @@ class HostNode(BaseROS2DeviceNode):
         target_device: str,
         mount_resource: ResourceSlot,
         site: str = "",
+        site_uuid: str = "",
     ) -> TransferResourceReturn:
         """
         转移物料到目标设备的目标孔位（系统记账，不含物理搬运）。物理搬运由前序节点保证：
@@ -2765,6 +2800,8 @@ class HostNode(BaseROS2DeviceNode):
             mount_resource[目标孔位]: 目标设备上的单个挂载孔位/父物料（list/dict 两形态）。
             site[目标库位]: 目标父级容器上的库位名，显式指定物料落在哪个库位（carrier/deck/plate 等按
                 _ordering 换算成 spot）；不传则由父级默认排布。
+            site_uuid[目标库位 UUID]: 可选稳定身份，优先于 ``site``；只传该值时
+                OS 自动解析设备执行所需库位名。为兼容旧工作流可继续只传 ``site``。
 
         Returns:
             四键运行结果字典；两个物料字段按规范单对象引用返回。静态类型化动作
@@ -2772,9 +2809,15 @@ class HostNode(BaseROS2DeviceNode):
             工作流节点继续连接。
 
         Raises:
-            ValueError: 必需物料缺失或转移执行失败时由既有执行核心抛出。
+            ValueError: 必需物料缺失、目标库位校验失败或转移执行失败时抛出。
         """
-        return await self._do_transfer_resource(resource, target_device, mount_resource, site)
+        return await self._do_transfer_resource(
+            resource,
+            target_device,
+            mount_resource,
+            site,
+            site_uuid,
+        )
 
     @legacy_action(
         description="人工搬运闸门：到该步暂停等人工确认（人工把物料搬运到位），仅透传物料，不做系统转移（人工工作流中间步，对应机械臂 pick/place）",

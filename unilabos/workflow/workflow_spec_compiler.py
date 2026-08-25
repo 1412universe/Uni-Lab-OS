@@ -203,6 +203,7 @@ class WorkflowSpecCompiler:
                     param_schema=param_schema,
                     node_type="ILab",
                     disabled=False,
+                    always_free=bool(node.get("always_free", False)),
                     material_requirements=requirements,
                 )
             )

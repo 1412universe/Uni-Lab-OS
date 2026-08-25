@@ -305,6 +305,29 @@ def test_execution_plan_is_the_only_runtime_static_input() -> None:
     ]
 
 
+def test_compiler_preserves_frozen_always_free_execution_semantics() -> None:
+    """编译器必须保留动作模板冻结的免设备排队语义。
+
+    参数：无。返回：无。异常：若执行计划中的 ``always_free`` 在调度模型边界
+    丢失，断言失败，避免运行时重新查询可变注册表。
+    """
+
+    planned_action = _planned_action()
+    planned_action["always_free"] = True
+    execution_plan = {
+        "run_mode": "normal",
+        "nodes": [planned_action],
+        "edges": [],
+    }
+
+    spec = WorkflowSpecCompiler().compile(
+        _task_from_plan(execution_plan),
+        [_job(JOB_A_UUID, NODE_A_UUID)],
+    )
+
+    assert spec.nodes[0].always_free is True
+
+
 def test_real_plan_freezes_executor_binding_and_action_contract() -> None:
     """真实计划必须冻结固定执行器与完整动作合同。
 
@@ -317,6 +340,21 @@ def test_real_plan_freezes_executor_binding_and_action_contract() -> None:
     assert plan["nodes"][0]["device_id"] == "reactor-a"
     assert plan["nodes"][0]["action_name"] == "distribute"
     assert plan["nodes"][0]["action_type"] == "UniLabJsonCommand"
+
+
+def test_real_plan_freezes_always_free_from_action_template() -> None:
+    """执行计划必须冻结动作模板的免设备排队语义。
+
+    参数：无。返回：无。异常：若模板元数据未进入不可变执行计划，断言失败，
+    防止运行时注册表变化改写同一任务的并发边界。
+    """
+
+    graph = _single_action_graph()
+    graph["node_templates"][0]["meta_data"]["unilab"]["always_free"] = True
+
+    plan, _jobs = _build_plan(graph)
+
+    assert plan["nodes"][0]["always_free"] is True
 
 
 def test_compiler_preserves_final_material_reference_param() -> None:

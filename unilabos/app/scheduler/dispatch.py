@@ -47,9 +47,15 @@ def build_job_start_payload(
     action_name: str,
     action_type: str,
     action_args: Any,
+    always_free: bool = False,
 ) -> DispatchPayload:
-    """与云端 job_start 消息同形状（engine.SendActionData / ws_client JobAddReq）。"""
-    return DispatchPayload(
+    """构造与云端 ``job_start`` 同形状的执行载荷。
+
+    参数：前七项描述作业、任务、工作流节点、设备动作及最终参数；
+    ``always_free`` 表示动作不占设备排队锁。返回：可交给执行微后端的载荷。
+    异常：无；身份与参数合同由调用方在越过执行边界前校验。
+    """
+    payload = DispatchPayload(
         job_id=job_id,
         task_id=task_id,
         node_id=node_id,
@@ -60,6 +66,11 @@ def build_job_start_payload(
         action_args=action_args,
         sample_material={},
     )
+    # 旧微后端与严格测试载荷没有该字段；只在动作确实免设备排队时扩展，保持
+    # 普通动作 wire 形状完全不变。
+    if always_free:
+        payload["always_free"] = True
+    return payload
 
 
 __all__ = [

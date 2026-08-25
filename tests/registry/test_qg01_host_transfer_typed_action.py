@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from unilabos.registry.registry import Registry
 from unilabos.registry.template_projection import RegistryTemplateProjection
+from unilabos.ros.nodes.base_device_node import BaseROS2DeviceNode
 from unilabos.ros.nodes.presets.host_node import HostNode, _dump_resource_slot
 from unilabos.workflow.store import WorkflowStore
 
@@ -57,6 +60,7 @@ def test_builtin_host_transfer_is_projected_with_material_lock_contract(
         "target_device": "target_device",
         "mount_resource": "mount_resource",
         "site": "site",
+        "site_uuid": "site_uuid",
     }
     assert action_mapping["placeholder_keys"] == {
         "resource": "unilabos_resources",
@@ -89,6 +93,7 @@ def test_builtin_host_transfer_is_projected_with_material_lock_contract(
     )
     assert transfer_template["node_type"] == "ILab"
     assert transfer_template["meta_data"]["unilab"]["contract_kind"] == "typed"
+    assert transfer_template["meta_data"]["unilab"]["always_free"] is True
     assert (
         transfer_template["meta_data"]["unilab"]["executor_kind"]
         == "material_transfer"
@@ -98,6 +103,11 @@ def test_builtin_host_transfer_is_projected_with_material_lock_contract(
     ]["properties"]["goal"]["properties"]
     assert goal_properties["resource"]["x-unilabos-material-lock"] is True
     assert goal_properties["mount_resource"]["x-unilabos-material-lock"] is True
+    assert goal_properties["site_uuid"]["type"] == "string"
+    assert "site_uuid" not in transfer_template["meta_data"]["unilab"][
+        "action_contract_schema"
+    ]["properties"]["goal"].get("required", [])
+    assert "x-unilabos-site-selector" not in goal_properties["site_uuid"]
     # ``handles`` 是 SZLab 工作流源码（Workflow Source）静态编译时唯一可用的
     # 输入、输出与依赖端口全集，不能依赖已经删除的旧装饰器 handles。
     handles = {
@@ -111,6 +121,7 @@ def test_builtin_host_transfer_is_projected_with_material_lock_contract(
         ("mount_resource", "source"),
         ("site", "target"),
         ("site", "source"),
+        ("site_uuid", "target"),
         ("target_device", "target"),
         ("ready", "target"),
         ("ready", "source"),
@@ -126,7 +137,7 @@ class _TransferRuntime:
         参数：无。返回：无。异常：无；``call`` 只保存本测试观察的参数顺序。
         """
 
-        self.call: tuple[Any, str, Any, str] | None = None
+        self.call: tuple[Any, str, Any, str, str] | None = None
 
     async def _do_transfer_resource(
         self,
@@ -134,16 +145,18 @@ class _TransferRuntime:
         target_device: str,
         mount_resource: Any,
         site: str,
+        site_uuid: str,
     ) -> dict[str, Any]:
         """记录转运参数并返回规范 ResourceSlot 四键结果字典。
 
         参数：``resource`` 与 ``mount_resource`` 是待转移物料和目标父物料；
-        ``target_device`` 是目标设备身份；``site`` 是目标库位（Site）名。返回：
+        ``target_device`` 是目标设备身份；``site`` 是目标库位（Site）名；
+        ``site_uuid`` 是可选稳定身份。返回：
         保留 ``resource/mount_resource/site/result`` 的四键形状。异常：无；
         本替身不触发物理动作或物料权威写入。
         """
 
-        self.call = (resource, target_device, mount_resource, site)
+        self.call = (resource, target_device, mount_resource, site, site_uuid)
         return {
             "resource": {"uuid": "resource-uuid"},
             "mount_resource": {"uuid": "mount-uuid"},
@@ -159,6 +172,14 @@ class _TransferExecutionRuntime:
         """保存共享调用记录；参数 ``calls`` 供库存替身共同追加事实。"""
 
         self.calls = calls
+
+    def lab_logger(self) -> logging.Logger:
+        """返回测试日志器，覆盖兼容降级路径的告警接缝。
+
+        参数：无。返回：当前测试模块日志器。异常：无。
+        """
+
+        return logging.getLogger(__name__)
 
     async def transfer_resource_to_another(
         self,
@@ -178,10 +199,31 @@ class _TransferExecutionRuntime:
 class _InventoryTransferRecorder:
     """记录主机动作提交到边缘库存权威（Inventory Authority）的移动事实。"""
 
-    def __init__(self, calls: list[tuple[Any, ...]]) -> None:
-        """保存共享调用记录；参数 ``calls`` 用于验证提交发生在转运之后。"""
+    def __init__(
+        self,
+        calls: list[tuple[Any, ...]],
+        *,
+        site_row: dict[str, Any] | None = None,
+    ) -> None:
+        """保存共享记录与可选库位查询结果。
+
+        参数：``calls`` 用于验证提交顺序；``site_row`` 非空时同时模拟库存存储
+        的库位权威查询。返回：无。异常：无。
+        """
 
         self.calls = calls
+        self._site_row = site_row
+        if site_row is not None:
+            self.store = self
+
+    def query_one(self, _sql: str, _params: tuple[Any, ...]) -> dict[str, Any] | None:
+        """返回预置库位行，供 ``site_uuid`` 直接调用路径解析。
+
+        参数：SQL 与参数只保持库存查询接口形状，本替身不解释其内容。返回：
+        预置库位行或 ``None``。异常：无。
+        """
+
+        return self._site_row
 
     def move_instance(
         self,
@@ -203,7 +245,7 @@ class _InventoryTransferRecorder:
 async def test_typed_host_transfer_preserves_direct_runtime_call_shape() -> None:
     """类型化动作（Typed Action）必须保留调用参数和规范四键结果字典。
 
-    参数：无。返回：无；断言装饰器包装后的公开方法仍把四个参数原样交给既有
+    参数：无。返回：无；断言装饰器包装后的公开方法仍把五个参数原样交给既有
     执行核心，并把规范 ResourceSlot 结果对象原样返回。异常：本测试不执行实际设备
     动作；若包装层改写参数或结果则断言失败。
     """
@@ -222,7 +264,7 @@ async def test_typed_host_transfer_preserves_direct_runtime_call_shape() -> None
         "L1B1",
     )
 
-    assert runtime.call == (resource, "target-device", mount_resource, "L1B1")
+    assert runtime.call == (resource, "target-device", mount_resource, "L1B1", "")
     assert result == {
         "resource": {"uuid": "resource-uuid"},
         "mount_resource": {"uuid": "mount-uuid"},
@@ -272,6 +314,151 @@ async def test_host_transfer_commits_edge_inventory_after_resource_tree_transfer
         ),
     ]
     assert result["result"] == "转运完成"
+
+
+@pytest.mark.asyncio
+async def test_host_transfer_accepts_site_uuid_without_site_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """直接执行只传 ``site_uuid`` 时也应先解析名称再进行物理转运。
+
+    参数：``monkeypatch`` 注入带库位行的库存权威替身。返回：无；断言设备层和
+    库存提交都使用数据库规范名称。异常：解析或归属失败时测试保持 RED。
+    """
+
+    calls: list[tuple[Any, ...]] = []
+    resource_uuid = "10000000-0000-4000-8000-000000000001"
+    owner_uuid = "20000000-0000-4000-8000-000000000002"
+    site_uuid = "30000000-0000-4000-8000-000000000003"
+    inventory = _InventoryTransferRecorder(
+        calls,
+        site_row={
+            "uuid": site_uuid,
+            "material_uuid": owner_uuid,
+            "name": "L2C3",
+            "occupied_material_uuid": None,
+        },
+    )
+    monkeypatch.setattr(
+        "unilabos.app.scheduler.integration.get_inventory_service",
+        lambda: inventory,
+    )
+    runtime = _TransferExecutionRuntime(calls)
+
+    result = await HostNode._do_transfer_resource(
+        runtime,
+        {"uuid": resource_uuid},
+        "host_node",
+        {"uuid": owner_uuid},
+        site_uuid=site_uuid,
+    )
+
+    assert calls[0][-1] == ["L2C3"]
+    assert calls[1][3] == "L2C3"
+    assert result["site"] == "L2C3"
+
+
+def test_transfer_runtime_prefers_explicit_site_over_legacy_extra() -> None:
+    """验证显式库位不会被物料上的旧兼容提示覆盖。
+
+    参数：无。返回：无。异常：若资源树执行使用 ``update_resource_site`` 覆盖
+    已校验的显式 ``site``，断言报告目标库位身份漂移。
+    """
+
+    class _ParentResource:
+        """记录最终传给 PLR 父物料的 ``spot``。"""
+
+        def __init__(self) -> None:
+            """初始化尚未分配子物料的父物料替身。
+
+            参数：无。返回：无。异常：无。
+            """
+
+            self._ordering: dict[str, Any] = {}
+            self.received_spot: Any = None
+
+        def assign_child_resource(
+            self,
+            _resource: Any,
+            location: Any = None,
+            *,
+            spot: Any = None,
+        ) -> None:
+            """记录显式库位参数。
+
+            参数：物料与 ``location`` 仅保持 PLR 接口形状；``spot`` 是最终库位。
+            返回：无。异常：无。
+            """
+
+            del location
+            self.received_spot = spot
+
+    parent = _ParentResource()
+    material = SimpleNamespace(
+        name="material",
+        parent=None,
+        unilabos_extra={"update_resource_site": "LEGACY-SITE"},
+    )
+    runtime = SimpleNamespace(
+        uuid="host-node",
+        identifier="host-node",
+        lab_logger=lambda: logging.getLogger(__name__),
+        resource_tracker=SimpleNamespace(
+            uuid_to_resources={"parent-uuid": parent},
+            resources=[],
+        ),
+        driver_instance=SimpleNamespace(),
+    )
+    tree = SimpleNamespace(
+        root_node=SimpleNamespace(
+            res_content=SimpleNamespace(
+                parent_uuid="parent-uuid",
+                name="parent",
+            )
+        )
+    )
+
+    result = BaseROS2DeviceNode.transfer_to_new_resource(
+        runtime,
+        material,
+        tree,
+        {"site": "EXPLICIT-SITE"},
+    )
+
+    assert result is parent
+    assert parent.received_spot == "EXPLICIT-SITE"
+
+
+@pytest.mark.asyncio
+async def test_host_transfer_preserves_unknown_legacy_site_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧库位名尚未进入 Site 投影时，Host 仍应按原名称执行。
+
+    参数：``monkeypatch`` 注入查询不到库位的库存替身。返回：无；断言不会因为
+    新库位锁功能阻断旧动作。异常：兼容分支失效时测试保持 RED。
+    """
+
+    calls: list[tuple[Any, ...]] = []
+    inventory = _InventoryTransferRecorder(calls)
+    inventory.store = inventory
+    monkeypatch.setattr(
+        "unilabos.app.scheduler.integration.get_inventory_service",
+        lambda: inventory,
+    )
+    runtime = _TransferExecutionRuntime(calls)
+
+    result = await HostNode._do_transfer_resource(
+        runtime,
+        {"uuid": "10000000-0000-4000-8000-000000000001"},
+        "host_node",
+        {"uuid": "20000000-0000-4000-8000-000000000002"},
+        site="LEGACY-SITE",
+    )
+
+    assert calls[0][-1] == ["LEGACY-SITE"]
+    assert calls[1][3] == "LEGACY-SITE"
+    assert result["site"] == "LEGACY-SITE"
 
 
 def test_transfer_result_projects_device_root_to_resource_slot_reference() -> None:

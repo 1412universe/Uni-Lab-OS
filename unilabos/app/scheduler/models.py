@@ -104,6 +104,8 @@ class WorkflowNode:
     # 比较请用 is_ilab()，容忍大小写差异）
     node_type: str = "ILab"
     disabled: bool = False
+    # 注册表动作声明的免设备排队语义；仍受物料/库位执行资源键约束。
+    always_free: bool = False
     # 可选物料需求（向后兼容：空列表 = 无物料，行为与旧 workflow 完全一致）
     material_requirements: List[MaterialRequirement] = field(default_factory=list)
 
@@ -259,6 +261,7 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
         param_schema=param_schema,
         node_type=normalize_node_type(data.get("node_type") or data.get("type")),
         disabled=bool(data.get("disabled", False)),
+        always_free=bool(data.get("always_free", False)),
         material_requirements=[
             MaterialRequirement.from_dict(r)
             for r in (data.get("material_requirements") or [])

@@ -24,10 +24,12 @@
   物料状态不明，同样转 quarantined 待复核
 - 工作流终态（failed/canceled）：剩余 active 预留自动 release（依据 DB，不依赖内存）
 
-动作物料锁（Action Material Lock，注入 ``material_lock_resolver`` 时启用）：
+动作物料锁与库位锁（Action Material Lock / Site Lock）：
 
-- 下发前校验最终参数，并从规范动作 Schema 的锁标记提取物料 UUID（Material UUID）；
-  与在执行作业（Job）的锁键冲突 → 本轮跳过（等释放后的重排）
+- 下发前校验最终参数，并从规范动作 Schema 提取物料 UUID
+- ``transfer_resource`` 的 ``site_uuid`` 是独立可选参数；优先按稳定 UUID 查库位，
+  未提供时再按 ``mount_resource.uuid + site`` 名称解析
+- 整物料锁覆盖其所有子库位；同一库位串行，同一物料下不同库位可并行
 - 实体型物料需求的 ``instance_uuid`` 自动并入同一物料锁键
 - job 完成 / 工作流取消时释放
 """
@@ -39,6 +41,7 @@ import threading
 import time
 import uuid as uuid_mod
 from collections import deque
+from collections.abc import Mapping
 from typing import Any, Callable, Deque, Dict, List, Optional, Set
 
 from unilabos.app.scheduler.dag_state import WorkflowRun
@@ -62,6 +65,17 @@ from unilabos.app.scheduler.ordering import (
     TaskOrderer,
 )
 from unilabos.app.scheduler.param_resolver import ParamResolveError
+from unilabos.app.scheduler.resource_lock import (
+    conflicting_resource_lock_keys,
+    material_lock_key,
+    normalize_resource_lock_keys,
+    site_lock_key,
+)
+from unilabos.app.scheduler.site_target import (
+    ResolvedSiteTarget,
+    SiteTargetResolutionError,
+    resolve_site_target,
+)
 from unilabos.registry.material_lock_schema import (
     MaterialLockSchemaError,
     compile_material_lock_schema,
@@ -74,6 +88,32 @@ from unilabos.utils.tracing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resource_argument_uuid(value: Any, *, argument_name: str) -> str:
+    """从动作物料引用中读取并规范化稳定 UUID。
+
+    参数：``value`` 可以是规范 ``ResourceSlot`` 字典或内部 PLR 富对象；
+    ``argument_name`` 用于错误说明。返回：规范小写 UUID 字符串。异常：字段缺失
+    或格式非法时抛 ``SiteTargetResolutionError``，防止库位锁退化为名称猜测。
+    """
+
+    raw_uuid: Any = None
+    if isinstance(value, Mapping):
+        raw_uuid = value.get("uuid") or value.get("unilabos_uuid")
+    else:
+        raw_uuid = getattr(value, "unilabos_uuid", None) or getattr(
+            value,
+            "uuid",
+            None,
+        )
+    try:
+        return str(uuid_mod.UUID(str(raw_uuid)))
+    except (AttributeError, TypeError, ValueError) as error:
+        raise SiteTargetResolutionError(
+            "invalid_resource_uuid",
+            f"{argument_name} 缺少合法 uuid",
+        ) from error
 
 
 def _device_key_from_strict_action_key(action_key: Any) -> str | None:
@@ -162,7 +202,7 @@ class EdgeScheduler:
         self._material_workflows: Set[str] = set()
         # 动作物料锁解析器消费规范动作 Schema；None 仅用于无注册表的隔离测试。
         self._material_lock_resolver = material_lock_resolver
-        # job_id -> 该作业（Job）持有的物料锁键；完成或取消时释放。
+        # job_id -> 该作业（Job）持有的物料与库位锁键；完成或取消时释放。
         self._job_resource_locks: Dict[str, Set[str]] = {}
         # 时长预估器（declared / historical / auto 三种 mode，内含两种计算模式）
         self._estimator = estimator or DurationEstimator()
@@ -841,9 +881,11 @@ class EdgeScheduler:
             # 同一设备上的不同动作不会在本轮或跨重排并行派发。
             action_key = task.node.device_action_key
             device_key = task.node.device_lock_key
-            # manual_confirm 是 always-free 特殊节点：不占设备动作锁，也不受其阻塞
+            # 人工确认和动作合同声明的 always_free 均不占设备锁；后者仍需通过
+            # 下方物料/库位执行资源键准入，不能借免排队语义绕过资源安全。
             manual_confirm = task.node.is_manual_confirm()
-            if not manual_confirm and (action_key in busy or device_key in busy):
+            bypass_device_lock = manual_confirm or task.node.always_free
+            if not bypass_device_lock and (action_key in busy or device_key in busy):
                 # 动作或设备已被占用：本轮跳过，等占用作业完成后准入重试。
                 continue
 
@@ -860,25 +902,38 @@ class EdgeScheduler:
                 run.mark_failed(task.node.id)
                 continue
 
-            # Schema 解析失败必须关闭执行，不能退化为“没有物料锁”。
+            # Schema 或库位解析失败必须关闭执行，不能退化为“没有资源锁”。
             try:
-                lock_keys = self._resource_lock_keys(task.node, resolved_args)
-            except MaterialLockSchemaError as error:
+                resolved_args, resolved_site = self._resolve_transfer_site_target(
+                    task.node,
+                    resolved_args,
+                )
+                lock_keys = self._resource_lock_keys(
+                    task.node,
+                    resolved_args,
+                    resolved_site=resolved_site,
+                )
+            except (MaterialLockSchemaError, SiteTargetResolutionError) as error:
                 logger.error(
-                    "[EdgeScheduler] 动作物料锁解析失败 wf=%s node=%s code=%s path=%s: %s",
+                    "[EdgeScheduler] 动作资源锁解析失败 "
+                    "wf=%s node=%s code=%s path=%s: %s",
                     task.workflow_id,
                     task.node.id,
                     error.code,
-                    error.path,
+                    getattr(error, "path", "/"),
                     error.message,
                 )
                 run.mark_failed(task.node.id)
                 continue
-            if lock_keys & held_resource_locks:
+            conflicting_lock_keys = conflicting_resource_lock_keys(
+                lock_keys,
+                held_resource_locks,
+            )
+            if conflicting_lock_keys:
                 logger.info(
                     "[EdgeScheduler] node %s waits for resource lock(s) %s (wf=%s)",
                     task.node.id,
-                    sorted(lock_keys & held_resource_locks),
+                    sorted(conflicting_lock_keys),
                     task.workflow_id,
                 )
                 continue
@@ -921,6 +976,7 @@ class EdgeScheduler:
                 action_name=task.node.action_name,
                 action_type=task.node.action_type,
                 action_args=resolved_args,
+                always_free=task.node.always_free,
             )
             # 预估基于 sjson 覆写后的 resolved 参数：父节点经 gjson/sjson 传下来的
             # 实际值（如 time）直接决定声明式预估结果
@@ -1001,7 +1057,7 @@ class EdgeScheduler:
                     "action.estimate.source": estimate_source,
                 },
             )
-            if not manual_confirm:
+            if not bypass_device_lock:
                 # 同轮立即登记两种键；后续候选即使动作不同，也不能绕过设备互斥。
                 busy.update((action_key, device_key))
             # ``dispatched_item`` 同时供返回值、监控和标准 Task/Job 状态投影使用。
@@ -1128,7 +1184,7 @@ class EdgeScheduler:
         except Exception:  # noqa: BLE001 - 善后失败可由人工经 inventory API 补救
             logger.exception("[EdgeScheduler] inventory.%s failed", method)
 
-    # ── 物料/资源锁 ──────────────────────────────────────────
+    # ── 执行资源锁 ───────────────────────────────────────────
 
     def _held_resource_locks(self) -> Set[str]:
         held: Set[str] = set()
@@ -1136,27 +1192,93 @@ class EdgeScheduler:
             held |= keys
         return held
 
-    def _resource_lock_keys(self, node: Any, resolved_args: Dict[str, Any]) -> Set[str]:
-        """生成节点本次执行需要持有的物料锁键。
+    def _resolve_transfer_site_target(
+        self,
+        node: Any,
+        resolved_args: Dict[str, Any],
+    ) -> tuple[Dict[str, Any], ResolvedSiteTarget | None]:
+        """解析转运动作的目标库位并规范化设备执行名称。
+
+        参数：``node`` 是候选工作流节点；``resolved_args`` 是合并上游输出后的
+        最终参数。返回：规范化参数副本与可选库位目标；非 ``transfer_resource``
+        动作或没有指定库位时原样返回。异常：显式 ``site_uuid`` 无法验证时抛
+        ``SiteTargetResolutionError``；旧任务只有 ``site`` 且未装配库存权威时
+        保留原有整父物料锁行为，不破坏历史本地工作流。
+        """
+
+        if getattr(node, "action_name", "") != "transfer_resource":
+            return resolved_args, None
+        site_uuid = str(resolved_args.get("site_uuid") or "").strip()
+        site_name = str(resolved_args.get("site") or "").strip()
+        if not site_uuid and not site_name:
+            return resolved_args, None
+
+        store = getattr(self._inventory, "store", None)
+        if not callable(getattr(store, "query_one", None)):
+            if site_uuid:
+                raise SiteTargetResolutionError(
+                    "site_authority_unavailable",
+                    "提供 site_uuid 时必须先初始化本地库存权威",
+                )
+            return resolved_args, None
+
+        mount_uuid = _resource_argument_uuid(
+            resolved_args.get("mount_resource"),
+            argument_name="mount_resource",
+        )
+        resource_uuid = _resource_argument_uuid(
+            resolved_args.get("resource"),
+            argument_name="resource",
+        )
+        try:
+            target = resolve_site_target(
+                self._inventory,
+                owner_material_uuid=mount_uuid,
+                site_uuid=site_uuid,
+                site_name=site_name,
+                occupant_material_uuid=resource_uuid,
+            )
+        except SiteTargetResolutionError as error:
+            if site_uuid or error.code != "site_not_found":
+                raise
+            # 历史工作流只保存设备侧库位名；本地 Site 投影尚未补齐时维持旧执行
+            # 语义，并保守占用整个父物料。显式 UUID 绝不走该兼容分支。
+            logger.warning(
+                "[EdgeScheduler] 旧库位名未进入本地库存；退回整父物料忙碌键 "
+                "wf_node=%s site=%s",
+                getattr(node, "id", ""),
+                site_name,
+            )
+            return resolved_args, None
+        canonical_args = dict(resolved_args)
+        # 设备驱动沿用库位名称；稳定 UUID 只用于身份解析和本地互斥。
+        canonical_args["site"] = target.name
+        return canonical_args, target
+
+    def _resource_lock_keys(
+        self,
+        node: Any,
+        resolved_args: Dict[str, Any],
+        *,
+        resolved_site: ResolvedSiteTarget | None = None,
+    ) -> Set[str]:
+        """生成节点本次执行需要持有的物料锁和库位锁键。
 
         参数：``node`` 是当前准备派发的工作流节点（WorkflowNode），
         ``resolved_args`` 是合并上游输出后的最终动作参数。返回：使用
-        ``material/{uuid}/exclusive`` 规范格式的物料锁键集合。异常：
-        冻结动作合同（Action Contract）、遗留注册表（Registry）Schema
-        或最终参数不能安全解析时抛 ``MaterialLockSchemaError``。
+        ``material/{uuid}/exclusive`` 物料锁；``resolved_site`` 非空时把
+        ``mount_resource`` 的整物料锁替换为具体库位锁。异常：冻结动作合同
+        （Action Contract）、遗留注册表（Registry）Schema 或最终参数不能安全
+        解析时抛 ``MaterialLockSchemaError``。
         """
 
         keys: Set[str] = set()
         frozen_schema = getattr(node, "param_schema", None)
         if frozen_schema is not None:
-            # ``material_uuids`` 优先来自任务创建时的冻结动作合同。
             material_uuids = compile_material_lock_schema(
                 frozen_schema
             ).material_lock_uuids(resolved_args)
-            keys.update(
-                f"material/{material_uuid}/exclusive"
-                for material_uuid in material_uuids
-            )
+            keys.update(material_lock_key(item) for item in material_uuids)
         elif self._material_lock_resolver is not None:
             # ``material_uuids`` 只为无冻结合同的遗留直接调用读取实时注册表。
             material_uuids = self._material_lock_resolver(
@@ -1165,13 +1287,25 @@ class EdgeScheduler:
                 resolved_args,
             )
             keys.update(
-                f"material/{material_uuid}/exclusive"
+                material_lock_key(material_uuid)
                 for material_uuid in material_uuids
             )
+        if resolved_site is not None:
+            keys.discard(material_lock_key(resolved_site.owner_material_uuid))
+            keys.add(
+                site_lock_key(
+                    resolved_site.owner_material_uuid,
+                    resolved_site.uuid,
+                )
+            )
+        # 工作流级实体物料需求是独立声明；若它要求整父物料，则必须覆盖上方
+        # 动作参数派生出的细粒度库位键，不能被替换逻辑误删。
         for req in getattr(node, "material_requirements", []) or []:
             if getattr(req, "instance_uuid", ""):
-                keys.add(f"material/{req.instance_uuid}/exclusive")
-        return keys
+                keys.add(material_lock_key(req.instance_uuid))
+        # 实体型物料需求可能与动作合同中的子库位成员指向同一拥有者；整物料
+        # 占用覆盖子库位，归一化后避免同一作业保存冗余键。
+        return normalize_resource_lock_keys(keys)
 
     def _busy_keys(self) -> Set[str]:
         """合并外部与本地在途作业的动作级、设备级内存忙碌键。

@@ -500,10 +500,21 @@ class ExecutionPlanBuilder:
         frozen_template_type = str(template.get("type") or "").strip()
         if not action_type and frozen_template_type.startswith("UniLabJsonCommand"):
             action_type = frozen_template_type
+        template_metadata = template.get("meta_data")
+        template_unilab = (
+            template_metadata.get("unilab")
+            if isinstance(template_metadata, Mapping)
+            else None
+        )
         return {
             "device_id": device_id,
             "action_name": node.get("action_name"),
             "action_type": action_type or "UniLabJsonCommand",
+            "always_free": bool(
+                template_unilab.get("always_free", False)
+                if isinstance(template_unilab, Mapping)
+                else False
+            ),
         }
 
     @staticmethod

@@ -248,6 +248,9 @@ def _action_definition(raw_action: Any) -> dict[str, Any]:
     executor_kind = str(action.get("executor_kind") or "").strip()
     if executor_kind:
         definition["executor_kind"] = executor_kind
+    # 普通动作保持既有 wire 形状；只为明确声明免排队的动作冻结扩展字段。
+    if action.get("always_free"):
+        definition["always_free"] = True
     return definition
 
 

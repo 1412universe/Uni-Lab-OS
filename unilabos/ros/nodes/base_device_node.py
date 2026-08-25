@@ -1079,7 +1079,9 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                 extra = getattr(plr_resource, "unilabos_extra", {})
                 if len(extra):
                     self.lab_logger().info(f"发现物料{plr_resource}额外参数: " + str(extra))
-                if "update_resource_site" in extra:
+                # 显式工作流 ``site`` 已经由调度器按稳定 Site 身份校验，必须优先；
+                # 只有调用方未指定目标时，才沿用旧前端写入的兼容提示。
+                if not additional_add_params.get("site") and "update_resource_site" in extra:
                     additional_add_params["site"] = extra["update_resource_site"]
                 site = additional_add_params.get("site", None)
                 spec = inspect.signature(parent_resource.assign_child_resource)

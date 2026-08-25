@@ -145,6 +145,35 @@ class TestBackendAlone:
         finally:
             backend.stop()
 
+    def test_always_free_jobs_on_same_device_start_without_device_queue(self):
+        """同设备免排队动作应并发启动，但不改变普通动作的设备互斥。
+
+        参数：无。返回：无。异常：若执行微后端丢失调度载荷中的
+        ``always_free``，第二个作业会停在设备队列并导致断言失败。
+        """
+
+        backend, host = _make_backend(auto_complete=False)
+        try:
+            for job_id in ("free-1", "free-2"):
+                backend.dispatch(
+                    build_job_start_payload(
+                        job_id=job_id,
+                        task_id="task-free",
+                        workflow_id="wf-free",
+                        node_id=job_id,
+                        device_id="host_node",
+                        action_name="transfer_resource",
+                        action_type="goal",
+                        action_args={},
+                        always_free=True,
+                    )
+                )
+            assert backend.wait_idle()
+            assert [goal.job_id for goal in host.sent_goals] == ["free-1", "free-2"]
+            assert backend.device_manager.get_queued_jobs() == []
+        finally:
+            backend.stop()
+
     def test_listener_receives_ret_value(self):
         backend, host = _make_backend(auto_complete=False)
         received: List[tuple] = []

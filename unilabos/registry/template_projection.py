@@ -689,6 +689,10 @@ class RegistryTemplateProjection:
         executor_kind = str(action.get("executor_kind") or "").strip()
         if executor_kind:
             unilab_metadata["executor_kind"] = executor_kind
+        # ``always_free`` 是设备排队语义，必须随模板冻结，避免任务运行时重新
+        # 查询可变注册表后得到与创作时不同的并发边界。
+        if action.get("always_free"):
+            unilab_metadata["always_free"] = True
         node = {
             "resource_template_uuid": resource_template_uuid,
             "name": action_name,

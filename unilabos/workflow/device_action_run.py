@@ -369,6 +369,11 @@ class DeviceActionRunService:
         )
         if not isinstance(action_contract_schema, Mapping):
             raise DeviceActionRunUnavailable("动作模板缺少第 2 版冻结 Schema")
+        always_free = bool(
+            unilab_meta_data.get("always_free", False)
+            if isinstance(unilab_meta_data, Mapping)
+            else False
+        )
         node_snapshot = {
             "uuid": node_uuid,
             "workflow_node_template_uuid": template["uuid"],
@@ -398,6 +403,7 @@ class DeviceActionRunService:
                     "device_id": edge_local_id,
                     "action_name": template["name"],
                     "action_type": template["type"],
+                    "always_free": always_free,
                     "material_uuid": material_uuid,
                     "param_schema": deepcopy(dict(action_contract_schema)),
                     "param": dict(param),
