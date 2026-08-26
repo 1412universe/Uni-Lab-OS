@@ -1239,7 +1239,10 @@ def test_backend_crash_is_supervised_into_a_new_process_generation(
                 assert backend["metadata"]["stateDirectory"] == str(
                     paths.runtime / "backend" / "local-domain"
                 )
-                break
+                if "backend.recovery.succeeded" in paths.audit.read_text(
+                    encoding="utf-8"
+                ):
+                    break
             time.sleep(0.05)
         assert recovered_pid is not None
         assert "backend.recovery.succeeded" in paths.audit.read_text(encoding="utf-8")

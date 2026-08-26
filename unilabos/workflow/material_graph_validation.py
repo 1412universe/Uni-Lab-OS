@@ -33,6 +33,9 @@ class MaterialGraphValidationError(ValueError):
         self.message = message
 
 
+_MATERIAL_MOVEMENT_ACTIONS = frozenset({"pick", "place", "transfer_resource"})
+
+
 def validate_material_graph(
     *,
     nodes: Sequence[Any],
@@ -60,6 +63,13 @@ def validate_material_graph(
     # 排序的动作复用，但任何一对可并发兄弟消费者仍然关闭失败。
     reachability = _node_reachability(nodes=nodes, edges=edges)
     composite_internal_nodes = _composite_internal_node_uuids(nodes)
+    _validate_shared_source_movement(
+        nodes=nodes,
+        edges=edges,
+        templates=templates,
+        handles=handles,
+        effective_params=effective_params,
+    )
     _validate_workflow_input_linearity(
         validated_workflow_io,
         reachability=reachability,
@@ -130,6 +140,183 @@ def validate_material_graph(
                 f"{source_node_uuid}:{source_handle.get('handle_key')} -> "
                 f"{_field(edge, 'target_node_uuid')}:{target_handle.get('handle_key')}",
             )
+
+
+def _validate_shared_source_movement(
+    *,
+    nodes: Sequence[Any],
+    edges: Sequence[Any],
+    templates: Mapping[str, Mapping[str, Any]],
+    handles: Mapping[str, Mapping[str, Any]],
+    effective_params: Mapping[str, Mapping[str, Any]],
+) -> None:
+    """拒绝共享来源所代表的原始物料身份进入移动动作。
+
+    参数说明：``nodes``/``edges`` 是完整候选图，``templates`` 与
+    ``handles`` 是同代目录，``effective_params`` 是最终节点参数。
+    返回：无；共享来源沿同一物料占位符（ResourceSlot）到达
+    ``pick``、``place`` 或 ``transfer_resource`` 时抛出稳定诊断。
+    """
+
+    # ``node_by_uuid`` 与 ``outgoing`` 保留原始物料身份的定向传播路径。
+    node_by_uuid = {str(_field(node, "uuid")): node for node in nodes}
+    outgoing: dict[str, list[Any]] = defaultdict(list)
+    for edge in edges:
+        outgoing[str(_field(edge, "source_node_uuid"))].append(edge)
+
+    for source_uuid, source_node in node_by_uuid.items():
+        if not _is_material_source_node(source_node, templates=templates):
+            continue
+        source_param = effective_params.get(source_uuid, {})
+        if source_param.get("custody_policy") != "shared_source":
+            continue
+        # ``queue`` 只沿同一数据键的物料边继续，避免把动作产出的
+        # 新容器身份误判为固定试剂来源本身。
+        queue = list(outgoing.get(source_uuid, ()))
+        visited: set[tuple[str, str]] = set()
+        while queue:
+            edge = queue.pop(0)
+            target_handle = handles.get(str(_field(edge, "target_handle_uuid")))
+            if target_handle is None or not _is_resource_slot_handle(target_handle):
+                continue
+            target_uuid = str(_field(edge, "target_node_uuid"))
+            identity_key = _material_handle_data_key(target_handle)
+            visit_key = (target_uuid, identity_key)
+            if visit_key in visited:
+                continue
+            visited.add(visit_key)
+            target_node = node_by_uuid.get(target_uuid)
+            if target_node is None:
+                continue
+            action_name = _material_action_name(target_node, templates=templates)
+            if action_name in _MATERIAL_MOVEMENT_ACTIONS:
+                raise MaterialGraphValidationError(
+                    "shared_source_movement_forbidden",
+                    f"共享物料来源 {source_uuid} 不得进入移动动作 {action_name}；"
+                    "请改用任务全程独占（task_exclusive）",
+                )
+            # 复合工作流（Composite Workflow）的外部输入与冻结子图
+            # 之间没有普通 Edge；``target_mappings`` 是跨边界的权威连接。
+            # 将它投影为只读到达项，使共享来源不能藏在复合调用
+            # 内部进入 pick/place/transfer_resource。
+            queue.extend(
+                _composite_material_target_arrivals(
+                    target_node,
+                    target_handle_uuid=str(_field(edge, "target_handle_uuid")),
+                    handles=handles,
+                )
+            )
+            for next_edge in outgoing.get(target_uuid, ()):
+                source_handle = handles.get(
+                    str(_field(next_edge, "source_handle_uuid"))
+                )
+                if (
+                    source_handle is not None
+                    and _is_resource_slot_handle(source_handle)
+                    and _material_handle_data_key(source_handle) == identity_key
+                ):
+                    queue.append(next_edge)
+
+
+def _composite_material_target_arrivals(
+    node: Any,
+    *,
+    target_handle_uuid: str,
+    handles: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    """把复合工作流外部物料输入投影到冻结子图输入。
+
+    参数说明：``node`` 是可能的复合调用节点，``target_handle_uuid``
+    是当前物料到达的外部输入，``handles`` 是同代句柄目录。
+    返回：可由主遍历直接消费的内部目标到达项；结构不完整时
+    返回空集合，由其他创作合同校验报错。
+    """
+
+    meta_data = (
+        node.get("meta_data")
+        if isinstance(node, Mapping)
+        else getattr(node, "meta_data", None)
+    )
+    if not isinstance(meta_data, Mapping):
+        return []
+    unilab = meta_data.get("unilab")
+    if not isinstance(unilab, Mapping):
+        return []
+    composite = unilab.get("composite")
+    if not isinstance(composite, Mapping):
+        return []
+    target_mappings = composite.get("target_mappings")
+    if not isinstance(target_mappings, Mapping):
+        return []
+    raw_mappings = target_mappings.get(target_handle_uuid)
+    if not isinstance(raw_mappings, Sequence) or isinstance(raw_mappings, (str, bytes)):
+        return []
+    arrivals: list[dict[str, str]] = []
+    for mapping in raw_mappings:
+        if not isinstance(mapping, Mapping):
+            continue
+        node_uuid = mapping.get("workflow_node_uuid")
+        handle_uuid = mapping.get("target_handle_uuid")
+        handle = handles.get(str(handle_uuid or ""))
+        if (
+            not isinstance(node_uuid, str)
+            or not node_uuid
+            or handle is None
+            or not _is_resource_slot_handle(handle)
+        ):
+            continue
+        arrivals.append(
+            {
+                "target_node_uuid": node_uuid,
+                "target_handle_uuid": str(handle_uuid),
+            }
+        )
+    return arrivals
+
+
+def _material_handle_data_key(handle: Mapping[str, Any]) -> str:
+    """返回物料占位符（ResourceSlot）传播使用的稳定数据键。
+
+    参数：``handle`` 是已验证的连接点（Handle）目录投影。
+    返回：优先使用非空 ``data_key``，否则回退到 ``handle_key``。
+    """
+
+    data_key = handle.get("data_key")
+    if isinstance(data_key, str) and data_key.strip():
+        return data_key.strip()
+    return str(handle.get("handle_key") or "").strip()
+
+
+def _material_action_name(
+    node: Any,
+    *,
+    templates: Mapping[str, Mapping[str, Any]],
+) -> str:
+    """解析节点或冻结模板的动作业务名。
+
+    参数：``node`` 是候选工作流节点，``templates`` 是同代目录。
+    返回：小写且无首尾空白的动作名；优先节点冻结值。
+    """
+
+    action_name = (
+        node.get("action_name")
+        if isinstance(node, Mapping)
+        else getattr(node, "action_name", None)
+    )
+    if isinstance(action_name, str) and action_name.strip():
+        return action_name.strip().lower()
+    template_uuid = (
+        node.get("workflow_node_template_uuid")
+        if isinstance(node, Mapping)
+        else getattr(node, "workflow_node_template_uuid", None)
+    )
+    template = templates.get(str(template_uuid or ""))
+    if template is not None:
+        template_name = template.get("name")
+        if isinstance(template_name, str) and template_name.strip():
+            return template_name.strip().lower()
+    node_name = node.get("name") if isinstance(node, Mapping) else getattr(node, "name", "")
+    return str(node_name or "").strip().lower()
 
 
 def validate_material_graph_projection(graph: Mapping[str, Any]) -> None:
