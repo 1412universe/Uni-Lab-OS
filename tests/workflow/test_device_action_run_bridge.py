@@ -58,7 +58,7 @@ def test_bridge_reuses_standard_job_identity_and_writes_terminal_state(
         assert dispatcher.dispatched[0]["task_id"] == TASK_A_UUID
         assert dispatcher.dispatched[0]["device_id"] == "device-a"
         assert store.get_task(TASK_A_UUID)["status"] == "running"
-        assert store.get_job(JOB_A_UUID)["status"] == "dispatched"
+        assert store.get_job(JOB_A_UUID)["status"] == "running"
 
         scheduler.on_job_finished(
             JOB_A_UUID,
@@ -140,6 +140,7 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
             task_uuid: str,
             job_uuid: str,
             resolved_param: dict[str, Any] | None = None,
+            execution_locks: list[dict[str, Any]] | None = None,
         ) -> dict[str, Any]:
             """拒绝派发意图投影。
 
@@ -147,7 +148,7 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
             返回：永不返回。异常：始终抛运行时错误以模拟数据库不可用。
             """
 
-            del task_uuid, job_uuid, resolved_param
+            del task_uuid, job_uuid, resolved_param, execution_locks
             raise RuntimeError("workflow database unavailable")
 
     bridge = TaskSchedulerBridge(
@@ -219,7 +220,7 @@ def test_bridge_keeps_second_job_pending_until_shared_material_lock_releases(
             JOB_A_UUID,
             JOB_B_UUID,
         ]
-        assert store.get_job(JOB_B_UUID)["status"] == "dispatched"
+        assert store.get_job(JOB_B_UUID)["status"] == "running"
     finally:
         bridge.close()
         store.close()

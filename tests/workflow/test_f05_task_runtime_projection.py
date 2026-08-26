@@ -193,6 +193,206 @@ def test_material_source_admission_projects_typed_result_atomically(
     assert jobs_by_uuid[action_job_uuid]["status"] == "pending"
 
 
+def test_material_source_admission_persists_backend_shaped_facts(
+    store: WorkflowStore,
+) -> None:
+    """准入成功必须同时保存来源绑定和任务独占占有。
+
+    参数：``store`` 是隔离工作流权威。返回无；断言 Backend 同名的 admission、
+    binding 与 claim 表共享任务/节点/作业身份，并保留流角色、策略和库位。
+    """
+
+    source_job_uuid, _ = _seed_material_source_task(store, with_action=True)
+    projection = _projection(store)
+    material_uuid = "50000000-0000-4000-8000-000000000001"
+    site_uuid = "70000000-0000-4000-8000-000000000001"
+
+    projection.project_material_source_admission(
+        TASK_UUID,
+        {
+            NODE_UUIDS[0]: {
+                "uuid": material_uuid,
+                "resource_template_uuid": (
+                    "60000000-0000-4000-8000-000000000001"
+                ),
+                "site_uuid": site_uuid,
+                "flow_role": "reagent",
+                "custody_policy": "task_exclusive",
+            }
+        },
+    )
+
+    with store.transaction() as connection:
+        admission = connection.execute(
+            "SELECT * FROM workflow_task_material_admission "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+        binding = connection.execute(
+            "SELECT * FROM workflow_task_material_binding "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+        claim = connection.execute(
+            "SELECT * FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+    assert dict(admission)["status"] == "admitted"
+    assert dict(admission)["attempt"] == 1
+    assert {
+        "workflow_node_uuid": NODE_UUIDS[0],
+        "workflow_node_job_uuid": source_job_uuid,
+        "material_uuid": material_uuid,
+        "site_uuid": site_uuid,
+        "flow_role": "reagent",
+        "custody_policy": "task_exclusive",
+    }.items() <= dict(binding).items()
+    assert {
+        "material_uuid": material_uuid,
+        "status": "active",
+        "revision": 1,
+    }.items() <= dict(claim).items()
+
+
+def test_shared_source_binding_does_not_create_exclusive_claim(
+    store: WorkflowStore,
+) -> None:
+    """共享来源只建立绑定，不应伪造任务独占 claim。
+
+    参数：``store`` 是隔离工作流权威。返回无；断言 ``shared_source`` 仍完成来源
+    准入，但 claim 表没有该任务记录。
+    """
+
+    _seed_material_source_task(store, with_action=True)
+    _projection(store).project_material_source_admission(
+        TASK_UUID,
+        {
+            NODE_UUIDS[0]: {
+                "uuid": "50000000-0000-4000-8000-000000000001",
+                "resource_template_uuid": (
+                    "60000000-0000-4000-8000-000000000001"
+                ),
+                "site_uuid": None,
+                "flow_role": "primary_sample",
+                "custody_policy": "shared_source",
+            }
+        },
+    )
+
+    with store.transaction() as connection:
+        claim_count = connection.execute(
+            "SELECT COUNT(*) FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()[0]
+    assert claim_count == 0
+
+
+def test_blocked_material_admission_is_revisioned_and_restart_visible(
+    store: WorkflowStore,
+) -> None:
+    """受阻判定必须可重试、可解释并能在进程重启后恢复。
+
+    参数：``store`` 是隔离工作流权威。返回无；断言两次判定复用同一 admission
+    身份并推进 attempt/revision，任务等待原因和恢复列表来自持久事实。
+    """
+
+    _seed_material_source_task(store, with_action=True)
+    projection = _projection(store)
+    projection.project_material_source_blocked(TASK_UUID, reason="缺少目标试剂")
+    projection.project_material_source_blocked(TASK_UUID, reason="缺少目标试剂")
+
+    admission = projection.get_material_admission(TASK_UUID)
+    assert admission is not None
+    assert admission["status"] == "blocked"
+    assert admission["attempt"] == 2
+    assert admission["revision"] == 2
+    assert store.get_task(TASK_UUID)["wait_reason"] == {
+        "code": "material_unavailable",
+        "message": "缺少目标试剂",
+    }
+    assert projection.list_blocked_material_tasks() == [TASK_UUID]
+
+
+def test_blocked_material_admission_survives_store_reopen(tmp_path: Path) -> None:
+    """关闭并重开数据库后仍能恢复受阻准入。
+
+    参数：``tmp_path`` 是 pytest 隔离目录。返回无；断言增量 Schema 可重复运行，
+    admission、任务等待原因与恢复索引均来自同一 SQLite 持久文件。
+    """
+
+    database = tmp_path / "workflow-restart.db"
+    first_store = WorkflowStore(database)
+    try:
+        _seed_material_source_task(first_store, with_action=True)
+        _projection(first_store).project_material_source_blocked(
+            TASK_UUID,
+            reason="等待补料",
+        )
+    finally:
+        first_store.close()
+
+    reopened_store = WorkflowStore(database)
+    try:
+        reopened_projection = _projection(reopened_store)
+        assert reopened_projection.list_blocked_material_tasks() == [TASK_UUID]
+        assert reopened_projection.get_material_admission(TASK_UUID)["status"] == (
+            "blocked"
+        )
+        assert reopened_store.get_task(TASK_UUID)["wait_reason"]["message"] == (
+            "等待补料"
+        )
+    finally:
+        reopened_store.close()
+
+
+def test_failed_task_releases_claim_only_after_cleanup_settlement(
+    store: WorkflowStore,
+) -> None:
+    """失败任务在物理清理结算前不得释放独占物料。
+
+    参数：``store`` 是隔离工作流权威。返回无；先把任务置为失败，断言 claim 仍
+    active；再提交 ``cleanup_status=settled``，断言触发器幂等释放并推进修订。
+    """
+
+    _seed_material_source_task(store, with_action=True)
+    projection = _projection(store)
+    projection.project_material_source_admission(
+        TASK_UUID,
+        {
+            NODE_UUIDS[0]: {
+                "uuid": "50000000-0000-4000-8000-000000000001",
+                "resource_template_uuid": (
+                    "60000000-0000-4000-8000-000000000001"
+                ),
+            }
+        },
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status = 'failed' WHERE uuid = ?",
+            (TASK_UUID,),
+        )
+        active_status = connection.execute(
+            "SELECT status FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()[0]
+    assert active_status == "active"
+
+    projection.project_cleanup_settled(TASK_UUID)
+
+    with store.transaction() as connection:
+        claim = connection.execute(
+            "SELECT status, revision, released_at "
+            "FROM workflow_task_material_claim WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+    assert tuple(claim)[:2] == ("released", 2)
+    assert claim["released_at"] is not None
+
+
 def test_paused_submission_accepts_succeeded_material_sources(
     store: WorkflowStore,
 ) -> None:
@@ -389,26 +589,31 @@ def test_source_only_admission_completes_task_without_running_state(
     assert aggregate["jobs"][0]["status"] == "succeeded"
 
 
-def test_blocked_material_source_admission_is_zero_write(
+def test_blocked_material_source_admission_preserves_jobs_and_records_wait(
     store: WorkflowStore,
 ) -> None:
-    """受阻准入必须保持任务和来源作业待处理且不发布部分绑定。
+    """受阻准入保持作业待处理，同时记录可恢复的等待事实。
 
     参数：``store`` 是隔离工作流权威。返回无；断言任务物料准入受阻
-    （TaskMaterialAdmissionBlocked）不刷新时间戳、不写 ``return_info``，允许同一
-    身份后续准入重试（AdmissionRetry）。异常：非法聚合由投影失败关闭。
+    （TaskMaterialAdmissionBlocked）不写来源结果或部分绑定，但持久化 admission
+    和任务等待原因，允许同一身份后续准入重试。异常：非法聚合由投影失败关闭。
     """
 
     _seed_material_source_task(store, with_action=True)
     projection = _projection(store)
-    before = _aggregate(store)
-
     projection.project_material_source_blocked(TASK_UUID)
 
-    assert _aggregate(store) == before
-    assert before["task"]["status"] == "pending"
-    assert before["jobs"][0]["status"] == "pending"
-    assert before["jobs"][0]["return_info"] == {}
+    aggregate = _aggregate(store)
+    assert aggregate["task"]["status"] == "pending"
+    assert aggregate["task"]["wait_reason"]["code"] == "material_unavailable"
+    assert aggregate["jobs"][0]["status"] == "pending"
+    assert aggregate["jobs"][0]["return_info"] == {}
+    with store.transaction() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM workflow_task_material_binding "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()[0] == 0
 
 
 def test_waiting_for_material_projects_to_pending_without_job_mutation(

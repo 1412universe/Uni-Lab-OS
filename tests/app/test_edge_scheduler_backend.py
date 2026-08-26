@@ -54,6 +54,7 @@ class FakeHostNode:
         """
 
         self.sent_goals: List[QueueItem] = []
+        self.cancel_requests: List[str] = []
         self.backend_ref = backend_ref  # {"backend": JobExecutionBackend}，延迟绑定
         self.auto_complete = auto_complete
         self.ret_values = ret_values or {}
@@ -74,6 +75,16 @@ class FakeHostNode:
             backend.publish_job_status(
                 {}, item, "success", serialize_result_info("", True, ret)
             )
+
+    def cancel_goal(self, goal_uuid: str, on_response=None) -> bool:
+        """同步确认测试 Goal 的取消请求，但保留活动作业等待终态。"""
+
+        if goal_uuid not in {item.job_id for item in self.sent_goals}:
+            return False
+        self.cancel_requests.append(goal_uuid)
+        if callable(on_response):
+            on_response(True)
+        return True
 
 
 def _node(node_id: str, device: str = "dev1", action: str = "run") -> WorkflowNode:
@@ -168,6 +179,7 @@ class TestBackendAlone:
                         always_free=True,
                     )
                 )
+
             assert backend.wait_idle()
             assert [goal.job_id for goal in host.sent_goals] == ["free-1", "free-2"]
             assert backend.device_manager.get_queued_jobs() == []
@@ -397,8 +409,11 @@ class TestEdgeStackEndToEnd:
             )
             assert backend.wait_idle()
             assert scheduler.cancel_workflow("wf-canceled-run") is True
+            run_job_uuid = first_result["dispatched"][0]["job_id"]
+            assert host.cancel_requests == [run_job_uuid]
+            assert run_job_uuid in scheduler.snapshot()["inflight_jobs"]
 
-            # 本地在途作业已移除，但微后端仍持有 run 的动作级物理忙碌事实。
+            # 取消已受理但设备未终止；调度器和微后端都继续持有物理忙碌事实。
             waiting_result = scheduler.submit_workflow(
                 WorkflowSpec(
                     workflow_id="wf-waiting-inspect-after-cancel",
@@ -411,19 +426,19 @@ class TestEdgeStackEndToEnd:
             ]
 
             # 明确终态引用原作业身份；微后端释放动作键后，公开重排才可准入 inspect。
-            run_job_uuid = first_result["dispatched"][0]["job_id"]
             backend.publish_job_status(
                 {},
                 host.sent_goals[0],
-                "success",
-                serialize_result_info("", True, {"stopped": True}),
+                "failed",
+                {
+                    **serialize_result_info("Job was cancelled", False, {}),
+                    "suc_type": "canceled",
+                },
             )
             assert backend.wait_idle()
             assert backend.device_manager.get_job_info(run_job_uuid) is None
 
-            released = scheduler.reschedule()
-            assert len(released) == 1
-            assert released[0]["workflow_id"] == "wf-waiting-inspect-after-cancel"
+            # 设备终态由统一完成入口触发一次全量重排，无需额外人工 reschedule。
             assert backend.wait_idle()
             assert [(goal.device_id, goal.action_name) for goal in host.sent_goals] == [
                 ("shared", "run"),

@@ -31,7 +31,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set
 
-from unilabos.app.scheduler.dispatch import DispatchPayload
+from unilabos.app.scheduler.dispatch import CancelDispatchState, DispatchPayload
 from unilabos.app.ws_client import (
     DeviceActionManager,
     JobInfo,
@@ -89,6 +89,9 @@ class JobExecutionBackend:
         # 本地模式（无云端 WS）下由调度器 REST / 前端做审批入口。
         self._error_decisions: Dict[str, Dict[str, Any]] = {}
         self._error_decisions_lock = threading.Lock()
+        self._error_decision_required_listeners: List[
+            Callable[[Dict[str, Any]], None]
+        ] = []
 
     # ── 生命周期 ─────────────────────────────────────────────
 
@@ -165,6 +168,59 @@ class JobExecutionBackend:
             self._put_event(("start", job_info), context=job_info.trace_context)
         else:
             logger.info("[JobExecutionBackend] job %s queued", job_log)
+
+    def cancel(
+        self,
+        job_id: str,
+        on_accepted: Callable[[bool], None],
+    ) -> CancelDispatchState:
+        """请求本地执行器停止一个工作流节点作业（WorkflowNodeJob）。
+
+        参数：``job_id`` 是稳定作业身份；``on_accepted`` 接收 ROS 执行器对取消
+        请求的明确受理结果。返回：排队作业返回 ``NOT_SENT``；已启动作业成功发起
+        异步取消返回 ``REQUESTED``；目标不存在或执行器不支持确认时返回
+        ``UNAVAILABLE``。异常：HostNode 异常转为 ``UNAVAILABLE`` 并记录日志。
+
+        受理只证明执行器开始停止，不证明设备已安全停止。本方法不会结束活动作业、
+        不会提升同设备队列，也不会释放设备忙碌事实；这些操作只能由随后到达的设备
+        终态回报触发。
+        """
+
+        job = self.device_manager.get_job_info(job_id)
+        if job is None:
+            return CancelDispatchState.UNAVAILABLE
+        if job.status == JobStatus.QUEUE:
+            canceled, next_job, _lock_became_free = self.device_manager.cancel_job(
+                job_id
+            )
+            if next_job is not None:
+                # 排队作业取消不应提升队列；若底层状态异常，保守恢复被提升作业。
+                self._put_event(("start", next_job), context=next_job.trace_context)
+            return (
+                CancelDispatchState.NOT_SENT
+                if canceled
+                else CancelDispatchState.UNAVAILABLE
+            )
+        if job.status != JobStatus.STARTED:
+            return CancelDispatchState.UNAVAILABLE
+
+        host_node = self._host_node_getter()
+        cancel_goal = getattr(host_node, "cancel_goal", None) if host_node else None
+        if not callable(cancel_goal):
+            return CancelDispatchState.UNAVAILABLE
+        try:
+            requested = bool(cancel_goal(job_id, on_response=on_accepted))
+        except Exception:  # noqa: BLE001 - 取消边界异常必须保守返回未知
+            logger.exception(
+                "[JobExecutionBackend] failed to request cancel for job %s",
+                job_id,
+            )
+            return CancelDispatchState.UNAVAILABLE
+        return (
+            CancelDispatchState.REQUESTED
+            if requested
+            else CancelDispatchState.UNAVAILABLE
+        )
 
     def add_job_finished_listener(self, listener: Callable[..., None]) -> None:
         """注册完成回调；兼容 3 参 (job_id, success, ret_value) 旧签名。"""
@@ -267,6 +323,27 @@ class JobExecutionBackend:
 
     # ── 异常决策桥（bridge 形状：publish_job_error_decision_required） ──
 
+    def add_error_decision_required_listener(
+        self,
+        listener: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        """注册设备异常报告持久化监听器。"""
+
+        if listener not in self._error_decision_required_listeners:
+            self._error_decision_required_listeners.append(listener)
+
+    def remove_error_decision_required_listener(
+        self,
+        listener: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        """幂等注销设备异常报告持久化监听器。"""
+
+        self._error_decision_required_listeners = [
+            item
+            for item in self._error_decision_required_listeners
+            if item != listener
+        ]
+
     def publish_job_error_decision_required(self, report: Dict[str, Any]) -> bool:
         """接收设备侧异常决策请求（本地审批通道，云端 WS 不可用时的回退）。
 
@@ -275,6 +352,17 @@ class JobExecutionBackend:
         """
         decision_id = str(report.get("decision_id") or "")
         if not decision_id:
+            return False
+        # 先形成可恢复的工作流干预事实，再允许设备进入等待。任一监听器失败都
+        # 关闭本地回退，设备按既有失败策略处理，不能只留下内存审批。
+        try:
+            for listener in tuple(self._error_decision_required_listeners):
+                listener(dict(report))
+        except Exception:  # noqa: BLE001 - 持久化失败必须关闭审批入口
+            logger.exception(
+                "[JobExecutionBackend] failed to persist intervention %s",
+                decision_id,
+            )
             return False
         now = time.time()
         with self._error_decisions_lock:
@@ -599,6 +687,9 @@ def create_edge_stack(
         history=history,
     )
     backend.add_job_finished_listener(scheduler.on_job_finished)
+    add_feedback_listener = getattr(backend, "add_job_feedback_listener", None)
+    if callable(add_feedback_listener):
+        add_feedback_listener(scheduler.on_job_feedback)
     start = getattr(backend, "start", None)
     if callable(start):
         start()

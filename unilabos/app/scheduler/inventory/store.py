@@ -13,7 +13,13 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
-SCHEMA_VERSION = 8
+from unilabos.app.scheduler.inventory.content_store import (
+    migrate_container_content_schema,
+)
+from unilabos.app.scheduler.inventory.reagent_store import migrate_reagent_schema
+
+# v8 已由生产分支用于物料来源绑定；试剂和容器内容依次占用后续版本。
+SCHEMA_VERSION = 10
 
 
 class InvalidCursorAdvance(ValueError):
@@ -1060,8 +1066,16 @@ class InventoryStore:
                     self._conn.execute(
                         _SCHEMA_V7_RESOURCE_TEMPLATE_AVAILABLE_SITES
                     )
-            if current < 8:
-                self._conn.executescript(_SCHEMA_V8_MATERIAL_SOURCE_BINDING)
+            # 生产 v8 增加任务物料绑定。这里始终幂等执行，同时兼容开发分支中
+            # 曾把 user_version 写到 9、但尚未创建本表的数据库。
+            self._conn.executescript(_SCHEMA_V8_MATERIAL_SOURCE_BINDING)
+            # v9 增加 Backend 同形的试剂身份与试剂实例，并把试剂变化收敛到
+            # Edge 原有 ledger + outbox。这里同样幂等执行，以修复早期开发版
+            # 已提升 user_version、但仍残留重复 material_ledger_entry 的数据库。
+            migrate_reagent_schema(self._conn)
+            # v10 增加样品与当前内容物。二者与试剂共用同一容器内容互斥规则；
+            # 当前内容物数量事件继续复用统一 inventory_ledger + sync_outbox。
+            migrate_container_content_schema(self._conn)
             if current >= 5:
                 # A development build may have added the v6 column before the
                 # deterministic backfill was introduced; keep this idempotent.
@@ -1442,14 +1456,108 @@ class InventoryStore:
         causation_id: str = "",
         trace_id: str = "",
         span_id: str = "",
+        *,
+        entry_uuid: str = "",
+        material_uuid: str = "",
+        subject_type: str = "",
+        quantity_delta: Optional[float] = None,
+        quantity_unit: Optional[str] = None,
+        revision: Optional[int] = None,
+        workflow_task_uuid: Optional[str] = None,
+        workflow_node_job_uuid: Optional[str] = None,
     ) -> None:
+        """在当前业务事务中追加一条统一库存台账。
+
+        参数：``conn`` 是调用方已开启的事务；前十个字段是既有台账事实；
+        ``entry_uuid``、``material_uuid`` 与 ``subject_type`` 为公共历史接口提供
+        稳定标识和查询维度。返回：无；SQLite 异常原样抛出并由外层事务回滚。
+        """
+
         conn.execute(
             "INSERT INTO inventory_ledger(occurred_at, op_type, aggregate_type, aggregate_id, "
-            "delta_json, actor, reason, causation_id, trace_id, span_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "delta_json, actor, reason, causation_id, trace_id, span_id, entry_uuid, "
+            "material_uuid, subject_type, quantity_delta, quantity_unit, revision, "
+            "workflow_task_uuid, workflow_node_job_uuid) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (occurred_at, op_type, aggregate_type, aggregate_id,
              json.dumps(delta, ensure_ascii=False), actor, reason, causation_id,
-             trace_id, span_id),
+             trace_id, span_id, entry_uuid, material_uuid, subject_type,
+             quantity_delta, quantity_unit, revision, workflow_task_uuid,
+             workflow_node_job_uuid),
+        )
+
+    @staticmethod
+    def tx_append_inventory_event(
+        conn: sqlite3.Connection,
+        *,
+        entry_uuid: str,
+        edge_id: str,
+        lab_id: str,
+        occurred_at: int,
+        aggregate_type: str,
+        aggregate_id: str,
+        aggregate_version: int,
+        event_type: str,
+        payload: Dict[str, Any],
+        actor: str = "",
+        reason: str = "",
+        causation_id: str = "",
+        traceparent: str = "",
+        tracestate: str = "",
+        trace_id: str = "",
+        span_id: str = "",
+        material_uuid: str = "",
+        subject_type: str = "",
+        quantity_delta: Optional[float] = None,
+        quantity_unit: Optional[str] = None,
+        revision: Optional[int] = None,
+        workflow_task_uuid: Optional[str] = None,
+        workflow_node_job_uuid: Optional[str] = None,
+    ) -> None:
+        """把同一领域事件同时追加到台账与事务发件箱。
+
+        参数：``conn`` 是调用方业务事务；``entry_uuid`` 同时作为历史记录 UUID
+        和发件箱事件 UUID；其余参数描述聚合版本、事件载荷、Edge 身份与追踪
+        上下文。返回：无；任一写入失败都由外层事务整体回滚。
+        """
+
+        InventoryStore.tx_insert_ledger(
+            conn,
+            occurred_at,
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload,
+            actor,
+            reason,
+            causation_id,
+            trace_id,
+            span_id,
+            entry_uuid=entry_uuid,
+            material_uuid=material_uuid,
+            subject_type=subject_type,
+            quantity_delta=quantity_delta,
+            quantity_unit=quantity_unit,
+            revision=revision,
+            workflow_task_uuid=workflow_task_uuid,
+            workflow_node_job_uuid=workflow_node_job_uuid,
+        )
+        InventoryStore.tx_insert_outbox(
+            conn,
+            entry_uuid,
+            edge_id,
+            lab_id,
+            aggregate_type,
+            aggregate_id,
+            aggregate_version,
+            event_type,
+            occurred_at,
+            causation_id,
+            payload,
+            traceparent,
+            tracestate,
+            trace_id,
+            span_id,
         )
 
     @staticmethod

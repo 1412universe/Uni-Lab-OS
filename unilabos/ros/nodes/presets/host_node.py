@@ -1521,6 +1521,9 @@ class HostNode(BaseROS2DeviceNode):
                 self.lab_logger().info(f"[Host Node] Goal {action_id} ({job_id[:8]}) was cancelled")
                 status = "failed"
                 return_info = serialize_result_info("Job was cancelled", False, {})
+                # ``status=failed`` 保持既有 Bridge wire 兼容；稳定分类让本地调度器
+                # 能区分“设备明确取消”与普通业务失败，并据此安全释放执行占用。
+                return_info["suc_type"] = "canceled"
             else:
                 result_data = convert_from_ros_msg(result_msg)
                 status = "success"
@@ -1605,15 +1608,19 @@ class HostNode(BaseROS2DeviceNode):
                         {}, item, "failed", serialize_result_info(f"Callback error: {str(e)}", False, {})
                     )
 
-    def cancel_goal(self, goal_uuid: str) -> bool:
-        """
-        取消目标
+    def cancel_goal(
+        self,
+        goal_uuid: str,
+        on_response=None,
+    ) -> bool:
+        """异步请求取消一个 ROS Goal。
 
-        Args:
-            goal_uuid: 目标UUID（job_id）
+        参数：``goal_uuid`` 是作业 UUID；``on_response`` 可选地接收执行器是否明确
+        接受取消。返回：找到 Goal 并成功发起异步请求时为真，否则为假。异常：
+        发起请求异常向调用方传播；异步响应异常会记录并通过回调返回假。
 
-        Returns:
-            bool: 如果找到目标并发起取消请求返回True，否则返回False
+        返回真只表示请求已发出；只有 ``on_response(True)`` 表示执行器已受理，
+        最终安全停止仍以 ``get_result_callback`` 的取消终态为准。
         """
         if goal_uuid in self._goals:
             self.lab_logger().info(f"[Host Node] Cancelling goal {goal_uuid[:8]}")
@@ -1623,17 +1630,31 @@ class HostNode(BaseROS2DeviceNode):
             cancel_future = goal_handle.cancel_goal_async()
 
             # 添加取消完成的回调
-            cancel_future.add_done_callback(lambda future: self._cancel_goal_callback(goal_uuid, future))
+            cancel_future.add_done_callback(
+                lambda future: self._cancel_goal_callback(
+                    goal_uuid,
+                    future,
+                    on_response=on_response,
+                )
+            )
             return True
         else:
             self.lab_logger().warning(f"[Host Node] Goal {goal_uuid[:8]} not found in _goals, cannot cancel")
             return False
 
-    def _cancel_goal_callback(self, goal_uuid: str, future) -> None:
-        """取消目标的回调"""
+    def _cancel_goal_callback(self, goal_uuid: str, future, on_response=None) -> None:
+        """记录 ROS 取消响应并回传明确受理事实。
+
+        参数：``goal_uuid`` 是作业 UUID；``future`` 持有 ROS 取消响应；
+        ``on_response`` 可选地接收布尔受理结果。返回无。异常：ROS Future 异常仅
+        记录并回调假，不把“请求已发出”误当成“执行器已接受”。
+        """
+
+        accepted = False
         try:
             cancel_response = future.result()
             if cancel_response.goals_canceling:
+                accepted = True
                 self.lab_logger().info(f"[Host Node] Goal {goal_uuid[:8]} cancel request accepted")
             else:
                 self.lab_logger().warning(f"[Host Node] Goal {goal_uuid[:8]} cancel request rejected")
@@ -1642,6 +1663,15 @@ class HostNode(BaseROS2DeviceNode):
             import traceback
 
             self.lab_logger().error(traceback.format_exc())
+        finally:
+            if callable(on_response):
+                try:
+                    on_response(accepted)
+                except Exception as callback_error:  # noqa: BLE001
+                    self.lab_logger().error(
+                        f"[Host Node] Error reporting cancel response for "
+                        f"{goal_uuid[:8]}: {callback_error}"
+                    )
 
     def get_goal_status(self, job_id: str) -> int:
         """获取目标状态"""

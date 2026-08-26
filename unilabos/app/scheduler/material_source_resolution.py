@@ -152,15 +152,28 @@ class MaterialSourceResolutionCoordinator:
                 task_uuid,
                 admission_requests,
             )
-        except InsufficientStock:
-            self._projection.project_material_source_blocked(task_uuid)
+        except InsufficientStock as error:
+            self._projection.project_material_source_blocked(
+                task_uuid,
+                reason=str(error) or "任务所需物料暂不可用",
+            )
             return MaterialSourceResolution(status="blocked")
-        allocations = (
-            reservation.get("allocations")
-            if isinstance(reservation, Mapping)
-            else None
-        )
-        bindings: dict[str, dict[str, str]] = {}
+        allocations: dict[str, Any] = {}
+        allocation_sites: dict[str, Any] = {}
+        for result in (reservation,):
+            result_allocations = (
+                result.get("allocations") if isinstance(result, Mapping) else None
+            )
+            if not isinstance(result_allocations, Mapping):
+                raise MaterialSourceResolutionError("库存解析结果缺少 allocations")
+            allocations.update(result_allocations)
+            result_sites = result.get("allocation_sites", {})
+            if not isinstance(result_sites, Mapping):
+                raise MaterialSourceResolutionError(
+                    "库存解析结果的 allocation_sites 必须是对象"
+                )
+            allocation_sites.update(result_sites)
+        bindings: dict[str, dict[str, str | None]] = {}
         for node_uuid, selector in selectors.items():
             fixed_uuid = str(selector.get("material_uuid") or "").strip()
             if fixed_uuid:
@@ -168,8 +181,6 @@ class MaterialSourceResolutionCoordinator:
             else:
                 raw_allocated = (
                     allocations.get(node_uuid)
-                    if isinstance(allocations, Mapping)
-                    else None
                 )
                 if (
                     not isinstance(raw_allocated, Sequence)
@@ -183,11 +194,29 @@ class MaterialSourceResolutionCoordinator:
                     raw_allocated[0],
                     field="material_source.allocated_material_uuid",
                 )
+            node_sites = allocation_sites.get(node_uuid, {})
+            if not isinstance(node_sites, Mapping):
+                raise MaterialSourceResolutionError("来源库位分配结果必须是对象")
+            resolved_site_uuid = str(
+                selector.get("site") or node_sites.get(material_uuid) or ""
+            ).strip()
+            if not resolved_site_uuid and hasattr(
+                self._inventory,
+                "current_site_uuid",
+            ):
+                resolved_site_uuid = str(
+                    self._inventory.current_site_uuid(material_uuid) or ""
+                ).strip()
             bindings[node_uuid] = {
                 "uuid": material_uuid,
                 "resource_template_uuid": self._required_text(
                     selector.get("resource_template_uuid"),
                     field="material_source.resource_template_uuid",
+                ),
+                "site_uuid": resolved_site_uuid or None,
+                "flow_role": self._required_text(
+                    selector.get("flow_role"),
+                    field="material_source.flow_role",
                 ),
                 "custody_policy": self._required_text(
                     selector.get("custody_policy"),

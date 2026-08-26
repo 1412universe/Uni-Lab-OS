@@ -237,12 +237,109 @@ def test_unknown_outcome_locks_device_until_explicit_reconciliation(
         assert commands[-1]["message_uuid"] == resolution["command_uuid"]
         assert commands[-1]["type"] == "job.resolve_unknown"
         authority.resolve_unknown_committed(payload["job_id"])
-        assert finished == [
-            (payload["job_id"], False, None, "operator_intervention")
-        ]
+        assert finished == [(payload["job_id"], False, None, "canceled")]
         assert authority.busy_device_action_keys() == set()
     finally:
         authority.stop()
+
+
+def test_feedback_projection_failure_is_replayed_after_restart(tmp_path: Path) -> None:
+    """Edge 已提交的反馈不得因工作流投影失败而丢失。"""
+
+    database = tmp_path / "authority.db"
+    authority = _authority(database)
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    sample = {
+        "sequence": 1,
+        "feedback_type": "progress",
+        "data": {"percent": 25},
+        "observed_at": "2026-08-26T10:00:00Z",
+        "idempotency_key": "feedback-1",
+    }
+
+    authority.add_job_feedback_listener(
+        lambda _job_uuid, _sample: (_ for _ in ()).throw(RuntimeError("db down"))
+    )
+    try:
+        with pytest.raises(RuntimeError, match="db down"):
+            authority.commit_feedback(
+                payload["job_id"],
+                command_uuid=command["message_uuid"],
+                job_token=command["payload"]["job_access_token"],
+                payload=sample,
+            )
+    finally:
+        authority.stop()
+
+    recovered = _authority(database)
+    projected: list[tuple[str, dict[str, object]]] = []
+    try:
+        recovered.replay_pending_projections(
+            feedback_listener=lambda job_uuid, item: projected.append(
+                (job_uuid, item)
+            )
+        )
+        assert projected == [(payload["job_id"], sample)]
+
+        recovered.replay_pending_projections(
+            feedback_listener=lambda job_uuid, item: projected.append(
+                (job_uuid, item)
+            )
+        )
+        assert projected == [(payload["job_id"], sample)]
+    finally:
+        recovered.stop()
+
+
+def test_outcome_projection_failure_is_replayed_after_restart(tmp_path: Path) -> None:
+    """Edge 不可变结果在工作流库恢复后必须可重放。"""
+
+    database = tmp_path / "authority.db"
+    authority = _authority(database)
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    authority.add_job_finished_listener(
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("db down"))
+    )
+    try:
+        with pytest.raises(RuntimeError, match="db down"):
+            authority.commit_outcome(
+                payload["job_id"],
+                command_uuid=command["message_uuid"],
+                job_token=command["payload"]["job_access_token"],
+                payload={
+                    "outcome": "succeeded",
+                    "return_info": {"return_value": {"moved": True}},
+                    "error_info": [],
+                    "unknown_command_ids": [],
+                },
+            )
+    finally:
+        authority.stop()
+
+    recovered = _authority(database)
+    projected: list[tuple[str, bool, object, str]] = []
+    try:
+        recovered.replay_pending_projections(
+            finished_listener=lambda job_uuid, success, result, suc_type: projected.append(
+                (job_uuid, success, result, suc_type)
+            )
+        )
+        assert projected == [
+            (payload["job_id"], True, {"moved": True}, "normal")
+        ]
+
+        recovered.replay_pending_projections(
+            finished_listener=lambda job_uuid, success, result, suc_type: projected.append(
+                (job_uuid, success, result, suc_type)
+            )
+        )
+        assert len(projected) == 1
+    finally:
+        recovered.stop()
 
 
 def test_disconnect_marks_dispatched_job_unknown_and_hello_can_reconcile(

@@ -41,7 +41,7 @@ def normalize_node_type(value: Any) -> str:
 
 
 # 状态词汇与新后端（Uni-Lab-OS/uni-lab-backend）表设计保持一致：
-# - workflow_task.status: pending/running/paused/success/failed/canceled/timeout
+# - workflow_task.status: pending/running/paused/canceling/success/failed/canceled/timeout
 # - workflow_node_job.status 终态同样使用 success（不是 succeeded）
 # Edge 额外扩展：ready/dispatched（节点内部推进态）、waiting_for_material（等料）、
 # interrupted（进程重启标记，仅历史库）；上报云端时终态词汇与云端枚举一字不差。
@@ -60,6 +60,7 @@ class WorkflowState(str, Enum):
     RUNNING = "running"
     WAITING_MATERIAL = "waiting_for_material"  # Edge 扩展：物料预留不足，等待补料后重试
     PAUSED = "paused"  # 词汇对齐云端；Edge 调度器当前不主动产生
+    CANCELING = "canceling"  # 已停止后续派发，等待在途设备作业明确终态
     SUCCESS = "success"
     FAILED = "failed"
     CANCELED = "canceled"
@@ -103,6 +104,8 @@ class WorkflowNode:
     # manual_confirm / Transfer（Edge 目前只执行 ILab；Transfer 仅规范化/透传，
     # 比较请用 is_ilab()，容忍大小写差异）
     node_type: str = "ILab"
+    # 人工确认可单独作为流程闸门，也可包装设备动作；只在后者批准后下发设备。
+    manual_continues_device_action: bool = False
     disabled: bool = False
     # 注册表动作声明的免设备排队语义；仍受物料/库位执行资源键约束。
     always_free: bool = False
@@ -212,6 +215,9 @@ class DispatchedJob:
     dispatched_at: float = field(default_factory=time.time)
     device_id: str = ""
     action_name: str = ""
+    # 人工确认节点在批准前保存已解析参数；批准后用同一 Job 身份下发真实动作。
+    resolved_args: Dict[str, Any] = field(default_factory=dict)
+    manual_action_dispatched: bool = False
     # 下发时刻的预估执行时长（泳道图预估终点）与来源（declared/historical/default）
     estimated_s: float = 0.0
     estimate_source: str = "default"
@@ -260,6 +266,9 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
         param=dict(data.get("param") or {}),
         param_schema=param_schema,
         node_type=normalize_node_type(data.get("node_type") or data.get("type")),
+        manual_continues_device_action=bool(
+            data.get("manual_continues_device_action", False)
+        ),
         disabled=bool(data.get("disabled", False)),
         always_free=bool(data.get("always_free", False)),
         material_requirements=[

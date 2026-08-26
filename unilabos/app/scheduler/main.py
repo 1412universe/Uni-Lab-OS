@@ -144,7 +144,14 @@ if _inventory is not None:
         create_lab_router as _create_lab_router,
     )
 
-    install_backend_resource_api(app, BackendResourceService(_inventory.store))
+    install_backend_resource_api(
+        app,
+        BackendResourceService(
+            _inventory.store,
+            edge_id=_inventory.edge_id,
+            lab_id=_inventory.lab_id,
+        ),
+    )
     app.include_router(_create_inventory_router(_inventory))
     app.include_router(_create_legacy_material_router(_inventory))
     app.include_router(_create_lab_router(_inventory))

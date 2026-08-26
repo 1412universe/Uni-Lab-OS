@@ -95,11 +95,14 @@ def store(tmp_path: Path) -> Iterator[WorkflowStore]:
 
 
 def _source_plan_node(
-    *, automatic: bool = False, custody_policy: str = "task_exclusive"
+    *,
+    automatic: bool = False,
+    custody_policy: str = "task_exclusive",
 ) -> dict[str, Any]:
-    """构造固定 existing 物料来源的协调器计划节点。
+    """构造 existing 物料来源的协调器计划节点。
 
-    参数：无。返回：包含冻结选择器和唯一实例需求的计划对象。异常：无。
+    参数：``automatic`` 决定由库存选择或固定实例；``custody_policy`` 决定任务
+    独占或共享来源。返回：包含冻结选择器和唯一实例需求的计划对象。异常：无。
     """
 
     return {
@@ -179,11 +182,13 @@ def _seed_task(
     *,
     with_action: bool,
     automatic: bool = False,
+    custody_policy: str = "task_exclusive",
 ) -> dict[str, Any]:
     """持久化含来源协调责任的待处理工作流任务。
 
-    参数：``store`` 是唯一写权威；``with_action`` 决定准入后是否需要物理派发。
-    返回：标准任务投影。异常：数据库约束原样传播。
+    参数：``store`` 是唯一写权威；``with_action`` 决定准入后是否需要物理派发；
+    ``automatic`` 决定库存自动选择；``custody_policy`` 决定独占或共享。返回：
+    标准任务投影。异常：数据库约束原样传播。
     """
 
     store.create_workflow(
@@ -193,7 +198,12 @@ def _seed_task(
         description=None,
         meta_data={},
     )
-    nodes = [_source_plan_node(automatic=automatic)]
+    nodes = [
+        _source_plan_node(
+            automatic=automatic,
+            custody_policy=custody_policy,
+        )
+    ]
     if with_action:
         nodes.append(_action_plan_node(automatic=automatic))
     execution_plan = {
@@ -291,7 +301,7 @@ def test_blocked_admission_retry_reuses_task_and_job_identities(
     """受阻后补料必须以同一任务和作业身份完成准入重试。
 
     参数：``store`` 是隔离任务权威。返回无；断言第一次零派发且全部待处理，
-    第二次准入重试（AdmissionRetry）只推进原身份并派发原动作作业。
+    重启后的第二次准入重试（AdmissionRetry）只推进原身份并派发原动作作业。
     """
 
     task = _seed_task(store, with_action=True)
@@ -301,10 +311,19 @@ def test_blocked_admission_retry_reuses_task_and_job_identities(
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:
         blocked = bridge.submit(task)
-        inventory.available = True
-        admitted = bridge.retry_admission(TASK_UUID)
     finally:
         bridge.close()
+
+    inventory.available = True
+    restarted_scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        inventory=inventory,
+    )
+    restarted_bridge = TaskSchedulerBridge(store, scheduler=restarted_scheduler)
+    try:
+        admitted = restarted_bridge.retry_admission(TASK_UUID)
+    finally:
+        restarted_bridge.close()
 
     assert blocked["task"]["status"] == "pending"
     assert [job["uuid"] for job in blocked["jobs"]] == [
@@ -316,6 +335,13 @@ def test_blocked_admission_retry_reuses_task_and_job_identities(
     assert admitted["jobs"][0]["uuid"] == SOURCE_JOB_UUID
     assert admitted["jobs"][0]["status"] == "succeeded"
     assert dispatcher.dispatched[0]["job_id"] == ACTION_JOB_UUID
+    with store.transaction() as connection:
+        admission = connection.execute(
+            "SELECT status, attempt, revision "
+            "FROM workflow_task_material_admission WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+    assert tuple(admission) == ("admitted", 2, 2)
 
 
 def test_source_admission_commits_before_ordinary_action_dispatch(
@@ -402,6 +428,52 @@ def test_automatic_source_projects_selected_material_before_dispatch(
     assert dispatcher.dispatched[0]["action_args"] == {
         "plate": {"uuid": MATERIAL_UUID}
     }
+
+
+def test_shared_source_uses_atomic_admission_without_exclusive_reservation(
+    store: WorkflowStore,
+) -> None:
+    """共享来源必须进入整组准入，但不得形成任务独占预留。
+
+    参数：``store`` 是隔离任务权威。返回无；断言协调器把共享保管策略交给库存
+    权威原子准入，仍持久化任务物料绑定，但不会创建任务物料预留事实。
+    """
+
+    task = _seed_task(
+        store,
+        with_action=True,
+        automatic=True,
+        custody_policy="shared_source",
+    )
+    inventory = _ToggleInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        bridge.submit(task)
+    finally:
+        bridge.close()
+
+    assert [call[0] for call in inventory.admission_calls] == [TASK_UUID]
+    assert [
+        request.custody_policy
+        for request in inventory.admission_calls[0][1]
+    ] == ["shared_source"]
+    with store.transaction() as connection:
+        binding = connection.execute(
+            "SELECT custody_policy FROM workflow_task_material_binding "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+        claim_count = connection.execute(
+            "SELECT COUNT(*) FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()[0]
+    assert binding["custody_policy"] == "shared_source"
+    assert claim_count == 0
 
 
 def test_successful_material_task_releases_source_reservations(

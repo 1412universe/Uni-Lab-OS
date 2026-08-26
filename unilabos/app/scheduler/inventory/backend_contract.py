@@ -28,6 +28,9 @@ class BackendContractError(RuntimeError):
 
 INVALID_PARAMETER = 1000
 DATABASE_CONFLICT = 2005
+REAGENT_INFO_IN_USE = 4000
+RESOURCE_NOT_FOUND = 4001
+RESOURCE_DATA_CONFLICT = 4002
 RESOURCE_TEMPLATE_NOT_FOUND = 5000
 TEMPLATE_DEFINITION_INVALID = 5003
 TEMPLATE_DATA_CONFLICT = 5004
@@ -73,8 +76,22 @@ def _optional(value: Any) -> Any:
 class BackendResourceService:
     """提供资源模板（ResourceTemplate）、物料（Material）与库位（Site）权威写入。"""
 
-    def __init__(self, store: InventoryStore):
+    def __init__(
+        self,
+        store: InventoryStore,
+        *,
+        edge_id: str = "edge-default",
+        lab_id: str = "edge-lab",
+    ):
+        """绑定 OS Local 库与当前 Edge 身份。
+
+        参数：``store`` 是唯一库存数据库；``edge_id`` 与 ``lab_id`` 用于同一
+        HTTP 合同下需要写入事务发件箱的领域事件。返回：初始化后的资源服务。
+        """
+
         self.store = store
+        self.edge_id = edge_id
+        self.lab_id = lab_id
 
     # Resource Template -------------------------------------------------
 
@@ -533,14 +550,30 @@ class BackendResourceService:
                 SELECT 1 FROM site
                 WHERE deleted_at IS NULL
                   AND (material_uuid=? OR occupied_material_uuid=?)
+                UNION ALL
+                SELECT 1 FROM reagent
+                WHERE material_uuid=? AND deleted_at IS NULL
+                UNION ALL
+                SELECT 1 FROM sample
+                WHERE material_uuid=? AND deleted_at IS NULL
+                UNION ALL
+                SELECT 1 FROM current_substance
+                WHERE material_uuid=? AND deleted_at IS NULL
                 LIMIT 1
                 """,
-                (material_uuid, material_uuid, material_uuid),
+                (
+                    material_uuid,
+                    material_uuid,
+                    material_uuid,
+                    material_uuid,
+                    material_uuid,
+                    material_uuid,
+                ),
             ).fetchone()
             if linked:
                 raise BackendContractError(
                     DATABASE_CONFLICT,
-                    "Material is referenced by a child or Site",
+                    "Material is referenced by a child, Site, or container content",
                 )
             now = _now()
             conn.execute(

@@ -526,6 +526,67 @@ class InventoryService:
     # reserve / release / consume（workflow 幂等键）
     # ------------------------------------------------------------------
 
+    @_traced_operation("resolve_shared_source")
+    def resolve_shared_workflow_materials(
+        self,
+        workflow_id: str,
+        node_requirements: Dict[str, List[MaterialRequirement]],
+    ) -> Dict[str, Any]:
+        """只读解析共享来源，不创建任务独占库存预留。
+
+        参数：``workflow_id`` 是用于追踪的工作流任务身份；``node_requirements``
+        按来源节点提供实例型需求。返回：与 ``reserve_workflow`` 相同形状的确定性
+        ``allocations``，但 ``reserved_nodes`` 为空。异常：数量型需求、实例不存在
+        或当前不可用时抛 ``CommandRejected``/``InsufficientStock``。整个解析在一个
+        SQLite 事务快照内完成，不写 ``inventory_reservation`` 或实例状态。
+        """
+
+        allocations: Dict[str, List[str]] = {}
+        allocation_sites: Dict[str, Dict[str, str]] = {}
+        with self._tx() as conn:
+            for node_id, requirements in node_requirements.items():
+                selected: List[str] = []
+                for requirement in requirements:
+                    if not requirement.is_instance_requirement():
+                        raise CommandRejected(
+                            "共享来源只支持实例型物料，数量型库存必须任务独占"
+                        )
+                    instance = self._tx_resolve_instance(conn, requirement)
+                    if instance["status"] != InstanceState.WAREHOUSE.value:
+                        raise InsufficientStock(
+                            f"instance {instance['edge_uuid']} not in warehouse "
+                            f"(status={instance['status']})"
+                        )
+                    selected.append(str(instance["edge_uuid"]))
+                allocations[node_id] = selected
+                allocation_sites[node_id] = {
+                    material_uuid: site_uuid
+                    for material_uuid in selected
+                    if (
+                        site_uuid := self._tx_instance_site_uuid(
+                            conn,
+                            material_uuid,
+                        )
+                    )
+                }
+        return {
+            "workflow_id": workflow_id,
+            "reserved_nodes": [],
+            "allocations": allocations,
+            "allocation_sites": allocation_sites,
+        }
+
+    def current_site_uuid(self, material_uuid: str) -> str:
+        """读取物料当前占用库位。
+
+        参数：``material_uuid`` 是物料实例身份。返回：当前库位 UUID，不在库位时
+        返回空字符串。异常：数据库错误原样传播。该方法只读，不创建预留或改变
+        库位占用。
+        """
+
+        with self._tx() as conn:
+            return self._tx_instance_site_uuid(conn, material_uuid)
+
     @_traced_operation("reserve")
     def reserve_workflow(
         self,
@@ -861,6 +922,29 @@ class InventoryService:
         return amounts
 
     @staticmethod
+    def _tx_instance_site_uuid(
+        conn: sqlite3.Connection,
+        material_uuid: str,
+    ) -> str:
+        """读取实例当前占用库位。
+
+        参数：``conn`` 是当前库存事务连接；``material_uuid`` 是物料实例身份。
+        返回：当前占用该物料的稳定库位 UUID，不在库位时返回空字符串。异常：
+        数据库错误原样传播；排序只为兼容历史重复脏数据，正常模型应至多一行。
+        """
+
+        row = conn.execute(
+            """
+            SELECT uuid FROM site
+            WHERE occupied_material_uuid = ? AND deleted_at IS NULL
+            ORDER BY sort_order ASC, create_time ASC, uuid ASC
+            LIMIT 1
+            """,
+            (material_uuid,),
+        ).fetchone()
+        return str(row["uuid"]) if row is not None else ""
+
+    @staticmethod
     def _tx_resolve_instance(
         conn: sqlite3.Connection,
         req: MaterialRequirement,
@@ -875,7 +959,6 @@ class InventoryService:
         匹配抛 ``CommandRejected``，身份缺失抛 ``NotFound``，自动选择没有
         可用实例时由库位解析抛 ``InsufficientStock``。
         """
-
         selector_fields = bool(req.mount_uuid or req.site_uuid or req.slot_uuids)
         if (req.instance_uuid or req.barcode) and selector_fields:
             raise CommandRejected(
@@ -1056,9 +1139,10 @@ class InventoryService:
         actor: str = "",
         causation_id: str = "",
     ) -> Dict[str, Any]:
-        """节点开始：预留 → 实际消费（lot reserved/total 扣减；实例 deploy 上台）.
+        """设备明确成功后结算预留（批次数量扣减；实例转为在台状态）。
 
-        幂等：已 consumed 直接返回；无预留（无物料节点）no-op。
+        同一库存事务提交业务行、台账和 outbox；已 consumed 直接返回，无预留
+        （无物料节点）为 no-op。调用方不得在派发或执行接受阶段调用本方法。
         """
         now = self._now_ms()
         with self._tx() as conn:

@@ -497,7 +497,11 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
                 if not resource_contract_routes_mounted:
                     install_backend_resource_api(
                         app,
-                        BackendResourceService(inventory_service.store),
+                        BackendResourceService(
+                            inventory_service.store,
+                            edge_id=inventory_service.edge_id,
+                            lab_id=inventory_service.lab_id,
+                        ),
                         material_shapes=get_material_shapes(),
                         material_model_catalog=get_material_model_catalog(),
                     )

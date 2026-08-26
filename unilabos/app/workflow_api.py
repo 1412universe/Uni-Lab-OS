@@ -181,6 +181,112 @@ class GraphWriteRequest(_BackendModel):
         return [] if value is None else value
 
 
+class WorkflowNodeCreateRequest(_StrictModel):
+    """向现有工作流增加一个节点的公共 DTO。"""
+
+    workflow_node_template_uuid: Optional[str] = None
+    parent_uuid: Optional[str] = None
+    material_uuid: Optional[str] = None
+    name: str = ""
+    type: str = ""
+    pose: Dict[str, Any] = Field(default_factory=dict)
+    param: Optional[Dict[str, Any]] = None
+    execution_policy: Dict[str, Any] = Field(default_factory=dict)
+    disabled: bool = False
+    minimized: bool = False
+    script: Optional[str] = None
+    description: Optional[str] = None
+    meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("pose", "execution_policy", "meta_data", mode="before")
+    @classmethod
+    def _json_object(cls, value: Any) -> Dict[str, Any]:
+        return normalize_json_object(value)
+
+
+class WorkflowNodePatchRequest(_StrictModel):
+    """Backend 允许局部更新的节点字段。"""
+
+    parent_uuid: Optional[str] = None
+    material_uuid: Optional[str] = None
+    name: Optional[str] = None
+    pose: Optional[Dict[str, Any]] = None
+    param: Optional[Dict[str, Any]] = None
+    execution_policy: Optional[Dict[str, Any]] = None
+    disabled: Optional[bool] = None
+    minimized: Optional[bool] = None
+    script: Optional[str] = None
+    description: Optional[str] = None
+    meta_data: Optional[Dict[str, Any]] = None
+
+
+class WorkflowEdgeCreateRequest(_BackendModel):
+    """向完整图增加一条依赖或数据连线的公共 DTO。"""
+
+    source_node_uuid: str
+    target_node_uuid: str
+    source_handle_uuid: str
+    target_handle_uuid: str
+    description: Optional[str] = None
+    meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("meta_data", mode="before")
+    @classmethod
+    def _json_object(cls, value: Any) -> Dict[str, Any]:
+        return normalize_json_object(value)
+
+
+class WorkflowBatchDeleteRequest(_BackendModel):
+    """原子删除一组节点和连线的公共 DTO。"""
+
+    node_uuids: List[str] = Field(default_factory=list)
+    edge_uuids: List[str] = Field(default_factory=list)
+
+
+class WorkflowDuplicateRequest(_BackendModel):
+    """工作流或节点复制时可选的新名称。"""
+
+    name: Optional[str] = None
+
+
+class LegacyWorkflowImportRequest(_BackendModel):
+    """兼容直接对象和 ``data`` 包装的旧版工作流导入载荷。"""
+
+    workflow_name: str = ""
+    name: str = ""
+    tags: List[Any] = Field(default_factory=list)
+    description: Optional[str] = None
+    meta_data: Dict[str, Any] = Field(default_factory=dict)
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    inventory_requirements: List[Dict[str, Any]] = Field(default_factory=list)
+    data: Optional[Dict[str, Any]] = None
+
+
+class PublishWorkflowContractRequest(_StrictModel):
+    """冻结指定工作流修订的发布命令。"""
+
+    revision: int = Field(ge=1, le=_INT64_MAX, strict=True)
+
+
+class InsertCompositeWorkflowRequest(_StrictModel):
+    """在父图中插入一个已发布工作流调用。"""
+
+    revision: int = Field(ge=1, le=_INT64_MAX, strict=True)
+    contract_uuid: str
+    invocation_uuid: Optional[str] = None
+    device_bindings: Dict[str, str] = Field(default_factory=dict)
+    pose: Dict[str, Any] = Field(default_factory=dict)
+    param: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("device_bindings", "pose", "param", mode="before")
+    @classmethod
+    def _json_object(cls, value: Any) -> Dict[str, Any]:
+        """规范化组合调用的对象字段并拒绝数组或标量。"""
+
+        return normalize_json_object(value)
+
+
 class WorkflowTaskCreateRequest(_BackendModel):
     workflow_uuid: str
     run_mode: str = "normal"
@@ -259,13 +365,36 @@ class DeviceActionRunCreateRequest(_StrictModel):
     @field_validator("execution_policy", "meta_data", mode="before")
     @classmethod
     def _json_object(cls, value: Any) -> Dict[str, Any]:
-        """规范化设备动作请求中的可选 JSON 对象。
-
-        参数：``value`` 是 Pydantic 解码前的策略或元数据值。返回独立 JSON
-        对象；缺失或 ``null`` 与 Backend 的零值对象语义一致。
-        """
+        """规范化设备动作请求中的可选 JSON 对象。"""
 
         return normalize_json_object(value)
+
+
+class ManualConfirmationDecisionRequest(_StrictModel):
+    """人工确认批准或拒绝的公共 DTO。"""
+
+    action: str
+    confirmed_by: str
+    comment: Optional[str] = None
+    idempotency_key: str
+    param: Optional[Dict[str, Any]] = None
+
+
+class WorkflowInterventionDecisionRequest(_StrictModel):
+    """按修订选择一个设备已经提供的干预方案。"""
+
+    revision: int = Field(ge=1, le=_INT64_MAX, strict=True)
+    option_id: str
+    # Local 模式兼容需要服务端执行的兜底动作结果；普通 retry/skip/abort 不传。
+    result: Any = None
+
+
+class UncertainJobResolutionRequest(_StrictModel):
+    """执行未知作业的安全人工处置请求。"""
+
+    resolution: str
+    reason: str
+    device_command_id: Optional[str] = None
 
 
 class DraftWriteRequest(_StrictModel):
@@ -389,6 +518,17 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             status=201,
         )
 
+    @router.post("/workflows/import")
+    def import_legacy_workflow(
+        body: LegacyWorkflowImportRequest,
+    ) -> JSONResponse:
+        """校验并在一个事务中导入旧版工作流图。"""
+
+        return _success(
+            service.import_legacy_workflow(payload=body.model_dump()),
+            status=201,
+        )
+
     @router.get("/workflows")
     def list_workflows(
         page: int = Query(default=1),
@@ -408,6 +548,22 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 "page": result["page"],
                 "page_size": result["page_size"],
             }
+        )
+
+    @router.get("/published-workflow-contracts")
+    def list_published_workflow_contracts(
+        page: int = Query(default=1),
+        page_size: int = Query(default=20),
+        keyword: str = Query(default=""),
+    ) -> JSONResponse:
+        """返回每个来源工作流最新的不可变发布合同。"""
+
+        return _success(
+            service.list_published_workflow_contracts(
+                page=page,
+                page_size=page_size,
+                keyword=keyword,
+            )
         )
 
     @router.get("/workflows/{workflow_uuid}")
@@ -443,6 +599,171 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 edges=body.edges,
             )
         )
+
+    @router.post("/workflows/{workflow_uuid}/nodes")
+    def create_workflow_node(
+        workflow_uuid: str,
+        body: WorkflowNodeCreateRequest,
+    ) -> JSONResponse:
+        """增加节点，并由完整图校验器原子推进修订。"""
+
+        return _success(
+            service.create_workflow_node(
+                workflow_uuid,
+                payload=body.model_dump(),
+            ),
+            status=201,
+        )
+
+    @router.get("/workflows/{workflow_uuid}/nodes")
+    def list_workflow_nodes(
+        workflow_uuid: str,
+        page: int = Query(default=1),
+        page_size: int = Query(default=20),
+        workflow_node_template_uuid: Optional[str] = Query(default=None),
+        material_uuid: Optional[str] = Query(default=None),
+    ) -> JSONResponse:
+        """分页查询指定工作流的节点。"""
+
+        return _success(
+            service.list_workflow_nodes(
+                workflow_uuid,
+                page=page,
+                page_size=page_size,
+                workflow_node_template_uuid=workflow_node_template_uuid,
+                material_uuid=material_uuid,
+            )
+        )
+
+    @router.post("/workflows/{workflow_uuid}/edges")
+    def create_workflow_edge(
+        workflow_uuid: str,
+        body: WorkflowEdgeCreateRequest,
+    ) -> JSONResponse:
+        """增加连线，并复用完整图引用与环路校验。"""
+
+        return _success(
+            service.create_workflow_edge(
+                workflow_uuid,
+                payload=body.model_dump(),
+            ),
+            status=201,
+        )
+
+    @router.post("/workflows/{workflow_uuid}/batch-delete")
+    def batch_delete_workflow_graph(
+        workflow_uuid: str,
+        body: WorkflowBatchDeleteRequest,
+    ) -> JSONResponse:
+        """一次删除多个节点与连线，失败时整图不变。"""
+
+        return _success(
+            service.batch_delete_workflow_graph(
+                workflow_uuid,
+                node_uuids=body.node_uuids,
+                edge_uuids=body.edge_uuids,
+            )
+        )
+
+    @router.post("/workflows/{workflow_uuid}/duplicate")
+    def duplicate_workflow(
+        workflow_uuid: str,
+        body: WorkflowDuplicateRequest,
+    ) -> JSONResponse:
+        """在单个 SQLite 事务中复制工作流和完整图。"""
+
+        return _success(
+            service.duplicate_workflow(workflow_uuid, name=body.name),
+            status=201,
+        )
+
+    @router.post("/workflows/{workflow_uuid}/publications")
+    def publish_workflow_contract(
+        workflow_uuid: str,
+        body: PublishWorkflowContractRequest,
+    ) -> JSONResponse:
+        """幂等冻结与当前修订一致的工作流合同。"""
+
+        return _success(
+            service.publish_workflow_contract(
+                workflow_uuid,
+                revision=body.revision,
+            ),
+            status=201,
+        )
+
+    @router.post("/workflows/{workflow_uuid}/composite-invocations")
+    def insert_composite_workflow(
+        workflow_uuid: str,
+        body: InsertCompositeWorkflowRequest,
+    ) -> JSONResponse:
+        """原子插入并确定性展开一个不可变组合工作流调用。"""
+
+        return _success(
+            service.insert_composite_workflow(
+                workflow_uuid,
+                revision=body.revision,
+                contract_uuid=body.contract_uuid,
+                invocation_uuid=body.invocation_uuid,
+                device_bindings=body.device_bindings,
+                pose=body.pose,
+                param=body.param,
+            )
+        )
+
+    @router.get("/workflows/{workflow_uuid}/run-preflight")
+    def get_workflow_run_preflight(
+        workflow_uuid: str,
+        run_mode: str = Query(default="normal"),
+        target_node_uuid: Optional[str] = Query(default=None),
+    ) -> JSONResponse:
+        """返回不创建任务、不占用资源的候选运行检查报告。"""
+
+        response = _success(
+            service.get_workflow_run_preflight(
+                workflow_uuid,
+                run_mode=run_mode,
+                target_node_uuid=target_node_uuid,
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @router.get("/workflow-nodes/{node_uuid}")
+    def get_workflow_node(node_uuid: str) -> JSONResponse:
+        return _success(service.get_workflow_node(node_uuid))
+
+    @router.patch("/workflow-nodes/{node_uuid}")
+    def patch_workflow_node(
+        node_uuid: str,
+        body: WorkflowNodePatchRequest,
+    ) -> JSONResponse:
+        return _success(
+            service.patch_workflow_node(
+                node_uuid,
+                patch=body.model_dump(exclude_unset=True),
+            )
+        )
+
+    @router.delete("/workflow-nodes/{node_uuid}")
+    def delete_workflow_node(node_uuid: str) -> JSONResponse:
+        service.delete_workflow_node(node_uuid)
+        return _success()
+
+    @router.post("/workflow-nodes/{node_uuid}/duplicate")
+    def duplicate_workflow_node(
+        node_uuid: str,
+        body: WorkflowDuplicateRequest,
+    ) -> JSONResponse:
+        return _success(
+            service.duplicate_workflow_node(node_uuid, name=body.name),
+            status=201,
+        )
+
+    @router.delete("/workflow-edges/{edge_uuid}")
+    def delete_workflow_edge(edge_uuid: str) -> JSONResponse:
+        service.delete_workflow_edge(edge_uuid)
+        return _success()
 
     @router.post("/workflow-tasks")
     def create_workflow_task(
@@ -571,6 +892,10 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def list_workflow_node_jobs(task_uuid: str) -> JSONResponse:
         return _success(service.list_workflow_node_jobs(task_uuid))
 
+    @router.get("/workflow-tasks/{task_uuid}/manual-confirmations")
+    def list_task_manual_confirmations(task_uuid: str) -> JSONResponse:
+        return _success(service.list_task_manual_confirmations(task_uuid))
+
     @router.get("/workflow-tasks/{task_uuid}/events")
     def list_workflow_task_runtime_events(
         task_uuid: str,
@@ -601,6 +926,88 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     @router.get("/workflow-node-jobs/{job_uuid}")
     def get_workflow_node_job(job_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_node_job(job_uuid))
+
+    @router.get("/workflow-node-jobs/{job_uuid}/feedback")
+    def list_workflow_node_job_feedback(
+        job_uuid: str,
+        page: int = Query(default=1),
+        page_size: int = Query(default=20),
+    ) -> JSONResponse:
+        """返回作业已经提交的有序过程反馈。"""
+
+        return _success(
+            service.list_workflow_node_job_feedback(
+                job_uuid,
+                page=page,
+                page_size=page_size,
+            )
+        )
+
+    @router.post("/workflow-node-jobs/{job_uuid}/resolve-uncertain")
+    def resolve_uncertain_workflow_node_job(
+        job_uuid: str,
+        body: UncertainJobResolutionRequest,
+    ) -> JSONResponse:
+        result = service.resolve_uncertain_job(
+            job_uuid,
+            resolution=body.resolution,
+            reason=body.reason,
+            device_command_id=body.device_command_id,
+        )
+        return _success(
+            result,
+            status=202 if result["pending_edge_confirmation"] else 200,
+        )
+
+    @router.get("/workflow-manual-confirmations/{confirmation_uuid}")
+    def get_manual_confirmation(confirmation_uuid: str) -> JSONResponse:
+        return _success(service.get_manual_confirmation(confirmation_uuid))
+
+    @router.post("/workflow-manual-confirmations/{confirmation_uuid}/decision")
+    def decide_manual_confirmation(
+        confirmation_uuid: str,
+        body: ManualConfirmationDecisionRequest,
+    ) -> JSONResponse:
+        return _success(
+            service.decide_manual_confirmation(
+                confirmation_uuid,
+                action=body.action,
+                confirmed_by=body.confirmed_by,
+                comment=body.comment,
+                idempotency_key=body.idempotency_key,
+                param=body.param,
+            )
+        )
+
+    @router.get("/workflow-interventions")
+    def list_workflow_interventions(
+        status: str = Query(default="open"),
+        limit: int = Query(default=100),
+    ) -> JSONResponse:
+        """按状态查询等待处理或已经处理的工作流干预。"""
+
+        return _success(
+            service.list_workflow_interventions(status=status, limit=limit)
+        )
+
+    @router.get("/workflow-interventions/{intervention_uuid}")
+    def get_workflow_intervention(intervention_uuid: str) -> JSONResponse:
+        return _success(service.get_workflow_intervention(intervention_uuid))
+
+    @router.post("/workflow-interventions/{intervention_uuid}/decisions")
+    def select_workflow_intervention(
+        intervention_uuid: str,
+        body: WorkflowInterventionDecisionRequest,
+        idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        result = service.select_workflow_intervention(
+            intervention_uuid,
+            revision=body.revision,
+            option_id=body.option_id,
+            idempotency_key=idempotency_key,
+            result=body.result,
+        )
+        return _success(result, status=201 if result["created"] else 200)
 
     @router.get("/workflows/{workflow_uuid}/authoring")
     def get_authoring(workflow_uuid: str) -> JSONResponse:

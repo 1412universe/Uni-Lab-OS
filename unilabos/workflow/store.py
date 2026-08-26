@@ -35,8 +35,18 @@ from unilabos.workflow.graph_validation import (
     validate_graph,
 )
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
-from unilabos.workflow.models import WorkflowEdgeWrite, WorkflowNodeWrite
-from unilabos.workflow.store_migrations import ensure_device_action_run_schema
+from unilabos.workflow.models import (
+    WorkflowEdgeWrite,
+    WorkflowInventoryRequirementWrite,
+    WorkflowNodeWrite,
+)
+from unilabos.workflow.store_migrations import (
+    ensure_device_action_run_schema,
+    ensure_execution_lock_schema,
+    ensure_local_cancellation_schema,
+    ensure_task_material_admission_schema,
+    ensure_workflow_inventory_schema,
+)
 
 if TYPE_CHECKING:
     from unilabos.workflow.task_input import PreparedTaskInput
@@ -332,6 +342,7 @@ CREATE TABLE IF NOT EXISTS workflow_node_job (
     cancel_command_uuid TEXT,
     cancel_ack_deadline_at TEXT,
     cancel_complete_deadline_at TEXT,
+    cancel_accepted_at TEXT,
     uncertainty_reason TEXT,
     started_at TEXT,
     finished_at TEXT,
@@ -458,6 +469,10 @@ class WorkflowStore:
                 )
                 try:
                     ensure_device_action_run_schema(self._conn)
+                    ensure_task_material_admission_schema(self._conn)
+                    ensure_execution_lock_schema(self._conn)
+                    ensure_local_cancellation_schema(self._conn)
+                    ensure_workflow_inventory_schema(self._conn)
                     columns = {
                         row["name"]
                         for row in self._conn.execute(
@@ -596,6 +611,58 @@ class WorkflowStore:
             raise StoreConflict(f"workflow {workflow_uuid} already exists") from exc
         return self.get_workflow(workflow_uuid)
 
+    def create_workflow_with_graph(
+        self,
+        *,
+        workflow_uuid: str,
+        name: str,
+        tags: List[Any],
+        description: Optional[str],
+        meta_data: Dict[str, Any],
+        nodes: List[WorkflowNodeWrite],
+        edges: List[WorkflowEdgeWrite],
+    ) -> Dict[str, Any]:
+        """在一个事务中创建工作流及其首版完整图。
+
+        参数：工作流字段构成新定义，``nodes``/``edges`` 已使用新身份重建引用。
+        返回修订为 1 的完整图；任何身份、模板或图语义错误都会回滚工作流主记录，
+        因此复制/导入不会留下空壳工作流。
+        """
+
+        now = utc_now()
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO workflow(
+                        uuid, create_time, update_time, deleted_at,
+                        description, meta_data, name, tags, revision
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        workflow_uuid,
+                        now,
+                        now,
+                        description,
+                        _json(meta_data),
+                        name,
+                        _json(tags),
+                    ),
+                )
+                self._reconcile_graph(
+                    conn,
+                    workflow_uuid=workflow_uuid,
+                    expected_revision=1,
+                    nodes=nodes,
+                    edges=edges,
+                    advance_revision=False,
+                    protect_reserved_metadata=True,
+                    validate_workflow_io_contract=True,
+                )
+        except sqlite3.IntegrityError as exc:
+            raise StoreConflict(f"workflow {workflow_uuid} already exists") from exc
+        return self.get_graph(workflow_uuid)
+
     def get_workflow(
         self,
         workflow_uuid: str,
@@ -718,6 +785,14 @@ class WorkflowStore:
                 """,
                 (workflow_uuid,),
             ).fetchall()
+            inventory_requirement_rows = database.execute(
+                """
+                SELECT * FROM workflow_inventory_requirement
+                WHERE workflow_uuid = ? AND deleted_at IS NULL
+                ORDER BY sort_order, uuid
+                """,
+                (workflow_uuid,),
+            ).fetchall()
             template_uuids = [
                 row["workflow_node_template_uuid"]
                 for row in node_rows
@@ -752,6 +827,10 @@ class WorkflowStore:
             "workflow": workflow,
             "nodes": [self._node_row(row) for row in node_rows],
             "edges": [self._edge_row(row) for row in edge_rows],
+            "inventory_requirements": [
+                self._inventory_requirement_row(row)
+                for row in inventory_requirement_rows
+            ],
             "node_templates": node_templates,
             "handle_templates": handle_templates,
         }
@@ -787,6 +866,9 @@ class WorkflowStore:
         revision: int,
         nodes: List[WorkflowNodeWrite],
         edges: List[WorkflowEdgeWrite],
+        inventory_requirements: Optional[
+            List[WorkflowInventoryRequirementWrite]
+        ] = None,
         protect_reserved_metadata: bool = False,
         validate_workflow_io_contract: bool = False,
     ) -> Dict[str, Any]:
@@ -804,6 +886,7 @@ class WorkflowStore:
                 expected_revision=revision,
                 nodes=nodes,
                 edges=edges,
+                inventory_requirements=inventory_requirements,
                 advance_revision=True,
                 protect_reserved_metadata=protect_reserved_metadata,
                 validate_workflow_io_contract=validate_workflow_io_contract,
@@ -818,6 +901,9 @@ class WorkflowStore:
         expected_revision: int,
         nodes: List[WorkflowNodeWrite],
         edges: List[WorkflowEdgeWrite],
+        inventory_requirements: Optional[
+            List[WorkflowInventoryRequirementWrite]
+        ] = None,
         advance_revision: bool,
         protect_reserved_metadata: bool = False,
         semantic_workflow_meta_data: Optional[Dict[str, Any]] = None,
@@ -857,6 +943,27 @@ class WorkflowStore:
                 raise StoreConflict(
                     f"edge {edge.uuid} references a node outside the submitted graph"
                 )
+        if inventory_requirements is not None:
+            requirement_keys: set[str] = set()
+            requirement_uuids: set[str] = set()
+            for requirement in inventory_requirements:
+                identity = requirement.uuid or ""
+                key = requirement.requirement_key or identity
+                if requirement.consume_node_uuid not in node_by_uuid:
+                    raise StoreConflict(
+                        "inventory requirement references a node outside the graph"
+                    )
+                if not key:
+                    # 无身份的新需求在当前事务生成一次，返回后由前端
+                    # 带回同一 UUID / requirement_key。
+                    identity = str(uuid4())
+                    key = identity
+                elif not identity:
+                    identity = str(uuid4())
+                if identity in requirement_uuids or key in requirement_keys:
+                    raise StoreConflict("duplicate workflow inventory requirement")
+                requirement_uuids.add(identity)
+                requirement_keys.add(key)
         template_uuids = sorted(
             {
                 node.workflow_node_template_uuid
@@ -941,6 +1048,13 @@ class WorkflowStore:
                 now,
                 protect_reserved_metadata=protect_reserved_metadata,
             )
+        if inventory_requirements is not None:
+            self._reconcile_inventory_requirements(
+                conn,
+                workflow_uuid=workflow_uuid,
+                requirements=inventory_requirements,
+                now=now,
+            )
         self._soft_delete_omitted(
             conn,
             table="workflow_edge",
@@ -962,6 +1076,79 @@ class WorkflowStore:
             (next_revision, now, workflow_uuid),
         )
         return next_revision
+
+    def _reconcile_inventory_requirements(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        workflow_uuid: str,
+        requirements: List[WorkflowInventoryRequirementWrite],
+        now: str,
+    ) -> None:
+        """在完整图 CAS 事务内替换逻辑数量库存需求。"""
+
+        retained: list[str] = []
+        seen_keys: set[str] = set()
+        for sort_order, requirement in enumerate(requirements):
+            identity = requirement.uuid or str(uuid4())
+            requirement_key = requirement.requirement_key or identity
+            if requirement_key in seen_keys:
+                raise StoreConflict("duplicate workflow inventory requirement key")
+            seen_keys.add(requirement_key)
+            existing = conn.execute(
+                "SELECT workflow_uuid,create_time FROM workflow_inventory_requirement "
+                "WHERE uuid=?",
+                (identity,),
+            ).fetchone()
+            if existing is not None and existing["workflow_uuid"] != workflow_uuid:
+                raise StoreAuthoringConflict("candidate_identity_conflict")
+            values = (
+                now,
+                None,
+                requirement.description,
+                _json(requirement.meta_data),
+                workflow_uuid,
+                requirement.consume_node_uuid,
+                requirement_key,
+                requirement.target_type,
+                requirement.reagent_info_uuid,
+                requirement.required_quantity,
+                requirement.quantity_unit,
+                int(requirement.allow_split),
+                sort_order,
+            )
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO workflow_inventory_requirement(
+                        uuid,create_time,update_time,deleted_at,description,meta_data,
+                        workflow_uuid,consume_node_uuid,requirement_key,target_type,
+                        reagent_info_uuid,required_quantity,quantity_unit,allow_split,
+                        sort_order
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (identity, now, *values),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE workflow_inventory_requirement
+                    SET update_time=?,deleted_at=?,description=?,meta_data=?,
+                        workflow_uuid=?,consume_node_uuid=?,requirement_key=?,
+                        target_type=?,reagent_info_uuid=?,required_quantity=?,
+                        quantity_unit=?,allow_split=?,sort_order=?
+                    WHERE uuid=?
+                    """,
+                    (*values, identity),
+                )
+            retained.append(identity)
+        self._soft_delete_omitted(
+            conn,
+            table="workflow_inventory_requirement",
+            workflow_uuid=workflow_uuid,
+            retained=retained,
+            now=now,
+        )
 
     def _upsert_node(
         self,
@@ -2716,6 +2903,11 @@ class WorkflowStore:
             "workflow_task",
             "workflow_task_command",
             "workflow_node_job",
+            "execution_lock_lease",
+            "execution_lock_waiter",
+            "workflow_inventory_requirement",
+            "workflow_inventory_allocation",
+            "workflow_inventory_saga",
             "workflow_authoring",
             "frontend_event",
             "workflow_runtime_journal",
@@ -2729,6 +2921,8 @@ class WorkflowStore:
             in {
                 "workflow_authoring",
                 "frontend_event",
+                "workflow_inventory_allocation",
+                "workflow_inventory_saga",
             }
             else " WHERE deleted_at IS NULL"
         )
@@ -2799,6 +2993,22 @@ class WorkflowStore:
         }
 
     @classmethod
+    def _inventory_requirement_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        result = {
+            **cls._base(row),
+            "workflow_uuid": row["workflow_uuid"],
+            "consume_node_uuid": row["consume_node_uuid"],
+            "requirement_key": row["requirement_key"],
+            "target_type": row["target_type"],
+            "required_quantity": row["required_quantity"],
+            "quantity_unit": row["quantity_unit"],
+            "allow_split": bool(row["allow_split"]),
+            "sort_order": row["sort_order"],
+        }
+        cls._add_optional(result, row, "reagent_info_uuid")
+        return result
+
+    @classmethod
     def _node_template_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
         result = {
             **cls._base(row),
@@ -2855,6 +3065,7 @@ class WorkflowStore:
             "run_mode": row["run_mode"],
             "control_status": row["control_status"],
             "cleanup_status": row["cleanup_status"],
+            "wait_reason": _load(row["wait_reason"], {}),
             "trace_context": _load(row["trace_context"], {}),
             "input": _load(row["input"], {}),
             "output": _load(row["output"], {}),
@@ -2905,6 +3116,7 @@ class WorkflowStore:
             "return_info": _load(row["return_info"], {}),
             "control_data": _load(row["control_data"], {}),
             "error_info": _load(row["error_info"], []),
+            "wait_reason": _load(row["wait_reason"], {}),
         }
         cls._add_optional(
             result,
@@ -2917,6 +3129,7 @@ class WorkflowStore:
             "cancel_command_uuid",
             "cancel_ack_deadline_at",
             "cancel_complete_deadline_at",
+            "cancel_accepted_at",
             "uncertainty_reason",
             "started_at",
             "finished_at",

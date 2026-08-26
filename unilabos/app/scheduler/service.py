@@ -18,11 +18,10 @@
 
 - submit：汇总 DAG 全部物料需求，入队前 all-or-nothing 预留；
   不足 → workflow 置 ``waiting_for_material``，不进入执行队列，每次重排重试预留
-- 节点下发前：预留 → FIFO lot 消费 + 实例 deploy（幂等键 workflow:node:attempt）
-- 节点失败：该节点已消费的物料转 quarantined（人工复核，不虚假加回）
-- 节点异常后人工选择 skip（suc_type=skip）：节点算成功继续推进，但其已消费
-  物料状态不明，同样转 quarantined 待复核
-- 工作流终态（failed/canceled）：剩余 active 预留自动 release（依据 DB，不依赖内存）
+- 节点下发前只持有预留，不提前扣减库存
+- 明确成功结果提交时：预留 → FIFO lot 消费 + 实例 deploy（幂等键
+  workflow:node:attempt）
+- 失败、取消或跳过不扣减；工作流终态释放剩余 active 预留（依据 DB，不依赖内存）
 
 动作物料锁与库位锁（Action Material Lock / Site Lock）：
 
@@ -46,12 +45,13 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Set
 
 from unilabos.app.scheduler.dag_state import WorkflowRun
 from unilabos.app.scheduler.dispatch import (
+    CancelDispatchState,
     Dispatcher,
     RecordingDispatcher,
     build_job_start_payload,
 )
 from unilabos.app.scheduler.estimation import DurationEstimator
-from unilabos.app.scheduler.inventory.domain import InsufficientStock, InventoryError
+from unilabos.app.scheduler.inventory.domain import InsufficientStock
 from unilabos.app.scheduler.models import (
     DispatchedJob,
     ReadyTask,
@@ -216,7 +216,22 @@ class EdgeScheduler:
         self._workflow_spans: Dict[str, DetachedSpan] = {}
         self._job_spans: Dict[str, DetachedSpan] = {}
         # 生命周期监听器仅承载标准 Task/Job 兼容回写，不成为第二个状态权威。
-        self._job_pre_dispatch_listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self._job_pre_dispatch_listeners: List[
+            Callable[[Dict[str, Any]], bool | None]
+        ] = []
+        self._job_execution_wait_listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self._job_dispatch_accepted_listeners: List[Callable[[str], None]] = []
+        self._job_dispatch_uncertain_listeners: List[
+            Callable[[str, str], None]
+        ] = []
+        self._job_cancel_accepted_listeners: List[Callable[[str], None]] = []
+        self._job_cancel_uncertain_listeners: List[
+            Callable[[str, str], None]
+        ] = []
+        self._job_cancel_no_send_listeners: List[Callable[[str], None]] = []
+        self._job_feedback_listeners: List[
+            Callable[[str, Dict[str, Any]], None]
+        ] = []
         self._job_finished_listeners: List[Callable[[str, bool, Any, str], None]] = []
         self._job_settled_listeners: List[Callable[[str, bool, Any, str], None]] = []
         # 准入重试监听器把尚未注册为旧调度运行的来源受阻任务接到同一个公开
@@ -282,25 +297,146 @@ class EdgeScheduler:
 
     def add_job_pre_dispatch_listener(
         self,
-        listener: Callable[[Dict[str, Any]], None],
+        listener: Callable[[Dict[str, Any]], bool | None],
     ) -> None:
         """注册作业派发前监听器。
 
-        参数：``listener`` 接收即将派发的作业摘要。返回无；监听器必须先提交持久
-        派发意图，异常会中止物理派发，禁止形成先发设备后记数据库的窗口。
+        参数：``listener`` 接收即将派发的作业摘要。监听器返回 ``False`` 表示
+        持久执行资源暂不可用，本轮保持等待；``None`` 兼容旧监听器并视为允许。
+        异常会中止物理派发，禁止形成先发设备后记数据库的窗口。
         """
 
         self._job_pre_dispatch_listeners.append(listener)
 
     def remove_job_pre_dispatch_listener(
         self,
-        listener: Callable[[Dict[str, Any]], None],
+        listener: Callable[[Dict[str, Any]], bool | None],
     ) -> None:
         """移除派发前监听器；参数 ``listener`` 必须是此前注册的同一回调。"""
 
         self._job_pre_dispatch_listeners = [
             current
             for current in self._job_pre_dispatch_listeners
+            if current != listener
+        ]
+
+    def add_job_execution_wait_listener(
+        self,
+        listener: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        """注册执行资源忙等待监听器，使内存阻塞也留下持久等待事实。"""
+
+        self._job_execution_wait_listeners.append(listener)
+
+    def remove_job_execution_wait_listener(
+        self,
+        listener: Callable[[Dict[str, Any]], None],
+    ) -> None:
+        """幂等移除执行资源忙等待监听器。"""
+
+        self._job_execution_wait_listeners = [
+            current
+            for current in self._job_execution_wait_listeners
+            if current != listener
+        ]
+
+    def add_job_dispatch_accepted_listener(
+        self,
+        listener: Callable[[str], None],
+    ) -> None:
+        """注册执行适配器接受作业后的持久确认监听器。"""
+
+        self._job_dispatch_accepted_listeners.append(listener)
+
+    def remove_job_dispatch_accepted_listener(
+        self,
+        listener: Callable[[str], None],
+    ) -> None:
+        """幂等移除执行接受监听器。"""
+
+        self._job_dispatch_accepted_listeners = [
+            current
+            for current in self._job_dispatch_accepted_listeners
+            if current != listener
+        ]
+
+    def add_job_dispatch_uncertain_listener(
+        self,
+        listener: Callable[[str, str], None],
+    ) -> None:
+        """注册派发边界异常后的执行未知监听器。"""
+
+        self._job_dispatch_uncertain_listeners.append(listener)
+
+    def remove_job_dispatch_uncertain_listener(
+        self,
+        listener: Callable[[str, str], None],
+    ) -> None:
+        """幂等移除执行未知监听器。"""
+
+        self._job_dispatch_uncertain_listeners = [
+            current
+            for current in self._job_dispatch_uncertain_listeners
+            if current != listener
+        ]
+
+    def add_job_cancel_accepted_listener(
+        self,
+        listener: Callable[[str], None],
+    ) -> None:
+        """注册本地执行器明确接受取消后的持久投影监听器。"""
+
+        self._job_cancel_accepted_listeners.append(listener)
+
+    def remove_job_cancel_accepted_listener(
+        self,
+        listener: Callable[[str], None],
+    ) -> None:
+        """幂等移除本地取消受理监听器。"""
+
+        self._job_cancel_accepted_listeners = [
+            current
+            for current in self._job_cancel_accepted_listeners
+            if current != listener
+        ]
+
+    def add_job_cancel_uncertain_listener(
+        self,
+        listener: Callable[[str, str], None],
+    ) -> None:
+        """注册取消不能确认时的执行未知监听器。"""
+
+        self._job_cancel_uncertain_listeners.append(listener)
+
+    def remove_job_cancel_uncertain_listener(
+        self,
+        listener: Callable[[str, str], None],
+    ) -> None:
+        """幂等移除取消执行未知监听器。"""
+
+        self._job_cancel_uncertain_listeners = [
+            current
+            for current in self._job_cancel_uncertain_listeners
+            if current != listener
+        ]
+
+    def add_job_cancel_no_send_listener(
+        self,
+        listener: Callable[[str], None],
+    ) -> None:
+        """注册可证明未越过物理边界的取消监听器。"""
+
+        self._job_cancel_no_send_listeners.append(listener)
+
+    def remove_job_cancel_no_send_listener(
+        self,
+        listener: Callable[[str], None],
+    ) -> None:
+        """幂等移除未发送取消监听器。"""
+
+        self._job_cancel_no_send_listeners = [
+            current
+            for current in self._job_cancel_no_send_listeners
             if current != listener
         ]
 
@@ -316,6 +452,24 @@ class EdgeScheduler:
 
         self._job_finished_listeners.append(listener)
 
+    def add_job_feedback_listener(
+        self,
+        listener: Callable[[str, Dict[str, Any]], None],
+    ) -> None:
+        """注册 Edge 已持久反馈的标准工作流投影监听器。"""
+
+        self._job_feedback_listeners.append(listener)
+
+    def remove_job_feedback_listener(
+        self,
+        listener: Callable[[str, Dict[str, Any]], None],
+    ) -> None:
+        """幂等移除作业反馈监听器。"""
+
+        self._job_feedback_listeners = [
+            current for current in self._job_feedback_listeners if current != listener
+        ]
+
     def remove_job_finished_listener(
         self,
         listener: Callable[[str, bool, Any, str], None],
@@ -325,6 +479,33 @@ class EdgeScheduler:
         self._job_finished_listeners = [
             current for current in self._job_finished_listeners if current != listener
         ]
+
+    def replay_persisted_edge_projections(
+        self,
+        *,
+        feedback_listener: Callable[[str, Dict[str, Any]], None],
+        finished_listener: Callable[[str, bool, Any, str], None],
+    ) -> Dict[str, int]:
+        """把 Edge 本地已提交证据直接重放给持久工作流投影。
+
+        进程重启后内存 DAG 尚未恢复，因此不绕经
+        ``on_job_finished`` 的内存在途作业查找。无持久 Edge 发件箱的
+        执行后端返回空计数。
+        """
+
+        replay = getattr(self._dispatcher, "replay_pending_projections", None)
+        if not callable(replay):
+            return {"feedback": 0, "outcomes": 0}
+        result = replay(
+            feedback_listener=feedback_listener,
+            finished_listener=finished_listener,
+        )
+        if not isinstance(result, Mapping):
+            raise ValueError("Edge 重放返回值必须是对象")
+        return {
+            "feedback": int(result.get("feedback", 0)),
+            "outcomes": int(result.get("outcomes", 0)),
+        }
 
     def add_job_settled_listener(
         self,
@@ -344,15 +525,53 @@ class EdgeScheduler:
             current for current in self._job_settled_listeners if current != listener
         ]
 
-    def _notify_job_pre_dispatch(self, dispatching: Dict[str, Any]) -> None:
+    def _notify_job_pre_dispatch(self, dispatching: Dict[str, Any]) -> bool:
         """同步通知派发意图；参数 ``dispatching`` 是即将越过执行边界的摘要。
 
-        返回无；任何监听器失败都会阻止执行适配器调用，由创建请求收到错误并保留
-        可核对的持久事实。
+        返回：全部监听器允许派发时为真；任一标准持久准入返回 ``False`` 时为假。
+        任何监听器异常都会阻止执行适配器调用。
         """
 
         for listener in tuple(self._job_pre_dispatch_listeners):
-            listener(dict(dispatching))
+            if listener(dict(dispatching)) is False:
+                return False
+        return True
+
+    def _notify_job_execution_wait(self, waiting: Dict[str, Any]) -> None:
+        """在内存设备锁或动作物料锁先命中时同步持久化等待顺序。"""
+
+        for listener in tuple(self._job_execution_wait_listeners):
+            listener(dict(waiting))
+
+    def _notify_job_dispatch_accepted(self, job_id: str) -> None:
+        """在执行适配器返回接受后同步推进持久作业与租约。"""
+
+        for listener in tuple(self._job_dispatch_accepted_listeners):
+            listener(job_id)
+
+    def _notify_job_dispatch_uncertain(self, job_id: str, reason: str) -> None:
+        """在派发意图已提交但适配器未明确返回时保守记录执行未知。"""
+
+        for listener in tuple(self._job_dispatch_uncertain_listeners):
+            listener(job_id, reason)
+
+    def _notify_job_cancel_accepted(self, job_id: str) -> None:
+        """记录执行器已接受取消；该事实不释放在途作业或资源锁。"""
+
+        for listener in tuple(self._job_cancel_accepted_listeners):
+            listener(job_id)
+
+    def _notify_job_cancel_uncertain(self, job_id: str, reason: str) -> None:
+        """把取消拒绝、能力缺失或边界异常保守通知为执行未知。"""
+
+        for listener in tuple(self._job_cancel_uncertain_listeners):
+            listener(job_id, reason)
+
+    def _notify_job_cancel_no_send(self, job_id: str) -> None:
+        """通知持久层该作业可证明从未越过物理执行边界。"""
+
+        for listener in tuple(self._job_cancel_no_send_listeners):
+            listener(job_id)
 
     def _notify_job_finished(
         self,
@@ -370,6 +589,12 @@ class EdgeScheduler:
 
         for listener in tuple(self._job_finished_listeners):
             listener(job_id, success, ret_value, suc_type)
+
+    def on_job_feedback(self, job_id: str, sample: Dict[str, Any]) -> None:
+        """把 Edge 已提交反馈同步投递给工作流持久投影。"""
+
+        for listener in tuple(self._job_feedback_listeners):
+            listener(job_id, dict(sample))
 
     def _notify_job_settled(
         self,
@@ -700,7 +925,7 @@ class EdgeScheduler:
 
         ``suc_type`` 来自设备侧异常决策（registry.action_policy）：
         normal / skip / operator_intervention。skip 表示动作报错后人工选择
-        跳过——节点按成功推进，但其已消费物料隔离待复核。
+        跳过——节点按成功推进，但不把本节点预留结算为库存消耗。
         """
         with self._lock:
             job = self._inflight.get(job_id)
@@ -708,46 +933,49 @@ class EdgeScheduler:
                 logger.warning("[EdgeScheduler] unknown job finished: %s", job_id)
                 return {"dispatched": []}
 
+            run = self._workflows.get(job.workflow_id)
+            if run is None:
+                return {"dispatched": []}
+
+            # 库存只在设备明确成功后结算。扣减失败时保留在途作业、执行占用和
+            # 完成投递，禁止出现“作业成功但库存仍未扣减”的公开事实。
+            if (
+                success
+                and suc_type != "skip"
+                and job.workflow_id in self._material_workflows
+            ):
+                node = next(
+                    (candidate for candidate in run.spec.nodes if candidate.id == job.node_id),
+                    None,
+                )
+                if node is not None and node.material_requirements:
+                    self._inventory.consume_reservation(job.workflow_id, job.node_id)
+
             # 标准完成事实必须先持久化；任一监听器失败时保留在途作业与资源锁，
-            # 允许设备对同一结果进行投递重放（DeliveryReplay）。
+            # 允许设备对同一结果进行投递重放（DeliveryReplay）。库存消费本身也
+            # 以相同 workflow/node/attempt 幂等，重放不会重复扣减。
             self._notify_job_finished(job_id, success, ret_value, suc_type)
             self._inflight.pop(job_id, None)
             self._job_resource_locks.pop(job_id, None)
 
             # 泳道图时间线：记录实际起止 + 喂给历史统计（EMA）+ 历史库落盘
+            canceled_by_executor = not success and suc_type == "canceled"
             self._record_timeline(
-                job, success=success, suc_type=suc_type, ret_value=ret_value
+                job,
+                success=success,
+                suc_type=suc_type,
+                ret_value=ret_value,
+                state="canceled" if canceled_by_executor else "",
             )
-
-            run = self._workflows.get(job.workflow_id)
-            if run is None:
-                return {"dispatched": []}
 
             if success:
                 run.mark_finished(job.node_id, ret_value)
-                if suc_type == "skip" and job.workflow_id in self._material_workflows:
-                    # 异常后跳过：动作未真正完成，该节点已消费物料状态不明 → 隔离
-                    logger.warning(
-                        "[EdgeScheduler] node %s skipped after error, "
-                        "quarantine its consumed materials (wf=%s)",
-                        job.node_id,
-                        job.workflow_id,
-                    )
-                    self._safe_inventory_call(
-                        "quarantine_reservation",
-                        job.workflow_id,
-                        job.node_id,
-                        reason="node_skipped_after_error",
-                    )
+            elif canceled_by_executor:
+                # 取消请求本身不结算节点；只有执行器返回明确取消终态后，才消费
+                # 在途节点并允许后续物理清理释放占用。
+                run.mark_canceled(job.node_id)
             else:
                 run.mark_failed(job.node_id)
-                # 失败节点已物理使用的物料转 quarantined（不虚假加回）
-                if job.workflow_id in self._material_workflows:
-                    self._safe_inventory_call(
-                        "quarantine_reservation",
-                        job.workflow_id,
-                        job.node_id,
-                    )
                 # 失败工作流的未下发节点不再推进；已下发的等它们各自回调
                 logger.warning(
                     "[EdgeScheduler] node %s failed, workflow %s stops advancing",
@@ -775,6 +1003,134 @@ class EdgeScheduler:
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
         return result
+
+    def resolve_manual_confirmation(
+        self,
+        job_id: str,
+        *,
+        approved: bool,
+        param: Mapping[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """批准后以同一作业身份下发真实设备动作，拒绝则明确失败。"""
+
+        if not approved:
+            return self.on_job_finished(
+                job_id,
+                False,
+                {"manual_confirmation": "rejected"},
+                "normal",
+            )
+        complete_without_dispatch = False
+        with self._lock:
+            job = self._inflight.get(job_id)
+            if job is None:
+                raise ValueError("人工确认对应的作业不在运行中")
+            run = self._workflows.get(job.workflow_id)
+            node = run.node(job.node_id) if run is not None else None
+            if run is None or node is None or not node.is_manual_confirm():
+                raise ValueError("作业不是人工确认节点")
+            if job.manual_action_dispatched:
+                return {
+                    "workflow_id": job.workflow_id,
+                    "workflow_state": run.state.value,
+                    "dispatched": [],
+                }
+            if not node.manual_continues_device_action:
+                job.manual_action_dispatched = True
+                complete_without_dispatch = True
+            if complete_without_dispatch:
+                approved_param = {}
+                payload = None
+            else:
+                approved_param = (
+                    dict(param) if param is not None else dict(job.resolved_args)
+                )
+                approved_locks = self._resource_lock_keys(node, approved_param)
+                held_locks = self._job_resource_locks.get(job_id, set())
+                if approved_locks != held_locks:
+                    raise ValueError("批准参数改变了物料或库位占用范围")
+                payload = build_job_start_payload(
+                    job_id=job_id,
+                    task_id=run.spec.task_id,
+                    workflow_id=job.workflow_id,
+                    node_id=job.node_id,
+                    device_id=node.device_id,
+                    action_name=node.action_name,
+                    action_type=node.action_type,
+                    action_args=approved_param,
+                    always_free=node.always_free,
+                )
+            if complete_without_dispatch:
+                pass
+            else:
+                assert payload is not None
+                try:
+                    self._dispatcher.dispatch(payload)
+                except BaseException:
+                    self._notify_job_dispatch_uncertain(
+                        job_id,
+                        "manual_confirmation_dispatch_acceptance_unknown",
+                    )
+                    raise
+                job.resolved_args = approved_param
+                job.manual_action_dispatched = True
+            dispatched_result = {
+                "workflow_id": job.workflow_id,
+                "workflow_state": run.state.value,
+                "dispatched": ([] if complete_without_dispatch else [
+                    {
+                        "job_id": job_id,
+                        "workflow_id": job.workflow_id,
+                        "node_id": job.node_id,
+                        "device_action_key": job.device_action_key,
+                    }
+                ]),
+            }
+        if complete_without_dispatch:
+            return self.on_job_finished(
+                job_id,
+                True,
+                {"manual_confirmation": "approved"},
+                "normal",
+            )
+        return dispatched_result
+
+    def expire_manual_confirmation(self, job_id: str) -> Dict[str, Any]:
+        """按持久截止时间关闭仍在等待的人工确认，不触发物理动作。"""
+
+        with self._lock:
+            job = self._inflight.get(job_id)
+            if job is None:
+                raise ValueError("人工确认对应的作业不在运行中")
+            run = self._workflows.get(job.workflow_id)
+            node = run.node(job.node_id) if run is not None else None
+            if run is None or node is None or not node.is_manual_confirm():
+                raise ValueError("作业不是人工确认节点")
+            if job.manual_action_dispatched:
+                raise ValueError("人工确认已经越过设备派发边界")
+        return self.on_job_finished(
+            job_id,
+            False,
+            {"manual_confirmation": "timed_out"},
+            "manual_confirmation_timeout",
+        )
+
+    def request_uncertain_resolution(
+        self,
+        job_id: str,
+        *,
+        reason: str,
+    ) -> Dict[str, Any]:
+        """请求 Edge 证明未知设备命令已取消；这里只创建命令，不释放占用。"""
+
+        store = getattr(self._dispatcher, "store", None)
+        create_resolution = getattr(store, "create_unknown_resolution", None)
+        if not callable(create_resolution):
+            raise ValueError("当前执行边界不支持 UNKNOWN 处置证明")
+        result = create_resolution(job_id, reason=reason)
+        if not isinstance(result, Mapping):
+            raise ValueError("UNKNOWN 处置命令返回非法")
+        return dict(result)
 
     # ── 重排核心 ─────────────────────────────────────────────
 
@@ -885,9 +1241,9 @@ class EdgeScheduler:
             # 下方物料/库位执行资源键准入，不能借免排队语义绕过资源安全。
             manual_confirm = task.node.is_manual_confirm()
             bypass_device_lock = manual_confirm or task.node.always_free
-            if not bypass_device_lock and (action_key in busy or device_key in busy):
-                # 动作或设备已被占用：本轮跳过，等占用作业完成后准入重试。
-                continue
+            # ``job_id`` 优先复用标准工作流节点作业（WorkflowNodeJob）身份；旧整图
+            # 没有提供时才维持历史随机身份行为。等待与派发必须使用同一身份。
+            job_id = task.node.job_id or uuid_mod.uuid4().hex
 
             run = self._workflows[task.workflow_id]
             try:
@@ -929,44 +1285,79 @@ class EdgeScheduler:
                 lock_keys,
                 held_resource_locks,
             )
-            if conflicting_lock_keys:
+            device_conflict = not bypass_device_lock and (
+                action_key in busy or device_key in busy
+            )
+            execution_locks: list[dict[str, Any]] = []
+            if not bypass_device_lock:
+                execution_locks.append({"lock_key": device_key, "scope": "device"})
+            for lock_key in sorted(lock_keys):
+                parts = lock_key.split("/")
+                if len(parts) == 3:
+                    execution_locks.append(
+                        {
+                            "lock_key": lock_key,
+                            "scope": "material",
+                            "material_uuid": parts[1],
+                        }
+                    )
+                elif len(parts) == 5:
+                    execution_locks.append(
+                        {
+                            "lock_key": lock_key,
+                            "scope": "material_site",
+                            "material_uuid": parts[1],
+                            "site_uuid": parts[3],
+                        }
+                    )
+            if device_conflict or conflicting_lock_keys:
+                blocking_job = next(
+                    (
+                        candidate
+                        for candidate in sorted(
+                            self._inflight.values(), key=lambda item: item.job_id
+                        )
+                        if (
+                            device_conflict
+                            and (
+                                candidate.device_action_key == action_key
+                                or candidate.device_id == task.node.device_id
+                            )
+                        )
+                        or conflicting_resource_lock_keys(
+                            lock_keys,
+                            self._job_resource_locks.get(candidate.job_id, set()),
+                        )
+                    ),
+                    None,
+                )
+                self._notify_job_execution_wait(
+                    {
+                        "job_id": job_id,
+                        "workflow_id": task.workflow_id,
+                        "node_id": task.node.id,
+                        "resolved_args": resolved_args,
+                        "execution_locks": execution_locks,
+                        "blocking_job_id": (
+                            blocking_job.job_id if blocking_job is not None else None
+                        ),
+                        "blocking_workflow_id": (
+                            blocking_job.workflow_id
+                            if blocking_job is not None
+                            else None
+                        ),
+                    }
+                )
                 logger.info(
-                    "[EdgeScheduler] node %s waits for resource lock(s) %s (wf=%s)",
+                    "[EdgeScheduler] node %s waits for execution lock(s) %s (wf=%s)",
                     task.node.id,
-                    sorted(conflicting_lock_keys),
+                    sorted(
+                        set(conflicting_lock_keys)
+                        | ({device_key} if device_conflict else set())
+                    ),
                     task.workflow_id,
                 )
                 continue
-
-            # 节点开始：预留 → FIFO lot 消费 + 实例 deploy（同一 SQLite 事务，幂等）
-            if (
-                task.workflow_id in self._material_workflows
-                and task.node.material_requirements
-            ):
-                try:
-                    workflow_trace = self._workflow_spans.get(task.workflow_id)
-                    activation = (
-                        workflow_trace.activate()
-                        if workflow_trace is not None
-                        else span("workflow.material.consume")
-                    )
-                    with activation:
-                        self._inventory.consume_reservation(
-                            task.workflow_id, task.node.id
-                        )
-                except InventoryError as exc:
-                    logger.error(
-                        "[EdgeScheduler] material consume failed for wf=%s node=%s: %s",
-                        task.workflow_id,
-                        task.node.id,
-                        exc,
-                    )
-                    run.mark_failed(task.node.id)
-                    continue
-
-            # ``job_id`` 优先复用标准工作流节点作业（WorkflowNodeJob）身份；旧整图
-            # 没有提供时才维持历史随机身份行为。
-            job_id = task.node.job_id or uuid_mod.uuid4().hex
             payload = build_job_start_payload(
                 job_id=job_id,
                 task_id=run.spec.task_id,
@@ -1000,6 +1391,7 @@ class EdgeScheduler:
                 },
             )
             self._job_spans[job_id] = action_trace
+            dispatch_intent_committed = False
             try:
                 with action_trace.activate():
                     with span(
@@ -1013,7 +1405,7 @@ class EdgeScheduler:
                         },
                     ):
                         # 标准任务/作业必须先提交派发意图，才能越过物理执行边界。
-                        self._notify_job_pre_dispatch(
+                        admitted = self._notify_job_pre_dispatch(
                             {
                                 "job_id": job_id,
                                 "workflow_id": task.workflow_id,
@@ -1022,8 +1414,18 @@ class EdgeScheduler:
                                 "estimated_s": round(estimated_s, 3),
                                 "estimate_source": estimate_source,
                                 "resolved_args": resolved_args,
+                                "execution_locks": execution_locks,
                             }
                         )
+                        if not admitted:
+                            action_trace.event(
+                                "action.waiting_for_execution_lock",
+                                {"workflow.job.uuid": job_id},
+                            )
+                            action_trace.end()
+                            self._job_spans.pop(job_id, None)
+                            continue
+                        dispatch_intent_committed = True
                         # 派发意图持久化后，先保守登记本地在途作业和动作物料锁，再
                         # 调用不可原子确认的执行适配器。适配器异常不得回滚这些事实。
                         run.mark_dispatched(task.node.id)
@@ -1034,6 +1436,7 @@ class EdgeScheduler:
                             device_action_key=action_key,
                             device_id=task.node.device_id,
                             action_name=task.node.action_name,
+                            resolved_args=dict(resolved_args),
                             estimated_s=estimated_s,
                             estimate_source=estimate_source,
                         )
@@ -1042,10 +1445,19 @@ class EdgeScheduler:
                             held_resource_locks |= lock_keys
                         if not manual_confirm:
                             self._dispatcher.dispatch(payload)
+                        self._notify_job_dispatch_accepted(job_id)
             except BaseException as exc:
                 action_trace.fail(exc)
                 action_trace.end()
                 self._job_spans.pop(job_id, None)
+                if dispatch_intent_committed:
+                    try:
+                        self._notify_job_dispatch_uncertain(
+                            job_id,
+                            "local_dispatch_acceptance_unknown",
+                        )
+                    except BaseException as projection_error:
+                        raise projection_error from exc
                 raise
             # 人工确认节点不进入执行器，但仍已在上方登记为在途作业，由统一完成
             # 接口提交明确结果。
@@ -1120,12 +1532,19 @@ class EdgeScheduler:
     )
 
     def _collect_terminal_notifications(self) -> List["tuple[str, str]"]:
-        """收集未处理过的终态工作流（须在锁内调用；通知/释放在锁外做）。"""
+        """收集已经物理结算的终态工作流。
+
+        参数：无；调用方必须持有调度器锁。返回：尚未通知且已经没有在途作业的
+        ``(workflow_id, state)`` 列表。仍有设备动作在途的失败任务延后通知与库存
+        释放，避免业务失败先于物理停止时让同一物料被再次使用。
+        """
+
         pending: List["tuple[str, str]"] = []
         for wid, run in self._workflows.items():
             if (
                 run.state not in self._TERMINAL_STATES
                 or wid in self._notified_workflows
+                or any(job.workflow_id == wid for job in self._inflight.values())
             ):
                 continue
             self._notified_workflows.add(wid)
@@ -1155,10 +1574,7 @@ class EdgeScheduler:
                 if workflow_trace is not None and state != WorkflowState.SUCCESS.value:
                     workflow_trace.error(f"workflow {state}")
                 # 终态工作流释放剩余 active 预留（幂等，依据 DB 状态而非内存）
-                if (
-                    wid in self._material_workflows
-                    and state != WorkflowState.SUCCESS.value
-                ):
+                if wid in self._material_workflows:
                     self._safe_inventory_call(
                         "release_workflow",
                         wid,
@@ -1514,26 +1930,83 @@ class EdgeScheduler:
             }
 
     def cancel_workflow(self, workflow_id: str) -> bool:
+        """停止后续派发并请求执行器取消全部在途设备作业。
+
+        参数：``workflow_id`` 是本地工作流任务（WorkflowTask）身份。返回：找到
+        运行并提交取消时为真，不存在时为假。异常：持久监听器或执行适配器异常
+        不会释放在途作业；调用方可重放命令。
+
+        未发送作业可立即结算；已发送作业始终保留在 ``_inflight`` 与资源锁中，
+        直到设备明确返回终态。执行器拒绝、缺少取消能力或调用异常只产生执行未知
+        （ExecutionUnknown），绝不伪造设备已经停止。
+        """
+
         with self._lock:
             run = self._workflows.get(workflow_id)
             if run is None:
                 return False
             run.cancel()
-            removed = [
+            canceling_jobs = [
                 job_id
                 for job_id, j in self._inflight.items()
                 if j.workflow_id == workflow_id
             ]
-            for job_id in removed:
-                job = self._inflight.pop(job_id, None)
-                self._job_resource_locks.pop(job_id, None)
-                action_trace = self._job_spans.pop(job_id, None)
-                if action_trace is not None:
-                    action_trace.error("action canceled")
-                    action_trace.event("action.canceled", {"workflow.job.uuid": job_id})
-                    action_trace.end()
-                if job is not None:
-                    self._record_timeline(job, success=False, state="canceled")
+            cancel_method = getattr(self._dispatcher, "cancel", None)
+            for job_id in canceling_jobs:
+                try:
+                    state = (
+                        cancel_method(
+                            job_id,
+                            lambda accepted, current_job_id=job_id: (
+                                self._notify_job_cancel_accepted(current_job_id)
+                                if accepted
+                                else self._notify_job_cancel_uncertain(
+                                    current_job_id,
+                                    "local_cancel_rejected",
+                                )
+                            ),
+                        )
+                        if callable(cancel_method)
+                        else CancelDispatchState.UNAVAILABLE
+                    )
+                except BaseException:
+                    self._notify_job_cancel_uncertain(
+                        job_id,
+                        "local_cancel_request_exception",
+                    )
+                    continue
+                try:
+                    normalized_state = CancelDispatchState(state)
+                except ValueError:
+                    normalized_state = CancelDispatchState.UNAVAILABLE
+                if normalized_state == CancelDispatchState.REQUESTED:
+                    continue
+                if normalized_state == CancelDispatchState.NOT_SENT:
+                    # No-send Proof 允许同步结算并释放内存锁；持久监听器必须先成功。
+                    self._notify_job_cancel_no_send(job_id)
+                    job = self._inflight.pop(job_id, None)
+                    self._job_resource_locks.pop(job_id, None)
+                    action_trace = self._job_spans.pop(job_id, None)
+                    if action_trace is not None:
+                        action_trace.event(
+                            "action.cancel_no_send",
+                            {"workflow.job.uuid": job_id},
+                        )
+                        action_trace.end()
+                    if job is not None:
+                        run.mark_canceled(job.node_id)
+                        self._record_timeline(
+                            job,
+                            success=False,
+                            suc_type="canceled",
+                            state="canceled",
+                        )
+                    self._notify_job_settled(job_id, False, None, "canceled")
+                    continue
+                self._notify_job_cancel_uncertain(
+                    job_id,
+                    "local_cancel_acceptance_unavailable",
+                )
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
         return True

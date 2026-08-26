@@ -33,7 +33,7 @@ def test_local_runtime_submits_device_action_run_to_existing_scheduler(
     scheduler = EdgeScheduler(
         dispatcher=dispatcher,
         material_lock_resolver=(
-            lambda _device_id, _action_name, _param: tuple()
+            lambda _device_id, _action_name, _param: ()
         ),
     )
     try:
@@ -59,7 +59,7 @@ def test_local_runtime_submits_device_action_run_to_existing_scheduler(
         )
 
         assert created["task"]["status"] == "running"
-        assert created["job"]["status"] == "dispatched"
+        assert created["job"]["status"] == "running"
         assert dispatcher.dispatched[0]["job_id"] == created["job"]["uuid"]
         assert dispatcher.dispatched[0]["device_id"] == "pump-01"
     finally:

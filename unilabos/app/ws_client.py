@@ -873,16 +873,12 @@ class MessageProcessor:
             logger.warning(f"[MessageProcessor] workflow_cancel: workflow {workflow_id} not found")
             return
 
-        # 取消设备侧正在执行/排队的 job（复用 cancel_action 的 HostNode 取消路径）
-        for job_id in inflight_job_ids:
-            try:
-                if self.websocket_client:
-                    self.websocket_client.cancel_goal(job_id)
-            except Exception as e:
-                logger.warning(f"[MessageProcessor] cancel inflight job {job_id[:8]} failed: {e}")
+        # EdgeScheduler 的执行适配器负责区分“尚未发送”与“设备已在执行”，并将
+        # 已执行作业交给 HostNode 请求停止。这里不能再直接清理 DeviceActionManager，
+        # 否则会在设备返回终态前提前释放同一动作的物理占用。
         logger.info(
             f"[MessageProcessor] workflow_cancel {workflow_id}: "
-            f"{len(inflight_job_ids)} inflight job(s) cancelled"
+            f"cancel requested for {len(inflight_job_ids)} inflight job(s)"
         )
 
     async def _handle_inventory_command(self, data: Dict[str, Any]):

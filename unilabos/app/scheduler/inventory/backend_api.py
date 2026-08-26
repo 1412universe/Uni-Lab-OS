@@ -17,6 +17,23 @@ from unilabos.app.scheduler.inventory.backend_contract import (
     BackendContractError,
     BackendResourceService,
 )
+from unilabos.app.scheduler.inventory.backend_response import (
+    call as _call,
+)
+from unilabos.app.scheduler.inventory.backend_response import (
+    error_response as _error,
+)
+from unilabos.app.scheduler.inventory.backend_response import (
+    success as _success,
+)
+from unilabos.app.scheduler.inventory.content_api import (
+    create_container_content_router,
+)
+from unilabos.app.scheduler.inventory.content_contract import (
+    BackendContainerContentService,
+)
+from unilabos.app.scheduler.inventory.reagent_api import create_reagent_router
+from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
 
 
 class BackendModel(BaseModel):
@@ -89,27 +106,6 @@ class MaterialStateRequest(BackendModel):
     meta_data: Dict[str, Any] = Field(default_factory=dict)
 
 
-def _success(data: Any = None, *, status_code: int = 200) -> JSONResponse:
-    content: Dict[str, Any] = {"code": 0}
-    if data is not None:
-        content["data"] = data
-    return JSONResponse(status_code=status_code, content=content)
-
-
-def _error(error: BackendContractError) -> JSONResponse:
-    return JSONResponse(
-        status_code=200,
-        content={"code": error.code, "error": {"msg": error.message}},
-    )
-
-
-def _call(callback, *args, status_code: int = 200, **kwargs) -> JSONResponse:
-    try:
-        return _success(callback(*args, **kwargs), status_code=status_code)
-    except BackendContractError as error:
-        return _error(error)
-
-
 def create_backend_resource_router(
     service: BackendResourceService,
     *,
@@ -129,6 +125,24 @@ def create_backend_resource_router(
         create_material_asset_router(
             material_shapes=material_shapes,
             material_model_catalog=material_model_catalog,
+        )
+    )
+    router.include_router(
+        create_reagent_router(
+            BackendReagentService(
+                service.store,
+                edge_id=service.edge_id,
+                lab_id=service.lab_id,
+            )
+        )
+    )
+    router.include_router(
+        create_container_content_router(
+            BackendContainerContentService(
+                service.store,
+                edge_id=service.edge_id,
+                lab_id=service.lab_id,
+            )
         )
     )
 
@@ -363,6 +377,13 @@ def install_backend_resource_api(
             "/api/v1/materials",
             "/api/v1/material-states",
             "/api/v1/sites",
+            "/api/v1/compounds",
+            "/api/v1/reagent-infos",
+            "/api/v1/reagents",
+            "/api/v1/reagent-history",
+            "/api/v1/samples",
+            "/api/v1/current-substances",
+            "/api/v1/substance-history",
             "/api/v1/workflows",
             "/api/v1/workflow-tasks",
             "/api/v1/workflow-node-jobs",

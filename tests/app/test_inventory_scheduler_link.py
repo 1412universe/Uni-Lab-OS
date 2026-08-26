@@ -2,8 +2,7 @@
 
 覆盖测试门槛：
 - submit 预留不足 → waiting_for_material，不进入执行队列；补料后自动恢复
-- 节点开始（下发前）预留转消费；节点失败已用物料 quarantined、
-  未消费预留在工作流终态时 release
+- 节点明确成功后预留转消费；失败、跳过和取消不扣减，终态 release
 - cancel/restart 依据 DB reservation 状态恢复，不依赖内存
 - 旧 workflow 无物料字段：不产生任何 inventory 调用，行为完全不变
 """
@@ -18,7 +17,6 @@ from unilabos.app.scheduler.models import (
     WorkflowEdge,
     WorkflowNode,
     WorkflowSpec,
-    WorkflowState,
     node_from_dict,
     spec_from_dict,
 )
@@ -64,8 +62,8 @@ class TestSubmitReserve:
         assert result["state"] == "running"
         lot = svc.store.get_lot("lot-1")
         # 整 DAG（A+B）在入队时一次性预留
-        assert lot["quantity_reserved"] == 30.0  # B 还没开始，A 已消费
-        assert lot["quantity_total"] == 80.0     # A 下发时消费了 20
+        assert lot["quantity_reserved"] == 50.0  # A、B 均只预留，尚未结算
+        assert lot["quantity_total"] == 100.0
         assert len(dispatcher.dispatched) == 1   # A 已下发
 
     def test_insufficient_waits_not_queued(self):
@@ -110,8 +108,31 @@ class TestSubmitReserve:
         assert len(result["dispatched"]) == 1
 
 
+class TestSharedSourceResolution:
+    """共享物料来源只读解析合同。"""
+
+    def test_shared_source_does_not_create_inventory_reservation(self):
+        """两个任务可解析同一共享实例且不会创建独占预留。
+
+        参数：无。返回无；断言实例保持 warehouse，库存预留表为空，两次解析都
+        返回同一稳定物料身份。
+        """
+
+        service = InventoryService(InventoryStore(":memory:"))
+        service.register_instance(edge_uuid="mi-shared", template_id="tpl-shared")
+        requirements = {"source": [_req(instance="mi-shared")]}
+
+        first = service.resolve_shared_workflow_materials("task-a", requirements)
+        second = service.resolve_shared_workflow_materials("task-b", requirements)
+
+        assert first["allocations"] == {"source": ["mi-shared"]}
+        assert second["allocations"] == first["allocations"]
+        assert service.store.get_instance("mi-shared")["status"] == "warehouse"
+        assert service.store.list_reservations() == []
+
+
 class TestNodeLifecycle:
-    def test_consume_on_dispatch_and_success_flow(self):
+    def test_consume_only_after_successful_outcome(self):
         scheduler, dispatcher, svc = _stack(stock=100.0)
         spec = WorkflowSpec(
             workflow_id="wf1",
@@ -122,23 +143,69 @@ class TestNodeLifecycle:
             edges=[_edge("A", "B")],
         )
         scheduler.submit_workflow(spec)
-        assert svc.store.get_reservation("wf1", "A", 1)["status"] == "consumed"
+        assert svc.store.get_reservation("wf1", "A", 1)["status"] == "active"
         assert svc.store.get_reservation("wf1", "B", 1)["status"] == "active"
 
         job_a = dispatcher.dispatched[0]["job_id"]
         scheduler.on_job_finished(job_a, success=True, ret_value={"ok": 1})
-        # B 下发时消费
-        assert svc.store.get_reservation("wf1", "B", 1)["status"] == "consumed"
+        assert svc.store.get_reservation("wf1", "A", 1)["status"] == "consumed"
+        # B 已下发但尚无明确成功结果，因此仍只保留预留。
+        assert svc.store.get_reservation("wf1", "B", 1)["status"] == "active"
         job_b = dispatcher.dispatched[1]["job_id"]
         scheduler.on_job_finished(job_b, success=True)
+        assert svc.store.get_reservation("wf1", "B", 1)["status"] == "consumed"
 
         assert scheduler.workflow_snapshot("wf1")["state"] == "success"
         lot = svc.store.get_lot("lot-1")
         assert lot["quantity_total"] == 50.0
         assert lot["quantity_reserved"] == 0.0
 
-    def test_failure_quarantines_used_releases_rest(self):
-        """节点失败：已消费物料 quarantined；未开始节点的预留在终态时 release."""
+    def test_success_result_replay_never_double_consumes_inventory(self):
+        """工作流结果投影瞬态失败后，重放同一成功结果不重复扣减库存。"""
+
+        scheduler, dispatcher, service = _stack(stock=100.0)
+        remaining_failures = 1
+
+        def fail_first_projection(
+            _job_id: str,
+            _success: bool,
+            _ret_value: object,
+            _suc_type: str,
+        ) -> None:
+            """首次模拟工作流库提交失败，第二次接受同一完成事实。"""
+
+            nonlocal remaining_failures
+            if remaining_failures:
+                remaining_failures -= 1
+                raise RuntimeError("workflow result commit failed")
+
+        scheduler.add_job_finished_listener(fail_first_projection)
+        scheduler.submit_workflow(
+            WorkflowSpec(
+                workflow_id="wf-replay",
+                nodes=[_node("A", materials=[_req(lot="lot-1", qty=20.0)])],
+            )
+        )
+        job_id = dispatcher.dispatched[0]["job_id"]
+
+        try:
+            scheduler.on_job_finished(job_id, success=True, ret_value={"ok": True})
+        except RuntimeError as error:
+            assert str(error) == "workflow result commit failed"
+        else:
+            raise AssertionError("首次完成投影必须失败")
+
+        assert service.store.get_reservation("wf-replay", "A", 1)["status"] == "consumed"
+        assert service.store.get_lot("lot-1")["quantity_total"] == 80.0
+        assert job_id in scheduler.snapshot()["inflight_jobs"]
+
+        scheduler.on_job_finished(job_id, success=True, ret_value={"ok": True})
+
+        assert service.store.get_lot("lot-1")["quantity_total"] == 80.0
+        assert scheduler.snapshot()["inflight_jobs"] == {}
+
+    def test_failure_releases_all_unconsumed_reservations(self):
+        """明确失败不扣库存，终态释放该任务全部未消费预留。"""
         scheduler, dispatcher, svc = _stack(stock=100.0)
         svc.register_instance(edge_uuid="mi-1")
         spec = WorkflowSpec(
@@ -153,18 +220,16 @@ class TestNodeLifecycle:
         job_a = dispatcher.dispatched[0]["job_id"]
         scheduler.on_job_finished(job_a, success=False)
 
-        # A 已物理使用 → quarantined（lot 不虚假加回，实例进人工复核）
-        assert svc.store.get_reservation("wf1", "A", 1)["status"] == "quarantined"
-        assert svc.store.get_instance("mi-1")["status"] == "quarantined"
-        # B 未开始 → 预留 release，数量回到 available
+        assert svc.store.get_reservation("wf1", "A", 1)["status"] == "released"
+        assert svc.store.get_instance("mi-1")["status"] == "warehouse"
         assert svc.store.get_reservation("wf1", "B", 1)["status"] == "released"
         lot = svc.store.get_lot("lot-1")
-        assert lot["quantity_total"] == 80.0     # A 消费的 20 不加回
+        assert lot["quantity_total"] == 100.0
         assert lot["quantity_reserved"] == 0.0
-        assert lot["quantity_available"] == 80.0
+        assert lot["quantity_available"] == 100.0
 
     def test_cancel_releases_active_reservations(self):
-        scheduler, dispatcher, svc = _stack(stock=100.0)
+        scheduler, _dispatcher, svc = _stack(stock=100.0)
         spec = WorkflowSpec(
             workflow_id="wf1",
             nodes=[
@@ -175,11 +240,12 @@ class TestNodeLifecycle:
         )
         scheduler.submit_workflow(spec)
         scheduler.cancel_workflow("wf1")
-        # A 已消费不回滚；B 的 active 预留释放
+        # 尚无明确成功结果，A、B 的 active 预留均释放且不扣库存。
+        assert svc.store.get_reservation("wf1", "A", 1)["status"] == "released"
         assert svc.store.get_reservation("wf1", "B", 1)["status"] == "released"
         lot = svc.store.get_lot("lot-1")
         assert lot["quantity_reserved"] == 0.0
-        assert lot["quantity_available"] == 80.0
+        assert lot["quantity_available"] == 100.0
 
     def test_restart_recovers_from_db_not_memory(self):
         """restart：换一个全新 scheduler（内存清空），仅凭 DB 状态恢复.
@@ -206,8 +272,8 @@ class TestNodeLifecycle:
         )
         assert svc.store.get_reservation("wf1", "B", 2)["status"] == "active"
         lot = svc.store.get_lot("lot-1")
-        # A(20) 已消费，B attempt=2 预留 30
-        assert lot["quantity_total"] == 80.0
+        # attempt=1 未收到成功结果，因此未扣减；attempt=2 只预留 B 的 30。
+        assert lot["quantity_total"] == 100.0
         assert lot["quantity_reserved"] == 30.0
 
 

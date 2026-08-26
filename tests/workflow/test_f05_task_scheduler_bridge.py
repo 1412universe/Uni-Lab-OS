@@ -11,12 +11,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from unilabos.app.workflow_api import create_workflow_app
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
 from unilabos.app.scheduler.inventory.domain import InsufficientStock
 from unilabos.app.scheduler.service import EdgeScheduler
-from unilabos.workflow.store import WorkflowStore
+from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.store import WorkflowStore
 
 WORKFLOW_UUID = "11000000-0000-4000-8000-000000000001"
 TASK_UUID = "21000000-0000-4000-8000-000000000001"
@@ -903,7 +903,7 @@ def test_restart_recovers_succeeded_test_mode_passthrough_without_replay(
         "uuid": MATERIAL_UUID
     }
     assert store.get_job(JOB_UUID)["status"] == "succeeded"
-    assert store.get_job(SECOND_JOB_UUID)["status"] == "dispatched"
+    assert store.get_job(SECOND_JOB_UUID)["status"] == "running"
     assert store.get_job(SECOND_JOB_UUID)["param"]["resource"] == {
         "uuid": MATERIAL_UUID
     }

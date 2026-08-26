@@ -186,11 +186,24 @@ class ExecutionPlanBuilder:
                     node_uuid=node_uuid,
                 )
                 planned_node["param_schema"] = action_contract
+            elif kind == "manual_confirm" and self._has_fixed_executor_binding(node):
+                # 人工确认既可以是纯人工闸门，也可以包装一个设备动作。只有后者
+                # 才冻结设备执行合同；纯闸门批准后直接完成本节点。
+                planned_node.update(
+                    self._device_action_contract(node, template=template)
+                )
+                planned_node["param_schema"] = self._frozen_action_contract(
+                    template,
+                    node_uuid=node_uuid,
+                )
+                planned_node["continues_device_action"] = True
             if node.get("material_uuid") is not None:
                 planned_node["material_uuid"] = node["material_uuid"]
             if node.get("script") is not None:
                 planned_node["script"] = node["script"]
-            if kind != "device_action" and template.get("schema") is not None:
+            if kind not in {"device_action", "manual_confirm"} and template.get(
+                "schema"
+            ) is not None:
                 planned_node["param_schema"] = template["schema"]
             if requirements.get(node_uuid):
                 planned_node["material_requirements"] = requirements[node_uuid]
@@ -220,6 +233,21 @@ class ExecutionPlanBuilder:
         if target_node_uuid is not None:
             plan["target_node_uuid"] = target_node_uuid
         return plan, jobs
+
+    @staticmethod
+    def _has_fixed_executor_binding(node: Mapping[str, Any]) -> bool:
+        """判断人工确认节点是否包装了一个固定设备动作。"""
+
+        metadata = node.get("meta_data")
+        unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+        binding = (
+            unilab.get("executor_binding") if isinstance(unilab, Mapping) else None
+        )
+        return (
+            isinstance(binding, Mapping)
+            and binding.get("mode") == "fixed"
+            and bool(str(binding.get("device_id") or "").strip())
+        )
 
     def _material_source_inputs(
         self,

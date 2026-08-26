@@ -519,6 +519,14 @@ class InventoryLedgerEntryResponse(WireModel):
     causation_id: str
     trace_id: str
     span_id: str
+    entry_uuid: str = ""
+    material_uuid: str = ""
+    subject_type: str = ""
+    quantity_delta: Optional[float] = None
+    quantity_unit: Optional[str] = None
+    revision: Optional[PositiveInt] = None
+    workflow_task_uuid: Optional[str] = None
+    workflow_node_job_uuid: Optional[str] = None
 
 
 class SyncOutboxRowResponse(WireModel):

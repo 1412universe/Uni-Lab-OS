@@ -29,15 +29,30 @@ from unilabos.workflow.catalog_dependent_authoring_refresh import (
     CatalogAuthoringGenerationTracker,
     refresh_catalog_dependent_authoring,
 )
+from unilabos.workflow.composite_invocation import (
+    CompositeInvocationInvalid,
+    expand_composite_invocation,
+)
 from unilabos.workflow.device_action_run import (
     DeviceActionRunConflict,
     DeviceActionRunInputError,
     DeviceActionRunService,
     DeviceActionRunUnavailable,
 )
+from unilabos.workflow.definition_edit import (
+    WorkflowDefinitionInvalid,
+    create_edge as build_workflow_edge,
+    create_node as build_workflow_node,
+    duplicate_graph,
+    duplicate_node as build_duplicated_node,
+    patch_node as build_patched_node,
+)
 from unilabos.workflow.event_reader import DurableEventReader
 from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.graph_validation import GraphValidationError
+from unilabos.workflow.job_evidence import JobEvidenceStore
+from unilabos.workflow.intervention import WorkflowInterventionStore
+from unilabos.workflow.manual_confirmation import ManualConfirmationStore
 from unilabos.workflow.models import (
     CandidateChangeset,
     CandidateCompilation,
@@ -49,6 +64,12 @@ from unilabos.workflow.models import (
     normalize_json_object,
     validate_uuid,
 )
+from unilabos.workflow.published_contract import (
+    PublishedContractConflict,
+    PublishedContractInvalid,
+    PublishedWorkflowContractStore,
+)
+from unilabos.workflow.run_preflight import build_run_preflight_report
 from unilabos.workflow.source_coordinates import source_ranges_fit
 from unilabos.workflow.source_discovery import (
     EditableSourceDiscoveryPlan,
@@ -293,6 +314,58 @@ class WorkflowTaskSchedulerBridge(Protocol):
 
         ...
 
+    def cancel(
+        self,
+        task_uuid: str,
+        *,
+        command_uuid: str | None = None,
+    ) -> dict[str, Any]:
+        """持久化取消命令并返回当前任务聚合；物理终态可随后异步收敛。"""
+
+        ...
+
+    def decide_manual_confirmation(
+        self,
+        job_uuid: str,
+        *,
+        approved: bool,
+        param: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """恢复或拒绝一个已经持久开启的人工确认。"""
+
+        ...
+
+    def request_uncertain_resolution(
+        self,
+        job_uuid: str,
+        *,
+        reason: str,
+        device_command_id: str,
+    ) -> dict[str, Any]:
+        """请求 Edge 证明未知设备作业已经取消。"""
+
+        ...
+
+
+class WorkflowInterventionDelivery(Protocol):
+    """本地设备异常决定的投递端口。"""
+
+    def add_error_decision_required_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None],
+    ) -> None: ...
+
+    def remove_error_decision_required_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None],
+    ) -> None: ...
+
+    def resolve_error_decision(
+        self,
+        decision_id: str,
+        decision: dict[str, Any],
+    ) -> bool: ...
+
 
 def _sha256(data: bytes) -> str:
     return f"sha256:{hashlib.sha256(data).hexdigest()}"
@@ -329,6 +402,13 @@ class WorkflowService:
         """
 
         self._store = store
+        # 新增能力仓储按需初始化，避免“只创建任务”的调用方被迫实现发布、证据和
+        # 人工处置所需的 SQLite 事务接口；第一次使用相应能力时才补齐其物理表。
+        self._published_contracts: PublishedWorkflowContractStore | None = None
+        self._job_evidence: JobEvidenceStore | None = None
+        self._manual_confirmations: ManualConfirmationStore | None = None
+        self._interventions: WorkflowInterventionStore | None = None
+        self._intervention_delivery: WorkflowInterventionDelivery | None = None
         self._event_reader = DurableEventReader(store)
         self.compiler = compiler
         if compiler_rebuilder is not None and not callable(compiler_rebuilder):
@@ -343,6 +423,7 @@ class WorkflowService:
         # 后端控制（Backend-controlled）配置保持空，避免第二个调度权威。
         self._task_scheduler_bridge = task_scheduler_bridge
         self._locks_guard = threading.Lock()
+        self._capability_store_lock = threading.Lock()
         self._authoring_locks: Dict[str, threading.RLock] = {}
         # ``_source_authorization_replacement_lock`` 串行化完整授权集合替换，使“当前
         # 集合 ∪ 新集合”的锁快照在取得所有创作锁前不会被另一替换命令改变。
@@ -363,6 +444,41 @@ class WorkflowService:
         # ``_catalog_generation_tracker`` 隐藏本进程目录编译基线、变化判定和源码
         # 观测签名组合；工作流服务只在编译事务接缝提交已验证指纹。
         self._catalog_generation_tracker = CatalogAuthoringGenerationTracker()
+
+    def _published_contract_store(self) -> PublishedWorkflowContractStore:
+        with self._capability_store_lock:
+            if self._published_contracts is None:
+                self._published_contracts = PublishedWorkflowContractStore(self._store)
+        return self._published_contracts
+
+    def _job_evidence_store(self) -> JobEvidenceStore:
+        with self._capability_store_lock:
+            if self._job_evidence is None:
+                self._job_evidence = JobEvidenceStore(self._store)
+        return self._job_evidence
+
+    def _manual_confirmation_store(self) -> ManualConfirmationStore:
+        with self._capability_store_lock:
+            if self._manual_confirmations is None:
+                self._manual_confirmations = ManualConfirmationStore(self._store)
+        return self._manual_confirmations
+
+    def _intervention_store(self) -> WorkflowInterventionStore:
+        with self._capability_store_lock:
+            if self._interventions is None:
+                self._interventions = WorkflowInterventionStore(self._store)
+        return self._interventions
+
+    def bind_intervention_delivery(
+        self,
+        delivery: WorkflowInterventionDelivery,
+    ) -> None:
+        """把设备异常报告与决定投递接到持久工作流干预。"""
+
+        self._intervention_delivery = delivery
+        delivery.add_error_decision_required_listener(
+            self.open_workflow_intervention_from_report
+        )
 
     # 工作流（Workflow）与图（Graph） -------------------------------------
 
@@ -460,6 +576,190 @@ class WorkflowService:
             self._store.get_graph(identity),
         )
 
+    def publish_workflow_contract(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+    ) -> Dict[str, Any]:
+        """把当前工作流修订冻结为不可变已发布工作流合同。
+
+        参数：``workflow_uuid`` 是来源工作流稳定身份，``revision`` 是调用方确认
+        的当前修订。返回 Backend 公共发布投影；修订变化或同修订内容漂移抛
+        ``WorkflowConflict``，空图和非法边界抛 ``WorkflowError``。
+        """
+
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise WorkflowError("invalid_input")
+        identity = self.get_workflow(workflow_uuid)["uuid"]
+        with self._authoring_lock(identity):
+            graph = self.get_graph(identity)
+            try:
+                contract = self._published_contract_store().publish(
+                    graph=graph,
+                    expected_revision=revision,
+                )
+            except PublishedContractInvalid as error:
+                raise WorkflowError("invalid_input", message=str(error)) from None
+            except PublishedContractConflict:
+                raise WorkflowConflict("workflow_revision_conflict") from None
+        return self._published_contract_store().public(contract)
+
+    def list_published_workflow_contracts(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        keyword: str = "",
+    ) -> Dict[str, Any]:
+        """分页返回每个来源工作流最新的已发布合同。
+
+        参数：``page``/``page_size`` 是 Backend 页码，``keyword`` 按名称模糊
+        过滤。返回空集合而不是 ``null``；非法页码按 Backend 默认值规范化。
+        """
+
+        page, page_size = self._normalize_page(page, page_size)
+        return self._published_contract_store().list_latest(
+            page=page,
+            page_size=page_size,
+            keyword=keyword,
+        )
+
+    def insert_composite_workflow(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+        contract_uuid: str,
+        invocation_uuid: Optional[str],
+        device_bindings: Mapping[str, str],
+        pose: Dict[str, Any],
+        param: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """把一个不可变发布合同原子展开到父工作流图。
+
+        参数：``workflow_uuid``/``revision`` 固定父图，``contract_uuid`` 固定子
+        合同，``invocation_uuid`` 固定本次调用身份；设备绑定、位置和参数成为冻结
+        调用事实。返回修订推进后的完整父图；递归、碰撞、合同损坏或设备不兼容时
+        关闭失败，任何节点都不会部分写入。
+        """
+
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise WorkflowError("invalid_input")
+        try:
+            parent_uuid = validate_uuid(workflow_uuid)
+            contract_identity = validate_uuid(contract_uuid)
+            invocation_identity = validate_uuid(invocation_uuid or str(uuid4()))
+            pose = normalize_json_object(pose)
+            param = normalize_json_object(param)
+            if not isinstance(device_bindings, Mapping):
+                raise ValueError
+            normalized_bindings = {
+                str(key): validate_uuid(value)
+                for key, value in device_bindings.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if len(normalized_bindings) != len(device_bindings):
+                raise ValueError
+        except (TypeError, ValueError):
+            raise WorkflowError("invalid_input") from None
+
+        parent_uuid = self.get_workflow(parent_uuid)["uuid"]
+        with self._authoring_lock(parent_uuid):
+            parent_graph = self.get_graph(parent_uuid)
+            if parent_graph["workflow"]["revision"] != revision:
+                raise WorkflowConflict("workflow_revision_conflict")
+            try:
+                contract = self._published_contract_store().get(contract_identity)
+            except KeyError:
+                raise WorkflowError("not_found") from None
+            requirements = contract["executor_requirements"]
+            required_keys = {str(item["key"]) for item in requirements}
+            if set(normalized_bindings) != required_keys:
+                raise WorkflowError("invalid_input")
+            for requirement in requirements:
+                material_uuid = normalized_bindings[str(requirement["key"])]
+                material = (
+                    self._material_resolver(material_uuid)
+                    if self._material_resolver is not None
+                    else None
+                )
+                if (
+                    not isinstance(material, Mapping)
+                    or material.get("resource_template_uuid")
+                    != requirement["resource_template_uuid"]
+                ):
+                    raise WorkflowError("invalid_input")
+            try:
+                insertion_nodes, insertion_edges = expand_composite_invocation(
+                    parent_graph=parent_graph,
+                    contract=contract,
+                    invocation_uuid=invocation_identity,
+                    pose=pose,
+                    param=param,
+                    device_bindings=normalized_bindings,
+                )
+                node_values = [
+                    WorkflowNodeWrite.model_validate(item)
+                    for item in [*parent_graph["nodes"], *insertion_nodes]
+                ]
+                edge_values = [
+                    WorkflowEdgeWrite.model_validate(item)
+                    for item in [*parent_graph["edges"], *insertion_edges]
+                ]
+                return self._store.save_graph(
+                    parent_uuid,
+                    revision=revision,
+                    nodes=node_values,
+                    edges=edge_values,
+                    protect_reserved_metadata=False,
+                    validate_workflow_io_contract=True,
+                )
+            except (CompositeInvocationInvalid, ValidationError):
+                raise WorkflowError("invalid_input") from None
+            except StoreRevisionConflict:
+                raise WorkflowConflict("workflow_revision_conflict") from None
+            except StoreNotFound:
+                raise WorkflowError("not_found") from None
+            except StoreAuthoringConflict as error:
+                raise WorkflowError(error.code) from None
+            except StoreConflict:
+                raise WorkflowError("invalid_input") from None
+
+    def get_workflow_run_preflight(
+        self,
+        workflow_uuid: str,
+        *,
+        run_mode: str = "normal",
+        target_node_uuid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """返回不产生 Task、预留或执行占用的候选运行报告。
+
+        参数：``workflow_uuid`` 定位当前图，``run_mode`` 与可选目标节点固定执行
+        范围。返回 Backend 形状的只读报告；动态设备和物料条件明确延迟到调度器
+        原子准入，不把预检结果当成执行承诺。
+        """
+
+        normalized_mode = run_mode or "normal"
+        if normalized_mode not in {"normal", "step", "single_node"}:
+            raise WorkflowError("invalid_input")
+        if normalized_mode == "single_node" and target_node_uuid is None:
+            raise WorkflowError("invalid_input")
+        if normalized_mode != "single_node" and target_node_uuid is not None:
+            raise WorkflowError("invalid_input")
+        if target_node_uuid is not None:
+            try:
+                target_node_uuid = validate_uuid(target_node_uuid)
+            except ValueError:
+                raise WorkflowError("invalid_input") from None
+        graph = self.get_graph(workflow_uuid)
+        return build_run_preflight_report(
+            graph=graph,
+            run_mode=normalized_mode,
+            target_node_uuid=target_node_uuid,
+            material_resolver=self._material_resolver,
+        )
+
     def save_graph(
         self,
         workflow_uuid: str,
@@ -512,6 +812,403 @@ class WorkflowService:
                 raise WorkflowError(error.code) from None
             except StoreConflict:
                 raise WorkflowError("invalid_input") from None
+
+    def create_workflow_node(
+        self,
+        workflow_uuid: str,
+        *,
+        payload: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """通过完整图原子保存向工作流增加一个节点。"""
+
+        identity = self.get_workflow(workflow_uuid)["uuid"]
+        with self._authoring_lock(identity):
+            graph = self.get_graph(identity)
+            template = None
+            template_uuid = payload.get("workflow_node_template_uuid")
+            if template_uuid is not None:
+                try:
+                    template = self._store.get_node_template(
+                        validate_uuid(str(template_uuid))
+                    )
+                except ValueError:
+                    raise WorkflowError("invalid_input") from None
+                except StoreNotFound:
+                    raise WorkflowError("not_found") from None
+            try:
+                node = build_workflow_node(payload=payload, template=template)
+            except (TypeError, ValueError, WorkflowDefinitionInvalid):
+                raise WorkflowError("invalid_input") from None
+            updated = self.save_graph(
+                identity,
+                revision=graph["workflow"]["revision"],
+                nodes=[*graph["nodes"], node],
+                edges=graph["edges"],
+            )
+            return self._graph_entity(updated, "nodes", node["uuid"])
+
+    def list_workflow_nodes(
+        self,
+        workflow_uuid: str,
+        *,
+        page: int,
+        page_size: int,
+        workflow_node_template_uuid: Optional[str] = None,
+        material_uuid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """分页返回指定工作流节点，并支持模板与物料身份筛选。"""
+
+        graph = self.get_graph(workflow_uuid)
+        page, page_size = self._normalize_page(page, page_size)
+        try:
+            template_uuid = (
+                validate_uuid(workflow_node_template_uuid)
+                if workflow_node_template_uuid
+                else None
+            )
+            resolved_material_uuid = (
+                validate_uuid(material_uuid) if material_uuid else None
+            )
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        items = [
+            node
+            for node in graph["nodes"]
+            if (
+                template_uuid is None
+                or node.get("workflow_node_template_uuid") == template_uuid
+            )
+            and (
+                resolved_material_uuid is None
+                or node.get("material_uuid") == resolved_material_uuid
+            )
+        ]
+        offset = (page - 1) * page_size
+        return {
+            "items": items[offset : offset + page_size],
+            "total": len(items),
+            "page": page,
+            "page_size": page_size,
+        }
+
+    def get_workflow_node(self, node_uuid: str) -> Dict[str, Any]:
+        """按全局稳定身份读取一个活动工作流节点。"""
+
+        _workflow_uuid, _graph, node = self._locate_graph_entity("nodes", node_uuid)
+        return node
+
+    def patch_workflow_node(
+        self,
+        node_uuid: str,
+        *,
+        patch: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """局部修改节点，但最终只通过完整图 CAS 写入一次。"""
+
+        workflow_uuid, _graph, _node = self._locate_graph_entity("nodes", node_uuid)
+        with self._authoring_lock(workflow_uuid):
+            graph = self.get_graph(workflow_uuid)
+            current = self._graph_entity(graph, "nodes", validate_uuid(node_uuid))
+            try:
+                updated_node = build_patched_node(current, patch)
+            except (TypeError, ValueError, WorkflowDefinitionInvalid):
+                raise WorkflowError("invalid_input") from None
+            nodes = [
+                updated_node if node["uuid"] == current["uuid"] else node
+                for node in graph["nodes"]
+            ]
+            updated = self.save_graph(
+                workflow_uuid,
+                revision=graph["workflow"]["revision"],
+                nodes=nodes,
+                edges=graph["edges"],
+            )
+            return self._graph_entity(updated, "nodes", current["uuid"])
+
+    def duplicate_workflow_node(
+        self,
+        node_uuid: str,
+        *,
+        name: Optional[str],
+    ) -> Dict[str, Any]:
+        """复制单个节点定义；原有连线保持不变。"""
+
+        workflow_uuid, _graph, _node = self._locate_graph_entity("nodes", node_uuid)
+        with self._authoring_lock(workflow_uuid):
+            graph = self.get_graph(workflow_uuid)
+            current = self._graph_entity(graph, "nodes", validate_uuid(node_uuid))
+            try:
+                duplicate = build_duplicated_node(current, name=name)
+            except (TypeError, ValueError, WorkflowDefinitionInvalid):
+                raise WorkflowError("invalid_input") from None
+            updated = self.save_graph(
+                workflow_uuid,
+                revision=graph["workflow"]["revision"],
+                nodes=[*graph["nodes"], duplicate],
+                edges=graph["edges"],
+            )
+            return self._graph_entity(updated, "nodes", duplicate["uuid"])
+
+    def delete_workflow_node(self, node_uuid: str) -> None:
+        """删除节点及其关联连线；存在未删除子节点时拒绝。"""
+
+        workflow_uuid, _graph, _node = self._locate_graph_entity("nodes", node_uuid)
+        with self._authoring_lock(workflow_uuid):
+            graph = self.get_graph(workflow_uuid)
+            identity = validate_uuid(node_uuid)
+            self._graph_entity(graph, "nodes", identity)
+            if any(node.get("parent_uuid") == identity for node in graph["nodes"]):
+                raise WorkflowConflict("conflict")
+            self.save_graph(
+                workflow_uuid,
+                revision=graph["workflow"]["revision"],
+                nodes=[node for node in graph["nodes"] if node["uuid"] != identity],
+                edges=[
+                    edge
+                    for edge in graph["edges"]
+                    if edge["source_node_uuid"] != identity
+                    and edge["target_node_uuid"] != identity
+                ],
+            )
+
+    def create_workflow_edge(
+        self,
+        workflow_uuid: str,
+        *,
+        payload: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """通过完整图验证和 CAS 增加一条连线。"""
+
+        identity = self.get_workflow(workflow_uuid)["uuid"]
+        with self._authoring_lock(identity):
+            graph = self.get_graph(identity)
+            try:
+                edge = build_workflow_edge(payload)
+                edge_value = WorkflowEdgeWrite.model_validate(edge)
+            except (TypeError, ValueError, ValidationError, WorkflowDefinitionInvalid):
+                raise WorkflowError("invalid_input") from None
+            updated = self.save_graph(
+                identity,
+                revision=graph["workflow"]["revision"],
+                nodes=graph["nodes"],
+                edges=[*graph["edges"], edge_value],
+            )
+            return self._graph_entity(updated, "edges", edge_value.uuid)
+
+    def delete_workflow_edge(self, edge_uuid: str) -> None:
+        """按稳定身份删除一条工作流连线。"""
+
+        workflow_uuid, _graph, _edge = self._locate_graph_entity("edges", edge_uuid)
+        with self._authoring_lock(workflow_uuid):
+            graph = self.get_graph(workflow_uuid)
+            identity = validate_uuid(edge_uuid)
+            self._graph_entity(graph, "edges", identity)
+            self.save_graph(
+                workflow_uuid,
+                revision=graph["workflow"]["revision"],
+                nodes=graph["nodes"],
+                edges=[edge for edge in graph["edges"] if edge["uuid"] != identity],
+            )
+
+    def batch_delete_workflow_graph(
+        self,
+        workflow_uuid: str,
+        *,
+        node_uuids: List[str],
+        edge_uuids: List[str],
+    ) -> Dict[str, Any]:
+        """一次原子删除指定节点、关联连线和显式指定连线。"""
+
+        identity = self.get_workflow(workflow_uuid)["uuid"]
+        try:
+            node_set = {validate_uuid(value) for value in node_uuids}
+            edge_set = {validate_uuid(value) for value in edge_uuids}
+        except (TypeError, ValueError):
+            raise WorkflowError("invalid_input") from None
+        if not node_set and not edge_set:
+            raise WorkflowError("invalid_input")
+        with self._authoring_lock(identity):
+            graph = self.get_graph(identity)
+            known_nodes = {node["uuid"] for node in graph["nodes"]}
+            known_edges = {edge["uuid"] for edge in graph["edges"]}
+            if not node_set <= known_nodes or not edge_set <= known_edges:
+                raise WorkflowError("invalid_input")
+            if any(
+                node.get("parent_uuid") in node_set and node["uuid"] not in node_set
+                for node in graph["nodes"]
+            ):
+                raise WorkflowConflict("conflict")
+            retained_edges = [
+                edge
+                for edge in graph["edges"]
+                if edge["uuid"] not in edge_set
+                and edge["source_node_uuid"] not in node_set
+                and edge["target_node_uuid"] not in node_set
+            ]
+            return self.save_graph(
+                identity,
+                revision=graph["workflow"]["revision"],
+                nodes=[node for node in graph["nodes"] if node["uuid"] not in node_set],
+                edges=retained_edges,
+            )
+
+    def duplicate_workflow(
+        self,
+        workflow_uuid: str,
+        *,
+        name: Optional[str],
+    ) -> Dict[str, Any]:
+        """在一个 SQLite 事务中复制工作流主记录和完整图。"""
+
+        source = self.get_graph(workflow_uuid)
+        if not source["nodes"]:
+            raise WorkflowError("invalid_input")
+        copied_name = (
+            name.strip() if isinstance(name, str) else f"{source['workflow']['name']} copy"
+        )
+        if not copied_name:
+            raise WorkflowError("invalid_input")
+        nodes, edges = duplicate_graph(source)
+        identity = str(uuid4())
+        try:
+            return self._store.create_workflow_with_graph(
+                workflow_uuid=identity,
+                name=copied_name,
+                tags=list(source["workflow"].get("tags", [])),
+                description=source["workflow"].get("description"),
+                meta_data=dict(source["workflow"].get("meta_data", {})),
+                nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
+                edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
+            )
+        except ValidationError:
+            raise WorkflowError("invalid_input") from None
+        except StoreAuthoringConflict as error:
+            raise WorkflowError(error.code) from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreConflict:
+            raise WorkflowError("invalid_input") from None
+
+    def import_legacy_workflow(
+        self,
+        *,
+        payload: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """原子导入旧版工作流定义，并重建节点与连线身份。"""
+
+        definition = payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
+        name_value = definition.get("name") or definition.get("workflow_name")
+        if not isinstance(name_value, str) or not name_value.strip():
+            raise WorkflowError("invalid_input")
+        source_nodes = definition.get("nodes")
+        source_edges = definition.get("edges", [])
+        if not isinstance(source_nodes, list) or not source_nodes:
+            raise WorkflowError("invalid_input")
+        if not isinstance(source_edges, list):
+            raise WorkflowError("invalid_input")
+        if definition.get("inventory_requirements") not in (None, []):
+            # Local 的数量型库存需求必须走已对齐的任务准入合同，不能静默丢弃。
+            raise WorkflowError("invalid_input")
+
+        old_to_new: Dict[str, str] = {}
+        nodes: List[Dict[str, Any]] = []
+        try:
+            for source in source_nodes:
+                if not isinstance(source, Mapping):
+                    raise WorkflowDefinitionInvalid("nodes 必须是对象数组")
+                old_uuid = validate_uuid(str(source.get("uuid")))
+                if old_uuid in old_to_new:
+                    raise WorkflowDefinitionInvalid("旧版节点 UUID 重复")
+                node_payload = dict(source)
+                node_payload["workflow_node_template_uuid"] = source.get(
+                    "workflow_node_template_uuid"
+                ) or source.get("template_uuid")
+                template = None
+                template_uuid = node_payload.get("workflow_node_template_uuid")
+                if template_uuid is not None:
+                    template = self._store.get_node_template(
+                        validate_uuid(str(template_uuid))
+                    )
+                node = build_workflow_node(payload=node_payload, template=template)
+                old_to_new[old_uuid] = node["uuid"]
+                nodes.append(node)
+            for index, source in enumerate(source_nodes):
+                parent_uuid = source.get("parent_uuid")
+                if parent_uuid is not None:
+                    nodes[index]["parent_uuid"] = old_to_new[
+                        validate_uuid(str(parent_uuid))
+                    ]
+            edges: List[Dict[str, Any]] = []
+            for source in source_edges:
+                if not isinstance(source, Mapping):
+                    raise WorkflowDefinitionInvalid("edges 必须是对象数组")
+                edge_payload = dict(source)
+                edge_payload["source_node_uuid"] = old_to_new[
+                    validate_uuid(str(source.get("source_node_uuid")))
+                ]
+                edge_payload["target_node_uuid"] = old_to_new[
+                    validate_uuid(str(source.get("target_node_uuid")))
+                ]
+                edges.append(build_workflow_edge(edge_payload))
+            tags = normalize_json_array(definition.get("tags"))
+            meta_data = normalize_json_object(definition.get("meta_data"))
+            public_meta_data = dict(meta_data)
+            public_meta_data.pop("unilab", None)
+            identity = str(uuid4())
+            return self._store.create_workflow_with_graph(
+                workflow_uuid=identity,
+                name=name_value.strip(),
+                tags=tags,
+                description=self._optional_text(definition.get("description")),
+                meta_data=public_meta_data,
+                nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
+                edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
+            )
+        except (KeyError, TypeError, ValueError, ValidationError, WorkflowDefinitionInvalid):
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreAuthoringConflict as error:
+            raise WorkflowError(error.code) from None
+        except StoreConflict:
+            raise WorkflowError("invalid_input") from None
+
+    def _locate_graph_entity(
+        self,
+        collection: str,
+        entity_uuid: str,
+    ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+        """通过公共存储投影定位全局节点或连线身份。"""
+
+        try:
+            identity = validate_uuid(entity_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        page = 1
+        while True:
+            result = self._store.list_workflows(page=page, page_size=100)
+            for workflow in result["items"]:
+                graph = self.get_graph(workflow["uuid"])
+                for entity in graph[collection]:
+                    if entity["uuid"] == identity:
+                        return workflow["uuid"], graph, entity
+            if page * result["page_size"] >= result["total"]:
+                break
+            page += 1
+        raise WorkflowError("not_found")
+
+    @staticmethod
+    def _graph_entity(
+        graph: Mapping[str, Any],
+        collection: str,
+        entity_uuid: str,
+    ) -> Dict[str, Any]:
+        """从同一图快照读取一个稳定身份实体。"""
+
+        for entity in graph[collection]:
+            if entity["uuid"] == entity_uuid:
+                return entity
+        raise WorkflowError("not_found")
 
     # 工作流任务（WorkflowTask）与工作流节点作业（WorkflowNodeJob） --------
 
@@ -659,7 +1356,10 @@ class WorkflowService:
                 elif command_type == "resume":
                     result = self._task_scheduler_bridge.resume(task_uuid)
                 else:
-                    result = self._task_scheduler_bridge.cancel(task_uuid)
+                    result = self._task_scheduler_bridge.cancel(
+                        task_uuid,
+                        command_uuid=command["uuid"],
+                    )
             except TaskSchedulerBridgeError as error:
                 return self._store.complete_task_command(
                     command["uuid"],
@@ -1009,6 +1709,248 @@ class WorkflowService:
             return self._store.get_job(identity)
         except StoreNotFound:
             raise WorkflowError("not_found") from None
+
+    def list_workflow_node_job_feedback(
+        self,
+        job_uuid: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> Dict[str, Any]:
+        """分页读取单个作业已经提交的过程反馈证据。"""
+
+        try:
+            identity = validate_uuid(job_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        page, page_size = self._normalize_page(page, page_size)
+        try:
+            return self._job_evidence_store().list_feedback(
+                job_uuid=identity,
+                page=page,
+                page_size=page_size,
+            )
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+
+    def get_manual_confirmation(self, confirmation_uuid: str) -> Dict[str, Any]:
+        """读取一条人工确认事实。"""
+
+        try:
+            identity = validate_uuid(confirmation_uuid)
+            return self._manual_confirmation_store().get(identity)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+
+    def resolve_uncertain_job(
+        self,
+        job_uuid: str,
+        *,
+        resolution: str,
+        reason: str,
+        device_command_id: str | None,
+    ) -> Dict[str, Any]:
+        """安全请求取消 execution_unknown 设备作业，等待 Edge 提交证明。"""
+
+        try:
+            identity = validate_uuid(job_uuid)
+            normalized_resolution = resolution.strip().lower()
+            normalized_reason = reason.strip()
+            if normalized_resolution != "canceled" or not normalized_reason:
+                raise ValueError
+            job = self._store.get_job(identity)
+            control = job.get("control_data")
+            manual = (
+                control.get("manual_resolution")
+                if isinstance(control, Mapping)
+                else None
+            )
+            if job.get("status") == "canceled" and isinstance(manual, Mapping):
+                if (
+                    manual.get("resolution") != "canceled"
+                    or manual.get("reason") != normalized_reason
+                ):
+                    raise StoreConflict("作业已经按另一人工结论终结")
+                return {
+                    "job": job,
+                    "resolution_command_uuid": manual.get("command_uuid"),
+                    "pending_edge_confirmation": False,
+                    "created": False,
+                }
+            if job.get("status") != "execution_unknown":
+                raise StoreConflict("作业不是 execution_unknown")
+            if self._task_scheduler_bridge is None:
+                raise StoreConflict("当前模式没有本地 UNKNOWN 处置端口")
+            command_id = (
+                str(device_command_id).strip()
+                if device_command_id is not None
+                else f"workflow-node-job:{identity}"
+            )
+            if not command_id:
+                raise ValueError
+            return self._task_scheduler_bridge.request_uncertain_resolution(
+                identity,
+                reason=normalized_reason,
+                device_command_id=command_id,
+            )
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except (StoreConflict, TaskSchedulerBridgeError):
+            raise WorkflowConflict("conflict") from None
+
+    def list_task_manual_confirmations(self, task_uuid: str) -> List[Dict[str, Any]]:
+        """按开启时间倒序读取任务的全部人工确认。"""
+
+        try:
+            identity = validate_uuid(task_uuid)
+            return self._manual_confirmation_store().list_by_task(identity)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+
+    def decide_manual_confirmation(
+        self,
+        confirmation_uuid: str,
+        *,
+        action: str,
+        confirmed_by: str,
+        comment: str | None,
+        idempotency_key: str,
+        param: Mapping[str, Any] | None,
+    ) -> Dict[str, Any]:
+        """幂等批准或拒绝人工确认，并恢复同一工作流作业。"""
+
+        try:
+            identity = validate_uuid(confirmation_uuid)
+            confirmation, _created = self._manual_confirmation_store().decide(
+                identity,
+                action=action,
+                confirmed_by=confirmed_by,
+                comment=comment,
+                idempotency_key=idempotency_key,
+                param=param,
+            )
+            if self._task_scheduler_bridge is not None:
+                self._task_scheduler_bridge.decide_manual_confirmation(
+                    confirmation["workflow_node_job_uuid"],
+                    approved=confirmation["status"] == "approved",
+                    param=(
+                        confirmation["param"]
+                        if confirmation["status"] == "approved"
+                        else None
+                    ),
+                )
+            return self._manual_confirmation_store().get(identity)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except (StoreConflict, TaskSchedulerBridgeError):
+            raise WorkflowConflict("conflict") from None
+
+    def open_workflow_intervention_from_report(
+        self,
+        report: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """把本地设备异常报告持久化为公共工作流干预。"""
+
+        try:
+            return self._intervention_store().open_from_report(report)
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreConflict:
+            raise WorkflowConflict("conflict") from None
+
+    def list_workflow_interventions(
+        self,
+        *,
+        status: str,
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """按状态读取当前工作流干预。"""
+
+        try:
+            return self._intervention_store().list(status=status, limit=limit)
+        except StoreConflict:
+            raise WorkflowError("invalid_input") from None
+
+    def get_workflow_intervention(
+        self,
+        intervention_uuid: str,
+    ) -> Dict[str, Any]:
+        """读取一条工作流干预事实。"""
+
+        try:
+            return self._intervention_store().get(validate_uuid(intervention_uuid))
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+
+    def select_workflow_intervention(
+        self,
+        intervention_uuid: str,
+        *,
+        revision: int,
+        option_id: str,
+        idempotency_key: str,
+        result: Any = None,
+    ) -> Dict[str, Any]:
+        """幂等选择一个设备已提供的干预方案并投递给原设备动作。"""
+
+        try:
+            identity = validate_uuid(intervention_uuid)
+            intervention, _created = self._intervention_store().select(
+                identity,
+                revision=revision,
+                option_id=option_id,
+                idempotency_key=idempotency_key,
+            )
+            if intervention["delivery_status"] == "accepted":
+                return {
+                    "intervention": intervention,
+                    "command_uuid": intervention["edge_command_uuid"],
+                    "created": False,
+                }
+            delivery = self._intervention_delivery
+            if delivery is None:
+                self._intervention_store().mark_delivery(identity, accepted=False)
+                raise WorkflowConflict("conflict")
+            selected = dict(intervention["selected_option"])
+            payload: dict[str, Any] = {
+                "option": selected,
+                "action": str(selected.get("action") or option_id),
+            }
+            if result is not None:
+                payload["result"] = result
+            elif "result" in selected:
+                payload["result"] = selected["result"]
+            accepted = delivery.resolve_error_decision(
+                str(intervention["edge_command_uuid"]),
+                payload,
+            )
+            delivered = self._intervention_store().mark_delivery(
+                identity,
+                accepted=accepted,
+            )
+            if not accepted:
+                raise WorkflowConflict("conflict")
+            return {
+                "intervention": delivered,
+                "command_uuid": delivered["edge_command_uuid"],
+                "created": _created,
+            }
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreConflict:
+            raise WorkflowConflict("conflict") from None
 
     def _build_execution_plan(
         self,
@@ -1619,6 +2561,11 @@ class WorkflowService:
 
         if self._task_scheduler_bridge is not None:
             self._task_scheduler_bridge.close()
+        if self._intervention_delivery is not None:
+            self._intervention_delivery.remove_error_decision_required_listener(
+                self.open_workflow_intervention_from_report
+            )
+            self._intervention_delivery = None
         self._store.close()
 
     def get_authoring(self, workflow_uuid: str) -> Dict[str, Any]:

@@ -88,6 +88,17 @@ class LocalEdgeAuthorityStore:
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS local_edge_job_feedback (
+                    job_uuid TEXT NOT NULL,
+                    sequence INTEGER NOT NULL CHECK (sequence > 0),
+                    payload_json TEXT NOT NULL,
+                    projected_at REAL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (job_uuid, sequence),
+                    FOREIGN KEY (job_uuid) REFERENCES local_edge_job(job_uuid)
+                );
+                CREATE INDEX IF NOT EXISTS ix_local_edge_feedback_projection
+                    ON local_edge_job_feedback(projected_at, job_uuid, sequence);
                 """
             )
             self._connection.commit()
@@ -440,18 +451,94 @@ class LocalEdgeAuthorityStore:
         sequence = payload.get("sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise ValueError("feedback sequence is invalid")
+        normalized_job = str(uuid.UUID(job_uuid))
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        now = time.time()
         with self._lock:
-            through = max(int(row["feedback_sequence"]), sequence)
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._connection.execute(
+                    """
+                    SELECT payload_json, projected_at
+                    FROM local_edge_job_feedback
+                    WHERE job_uuid = ? AND sequence = ?
+                    """,
+                    (normalized_job, sequence),
+                ).fetchone()
+                if existing is not None and str(existing["payload_json"]) != encoded:
+                    raise ValueError(
+                        "feedback sequence conflicts with its first committed payload"
+                    )
+                created = existing is None
+                if created:
+                    self._connection.execute(
+                        """
+                        INSERT INTO local_edge_job_feedback(
+                            job_uuid, sequence, payload_json, created_at
+                        ) VALUES (?, ?, ?, ?)
+                        """,
+                        (normalized_job, sequence, encoded, now),
+                    )
+                through = max(int(row["feedback_sequence"]), sequence)
+                self._connection.execute(
+                    """
+                    UPDATE local_edge_job SET feedback_sequence = ?, status = CASE
+                        WHEN status IN ('pending', 'dispatched') THEN 'running'
+                        ELSE status END, updated_at = ? WHERE job_uuid = ?
+                    """,
+                    (through, now, normalized_job),
+                )
+                self._connection.commit()
+            except BaseException:
+                self._connection.rollback()
+                raise
+        return {
+            "through_sequence": through,
+            "created": created,
+            "projected": existing is not None and existing["projected_at"] is not None,
+        }
+
+    def pending_feedback_projections(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        """读取 Edge 已提交、工作流库尚未确认的反馈事实。"""
+
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT job_uuid, sequence, payload_json
+                FROM local_edge_job_feedback
+                WHERE projected_at IS NULL
+                ORDER BY created_at, job_uuid, sequence
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [
+            {
+                "job_uuid": str(row["job_uuid"]),
+                "sequence": int(row["sequence"]),
+                "payload": json.loads(str(row["payload_json"])),
+            }
+            for row in rows
+        ]
+
+    def mark_feedback_projected(self, job_uuid: str, sequence: int) -> None:
+        """仅在工作流库已幂等提交后标记反馈投影完成。"""
+
+        with self._lock:
             self._connection.execute(
                 """
-                UPDATE local_edge_job SET feedback_sequence = ?, status = CASE
-                    WHEN status IN ('pending', 'dispatched') THEN 'running'
-                    ELSE status END, updated_at = ? WHERE job_uuid = ?
+                UPDATE local_edge_job_feedback
+                SET projected_at = COALESCE(projected_at, ?)
+                WHERE job_uuid = ? AND sequence = ?
                 """,
-                (through, time.time(), str(uuid.UUID(job_uuid))),
+                (time.time(), str(uuid.UUID(job_uuid)), int(sequence)),
             )
             self._connection.commit()
-        return {"through_sequence": through}
 
     def save_outcome(
         self,
@@ -523,6 +610,30 @@ class LocalEdgeAuthorityStore:
             ).fetchone()
         return row is not None and row["projected_at"] is not None
 
+    def pending_outcome_projections(self, *, limit: int = 1000) -> list[dict[str, Any]]:
+        """读取无 UNKNOWN 证据且尚未投影的 Edge 不可变结果。"""
+
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT job_uuid, outcome_json
+                FROM local_edge_job
+                WHERE outcome_json IS NOT NULL
+                  AND projected_at IS NULL
+                  AND unknown_command_ids_json = '[]'
+                ORDER BY updated_at, job_uuid
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [
+            {
+                "job_uuid": str(row["job_uuid"]),
+                "outcome": json.loads(str(row["outcome_json"])),
+            }
+            for row in rows
+        ]
+
     def create_unknown_resolution(
         self, job_uuid: str, *, reason: str
     ) -> dict[str, Any]:
@@ -541,6 +652,27 @@ class LocalEdgeAuthorityStore:
             if row["status"] != "unknown" or not unknown_ids:
                 self._connection.rollback()
                 raise ValueError("job has no unresolved UNKNOWN command")
+            pending_rows = self._connection.execute(
+                """
+                SELECT command_uuid, sequence, payload_json
+                FROM local_edge_command
+                WHERE type = 'job.resolve_unknown' AND status = 'pending'
+                ORDER BY sequence ASC
+                """
+            ).fetchall()
+            for pending in pending_rows:
+                existing_payload = json.loads(str(pending["payload_json"]))
+                if existing_payload.get("job_uuid") != normalized_job:
+                    continue
+                if existing_payload.get("reason") != reason.strip():
+                    self._connection.rollback()
+                    raise ValueError("another UNKNOWN resolution is already pending")
+                self._connection.rollback()
+                return {
+                    "command_uuid": str(pending["command_uuid"]),
+                    "sequence": int(pending["sequence"]),
+                    "created": False,
+                }
             sequence = self._next_sequence_locked()
             command_uuid = str(uuid.uuid4())
             payload = {
@@ -575,7 +707,7 @@ class LocalEdgeAuthorityStore:
             except BaseException:
                 self._connection.rollback()
                 raise
-        return {"command_uuid": command_uuid, "sequence": sequence}
+        return {"command_uuid": command_uuid, "sequence": sequence, "created": True}
 
     def resolve_unknown_committed(self, job_uuid: str) -> bool:
         normalized = str(uuid.UUID(job_uuid))
@@ -710,6 +842,7 @@ class LocalEdgeControlAuthority:
         self.api_key = api_key
         self.device_state = None
         self._listeners: list[Callable[[str, bool, Any, str], None]] = []
+        self._feedback_listeners: list[Callable[[str, dict[str, Any]], None]] = []
 
     def start(self) -> None:
         return
@@ -724,6 +857,53 @@ class LocalEdgeControlAuthority:
         self, listener: Callable[[str, bool, Any, str], None]
     ) -> None:
         self._listeners.append(listener)
+
+    def add_job_feedback_listener(
+        self,
+        listener: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        """注册已持久提交反馈的投影监听器。"""
+
+        self._feedback_listeners.append(listener)
+
+    def commit_feedback(
+        self,
+        job_uuid: str,
+        *,
+        command_uuid: str,
+        job_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """先提交 Edge 本地事实，再幂等通知工作流投影。"""
+
+        samples = payload.get("samples")
+        if samples is None:
+            samples = [payload]
+        if not isinstance(samples, list) or not samples or any(
+            not isinstance(sample, dict) for sample in samples
+        ):
+            raise ValueError("feedback samples are invalid")
+        through = 0
+        created = 0
+        for sample in samples:
+            result = self.store.commit_feedback(
+                job_uuid,
+                command_uuid=command_uuid,
+                job_token=job_token,
+                payload=sample,
+            )
+            through = max(through, int(result["through_sequence"]))
+            if not bool(result.get("projected")):
+                listeners = tuple(self._feedback_listeners)
+                for listener in listeners:
+                    listener(job_uuid, dict(sample))
+                if listeners:
+                    self.store.mark_feedback_projected(
+                        job_uuid,
+                        int(sample["sequence"]),
+                    )
+            created += int(bool(result.get("created")))
+        return {"through_sequence": through, "created": created}
 
     def busy_device_action_keys(self) -> set[str]:
         return self.store.busy_device_action_keys()
@@ -762,8 +942,64 @@ class LocalEdgeControlAuthority:
             return
         if not self.store.is_outcome_projected(job_uuid):
             for listener in tuple(self._listeners):
-                listener(job_uuid, False, None, "operator_intervention")
+                listener(job_uuid, False, None, "canceled")
             self.store.mark_outcome_projected(job_uuid)
+
+    def replay_pending_projections(
+        self,
+        *,
+        feedback_listener: Callable[[str, dict[str, Any]], None] | None = None,
+        finished_listener: Callable[[str, bool, Any, str], None] | None = None,
+    ) -> dict[str, int]:
+        """重放 Edge 已提交但工作流库尚未确认的证据。
+
+        反馈与结果只在目标投影回调成功后标记完成；任一回调
+        失败都保留未确认事实，下次启动继续交付。可选的显式回调
+        供启动恢复使用，避免绕经已丢失内存 DAG 的旧调度器路由。
+        """
+
+        feedback_targets = (
+            (feedback_listener,)
+            if feedback_listener is not None
+            else tuple(self._feedback_listeners)
+        )
+        finished_targets = (
+            (finished_listener,)
+            if finished_listener is not None
+            else tuple(self._listeners)
+        )
+        projected_feedback = 0
+        for pending in self.store.pending_feedback_projections():
+            if not feedback_targets:
+                break
+            for listener in feedback_targets:
+                listener(pending["job_uuid"], dict(pending["payload"]))
+            self.store.mark_feedback_projected(
+                pending["job_uuid"],
+                int(pending["sequence"]),
+            )
+            projected_feedback += 1
+
+        projected_outcomes = 0
+        for pending in self.store.pending_outcome_projections():
+            if not finished_targets:
+                break
+            outcome = pending["outcome"]
+            succeeded = outcome["outcome"] == "succeeded"
+            return_info = outcome.get("return_info") or {}
+            result = (
+                return_info.get("return_value")
+                if isinstance(return_info, dict) and "return_value" in return_info
+                else return_info
+            )
+            for listener in finished_targets:
+                listener(pending["job_uuid"], succeeded, result, "normal")
+            self.store.mark_outcome_projected(pending["job_uuid"])
+            projected_outcomes += 1
+        return {
+            "feedback": projected_feedback,
+            "outcomes": projected_outcomes,
+        }
 
 
 def create_local_edge_control_router(
@@ -820,7 +1056,7 @@ def create_local_edge_control_router(
         x_job_token: str = Header(alias="X-Job-Token"),
     ) -> dict[str, Any]:
         try:
-            result = authority.store.commit_feedback(
+            result = authority.commit_feedback(
                 job_uuid,
                 command_uuid=x_command_uuid,
                 job_token=x_job_token,

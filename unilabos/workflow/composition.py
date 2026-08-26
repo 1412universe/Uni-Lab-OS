@@ -213,6 +213,23 @@ def compose_workflow_runtime(
                 material_resolver=material_resolver,
                 task_scheduler_bridge=task_scheduler_bridge,
             )
+            if scheduler is not None:
+                # 本地组合根把执行微后端的异常决策端口接入持久工作流干预；
+                # Backend-controlled 模式没有本地 Scheduler，因此不会建立第二权威。
+                intervention_delivery = getattr(scheduler, "_dispatcher", None)
+                if (
+                    callable(
+                        getattr(
+                            intervention_delivery,
+                            "add_error_decision_required_listener",
+                            None,
+                        )
+                    )
+                    and callable(
+                        getattr(intervention_delivery, "resolve_error_decision", None)
+                    )
+                ):
+                    new_service.bind_intervention_delivery(intervention_delivery)
             # ``discovery_plan`` 是全量文件预校验结果；服务在单事务中注册后，
             # 才能恢复草稿并建立一致的监视基线。
             discovery_plan = (

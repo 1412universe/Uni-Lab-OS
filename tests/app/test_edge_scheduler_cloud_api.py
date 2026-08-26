@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 import pytest
 
 from unilabos.app.scheduler import integration
-from unilabos.app.scheduler.dispatch import RecordingDispatcher
+from unilabos.app.scheduler.dispatch import CancelDispatchState, RecordingDispatcher
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.ws_client import DeviceActionManager, MessageProcessor
 
@@ -99,7 +99,18 @@ class TestWorkflowStart:
 class TestWorkflowCancel:
     def test_cancel_workflow(self):
         mp = _make_processor()
-        dispatcher = RecordingDispatcher()
+
+        class RequestedCancelDispatcher(RecordingDispatcher):
+            def __init__(self):
+                super().__init__()
+                self.cancel_requests: List[str] = []
+
+            def cancel(self, job_id: str, on_accepted) -> CancelDispatchState:
+                self.cancel_requests.append(job_id)
+                on_accepted(True)
+                return CancelDispatchState.REQUESTED
+
+        dispatcher = RequestedCancelDispatcher()
         scheduler = EdgeScheduler(dispatcher=dispatcher)
         mp.edge_scheduler = scheduler
 
@@ -107,8 +118,16 @@ class TestWorkflowCancel:
         asyncio.run(mp._handle_workflow_cancel({"workflow_id": "wf-c"}))
 
         snap = scheduler.workflow_snapshot("wf-c")
-        assert snap["state"] == "canceled"
+        assert snap["state"] == "canceling"
+        inflight = scheduler.snapshot()["inflight_jobs"]
+        assert len(inflight) == 1
+        job_uuid = next(iter(inflight))
+        assert dispatcher.cancel_requests == [job_uuid]
+
+        # 云端取消消息只请求设备停止；同一本地完成入口收到明确终态后才释放。
+        scheduler.on_job_finished(job_uuid, False, None, "canceled")
         assert scheduler.snapshot()["inflight_jobs"] == {}
+        assert scheduler.workflow_snapshot("wf-c")["state"] == "canceled"
 
     def test_cancel_unknown_workflow_no_crash(self):
         mp = _make_processor()

@@ -303,7 +303,13 @@ def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
         assert isinstance(captured_error.value.__cause__, RuntimeError)
         assert cancel_calls == []
         assert store.get_task(TASK_UUID)["status"] == "running"
-        assert store.get_job(JOB_UUID)["status"] == "dispatched"
+        assert store.get_job(JOB_UUID)["status"] == "execution_unknown"
+        assert store.get_task(TASK_UUID)["control_status"] == "waiting_reconciliation"
+        assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+        assert {
+            lease["state"]
+            for lease in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
+        } == {"uncertain"}
         assert scheduler.snapshot()["inflight_jobs"][JOB_UUID]["resource_locks"] == [
             f"material/{MATERIAL_UUID}/exclusive"
         ]
@@ -339,6 +345,7 @@ class _FailOnceProjection:
         task_uuid: str,
         job_uuid: str,
         resolved_param: Mapping[str, Any],
+        execution_locks: list[Mapping[str, Any]],
     ) -> dict[str, Any]:
         """委托派发前投影；参数含最终解析参数，返回标准聚合。"""
 
@@ -346,7 +353,23 @@ class _FailOnceProjection:
             task_uuid=task_uuid,
             job_uuid=job_uuid,
             resolved_param=resolved_param,
+            execution_locks=execution_locks,
         )
+
+    def project_dispatch_accepted(self, job_uuid: str) -> dict[str, Any]:
+        """委托执行接受投影；参数是稳定作业身份。"""
+
+        return self._delegate.project_dispatch_accepted(job_uuid)
+
+    def project_execution_unknown(
+        self,
+        job_uuid: str,
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        """委托执行未知投影；参数是作业身份和稳定原因。"""
+
+        return self._delegate.project_execution_unknown(job_uuid, reason=reason)
 
     def project_job_finished(self, **values: Any) -> dict[str, Any]:
         """首次抛 SQLite 瞬态错误，随后委托同一完成事实。
@@ -383,7 +406,7 @@ def test_completion_projection_failure_keeps_inflight_for_delivery_replay(
         with pytest.raises(sqlite3.OperationalError):
             scheduler.on_job_finished(JOB_UUID, True, {"receipt": "same"})
 
-        assert store.get_job(JOB_UUID)["status"] == "dispatched"
+        assert store.get_job(JOB_UUID)["status"] == "running"
         assert JOB_UUID in scheduler.snapshot()["inflight_jobs"]
         assert scheduler.snapshot()["inflight_jobs"][JOB_UUID]["resource_locks"]
 

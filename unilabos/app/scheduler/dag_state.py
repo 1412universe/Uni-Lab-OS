@@ -52,6 +52,8 @@ class WorkflowRun:
         self._parent_pairs: Dict[str, List[HandlePair]] = {}
         # node_id -> 执行返回值（Go nodeMap[..].ReturnInfo.ReturnValue 等价）
         self._ret_values: Dict[str, Any] = {}
+        # 取消意图与业务终态分离；在途节点返回成功/失败也不能抹掉用户取消事实。
+        self._cancel_requested = False
         self._failed_nodes: Set[str] = set()
 
         self._build()
@@ -186,7 +188,11 @@ class WorkflowRun:
         for parents in self._pending_parents.values():
             parents.discard(node_id)
         if self._is_all_done():
-            self.state = WorkflowState.SUCCESS
+            self.state = (
+                WorkflowState.CANCELED
+                if self._cancel_requested
+                else WorkflowState.SUCCESS
+            )
 
     def mark_failed(self, node_id: str) -> None:
         """节点失败：整个工作流失败（对齐 Go errChan → jobsCtxCancel 全停语义）。"""
@@ -195,13 +201,47 @@ class WorkflowRun:
         self._consumed.add(node_id)
         self._failed_nodes.add(node_id)
         self._node_states[node_id] = NodeState.FAILED
-        self.state = WorkflowState.FAILED
+        if self._cancel_requested:
+            self.state = (
+                WorkflowState.CANCELED
+                if self._is_all_done()
+                else WorkflowState.CANCELING
+            )
+        else:
+            self.state = WorkflowState.FAILED
 
     def cancel(self) -> None:
-        self.state = WorkflowState.CANCELED
+        """停止后续派发，但保留已派发节点直到设备返回明确终态。"""
+
+        self._cancel_requested = True
         for node_id, state in self._node_states.items():
-            if state in (NodeState.PENDING, NodeState.READY, NodeState.DISPATCHED):
+            if state in (NodeState.PENDING, NodeState.READY):
                 self._node_states[node_id] = NodeState.CANCELED
+        self.state = (
+            WorkflowState.CANCELED
+            if self._is_all_done()
+            else WorkflowState.CANCELING
+        )
+
+    def mark_canceled(self, node_id: str) -> None:
+        """用设备明确取消终态结算一个已派发节点。
+
+        参数：``node_id`` 是当前在途节点身份。返回无。异常：未知节点幂等忽略；
+        该方法只消费已派发节点，不会把取消请求误当成安全停止证明。
+        """
+
+        if node_id not in self._nodes:
+            return
+        self._consumed.add(node_id)
+        self._node_states[node_id] = NodeState.CANCELED
+        self._pending_parents.pop(node_id, None)
+        for parents in self._pending_parents.values():
+            parents.discard(node_id)
+        self.state = (
+            WorkflowState.CANCELED
+            if self._is_all_done()
+            else WorkflowState.CANCELING
+        )
 
     def _is_all_done(self) -> bool:
         return all(

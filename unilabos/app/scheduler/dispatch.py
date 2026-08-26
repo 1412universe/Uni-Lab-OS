@@ -10,6 +10,7 @@ service 层产出「该启动的节点 + 解析后的参数」，由 Dispatcher 
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Callable, Dict, List, Protocol
 
 
@@ -22,12 +23,49 @@ class Dispatcher(Protocol):
         ...
 
 
+class CancelDispatchState(str, Enum):
+    """本地执行适配器对取消请求的即时判定。"""
+
+    NOT_SENT = "not_sent"
+    REQUESTED = "requested"
+    UNAVAILABLE = "unavailable"
+
+
 class CallbackDispatcher:
-    def __init__(self, fn: Callable[[DispatchPayload], None]):
+    def __init__(
+        self,
+        fn: Callable[[DispatchPayload], None],
+        cancel_fn: Callable[[str, Callable[[bool], None]], CancelDispatchState]
+        | None = None,
+    ):
+        """装配回调执行适配器。
+
+        参数：``fn`` 接收物理派发载荷；``cancel_fn`` 可选地提交本地设备取消，
+        并在执行器明确接受或拒绝时回调。返回无。异常：派发或取消回调异常由调用
+        方处理；没有取消能力时返回 ``UNAVAILABLE``，绝不伪造设备已停止。
+        """
+
         self._fn = fn
+        self._cancel_fn = cancel_fn
 
     def dispatch(self, payload: DispatchPayload) -> None:
         self._fn(payload)
+
+    def cancel(
+        self,
+        job_id: str,
+        on_accepted: Callable[[bool], None],
+    ) -> CancelDispatchState:
+        """请求取消已经派发的作业（Job）。
+
+        参数：``job_id`` 是稳定作业身份；``on_accepted`` 接收执行器异步受理事实。
+        返回：即时判定；未配置取消回调时为 ``UNAVAILABLE``。异常由取消回调原样
+        传播，调度器会将其保守投影为执行未知（ExecutionUnknown）。
+        """
+
+        if self._cancel_fn is None:
+            return CancelDispatchState.UNAVAILABLE
+        return self._cancel_fn(job_id, on_accepted)
 
 
 class RecordingDispatcher:
@@ -36,6 +74,21 @@ class RecordingDispatcher:
 
     def dispatch(self, payload: DispatchPayload) -> None:
         self.dispatched.append(payload)
+
+    def cancel(
+        self,
+        job_id: str,
+        on_accepted: Callable[[bool], None],
+    ) -> CancelDispatchState:
+        """取消干跑记录且声明作业从未越过物理执行边界。
+
+        参数：``job_id`` 是记录中的作业身份；``on_accepted`` 不会调用，因为没有
+        设备取消需要等待。返回 ``NOT_SENT``。异常：作业不在记录中也按未发送
+        处理；记录器只用于测试/干跑，不能制造物理执行事实。
+        """
+
+        del job_id, on_accepted
+        return CancelDispatchState.NOT_SENT
 
 
 def build_job_start_payload(
@@ -74,6 +127,7 @@ def build_job_start_payload(
 
 
 __all__ = [
+    "CancelDispatchState",
     "CallbackDispatcher",
     "DispatchPayload",
     "Dispatcher",

@@ -162,24 +162,32 @@ class WorkflowSpecCompiler:
                         f"物料来源作业执行种类非法：{node_uuid}",
                     )
                 continue
-            if kind != "device_action":
+            if kind not in {"device_action", "manual_confirm"}:
                 raise WorkflowSpecCompilationError(
                     "unsupported_executor_kind", f"旧调度器不支持执行种类：{kind}"
                 )
             job_uuid = canonical_uuid(
                 job.get("uuid"), "invalid_job_identity", f"jobs[{node_uuid}].uuid"
             )
+            continues_device_action = bool(node.get("continues_device_action", False))
             device_id = str(node.get("device_id") or "").strip()
-            if not device_id:
-                raise WorkflowSpecCompilationError(
-                    "invalid_executor_binding", f"设备动作缺少固定执行器：{node_uuid}"
-                )
+            if kind == "device_action" or continues_device_action:
+                if not device_id:
+                    raise WorkflowSpecCompilationError(
+                        "invalid_executor_binding", f"设备动作缺少固定执行器：{node_uuid}"
+                    )
+            else:
+                device_id = "manual-confirmation"
             action_name = str(node.get("action_name") or "").strip()
             action_type = str(node.get("action_type") or "").strip()
-            if not action_name or not action_type:
-                raise WorkflowSpecCompilationError(
-                    "invalid_action_contract", f"设备动作合同不完整：{node_uuid}"
-                )
+            if kind == "device_action" or continues_device_action:
+                if not action_name or not action_type:
+                    raise WorkflowSpecCompilationError(
+                        "invalid_action_contract", f"设备动作合同不完整：{node_uuid}"
+                    )
+            else:
+                action_name = "confirm"
+                action_type = "manual_confirm"
             planned_param = node.get("param", {})
             if not isinstance(planned_param, Mapping):
                 raise WorkflowSpecCompilationError(
@@ -191,7 +199,11 @@ class WorkflowSpecCompiler:
                     "invalid_job_param", f"作业最终参数必须是对象：{job_uuid}"
                 )
             requirements = self._material_requirements(node, node_uuid=node_uuid)
-            param_schema = self._param_schema(node, node_uuid=node_uuid)
+            param_schema = (
+                self._param_schema(node, node_uuid=node_uuid)
+                if kind == "device_action" or continues_device_action
+                else None
+            )
             compiled.append(
                 WorkflowNode(
                     id=node_uuid,
@@ -201,7 +213,8 @@ class WorkflowSpecCompiler:
                     action_type=action_type,
                     param=self._merge_final_param(planned_param, job_param),
                     param_schema=param_schema,
-                    node_type="ILab",
+                    node_type=("manual_confirm" if kind == "manual_confirm" else "ILab"),
+                    manual_continues_device_action=continues_device_action,
                     disabled=False,
                     always_free=bool(node.get("always_free", False)),
                     material_requirements=requirements,

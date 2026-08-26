@@ -202,6 +202,55 @@ class WorkflowEdgeWrite(BaseModel):
         return normalized or None
 
 
+class WorkflowInventoryRequirementWrite(BaseModel):
+    """工作流定义中不绑定具体库存实例的逻辑数量需求。"""
+
+    model_config = ConfigDict(extra="ignore")
+
+    uuid: Optional[str] = None
+    consume_node_uuid: str
+    requirement_key: str = ""
+    target_type: Literal["reagent_info", "current_substance"]
+    reagent_info_uuid: Optional[str] = None
+    required_quantity: float = Field(gt=0)
+    quantity_unit: str
+    allow_split: bool = Field(default=False, strict=True)
+    description: Optional[str] = None
+    meta_data: JsonObject = Field(default_factory=dict)
+
+    @field_validator("uuid", "consume_node_uuid", "reagent_info_uuid")
+    @classmethod
+    def _requirement_uuid(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else validate_uuid(value)
+
+    @field_validator("requirement_key", "quantity_unit")
+    @classmethod
+    def _requirement_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("description")
+    @classmethod
+    def _requirement_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return value.strip() or None
+
+    @field_validator("meta_data", mode="before")
+    @classmethod
+    def _requirement_meta_data(cls, value: Any) -> JsonObject:
+        return normalize_json_object(value)
+
+    @model_validator(mode="after")
+    def _target_shape(self) -> WorkflowInventoryRequirementWrite:
+        if not self.quantity_unit:
+            raise ValueError("quantity_unit must not be blank")
+        if self.target_type == "reagent_info" and self.reagent_info_uuid is None:
+            raise ValueError("reagent_info target requires reagent_info_uuid")
+        if self.target_type == "current_substance" and self.reagent_info_uuid is not None:
+            raise ValueError("current_substance target forbids reagent_info_uuid")
+        return self
+
+
 class CandidateCompilation(BaseModel):
     """One compiler result before the service issues a Candidate hash."""
 
@@ -359,6 +408,7 @@ __all__ = [
     "JsonArray",
     "JsonObject",
     "WorkflowEdgeWrite",
+    "WorkflowInventoryRequirementWrite",
     "WorkflowNodeWrite",
     "normalize_json_array",
     "normalize_json_object",
