@@ -1,7 +1,6 @@
 import collections.abc
 import json
 from collections import OrderedDict
-from collections.abc import Mapping
 from typing import Optional, get_origin, get_args
 
 import yaml
@@ -20,23 +19,6 @@ def resource_reference_uuid(obj) -> Optional[str]:
     runtime_uuid = getattr(obj, "unilabos_uuid", None)
     resolved = reference_uuid or runtime_uuid
     return str(resolved) if resolved else None
-
-
-_DEVICE_FAILURE_STATES = frozenset({"FAILED", "CANCELED", "UNKNOWN", "REJECTED"})
-
-
-def device_result_declares_failure(return_info: object) -> bool:
-    """识别动作传输成功载荷中由设备明确声明的业务失败。"""
-
-    if not isinstance(return_info, Mapping):
-        return False
-    return_value = return_info.get("return_value")
-    if not isinstance(return_value, Mapping):
-        return False
-    if return_value.get("success") is False:
-        return True
-    state = str(return_value.get("state") or "").strip().upper()
-    return state in _DEVICE_FAILURE_STATES
 
 
 def get_type_class(type_hint):
