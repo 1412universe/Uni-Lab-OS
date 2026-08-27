@@ -566,8 +566,8 @@ class TaskRuntimeProjection:
         """原子提交成功任务物料准入（TaskMaterialAdmission）的逐来源结果。
 
         参数：``task_uuid`` 是父工作流任务（WorkflowTask）身份；``bindings`` 按
-        物料来源节点 UUID 提供已预留的 ``uuid``、``resource_template_uuid``，
-        并可提供 ``site_uuid``、``flow_role``、``custody_policy``。返回：全部来源
+        物料来源节点 UUID 提供已预留的 ``uuid``、``resource_template_uuid``
+        与 ``custody_policy``，并可提供 ``site_uuid``、``flow_role``。返回：全部来源
         作业已直接变为 ``succeeded``
         的标准聚合；若没有普通动作，父任务也直接成功。异常：绑定集合、字段、
         状态或重放载荷冲突时抛出 ``StoreConflict``，整笔事务零部分写入。
@@ -577,8 +577,9 @@ class TaskRuntimeProjection:
             raise StoreConflict("物料来源绑定必须是对象")
         # ``normalized_bindings`` 隔离调用方容器并验证有类型物料占位符身份。
         normalized_bindings: dict[str, dict[str, str]] = {}
-        # ``material_facts`` 是 Backend-shaped 准入事实；旧调用方未提供新增字段时
-        # 使用历史默认，仅用于兼容已持久化的本地执行计划。
+        # ``material_facts`` 是后端形态契约（Backend-shaped Contract）准入事实；
+        # 保管策略必须由
+        # 当前准入决策显式提供，禁止投影层猜测领域语义。
         material_facts: dict[str, dict[str, str | None]] = {}
         for node_uuid, raw_binding in bindings.items():
             if not isinstance(raw_binding, Mapping):
@@ -587,12 +588,11 @@ class TaskRuntimeProjection:
             template_uuid = str(
                 raw_binding.get("resource_template_uuid") or ""
             ).strip()
-            custody_policy = str(
-                raw_binding.get("custody_policy")
-                or MaterialCustodyPolicy.TASK_EXCLUSIVE.value
-            ).strip()
-            if not node_uuid or not material_uuid or not template_uuid or not custody_policy:
+            custody_policy = str(raw_binding.get("custody_policy") or "").strip()
+            if not node_uuid or not material_uuid or not template_uuid:
                 raise StoreConflict("物料来源绑定身份不能为空")
+            if not custody_policy:
+                raise StoreConflict("物料来源保管策略不能为空")
             if custody_policy not in {member.value for member in MaterialCustodyPolicy}:
                 raise StoreConflict("物料来源保管策略不在规范闭集")
             normalized_bindings[str(node_uuid)] = {
@@ -608,9 +608,7 @@ class TaskRuntimeProjection:
                 "flow_role": str(
                     raw_binding.get("flow_role") or "primary_sample"
                 ).strip(),
-                "custody_policy": str(
-                    raw_binding.get("custody_policy") or "task_exclusive"
-                ).strip(),
+                "custody_policy": custody_policy,
             }
 
         with self._store.transaction() as connection:

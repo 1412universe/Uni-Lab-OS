@@ -193,6 +193,34 @@ def test_material_source_admission_projects_typed_result_atomically(
     assert jobs_by_uuid[action_job_uuid]["status"] == "pending"
 
 
+def test_material_source_admission_requires_explicit_custody_policy(
+    store: WorkflowStore,
+) -> None:
+    """物料来源准入必须显式提供物料保管策略（MaterialCustodyPolicy）。
+
+    参数：``store`` 是隔离工作流权威。返回无；断言缺失
+    ``custody_policy`` 的准入请求关闭失败，且来源作业仍保持待处理。
+    """
+
+    source_job_uuid, _ = _seed_material_source_task(store, with_action=True)
+    projection = _projection(store)
+
+    with pytest.raises(StoreConflict, match="物料来源保管策略不能为空"):
+        projection.project_material_source_admission(
+            TASK_UUID,
+            {
+                NODE_UUIDS[0]: {
+                    "uuid": "50000000-0000-4000-8000-000000000001",
+                    "resource_template_uuid": (
+                        "60000000-0000-4000-8000-000000000001"
+                    ),
+                }
+            },
+        )
+
+    assert store.get_job(source_job_uuid)["status"] == "pending"
+
+
 def test_material_source_admission_persists_backend_shaped_facts(
     store: WorkflowStore,
 ) -> None:
@@ -366,6 +394,7 @@ def test_failed_task_releases_claim_only_after_cleanup_settlement(
                 "resource_template_uuid": (
                     "60000000-0000-4000-8000-000000000001"
                 ),
+                "custody_policy": "task_exclusive",
             }
         },
     )
