@@ -13,14 +13,15 @@ from unilabos.workflow.execution_lock_lease import (
     mark_execution_locks_uncertain,
     record_execution_lock_wait,
     release_execution_locks,
+    release_task_execution_locks,
     try_acquire_execution_locks,
 )
-from unilabos.workflow.json_codec import decode_json_bytes, encode_json
-from unilabos.workflow.job_evidence import JobEvidenceStore, record_job_result
 from unilabos.workflow.intervention import (
     WorkflowInterventionStore,
     settle_intervention_for_job,
 )
+from unilabos.workflow.job_evidence import JobEvidenceStore, record_job_result
+from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.manual_confirmation import (
     ManualConfirmationStore,
     close_pending_manual_confirmation,
@@ -48,6 +49,7 @@ _FINISHED_STATE_MAP = {
     "success": "succeeded",
     "failed": "failed",
     "canceled": "canceled",
+    "timeout": "timeout",
 }
 
 
@@ -744,6 +746,11 @@ class TaskRuntimeProjection:
             }:
                 raise StoreConflict(f"任务清理状态不能结算：{task_uuid}")
             settled_at = utc_now()
+            release_task_execution_locks(
+                connection,
+                task_uuid=task_uuid,
+                now=settled_at,
+            )
             connection.execute(
                 """
                 UPDATE workflow_task
@@ -1229,10 +1236,11 @@ class TaskRuntimeProjection:
         """投影工作流节点作业（WorkflowNodeJob）的明确业务结果。
 
         参数：``job_uuid`` 是作业稳定身份；``scheduler_state`` 只接受本地
-        ``success``、``failed`` 或设备明确 ``canceled``；``return_info`` 是结果
-        对象；``error_info`` 是错误详情序列；``manual_confirmation_status`` 只供
-        截止时间或取消收敛把关联确认原子关闭。返回：提交后的标准任务/作业聚合。异常：未知状态、结果
-        类型、终态或载荷冲突抛出 ``StoreConflict``；身份缺失抛出
+        ``success``、``failed``、设备明确 ``canceled`` 或 ``timeout``；
+        ``return_info`` 是结果对象；``error_info`` 是错误详情序列；
+        ``manual_confirmation_status`` 只供截止时间或取消收敛把关联确认原子关闭。
+        返回：提交后的标准任务/作业聚合。异常：未知状态、结果类型、终态或载荷
+        冲突抛出 ``StoreConflict``；身份缺失抛出
         ``StoreNotFound``。相同终态和载荷的投递重放（DeliveryReplay）零写入。
         """
 
@@ -1400,7 +1408,9 @@ class TaskRuntimeProjection:
                 if all(status in _TERMINAL_JOB_STATES for status in job_statuses):
                     target_task_status = "canceled"
             elif task_row["status"] != "failed":
-                if "failed" in job_statuses:
+                if "timeout" in job_statuses:
+                    target_task_status = "timeout"
+                elif "failed" in job_statuses:
                     target_task_status = "failed"
                 elif "canceled" in job_statuses:
                     # execution_unknown 的人工取消证明终结的是整次 Task；后续节点

@@ -10,12 +10,49 @@ service 层产出「该启动的节点 + 解析后的参数」，由 Dispatcher 
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Protocol
 
 
 class DispatchPayload(Dict[str, Any]):
     """job_start 形状的下发载荷（与 ws_client JobAddReq 字段对齐）。"""
+
+
+@dataclass(frozen=True)
+class CommittedJobOutcome:
+    """执行器通过 Edge HTTP 已持久提交的不可变作业结果。
+
+    参数：``outcome`` 保留 Backend wire 终态；``return_info`` 与
+    ``error_info`` 是同一次提交的原始结果和错误证据；
+    ``unknown_command_ids`` 是尚未完成物理对账的命令身份；
+    ``inventory_consumptions`` 是成功作业报告的实际数量。返回值通过
+    :meth:`as_dict` 生成可序列化公共形状。该对象只承载投递重放
+    （DeliveryReplay），不会授权新的物理执行。
+    """
+
+    outcome: str
+    return_info: Dict[str, Any]
+    error_info: List[Any]
+    unknown_command_ids: List[str]
+    inventory_consumptions: List[Dict[str, Any]] = field(default_factory=list)
+
+    def as_dict(self) -> Dict[str, Any]:
+        """返回与 Backend Edge outcome 请求一致的可序列化值。
+
+        参数：无。返回：字段副本，调用方修改嵌套集合不会改变已提交结果。
+        异常：无；字段合法性由 Edge HTTP 提交边界完成。
+        """
+
+        return {
+            "outcome": self.outcome,
+            "return_info": dict(self.return_info),
+            "error_info": list(self.error_info),
+            "unknown_command_ids": list(self.unknown_command_ids),
+            "inventory_consumptions": [
+                dict(consumption) for consumption in self.inventory_consumptions
+            ],
+        }
 
 
 class Dispatcher(Protocol):
@@ -129,6 +166,7 @@ def build_job_start_payload(
 __all__ = [
     "CancelDispatchState",
     "CallbackDispatcher",
+    "CommittedJobOutcome",
     "DispatchPayload",
     "Dispatcher",
     "RecordingDispatcher",

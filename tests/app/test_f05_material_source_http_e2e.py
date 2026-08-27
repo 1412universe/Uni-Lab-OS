@@ -288,7 +288,7 @@ def test_fixed_existing_waits_then_reschedules_with_same_task_and_job(
     assert [job["uuid"] for job in jobs_after] == [
         job["uuid"] for job in jobs_before
     ]
-    assert [job["status"] for job in jobs_after] == ["succeeded", "dispatched"]
+    assert [job["status"] for job in jobs_after] == ["succeeded", "running"]
     assert len(runtime.dispatcher.dispatched) == 1
 
 

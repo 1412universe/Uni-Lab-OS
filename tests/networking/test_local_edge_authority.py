@@ -98,6 +98,12 @@ def test_dispatch_is_idempotent_and_rejects_changed_identity(tmp_path: Path) -> 
 def test_http_websocket_round_trip_projects_one_terminal_outcome(
     tmp_path: Path,
 ) -> None:
+    """验证 Local Edge 公开协议可完成命令、ACK 与结果的单次闭环。
+
+    参数：``tmp_path`` 隔离本地 Edge 事实库。返回无。异常：公开 HTTP/WebSocket
+    合同、结果幂等或投影次数不符合预期时由断言失败；重复结果不得重复通知监听器。
+    """
+
     authority = _authority(tmp_path / "authority.db")
     finished: list[tuple[str, bool, object, str]] = []
     authority.add_job_finished_listener(
@@ -161,6 +167,7 @@ def test_http_websocket_round_trip_projects_one_terminal_outcome(
             }
 
         headers = {
+            "Idempotency-Key": "round-trip-outcome",
             "X-Command-UUID": command["message_uuid"],
             "X-Job-Token": command_payload["job_access_token"],
         }
@@ -190,7 +197,18 @@ def test_http_websocket_round_trip_projects_one_terminal_outcome(
             headers=headers,
             json=outcome,
         )
-        assert first.status_code == second.status_code == 200
+        assert first.status_code == 201
+        assert second.status_code == 200
+        first_result = first.json()["data"]
+        assert second.json()["data"] == first_result
+        assert first_result["workflow_node_job_uuid"] == payload["job_id"]
+        assert first_result["edge_command_uuid"] == command["message_uuid"]
+        assert first_result["idempotency_key"] == "round-trip-outcome"
+        assert first_result["outcome"] == "succeeded"
+        assert first_result["return_info"] == outcome["return_info"]
+        assert first_result["error_info"] == []
+        assert first_result["uuid"]
+        assert first_result["committed_at"].endswith("Z")
         assert finished == [
             (payload["job_id"], True, {"moved": True}, "normal")
         ]
@@ -201,6 +219,12 @@ def test_http_websocket_round_trip_projects_one_terminal_outcome(
 def test_unknown_outcome_locks_device_until_explicit_reconciliation(
     tmp_path: Path,
 ) -> None:
+    """验证结果不明会锁住设备，且只能由明确取消证据完成物理结算。
+
+    参数：``tmp_path`` 隔离本地 Edge 事实库。返回无。异常：UNKNOWN 未锁设备、
+    被盲目重放或取消证据未幂等释放设备时由断言失败。
+    """
+
     authority = _authority(tmp_path / "authority.db")
     finished: list[tuple[str, bool, object, str]] = []
     authority.add_job_finished_listener(
@@ -218,7 +242,10 @@ def test_unknown_outcome_locks_device_until_explicit_reconciliation(
             payload["job_id"],
             command_uuid=command["message_uuid"],
             job_token=job_token,
+            idempotency_key="unknown-outcome",
             payload={
+                "task_uuid": payload["task_id"],
+                "node_uuid": payload["node_id"],
                 "outcome": "failed",
                 "return_info": {},
                 "error_info": [{"message": "Edge disconnected"}],
@@ -239,6 +266,109 @@ def test_unknown_outcome_locks_device_until_explicit_reconciliation(
         authority.resolve_unknown_committed(payload["job_id"])
         assert finished == [(payload["job_id"], False, None, "canceled")]
         assert authority.busy_device_action_keys() == set()
+    finally:
+        authority.stop()
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("return_info", []),
+        ("error_info", {}),
+        ("unknown_command_ids", {}),
+        ("inventory_consumptions", {}),
+    ],
+)
+def test_http_outcome_rejects_wrong_empty_json_types(
+    tmp_path: Path,
+    field: str,
+    invalid_value: object,
+) -> None:
+    """错误的空 JSON 类型不能被默认值逻辑静默改写后提交。
+
+    参数：``tmp_path`` 隔离事实库；``field`` 与 ``invalid_value`` 描述一个违反
+    Backend DTO 的字段。返回无。异常：接口未拒绝输入或错误输入产生不可变结果
+    时由断言失败；失败请求不得占用该 Job 的首次幂等提交位置。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+    client = TestClient(application)
+    outcome: dict[str, object] = {
+        "task_uuid": payload["task_id"],
+        "node_uuid": payload["node_id"],
+        "outcome": "succeeded",
+        "return_info": {},
+        "error_info": [],
+        "unknown_command_ids": [],
+        "inventory_consumptions": [],
+    }
+    outcome[field] = invalid_value
+    try:
+        response = client.put(
+            f"/api/v1/edge/jobs/{payload['job_id']}/outcome",
+            headers={
+                "Idempotency-Key": f"wrong-type-{field}",
+                "X-Command-UUID": command["message_uuid"],
+                "X-Job-Token": command["payload"]["job_access_token"],
+            },
+            json=outcome,
+        )
+        assert response.status_code == 400
+        assert authority.store.job(payload["job_id"])["status"] == "pending"
+    finally:
+        authority.stop()
+
+
+@pytest.mark.parametrize(
+    "unknown_command_id",
+    [
+        "not-a-workflow-command",
+        f"workflow-node-job:{uuid.uuid4()}",
+    ],
+)
+def test_http_outcome_rejects_unknown_command_from_another_job(
+    tmp_path: Path,
+    unknown_command_id: str,
+) -> None:
+    """UNKNOWN 证据必须采用规范身份并至少包含当前 Job 的设备命令。
+
+    参数：``tmp_path`` 隔离事实库；``unknown_command_id`` 是格式错误或属于其他
+    Job 的命令身份。返回无。异常：非法证据被接受并锁住设备时由断言失败；失败
+    请求不得写入作业终态。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+    client = TestClient(application)
+    try:
+        response = client.put(
+            f"/api/v1/edge/jobs/{payload['job_id']}/outcome",
+            headers={
+                "Idempotency-Key": "invalid-unknown-evidence",
+                "X-Command-UUID": command["message_uuid"],
+                "X-Job-Token": command["payload"]["job_access_token"],
+            },
+            json={
+                "task_uuid": payload["task_id"],
+                "node_uuid": payload["node_id"],
+                "outcome": "failed",
+                "return_info": {},
+                "error_info": [{"message": "连接中断"}],
+                "unknown_command_ids": [unknown_command_id],
+                "inventory_consumptions": [],
+            },
+        )
+        assert response.status_code == 400
+        assert authority.store.job(payload["job_id"])["status"] == "pending"
     finally:
         authority.stop()
 
@@ -310,7 +440,10 @@ def test_outcome_projection_failure_is_replayed_after_restart(tmp_path: Path) ->
                 payload["job_id"],
                 command_uuid=command["message_uuid"],
                 job_token=command["payload"]["job_access_token"],
+                idempotency_key="projection-failure",
                 payload={
+                    "task_uuid": payload["task_id"],
+                    "node_uuid": payload["node_id"],
                     "outcome": "succeeded",
                     "return_info": {"return_value": {"moved": True}},
                     "error_info": [],
@@ -335,6 +468,82 @@ def test_outcome_projection_failure_is_replayed_after_restart(tmp_path: Path) ->
         recovered.replay_pending_projections(
             finished_listener=lambda job_uuid, success, result, suc_type: projected.append(
                 (job_uuid, success, result, suc_type)
+            )
+        )
+        assert len(projected) == 1
+    finally:
+        recovered.stop()
+
+
+@pytest.mark.parametrize("terminal_outcome", ["failed", "canceled", "timeout"])
+def test_http_outcome_replay_preserves_exact_terminal_semantics(
+    tmp_path: Path,
+    terminal_outcome: str,
+) -> None:
+    """HTTP 提交的失败类结果必须按原终态和错误证据进行投递重放。
+
+    参数：``tmp_path`` 隔离边缘控制存储；``terminal_outcome`` 是 Backend
+    合同允许的失败、取消或超时终态。返回无；先在没有工作流监听器的启动窗口
+    提交结果，再注册持久结果监听器并重放，证明结果不会被提前确认，也不会把
+    不同终态压缩成普通失败。
+    """
+
+    database = tmp_path / "authority.db"
+    authority = _authority(database)
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+    client = TestClient(application)
+    headers = {
+        "Authorization": "Bearer managed-local-secret",
+        "Idempotency-Key": f"outcome-{terminal_outcome}",
+        "X-Command-UUID": command["message_uuid"],
+        "X-Job-Token": command["payload"]["job_access_token"],
+    }
+    error_info = [{"code": f"device_{terminal_outcome}", "message": "设备终态"}]
+    try:
+        response = client.put(
+            f"/api/v1/edge/jobs/{payload['job_id']}/outcome",
+            headers=headers,
+            json={
+                "task_uuid": payload["task_id"],
+                "node_uuid": payload["node_id"],
+                "outcome": terminal_outcome,
+                "return_info": {"last_step": 3},
+                "error_info": error_info,
+                "unknown_command_ids": [],
+            },
+        )
+        assert response.status_code == 201
+    finally:
+        authority.stop()
+
+    recovered = _authority(database)
+    projected: list[tuple[str, dict[str, object]]] = []
+    try:
+        recovered.replay_pending_projections(
+            outcome_listener=lambda job_uuid, outcome: projected.append(
+                (job_uuid, outcome.as_dict())
+            )
+        )
+        assert projected == [
+            (
+                payload["job_id"],
+                {
+                    "outcome": terminal_outcome,
+                    "return_info": {"last_step": 3},
+                    "error_info": error_info,
+                    "unknown_command_ids": [],
+                    "inventory_consumptions": [],
+                },
+            )
+        ]
+
+        recovered.replay_pending_projections(
+            outcome_listener=lambda job_uuid, outcome: projected.append(
+                (job_uuid, outcome.as_dict())
             )
         )
         assert len(projected) == 1

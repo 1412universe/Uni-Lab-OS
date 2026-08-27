@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, Header, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -25,6 +25,7 @@ from unilabos.workflow.models import (
     WorkflowNodeWrite,
     normalize_json_array,
     normalize_json_object,
+    validate_uuid,
 )
 from unilabos.workflow.service import WorkflowError, WorkflowService
 
@@ -287,11 +288,41 @@ class InsertCompositeWorkflowRequest(_StrictModel):
         return normalize_json_object(value)
 
 
+class WorkflowInventoryBindingRequest(_StrictModel):
+    """把一个逻辑库存需求绑定到本次任务实际使用的库存实例。"""
+
+    requirement_key: str
+    inventory_type: Literal["reagent", "current_substance"]
+    inventory_uuid: str
+    reserved_quantity: float = Field(gt=0, allow_inf_nan=False)
+    quantity_unit: str
+
+    @field_validator("inventory_uuid")
+    @classmethod
+    def _inventory_uuid(cls, value: str) -> str:
+        """规范库存实例 UUID；nil 或非法值由 Pydantic 映射为请求错误。"""
+
+        return validate_uuid(value)
+
+    @field_validator("requirement_key", "quantity_unit")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        """去除两端空白并拒绝空逻辑键或单位。"""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+
 class WorkflowTaskCreateRequest(_BackendModel):
     workflow_uuid: str
     run_mode: str = "normal"
     target_node_uuid: Optional[str] = None
     input: Dict[str, Any] = Field(default_factory=dict)
+    inventory_bindings: List[WorkflowInventoryBindingRequest] = Field(
+        default_factory=list
+    )
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
 
@@ -784,9 +815,30 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 input_value=body.input,
                 description=body.description,
                 meta_data=body.meta_data,
+                inventory_bindings=[
+                    binding.model_dump() for binding in body.inventory_bindings
+                ],
             ),
             status=201,
         )
+
+    @router.get("/workflow-tasks/{task_uuid}/inventory-consumptions")
+    def list_task_inventory_consumptions(task_uuid: str) -> JSONResponse:
+        """读取任务级数量型库存消费事实。"""
+
+        return _success(service.list_task_inventory_consumptions(task_uuid))
+
+    @router.get("/workflow-node-jobs/{job_uuid}/inventory-consumptions")
+    def list_job_inventory_consumptions(job_uuid: str) -> JSONResponse:
+        """读取作业级数量型库存消费事实。"""
+
+        return _success(service.list_job_inventory_consumptions(job_uuid))
+
+    @router.get("/reagents/{reagent_uuid}/inventory-consumptions")
+    def list_reagent_inventory_consumptions(reagent_uuid: str) -> JSONResponse:
+        """读取试剂库存实例的工作流消费谱系。"""
+
+        return _success(service.list_reagent_inventory_consumptions(reagent_uuid))
 
     @router.post("/debug/workflow-tasks")
     def create_debug_workflow_task(

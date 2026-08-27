@@ -1,0 +1,697 @@
+"""工作流数量型库存运行合同。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from unilabos.app.scheduler.inventory.backend_api import install_backend_resource_api
+from unilabos.app.scheduler.inventory.backend_contract import (
+    RESOURCE_DATA_CONFLICT,
+    BackendContractError,
+    BackendResourceService,
+)
+from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
+from unilabos.app.scheduler.inventory.service import InventoryService
+from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.workflow_api import create_workflow_app
+from unilabos.workflow.models import (
+    WorkflowInventoryRequirementWrite,
+    WorkflowNodeWrite,
+)
+from unilabos.workflow.quantity_inventory import WorkflowQuantityInventory
+from unilabos.workflow.service import WorkflowError, WorkflowService
+from unilabos.workflow.store import StoreConflict, WorkflowStore
+from unilabos.workflow.task_input import PreparedTaskInput
+
+WORKFLOW_UUID = "10000000-0000-4000-8000-000000000001"
+NODE_UUID = "20000000-0000-4000-8000-000000000001"
+TASK_UUID = "30000000-0000-4000-8000-000000000001"
+JOB_UUID = "40000000-0000-4000-8000-000000000001"
+
+
+class _InventoryReadBridge:
+    """把数量型库存协调器暴露为工作流服务只读端口。"""
+
+    def __init__(self, coordinator: WorkflowQuantityInventory) -> None:
+        """绑定协调器；参数是既有库存事实读取器，返回无且不创建新存储。"""
+
+        self._coordinator = coordinator
+
+    def list_task_inventory_consumptions(self, task_uuid: str) -> list[dict[str, Any]]:
+        """按任务读取消费；参数是任务 UUID，返回统一库存台账投影。"""
+
+        return self._coordinator.list_task_consumptions(task_uuid)
+
+    def list_job_inventory_consumptions(self, job_uuid: str) -> list[dict[str, Any]]:
+        """按作业读取消费；参数是作业 UUID，返回统一库存台账投影。"""
+
+        return self._coordinator.list_job_consumptions(job_uuid)
+
+    def list_reagent_inventory_consumptions(
+        self, reagent_uuid: str
+    ) -> list[dict[str, Any]]:
+        """按试剂读取消费；参数是试剂 UUID，返回统一库存台账投影。"""
+
+        return self._coordinator.list_reagent_consumptions(reagent_uuid)
+
+    def close(self) -> None:
+        """释放测试只读端口；参数无、返回无，协调器由外层存储生命周期管理。"""
+
+
+class _InventoryCreationBridge(_InventoryReadBridge):
+    """暴露任务创建数量预留及回滚补偿的最小测试端口。"""
+
+    def prepare_inventory_allocations(
+        self,
+        connection: Any,
+        *,
+        graph: dict[str, Any],
+        prepared: PreparedTaskInput,
+        task_uuid: str,
+        bindings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """代理数量预留；参数与生产桥一致，返回待写分配，异常原样传播。"""
+
+        return self._coordinator.prepare_task_allocations(
+            connection,
+            graph=graph,
+            prepared=prepared,
+            task_uuid=task_uuid,
+            bindings=bindings,
+        )
+
+    def discard_uncommitted_inventory(self, task_uuid: str) -> None:
+        """代理创建回滚补偿；参数是未提交任务身份，返回无且重复调用幂等。"""
+
+        self._coordinator.discard_uncommitted_task(task_uuid)
+
+
+def _inventory(tmp_path: Path) -> tuple[InventoryStore, str, str, str]:
+    """创建一个余量为 10 mL 的活动试剂库存。
+
+    参数：``tmp_path`` 提供隔离数据库目录。返回：库存写权威、容器物料、试剂
+    身份和试剂实例 UUID。异常：任一公共 HTTP 创建失败时断言失败。
+    """
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    app = FastAPI()
+    install_backend_resource_api(app, BackendResourceService(store))
+    client = TestClient(app)
+    template_response = client.post(
+        "/api/v1/resource-templates",
+        json={
+            "resources": [
+                {
+                    "id": "local.workflow_reagent_bottle",
+                    "display_name": "工作流试剂瓶",
+                    "registry_type": "material",
+                    "category": ["container"],
+                    "model": {},
+                    "class": {},
+                    "handles": [],
+                    "config_info": [],
+                    "scene": [],
+                    "device_params": {},
+                }
+            ]
+        },
+    )
+    assert template_response.status_code == 200
+    template_uuid = template_response.json()["data"]["templates"][0]["uuid"]
+    material_response = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "name": "工作流乙醇瓶",
+            "barcode": "WF-ETHANOL-001",
+        },
+    )
+    assert material_response.status_code == 201
+    material_uuid = material_response.json()["data"]["uuid"]
+    info_response = client.post(
+        "/api/v1/reagent-infos",
+        json={
+            "cas": "64-17-5",
+            "name": "乙醇",
+            "physical_state": "liquid",
+        },
+    )
+    assert info_response.status_code == 201
+    info_uuid = info_response.json()["data"]["uuid"]
+    reagent_response = client.post(
+        "/api/v1/reagents",
+        json={
+            "material_uuid": material_uuid,
+            "reagent_info_uuid": info_uuid,
+            "quantity": 10,
+            "quantity_unit": "mL",
+            "meta_data": {},
+        },
+    )
+    assert reagent_response.status_code == 201
+    return store, material_uuid, info_uuid, reagent_response.json()["data"]["uuid"]
+
+
+def _workflow(
+    database: Path,
+    *,
+    reagent_info_uuid: str,
+    material_uuid: str,
+) -> tuple[WorkflowStore, dict[str, Any], PreparedTaskInput]:
+    """创建一个单动作、消耗 2 mL 指定试剂身份的工作流图。
+
+    参数：``database`` 是工作流库路径；``reagent_info_uuid`` 是逻辑需求身份；
+    ``material_uuid`` 是执行设备动作绑定的物料实例。
+    返回：工作流写权威、应用图和冻结任务输入。异常：图保存失败原样传播。
+    """
+
+    store = WorkflowStore(database)
+    store.create_workflow(
+        workflow_uuid=WORKFLOW_UUID,
+        name="数量型库存合同",
+        tags=[],
+        description=None,
+        meta_data={},
+    )
+    graph = store.save_graph(
+        WORKFLOW_UUID,
+        revision=1,
+        nodes=[
+            WorkflowNodeWrite(
+                uuid=NODE_UUID,
+                name="分液",
+                type="device_action",
+                action_name="dispense",
+                action_type="UniLabJsonCommand",
+                param={},
+                material_uuid=material_uuid,
+            )
+        ],
+        edges=[],
+        inventory_requirements=[
+            WorkflowInventoryRequirementWrite(
+                uuid="50000000-0000-4000-8000-000000000001",
+                consume_node_uuid=NODE_UUID,
+                requirement_key="ethanol",
+                target_type="reagent_info",
+                reagent_info_uuid=reagent_info_uuid,
+                required_quantity=2,
+                quantity_unit="mL",
+                allow_split=False,
+            )
+        ],
+    )
+    plan = {
+        "version": 1,
+        "run_mode": "normal",
+        "target_node_uuid": None,
+        "nodes": [{"uuid": NODE_UUID}],
+        "handles": [],
+        "edges": [],
+    }
+    prepared = PreparedTaskInput(
+        workflow_snapshot=graph,
+        resolved_input={},
+        execution_plan=plan,
+        jobs=[
+            {
+                "uuid": JOB_UUID,
+                "workflow_node_uuid": NODE_UUID,
+                "topological_index": 0,
+                "executor_kind": "device_action",
+                "execution_policy": {},
+                "execution_timeout_seconds": 60,
+                "param": {},
+            }
+        ],
+    )
+    return store, graph, prepared
+
+
+def _create_task(
+    store: WorkflowStore,
+    coordinator: WorkflowQuantityInventory,
+    *,
+    graph: dict[str, Any],
+    prepared: PreparedTaskInput,
+    reagent_uuid: str,
+) -> None:
+    """以公共任务创建事务写入 Task、Job、allocation 与 Saga。
+
+    参数：两个写权威、同一图快照、冻结输入和试剂 UUID。返回无；异常原样传播。
+    """
+
+    bindings = [
+        {
+            "requirement_key": "ethanol",
+            "inventory_type": "reagent",
+            "inventory_uuid": reagent_uuid,
+            "reserved_quantity": 2,
+            "quantity_unit": "mL",
+        }
+    ]
+    store.create_task_with_jobs(
+        workflow_uuid=WORKFLOW_UUID,
+        task_uuid=TASK_UUID,
+        run_mode="normal",
+        target_node_uuid=None,
+        description=None,
+        meta_data={},
+        plan_builder=lambda _graph: prepared,
+        inventory_allocation_builder=lambda connection, _graph, frozen: (
+            coordinator.prepare_task_allocations(
+                connection,
+                graph=graph,
+                prepared=frozen,
+                task_uuid=TASK_UUID,
+                bindings=bindings,
+            )
+        ),
+    )
+
+
+def test_task_binding_and_successful_consumption_reuse_existing_tables(
+    tmp_path: Path,
+) -> None:
+    """任务绑定与成功消费必须闭合且不创建第二套库存表。
+
+    参数：``tmp_path`` 隔离两个 SQLite。返回无；断言 Task/Job/分配同事务创建，
+    实际消耗 1.5 mL 后余量为 8.5，重复结果不再次扣减且仅追加一条消费台账。
+    """
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    inventory_service = InventoryService(inventory_store)
+    coordinator = WorkflowQuantityInventory(workflow_store, inventory_service)
+    try:
+        _create_task(
+            workflow_store,
+            coordinator,
+            graph=graph,
+            prepared=prepared,
+            reagent_uuid=reagent_uuid,
+        )
+        allocation = workflow_store._conn.execute(
+            "SELECT * FROM workflow_inventory_allocation"
+        ).fetchone()
+
+        first = coordinator.consume_successful_job(
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            consumptions=[
+                {
+                    "inventory_type": "reagent",
+                    "inventory_uuid": reagent_uuid,
+                    "actual_quantity": 1500,
+                    "quantity_unit": "uL",
+                }
+            ],
+        )
+        replay = coordinator.consume_successful_job(
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            consumptions=[
+                {
+                    "inventory_type": "reagent",
+                    "inventory_uuid": reagent_uuid,
+                    "actual_quantity": 1500,
+                    "quantity_unit": "uL",
+                }
+            ],
+        )
+
+        assert allocation is not None
+        assert allocation["status"] == "reserved"
+        assert first == replay
+        assert first[0]["status"] == "consumed"
+        assert first[0]["balance_before"] == 10
+        assert first[0]["balance_after"] == 8.5
+        assert first[0]["actual_quantity"] == 1.5
+        assert first[0]["workflow_node_uuid"] == NODE_UUID
+        assert first[0]["workflow_name"] == "数量型库存合同"
+        assert first[0]["node_name"] == "分液"
+        assert first[0]["display_name"] == "乙醇"
+        assert first[0]["container_barcode"] == "WF-ETHANOL-001"
+        assert first[0]["consumed_at"].endswith("Z")
+        assert first[0]["meta_data"]["quantity_conversion"]["kind"] == (
+            "same_dimension"
+        )
+        assert coordinator.list_reagent_consumptions(reagent_uuid) == first
+        assert inventory_store.query_one(
+            "SELECT quantity,revision FROM reagent WHERE uuid=?", (reagent_uuid,)
+        ) == {"quantity": 8.5, "revision": 2}
+        assert inventory_store.query_one(
+            "SELECT COUNT(*) AS count FROM inventory_ledger "
+            "WHERE workflow_node_job_uuid=? "
+            "AND subject_type IN ('reagent','current_substance')",
+            (JOB_UUID,),
+        ) == {"count": 1}
+        reservation = inventory_store.query_one(
+            "SELECT status,amounts_json FROM inventory_reservation "
+            "WHERE workflow_id=? AND node_id=?",
+            (TASK_UUID, JOB_UUID),
+        )
+        assert reservation is not None
+        assert reservation["status"] == "consumed"
+        table_names = {
+            row["name"]
+            for row in inventory_store.query_all(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "workflow_inventory_consumption" not in table_names
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_missing_binding_rolls_back_task_job_and_allocation(tmp_path: Path) -> None:
+    """有活动逻辑需求但未绑定库存时必须保持任务创建零写入。
+
+    参数：``tmp_path`` 隔离数据库。返回无；断言冲突后 Task、Job、allocation 和
+    Saga 均未写入，避免出现不可执行的半任务。
+    """
+
+    inventory_store, material_uuid, info_uuid, _reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    try:
+        with pytest.raises(StoreConflict):
+            workflow_store.create_task_with_jobs(
+                workflow_uuid=WORKFLOW_UUID,
+                task_uuid=TASK_UUID,
+                run_mode="normal",
+                target_node_uuid=None,
+                description=None,
+                meta_data={},
+                plan_builder=lambda _graph: prepared,
+                inventory_allocation_builder=lambda connection, _graph, frozen: (
+                    coordinator.prepare_task_allocations(
+                        connection,
+                        graph=graph,
+                        prepared=frozen,
+                        task_uuid=TASK_UUID,
+                        bindings=[],
+                    )
+                ),
+            )
+
+        assert workflow_store.count_rows("workflow_task") == 0
+        assert workflow_store.count_rows("workflow_node_job") == 0
+        assert workflow_store.count_rows("workflow_inventory_allocation") == 0
+        assert workflow_store.count_rows("workflow_inventory_saga") == 0
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_pending_consumption_recovery_does_not_deduct_twice(tmp_path: Path) -> None:
+    """库存已提交而分配状态未提交的崩溃窗口必须只补状态。
+
+    参数：``tmp_path`` 隔离数据库。返回无；先完成一次消费，再模拟工作流库回滚
+    到 ``consume_pending``，重启恢复后余量和台账数量保持不变、分配变 consumed。
+    """
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    try:
+        _create_task(
+            workflow_store,
+            coordinator,
+            graph=graph,
+            prepared=prepared,
+            reagent_uuid=reagent_uuid,
+        )
+        coordinator.consume_successful_job(
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            consumptions=[],
+        )
+        with workflow_store.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE workflow_inventory_allocation
+                SET status='reserved',consumed_at=NULL,revision=1
+                WHERE workflow_task_uuid=?
+                """,
+                (TASK_UUID,),
+            )
+            connection.execute(
+                """
+                UPDATE workflow_inventory_saga SET status='consume_pending'
+                WHERE workflow_task_uuid=?
+                """,
+                (TASK_UUID,),
+            )
+
+        restarted = WorkflowQuantityInventory(
+            workflow_store,
+            InventoryService(inventory_store),
+        )
+        restarted.recover_pending()
+
+        assert inventory_store.query_one(
+            "SELECT quantity FROM reagent WHERE uuid=?", (reagent_uuid,)
+        ) == {"quantity": 8.0}
+        assert inventory_store.query_one(
+            "SELECT COUNT(*) AS count FROM inventory_ledger "
+            "WHERE workflow_node_job_uuid=? "
+            "AND subject_type IN ('reagent','current_substance')",
+            (JOB_UUID,),
+        ) == {"count": 1}
+        assert (
+            workflow_store._conn.execute(
+                "SELECT status FROM workflow_inventory_allocation"
+            ).fetchone()["status"]
+            == "consumed"
+        )
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_inventory_consumption_http_paths_match_backend_contract(
+    tmp_path: Path,
+) -> None:
+    """任务、作业和试剂消费查询必须使用 Backend 的公共 HTTP 路径。
+
+    参数：``tmp_path`` 隔离数据库。返回无；断言三个 GET 接口均返回标准
+    ``code/data`` 包装和同一消费事实，不依赖 SQLite 表名或新增消费表。
+    """
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    service = WorkflowService(
+        workflow_store,
+        task_scheduler_bridge=_InventoryReadBridge(coordinator),  # type: ignore[arg-type]
+    )
+    try:
+        _create_task(
+            workflow_store,
+            coordinator,
+            graph=graph,
+            prepared=prepared,
+            reagent_uuid=reagent_uuid,
+        )
+        expected = coordinator.consume_successful_job(
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            consumptions=[],
+        )
+        client = TestClient(create_workflow_app(service))
+
+        task_response = client.get(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/inventory-consumptions"
+        )
+        job_response = client.get(
+            f"/api/v1/workflow-node-jobs/{JOB_UUID}/inventory-consumptions"
+        )
+        reagent_response = client.get(
+            f"/api/v1/reagents/{reagent_uuid}/inventory-consumptions"
+        )
+
+        assert task_response.status_code == 200
+        assert task_response.json() == {"code": 0, "data": expected}
+        assert job_response.status_code == 200
+        assert job_response.json() == {"code": 0, "data": expected}
+        assert reagent_response.status_code == 200
+        assert reagent_response.json() == {"code": 0, "data": expected}
+    finally:
+        service.close()
+        inventory_store.close()
+
+
+def test_active_workflow_reservation_protects_reagent_quantity(
+    tmp_path: Path,
+) -> None:
+    """活动工作流预留必须阻止普通试剂写操作侵占已承诺数量。
+
+    参数：``tmp_path`` 隔离两个 SQLite。返回无；创建 2 mL 任务预留后，把试剂
+    余量从 10 mL 降到 1 mL 必须返回数据冲突，增加余量仍允许；释放任务后允许
+    再次减少，证明保护边界位于现有库存写权威而非工作流表名。
+    """
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    reagent_service = BackendReagentService(inventory_store)
+    try:
+        _create_task(
+            workflow_store,
+            coordinator,
+            graph=graph,
+            prepared=prepared,
+            reagent_uuid=reagent_uuid,
+        )
+        current = reagent_service.get_reagent(reagent_uuid)
+        with pytest.raises(BackendContractError) as raised:
+            reagent_service.update_reagent(
+                reagent_uuid,
+                {
+                    **current,
+                    "quantity": 1,
+                    "expected_revision": current["revision"],
+                },
+            )
+        assert raised.value.code == RESOURCE_DATA_CONFLICT
+        increased = reagent_service.update_reagent(
+            reagent_uuid,
+            {
+                **current,
+                "quantity": 11,
+                "expected_revision": current["revision"],
+            },
+        )
+        assert increased["quantity"] == 11
+
+        coordinator.release_task(TASK_UUID, reason="test_terminal")
+        released = reagent_service.update_reagent(
+            reagent_uuid,
+            {
+                **increased,
+                "quantity": 1,
+                "expected_revision": increased["revision"],
+            },
+        )
+        assert released["quantity"] == 1
+        assert inventory_store.query_one(
+            "SELECT status FROM inventory_reservation "
+            "WHERE workflow_id=? AND node_id=?",
+            (TASK_UUID, JOB_UUID),
+        ) == {"status": "released"}
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_task_creation_failure_compensates_inventory_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工作流事务在库存预留后失败时必须立即补偿库存权威。
+
+    参数：临时目录隔离数据库，``monkeypatch`` 注入预留之后的工作流写失败。返回
+    无；断言 API 语义仍为非法创建、Task 未落库，并且现有库存预留已 released，
+    不依赖进程重启才恢复可用量。
+    """
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    bridge = _InventoryCreationBridge(coordinator)
+    service = WorkflowService(
+        workflow_store,
+        task_scheduler_bridge=bridge,  # type: ignore[arg-type]
+    )
+    created_task_uuid = ""
+
+    def fail_after_reservation(**values: Any) -> dict[str, Any]:
+        """执行真实库存分配后模拟工作流事务失败；参数为创建载荷，不返回。"""
+
+        nonlocal created_task_uuid
+        created_task_uuid = str(values["task_uuid"])
+        with workflow_store.transaction() as connection:
+            frozen = values["plan_builder"](graph)
+            values["inventory_allocation_builder"](connection, graph, frozen)
+            raise StoreConflict("模拟工作流写入失败")
+
+    monkeypatch.setattr(
+        service,
+        "_prepare_task_input",
+        lambda *args, **kwargs: prepared,
+    )
+    monkeypatch.setattr(workflow_store, "create_task_with_jobs", fail_after_reservation)
+    try:
+        with pytest.raises(WorkflowError) as raised:
+            service.create_workflow_task(
+                workflow_uuid=WORKFLOW_UUID,
+                run_mode="normal",
+                target_node_uuid=None,
+                input_value={},
+                description=None,
+                meta_data={},
+                inventory_bindings=[
+                    {
+                        "requirement_key": "ethanol",
+                        "inventory_type": "reagent",
+                        "inventory_uuid": reagent_uuid,
+                        "reserved_quantity": 2,
+                        "quantity_unit": "mL",
+                    }
+                ],
+            )
+        assert raised.value.code == "invalid_input"
+        assert workflow_store.count_rows("workflow_task") == 0
+        assert inventory_store.query_one(
+            "SELECT status FROM inventory_reservation WHERE workflow_id=?",
+            (created_task_uuid,),
+        ) == {"status": "released"}
+    finally:
+        service.close()
+        inventory_store.close()

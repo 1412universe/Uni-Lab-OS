@@ -686,7 +686,13 @@ def create_edge_stack(
         monitor=monitor,
         history=history,
     )
-    backend.add_job_finished_listener(scheduler.on_job_finished)
+    add_outcome_listener = getattr(backend, "add_job_outcome_listener", None)
+    if callable(add_outcome_listener):
+        # Backend-shaped Edge HTTP 保留 outcome/error_info；旧四参数回调只作为
+        # ROS/内存执行适配器的兼容路径，不能覆盖保真终态。
+        add_outcome_listener(scheduler.on_job_outcome)
+    else:
+        backend.add_job_finished_listener(scheduler.on_job_finished)
     add_feedback_listener = getattr(backend, "add_job_feedback_listener", None)
     if callable(add_feedback_listener):
         add_feedback_listener(scheduler.on_job_feedback)

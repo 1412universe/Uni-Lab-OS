@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from unilabos.app.scheduler.dispatch import RecordingDispatcher
+from unilabos.app.scheduler.dispatch import CommittedJobOutcome, RecordingDispatcher
 from unilabos.app.scheduler.inventory.domain import InsufficientStock
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
@@ -853,6 +853,183 @@ def test_failure_callback_projects_standard_error_details(
             "suc_type": "operator_intervention",
         }
     ]
+
+
+def test_failed_task_releases_quantity_before_marking_cleanup_settled(
+    store: WorkflowStore,
+) -> None:
+    """异常终态必须先释放库存数量预留，再声明物理清理已经完成。
+
+    参数：``store`` 是隔离任务权威。返回无；断言失败作业完成后调用顺序严格为
+    ``release_task`` 后 ``project_cleanup_settled``。若释放失败，清理状态不得
+    提前变成 settled，避免重启恢复跳过仍活动的库存预留。
+    """
+
+    class _QuantityReleaseRecorder:
+        """记录测试任务的数量预留释放，不访问库存数据库。"""
+
+        def release_task(self, task_uuid: str, *, reason: str) -> None:
+            """记录任务和原因；参数均来自终态清理，返回无且不抛异常。"""
+
+            assert task_uuid == TASK_UUID
+            assert reason == "workflow_failed"
+            calls.append("quantity")
+
+    task = _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    calls: list[str] = []
+    original_cleanup = bridge._projection.project_cleanup_settled
+
+    def project_cleanup_settled(task_uuid: str) -> dict[str, Any]:
+        """记录最终清理提交；参数是任务身份，返回真实持久投影结果。"""
+
+        calls.append("cleanup")
+        return original_cleanup(task_uuid)
+
+    bridge._quantity_inventory = _QuantityReleaseRecorder()
+    bridge._projection.project_cleanup_settled = project_cleanup_settled
+    try:
+        bridge.submit(task)
+        scheduler.on_job_finished(
+            JOB_UUID,
+            False,
+            {"reason": "pump_error"},
+            "operator_intervention",
+        )
+    finally:
+        bridge.close()
+
+    assert calls == ["quantity", "cleanup"]
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+
+
+def test_restart_finishes_terminal_inventory_cleanup_without_reexecution(
+    store: WorkflowStore,
+) -> None:
+    """重启必须补扫已终态但尚未完成库存释放的任务。
+
+    参数：``store`` 是隔离任务权威。返回无；先模拟失败结果已提交、进程在 settled
+    回调前退出，再启动桥并恢复。断言只释放原任务预留并提交 cleanup settled，
+    不派发任何新设备动作。
+    """
+
+    class _QuantityReleaseRecorder:
+        """记录恢复扫描触发的数量预留释放。"""
+
+        def recover_pending(self) -> None:
+            """模拟跨库 Saga 已无待重放项；参数与返回均为空。"""
+
+        def release_task(self, task_uuid: str, *, reason: str) -> None:
+            """记录终态释放；参数为任务身份和恢复原因，返回无。"""
+
+            calls.append((task_uuid, reason))
+
+    task = _seed_task(store, with_material=False)
+    first_scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    first_bridge = _bridge(store, first_scheduler)
+    first_bridge.submit(task)
+    first_scheduler.remove_job_settled_listener(first_bridge._on_job_settled)
+    first_scheduler.on_job_finished(
+        JOB_UUID,
+        False,
+        {"reason": "pump_error"},
+        "operator_intervention",
+    )
+    first_bridge.close()
+    assert store.get_task(TASK_UUID)["status"] == "failed"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "none"
+
+    dispatcher = RecordingDispatcher()
+    restarted = _bridge(store, EdgeScheduler(dispatcher=dispatcher))
+    calls: list[tuple[str, str]] = []
+    restarted._quantity_inventory = _QuantityReleaseRecorder()
+    try:
+        recovered = restarted.recover_active_tasks()
+    finally:
+        restarted.close()
+
+    assert recovered == []
+    assert calls == [(TASK_UUID, "workflow_failed_recovery")]
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert dispatcher.dispatched == []
+
+
+@pytest.mark.parametrize(
+    ("outcome", "task_status"),
+    [("failed", "failed"), ("canceled", "canceled"), ("timeout", "timeout")],
+)
+def test_edge_http_outcome_projects_exact_terminal_evidence(
+    store: WorkflowStore,
+    outcome: str,
+    task_status: str,
+) -> None:
+    """Edge HTTP 终态必须不经旧回调压缩地写入标准任务事实。
+
+    参数：``store`` 是隔离任务权威；``outcome`` 与 ``task_status`` 覆盖 Backend
+    允许的三种非成功结果。返回无；断言作业终态、任务终态、返回对象与错误数组
+    均逐字段保真。异常：任何投影冲突都会使测试失败，且不会触发物理重做。
+    """
+
+    task = _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    error_info = [{"code": f"device_{outcome}", "message": "设备终态"}]
+    try:
+        bridge.submit(task)
+        scheduler.on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome=outcome,
+                return_info={"last_step": 3},
+                error_info=error_info,
+                unknown_command_ids=[],
+            ),
+        )
+    finally:
+        bridge.close()
+
+    job = store.get_job(JOB_UUID)
+    assert store.get_task(TASK_UUID)["status"] == task_status
+    assert job["status"] == outcome
+    assert job["return_info"] == {"last_step": 3}
+    assert job["error_info"] == error_info
+
+
+def test_edge_http_unknown_outcome_preserves_inflight_job_for_reconciliation(
+    store: WorkflowStore,
+) -> None:
+    """结果不明证据只进入 ``execution_unknown``，不能伪装成失败终态。
+
+    参数：``store`` 是隔离任务权威。返回无。异常：UNKNOWN 结果释放在途作业、
+    推进任务终态或丢失物理对账占用时由断言失败；该路径禁止自动执行重试。
+    """
+
+    task = _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    unknown_id = f"workflow-node-job:{JOB_UUID}"
+    try:
+        bridge.submit(task)
+        scheduler.on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome="failed",
+                return_info={},
+                error_info=[{"code": "edge_disconnected"}],
+                unknown_command_ids=[unknown_id],
+            ),
+        )
+
+        job = store.get_job(JOB_UUID)
+        aggregate = store.get_task(TASK_UUID)
+        assert job["status"] == "execution_unknown"
+        assert aggregate["status"] == "running"
+        assert aggregate["control_status"] == "waiting_reconciliation"
+        assert aggregate["cleanup_status"] == "requires_attention"
+        assert JOB_UUID in scheduler.snapshot()["inflight_jobs"]
+    finally:
+        bridge.close()
 
 
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(

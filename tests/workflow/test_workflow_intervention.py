@@ -21,9 +21,12 @@ CREATED_AT = "2026-08-26T00:00:00Z"
 class _InterventionDelivery:
     """模拟本地设备异常决定端口。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, accepted: bool = True) -> None:
+        """设置设备是否接受干预决定；参数为接受标记，返回无且不写外部状态。"""
+
         self.listeners: list[Callable[[dict[str, Any]], None]] = []
         self.delivered: list[tuple[str, dict[str, Any]]] = []
+        self.accepted = accepted
 
     def add_error_decision_required_listener(
         self,
@@ -35,13 +38,23 @@ class _InterventionDelivery:
         for listener in tuple(self.listeners):
             listener(dict(report))
 
+    def remove_error_decision_required_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """移除异常决定监听器；参数为既有回调，返回无且重复移除幂等。"""
+
+        self.listeners = [item for item in self.listeners if item != listener]
+
     def resolve_error_decision(
         self,
         decision_id: str,
         decision: dict[str, Any],
     ) -> bool:
+        """记录人工决定并返回设备接受结果；参数为决定身份与载荷。"""
+
         self.delivered.append((decision_id, dict(decision)))
-        return True
+        return self.accepted
 
 
 def _seed_running_job(store: WorkflowStore) -> None:
@@ -176,5 +189,72 @@ def test_new_report_supersedes_previous_revision_and_stale_choice_conflicts(
         ).json()
         assert stale["code"] != 0
         assert delivery.delivered == []
+    finally:
+        store.close()
+
+
+def test_selected_intervention_replays_persisted_payload_after_service_rebind(
+    tmp_path,
+) -> None:
+    """投递失败后的服务重建必须用同一决定身份和冻结结果安全重投。
+
+    参数：``tmp_path`` 隔离工作流库。返回无；断言第一次拒绝留下 unknown，第二
+    个服务绑定可用端口后自动重投用户覆盖结果并恢复 Task，不新增持久表。
+    """
+
+    store = WorkflowStore(tmp_path / "intervention-recovery.db")
+    try:
+        _seed_running_job(store)
+        unavailable = _InterventionDelivery(accepted=False)
+        first_service = WorkflowService(store)
+        first_service.bind_intervention_delivery(unavailable)
+        unavailable.publish(_report("50000000-0000-4000-8000-000000000321"))
+        intervention = first_service.list_workflow_interventions(
+            status="open",
+            limit=10,
+        )[0]
+
+        response = TestClient(create_workflow_app(first_service)).post(
+            f"/api/v1/workflow-interventions/{intervention['uuid']}/decisions",
+            headers={"Idempotency-Key": "recover-selected-decision"},
+            json={
+                "revision": 1,
+                "option_id": "reset_connection",
+                "result": {"suc": True, "return_value": {"manual": "override"}},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["code"] != 0
+        assert first_service.get_workflow_intervention(intervention["uuid"])[
+            "delivery_status"
+        ] == "unknown"
+
+        recovered_delivery = _InterventionDelivery()
+        recovered_service = WorkflowService(store)
+        recovered_service.bind_intervention_delivery(recovered_delivery)
+        recovered = recovered_service.get_workflow_intervention(intervention["uuid"])
+
+        assert recovered["delivery_status"] == "accepted"
+        assert recovered_delivery.delivered == [
+            (
+                intervention["edge_command_uuid"],
+                {
+                    "option": intervention["options"][1],
+                    "action": "reset_connection",
+                    "result": {
+                        "suc": True,
+                        "return_value": {"manual": "override"},
+                    },
+                },
+            )
+        ]
+        assert store.get_task(TASK_UUID)["control_status"] == "active"
+        table_names = {
+            row["name"]
+            for row in store._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "workflow_intervention_delivery" not in table_names
     finally:
         store.close()

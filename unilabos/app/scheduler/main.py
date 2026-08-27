@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 from unilabos.app.scheduler.api import create_app
 from unilabos.app.scheduler.estimation import DurationEstimator
@@ -103,11 +104,43 @@ def build_scheduler(inventory=None, history=None) -> EdgeScheduler:
     )
 
 
+def build_workflow_service(
+    scheduler: EdgeScheduler,
+    database_path: str,
+) -> tuple[Any, Any]:
+    """在指定现有数据库上装配工作流服务与任务调度桥。
+
+    参数：``scheduler`` 是本进程唯一调度器（Scheduler）；``database_path`` 是
+    已配置的工作流 SQLite 文件。返回：共享同一 ``WorkflowStore`` 的服务与桥，
+    供进程生命周期持有。异常：Schema 初始化或安全恢复失败原样传播；恢复只投递
+    已提交事实，不会盲目重放结果未知的设备作业。
+    """
+
+    from unilabos.workflow.service import WorkflowService
+    from unilabos.workflow.store import WorkflowStore
+    from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
+
+    workflow_store = WorkflowStore(database_path)
+    bridge = TaskSchedulerBridge(workflow_store, scheduler=scheduler)
+    try:
+        service = WorkflowService(
+            workflow_store,
+            task_scheduler_bridge=bridge,
+        )
+        bridge.recover_active_tasks()
+    except BaseException:
+        bridge.close()
+        workflow_store.close()
+        raise
+    return service, bridge
+
+
 initialize_tracing()
 _inventory = _build_inventory()
 _history = _build_history()
+_scheduler = build_scheduler(inventory=_inventory, history=_history)
 app = create_app(
-    build_scheduler(inventory=_inventory, history=_history),
+    _scheduler,
     device_state=_build_device_state(),
     history=_history,
     include_execution_shaped_workflow_routes=False,
@@ -118,14 +151,14 @@ _workflow_history_path = os.environ.get(
 ).strip()
 if _workflow_history_path and _workflow_history_path.lower() != "off":
     from unilabos.app.workflow_api import install_workflow_api
-    from unilabos.workflow.service import WorkflowService
-    from unilabos.workflow.store import WorkflowStore
 
+    _workflow_service, _workflow_bridge = build_workflow_service(
+        _scheduler,
+        os.path.abspath(os.path.expanduser(_workflow_history_path)),
+    )
     install_workflow_api(
         app,
-        WorkflowService(
-            WorkflowStore(os.path.abspath(os.path.expanduser(_workflow_history_path)))
-        ),
+        _workflow_service,
     )
 if _inventory is not None:
     from unilabos.app.scheduler.inventory.api import (

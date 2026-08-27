@@ -8,6 +8,7 @@ import re
 from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Mapping
+from uuid import UUID
 
 from unilabos.workflow.json_codec import encode_json, strict_json_equal
 from unilabos.workflow.material_graph_validation import (
@@ -554,16 +555,43 @@ def _validated_input_bindings(
 
 
 def _validate_execution_policy(policy: Mapping[str, Any]) -> None:
-    if "execution_timeout_seconds" not in policy:
+    """校验节点执行期限与跨节点访问区域策略。
+
+    参数：``policy`` 是应用图节点的公开执行策略。返回无。异常：超时非法、
+    区域键非规范或稳定身份缺失时抛 ``GraphValidationError``；释放节点的类型和
+    拓扑顺序由执行计划构建器在完整活动图上继续校验。
+    """
+
+    if "execution_timeout_seconds" in policy:
+        value = policy["execution_timeout_seconds"]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > _MAX_TIMEOUT_SECONDS
+        ):
+            raise GraphValidationError("execution_timeout_seconds 必须是非负整数")
+    access = policy.get("access_region")
+    if access is None:
         return
-    value = policy["execution_timeout_seconds"]
+    if not isinstance(access, Mapping):
+        raise GraphValidationError("access_region 必须是对象")
+    key = str(access.get("key") or "").strip()
     if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or value < 0
-        or value > _MAX_TIMEOUT_SECONDS
+        not key
+        or key != key.lower()
+        or len(key) > 128
+        or any(character.isspace() for character in key)
     ):
-        raise GraphValidationError("execution_timeout_seconds 必须是非负整数")
+        raise GraphValidationError("access_region.key 必须是非空规范小写 token")
+    for field in ("lock_material_uuid", "release_node_uuid"):
+        value = str(access.get(field) or "").strip()
+        try:
+            parsed = UUID(value)
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise GraphValidationError(f"access_region.{field} 必须是 UUID") from exc
+        if str(parsed) != value.lower():
+            raise GraphValidationError(f"access_region.{field} 必须是规范 UUID")
 
 
 def _parse_schema(raw_schema: Any) -> Any:

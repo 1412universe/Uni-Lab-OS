@@ -11,11 +11,13 @@ from typing import Any
 from uuid import uuid4
 
 from unilabos.app.scheduler.dag_state import WorkflowRun
+from unilabos.app.scheduler.dispatch import CommittedJobOutcome
 from unilabos.app.scheduler.material_source_resolution import (
     MaterialSourceResolutionCoordinator,
 )
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
+from unilabos.workflow.quantity_inventory import WorkflowQuantityInventory
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.workflow_spec_compiler import WorkflowSpecCompiler
@@ -83,6 +85,12 @@ class TaskSchedulerBridge:
             inventory=scheduler.inventory_service,
             projection=self._projection,
         )
+        inventory_store = getattr(scheduler.inventory_service, "store", None)
+        self._quantity_inventory = (
+            WorkflowQuantityInventory(store, scheduler.inventory_service)
+            if inventory_store is not None
+            else None
+        )
         # ``_task_by_job`` 只过滤本桥提交到共享调度器的作业，不承担持久恢复。
         self._task_by_job: dict[str, str] = {}
         # ``_submitted_tasks`` 标识仍可进行准入重试（AdmissionRetry）的本地运行。
@@ -106,8 +114,85 @@ class TaskSchedulerBridge:
         scheduler.add_job_cancel_uncertain_listener(self._on_job_cancel_uncertain)
         scheduler.add_job_cancel_no_send_listener(self._on_job_cancel_no_send)
         scheduler.add_job_feedback_listener(self._on_job_feedback)
+        scheduler.add_job_outcome_listener(self._on_job_outcome)
         scheduler.add_job_finished_listener(self._on_job_finished)
         scheduler.add_job_settled_listener(self._on_job_settled)
+
+    def prepare_inventory_allocations(
+        self,
+        connection: Any,
+        *,
+        graph: Mapping[str, Any],
+        prepared: Any,
+        task_uuid: str,
+        bindings: list[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """在 Task 首次写入前准备数量型库存分配。
+
+        参数：``connection`` 是工作流创建事务；``graph/prepared`` 是同一冻结图
+        和执行计划；``task_uuid`` 是运行身份；``bindings`` 是 HTTP 显式绑定。
+        返回：既有 ``workflow_inventory_allocation`` 表的待插入行。异常：本次执行
+        有逻辑库存需求但未装配库存权威时关闭式失败；具体校验错误原样传播。
+        """
+
+        active_nodes = {
+            str(job.get("workflow_node_uuid")) for job in prepared.jobs
+        }
+        active_requirements = [
+            requirement
+            for requirement in graph.get("inventory_requirements", [])
+            if isinstance(requirement, Mapping)
+            and str(requirement.get("consume_node_uuid")) in active_nodes
+        ]
+        if self._quantity_inventory is None:
+            if active_requirements or bindings:
+                raise StoreConflict("工作流数量型库存未装配本地库存权威")
+            return []
+        return self._quantity_inventory.prepare_task_allocations(
+            connection,
+            graph=graph,
+            prepared=prepared,
+            task_uuid=task_uuid,
+            bindings=bindings,
+        )
+
+    def discard_uncommitted_inventory(self, task_uuid: str) -> None:
+        """补偿未提交 Task 在库存权威中留下的数量预留。
+
+        参数：``task_uuid`` 是创建事务最终回滚的任务身份。返回无。异常：库存补偿
+        失败原样传播并由 API 报告内部错误；未装配数量库存或重复调用均安全无写入。
+        """
+
+        if self._quantity_inventory is None:
+            return
+        self._quantity_inventory.discard_uncommitted_task(task_uuid)
+
+    def list_task_inventory_consumptions(
+        self, task_uuid: str
+    ) -> list[dict[str, Any]]:
+        """返回任务的数量型库存消费事实；未装配库存时返回空数组。"""
+
+        if self._quantity_inventory is None:
+            return []
+        return self._quantity_inventory.list_task_consumptions(task_uuid)
+
+    def list_job_inventory_consumptions(
+        self, job_uuid: str
+    ) -> list[dict[str, Any]]:
+        """返回作业的数量型库存消费事实；未装配库存时返回空数组。"""
+
+        if self._quantity_inventory is None:
+            return []
+        return self._quantity_inventory.list_job_consumptions(job_uuid)
+
+    def list_reagent_inventory_consumptions(
+        self, reagent_uuid: str
+    ) -> list[dict[str, Any]]:
+        """返回试剂实例的数量型库存消费谱系；未装配库存时返回空数组。"""
+
+        if self._quantity_inventory is None:
+            return []
+        return self._quantity_inventory.list_reagent_consumptions(reagent_uuid)
 
     def submit(self, task: Mapping[str, Any]) -> dict[str, Any]:
         """提交已经持久化的工作流任务（WorkflowTask）。
@@ -395,12 +480,18 @@ class TaskSchedulerBridge:
 
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        # 先补齐跨两个 SQLite 的库存消费意图，再恢复 Job→Task 路由并重放
+        # Edge 已提交结果，避免结果投影领先于实际库存结算。
+        if self._quantity_inventory is not None:
+            self._quantity_inventory.recover_pending()
+        self._recover_terminal_inventory_cleanup()
         # 先恢复持久 Job→Task 路由，再重放 Edge 已提交的反馈/结果。
         # 这一顺序可以收敛“Edge 已落盘，工作流库未投影”的崩溃点，
         # 且不会把结果重放误当成物理执行重试。
         self._register_active_recovery_routes()
         self._scheduler.replay_persisted_edge_projections(
             feedback_listener=self._on_job_feedback,
+            outcome_listener=self._replay_persisted_job_outcome,
             finished_listener=self._replay_persisted_job_finished,
         )
         recovered: list[dict[str, Any]] = []
@@ -433,6 +524,60 @@ class TaskSchedulerBridge:
                     break
                 page += 1
         return recovered
+
+    def _recover_terminal_inventory_cleanup(self) -> None:
+        """补齐终态 Task 在进程退出前未完成的库存释放与清理提交。
+
+        参数与返回均为空。扫描成功、失败、取消和超时任务；仍存在 dispatched、
+        running、cancel_requested 或 execution_unknown 作业时保留全部占用。安全
+        任务先幂等释放数量与实例物料预留，异常终态最后才写 cleanup settled；
+        任一释放失败原样传播，禁止把未完成清理伪装成已结算。
+        """
+
+        unsafe_job_statuses = {
+            "dispatched",
+            "running",
+            "cancel_requested",
+            "execution_unknown",
+        }
+        for status in ("succeeded", "failed", "canceled", "timeout"):
+            page = 1
+            while True:
+                task_page = self._store.list_tasks(
+                    page=page,
+                    page_size=200,
+                    status=status,
+                )
+                for task in task_page["items"]:
+                    task_uuid = str(task["uuid"])
+                    jobs = self._store.list_jobs(task_uuid)
+                    if any(
+                        str(job.get("status")) in unsafe_job_statuses for job in jobs
+                    ):
+                        continue
+                    reason = f"workflow_{status}_recovery"
+                    if self._quantity_inventory is not None:
+                        self._quantity_inventory.release_task(
+                            task_uuid,
+                            reason=reason,
+                        )
+                    if any(
+                        job.get("executor_kind") == "material_source" for job in jobs
+                    ):
+                        self._material_sources.release_terminal_reservations(
+                            task_uuid,
+                            reason=reason,
+                        )
+                    if status != "succeeded" and task.get("cleanup_status") in {
+                        "none",
+                        "pending",
+                        "required",
+                        "canceling",
+                    }:
+                        self._projection.project_cleanup_settled(task_uuid)
+                if page * 200 >= int(task_page["total"]):
+                    break
+                page += 1
 
     def _register_active_recovery_routes(self) -> None:
         """从持久任务重建结果重放所需的稳定路由。"""
@@ -473,6 +618,28 @@ class TaskSchedulerBridge:
 
         self._on_job_finished(job_uuid, success, ret_value, suc_type)
         self._on_job_settled(job_uuid, success, ret_value, suc_type)
+
+    def _replay_persisted_job_outcome(
+        self,
+        job_uuid: str,
+        outcome: CommittedJobOutcome,
+    ) -> None:
+        """把已提交保真结果投影终态并收敛任务清理。
+
+        参数：``job_uuid`` 是持久作业身份；``outcome`` 是 Edge 发件箱重放的完整
+        终态证据。返回无。异常：工作流投影或清理失败向上传播，结果保持待投影；
+        本方法只做投递重放（DeliveryReplay），不会再次派发物理作业。
+        """
+
+        self._on_job_outcome(job_uuid, outcome)
+        success = outcome.outcome == "succeeded"
+        ret_value = outcome.return_info.get("return_value", outcome.return_info)
+        self._on_job_settled(
+            job_uuid,
+            success,
+            ret_value,
+            "normal" if success else outcome.outcome,
+        )
 
     def _recover_running_task(
         self,
@@ -685,6 +852,7 @@ class TaskSchedulerBridge:
             self._on_job_cancel_no_send
         )
         self._scheduler.remove_job_feedback_listener(self._on_job_feedback)
+        self._scheduler.remove_job_outcome_listener(self._on_job_outcome)
         self._scheduler.remove_job_finished_listener(self._on_job_finished)
         self._scheduler.remove_job_settled_listener(self._on_job_settled)
         self._task_by_job.clear()
@@ -1055,7 +1223,8 @@ class TaskSchedulerBridge:
                     "suc_type": suc_type,
                 }
             ]
-        aggregate = self._projection.project_job_finished(
+        self._project_job_result(
+            task_uuid=task_uuid,
             job_uuid=job_uuid,
             scheduler_state=(
                 "success" if success else ("canceled" if canceled else "failed")
@@ -1063,10 +1232,80 @@ class TaskSchedulerBridge:
             return_info=return_info,
             error_info=error_info,
             manual_confirmation_status=(
-                "timed_out"
-                if suc_type == "manual_confirmation_timeout"
-                else None
+                "timed_out" if suc_type == "manual_confirmation_timeout" else None
             ),
+        )
+
+    def _on_job_outcome(
+        self,
+        job_uuid: str,
+        outcome: CommittedJobOutcome,
+    ) -> None:
+        """把 Edge HTTP 保真结果投影为标准任务/作业终态。
+
+        参数：``job_uuid`` 是稳定作业身份；``outcome`` 保留 Backend wire 终态、
+        返回值与错误证据。返回无。异常：身份路由或持久投影冲突向上传播；结果不会
+        被降级成旧 ``success/suc_type`` 组合，也不会触发新的物理执行。
+        """
+
+        task_uuid = self._task_by_job.get(job_uuid)
+        if task_uuid is None:
+            return
+        if outcome.unknown_command_ids:
+            self._projection.project_execution_unknown(
+                job_uuid,
+                reason=(
+                    "edge_reported_unknown_commands:"
+                    + ",".join(outcome.unknown_command_ids)
+                ),
+            )
+            return
+        scheduler_state = {
+            "succeeded": "success",
+            "failed": "failed",
+            "canceled": "canceled",
+            "timeout": "timeout",
+        }.get(outcome.outcome)
+        if scheduler_state is None:
+            raise StoreConflict(f"不支持的 Edge 作业终态：{outcome.outcome}")
+        if outcome.outcome == "succeeded" and self._quantity_inventory is not None:
+            self._quantity_inventory.consume_successful_job(
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                consumptions=outcome.inventory_consumptions,
+            )
+        self._project_job_result(
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            scheduler_state=scheduler_state,
+            return_info=outcome.return_info,
+            error_info=outcome.error_info,
+            manual_confirmation_status=None,
+        )
+
+    def _project_job_result(
+        self,
+        *,
+        task_uuid: str,
+        job_uuid: str,
+        scheduler_state: str,
+        return_info: Mapping[str, Any],
+        error_info: list[Any],
+        manual_confirmation_status: str | None,
+    ) -> None:
+        """提交一次标准作业结果并完成桥接层终态收尾。
+
+        参数：任务/作业身份、规范调度终态、返回对象、错误数组和可选人工确认
+        关闭状态。返回无。异常：持久结果冲突或物料来源释放失败原样传播；计时器
+        仅在结果提交成功后取消，相同投递依赖投影层幂等处理。
+        """
+
+        aggregate = self._projection.project_job_finished(
+            job_uuid=job_uuid,
+            scheduler_state=scheduler_state,
+            return_info=return_info,
+            error_info=error_info,
+            manual_confirmation_status=manual_confirmation_status,
         )
         self._cancel_cancel_timer(job_uuid)
         self._cancel_manual_confirmation_timer(job_uuid)
@@ -1080,6 +1319,11 @@ class TaskSchedulerBridge:
             self._material_sources.release_terminal_reservations(
                 task_uuid,
                 reason=f"workflow_{terminal_status}",
+            )
+        if terminal_status == "succeeded" and self._quantity_inventory is not None:
+            self._quantity_inventory.release_task(
+                task_uuid,
+                reason="workflow_succeeded",
             )
 
     def _on_job_settled(
@@ -1123,7 +1367,11 @@ class TaskSchedulerBridge:
                 for inflight in scheduler_snapshot.get("inflight_jobs", {}).values()
             )
             if not active_for_task:
-                self._projection.project_cleanup_settled(task_uuid)
+                if self._quantity_inventory is not None:
+                    self._quantity_inventory.release_task(
+                        task_uuid,
+                        reason=f"workflow_{aggregate['task']['status']}",
+                    )
                 if any(
                     job.get("executor_kind") == "material_source"
                     for job in aggregate["jobs"]
@@ -1132,6 +1380,9 @@ class TaskSchedulerBridge:
                         task_uuid,
                         reason=f"workflow_{aggregate['task']['status']}",
                     )
+                # ``settled`` 是两类库存预留均已安全释放后的最终承诺。任何释放
+                # 失败都会保留非 settled 状态，供恢复扫描以同一身份幂等重试。
+                self._projection.project_cleanup_settled(task_uuid)
         if task_uuid not in self._task_by_job.values():
             self._submitted_tasks.discard(task_uuid)
 

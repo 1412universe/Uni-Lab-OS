@@ -43,14 +43,11 @@ class ExecutionPlanBuilder:
         edges = self._objects(graph.get("edges", []), "edges")
         # ``kinds`` 是每个冻结节点的规范执行责任；虚拟节点不创建作业。
         kinds = {
-            node_uuid: executor_kind(
-                str(
-                    (templates.get(node.get("workflow_node_template_uuid")) or {}).get(
-                        "node_type"
-                    )
-                    or node.get("type")
-                    or ""
-                )
+            node_uuid: self._planned_executor_kind(
+                node,
+                template=(
+                    templates.get(node.get("workflow_node_template_uuid")) or {}
+                ),
             )
             for node_uuid, node in nodes.items()
         }
@@ -175,7 +172,7 @@ class ExecutionPlanBuilder:
                     if handle["io_type"] == "source"
                 ],
             }
-            if kind == "device_action":
+            if kind in {"device_action", "material_transfer"}:
                 planned_node.update(
                     self._device_action_contract(node, template=template)
                 )
@@ -201,7 +198,11 @@ class ExecutionPlanBuilder:
                 planned_node["material_uuid"] = node["material_uuid"]
             if node.get("script") is not None:
                 planned_node["script"] = node["script"]
-            if kind not in {"device_action", "manual_confirm"} and template.get(
+            if kind not in {
+                "device_action",
+                "material_transfer",
+                "manual_confirm",
+            } and template.get(
                 "schema"
             ) is not None:
                 planned_node["param_schema"] = template["schema"]
@@ -223,6 +224,7 @@ class ExecutionPlanBuilder:
                     "param": planned_param,
                 }
             )
+        self._validate_access_region_policies(planned_nodes)
         plan: dict[str, Any] = {
             "version": PLAN_VERSION,
             "run_mode": run_mode,
@@ -233,6 +235,78 @@ class ExecutionPlanBuilder:
         if target_node_uuid is not None:
             plan["target_node_uuid"] = target_node_uuid
         return plan, jobs
+
+    @staticmethod
+    def _planned_executor_kind(
+        node: Mapping[str, Any],
+        *,
+        template: Mapping[str, Any],
+    ) -> str:
+        """确定冻结计划中的真实执行责任。
+
+        参数：应用节点与对应节点模板。返回：普通设备动作、物料转移或其他规范
+        执行种类。异常：未知节点类型沿用 ``executor_kind`` 的稳定失败。模板声明
+        的 ``meta_data.unilab.executor_kind`` 优先用于区分仍以 ILab 节点展示的
+        受信物料转移动作。
+        """
+
+        template_metadata = template.get("meta_data")
+        template_unilab = (
+            template_metadata.get("unilab")
+            if isinstance(template_metadata, Mapping)
+            else None
+        )
+        explicit_kind = str(
+            template.get("executor_kind")
+            or (
+                template_unilab.get("executor_kind")
+                if isinstance(template_unilab, Mapping)
+                else ""
+            )
+            or ""
+        ).strip()
+        if explicit_kind == "material_transfer":
+            return explicit_kind
+        return executor_kind(
+            str(template.get("node_type") or node.get("type") or "")
+        )
+
+    @staticmethod
+    def _validate_access_region_policies(
+        planned_nodes: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """校验访问区域由同一计划中更晚的物料转移节点显式结束。
+
+        参数：已按拓扑稳定排序的冻结计划节点。返回无。异常：释放节点缺失、
+        执行责任错误或顺序不晚于入口时抛 ``ExecutionPlanBuildError``。该关系
+        直接冻结在执行策略中，无需新增关系表。
+        """
+
+        by_uuid = {str(node.get("uuid") or ""): node for node in planned_nodes}
+        for source in planned_nodes:
+            policy = source.get("execution_policy")
+            access = (
+                policy.get("access_region") if isinstance(policy, Mapping) else None
+            )
+            if access is None:
+                continue
+            if not isinstance(access, Mapping):
+                raise ExecutionPlanBuildError(
+                    "invalid_execution_policy",
+                    "access_region 必须是对象",
+                )
+            release_uuid = str(access.get("release_node_uuid") or "").strip()
+            release = by_uuid.get(release_uuid)
+            if (
+                release is None
+                or release.get("kind") != "material_transfer"
+                or int(release.get("topological_index", -1))
+                <= int(source.get("topological_index", -1))
+            ):
+                raise ExecutionPlanBuildError(
+                    "invalid_execution_policy",
+                    "access_region 必须由同一计划中更晚的物料转移节点释放",
+                )
 
     @staticmethod
     def _has_fixed_executor_binding(node: Mapping[str, Any]) -> bool:

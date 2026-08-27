@@ -20,6 +20,10 @@ from unilabos.app.scheduler.inventory.backend_contract import (
 )
 from unilabos.app.scheduler.inventory.domain import new_event_id
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.workflow_quantity import (
+    WorkflowQuantityReservationError,
+    assert_workflow_quantity_mutation_allowed,
+)
 
 _PHYSICAL_STATES = {"solid", "liquid", "gas", "other", "unknown"}
 _CAS_PATTERN = re.compile(r"^(\d{2,7})-(\d{2})-(\d)$")
@@ -534,6 +538,19 @@ class BackendReagentService:
         event = "add" if quantity > float(current["quantity"]) else "adjust"
         delta = quantity - float(current["quantity"])
         with self.store.transaction() as conn:
+            try:
+                assert_workflow_quantity_mutation_allowed(
+                    conn,
+                    inventory_type="reagent",
+                    inventory_uuid=identity,
+                    quantity=quantity,
+                    current_unit=str(current["quantity_unit"]),
+                    next_unit=unit,
+                )
+            except WorkflowQuantityReservationError as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             cursor = conn.execute(
                 """UPDATE reagent SET update_time=?,description=?,meta_data=?,
                 concentration_value=?,concentration_unit=?,quantity=?,revision=?
@@ -567,6 +584,19 @@ class BackendReagentService:
         revision = int(current["revision"]) + 1
         now = _now()
         with self.store.transaction() as conn:
+            try:
+                assert_workflow_quantity_mutation_allowed(
+                    conn,
+                    inventory_type="reagent",
+                    inventory_uuid=identity,
+                    quantity=0,
+                    current_unit=str(current["quantity_unit"]),
+                    next_unit=str(current["quantity_unit"]),
+                )
+            except WorkflowQuantityReservationError as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             cursor = conn.execute(
                 "UPDATE reagent SET deleted_at=?,update_time=?,quantity=0,revision=? "
                 "WHERE uuid=? AND deleted_at IS NULL AND revision=?",

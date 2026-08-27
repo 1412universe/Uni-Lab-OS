@@ -21,6 +21,10 @@ from unilabos.app.scheduler.inventory.content_rules import (
 )
 from unilabos.app.scheduler.inventory.domain import new_event_id
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.workflow_quantity import (
+    WorkflowQuantityReservationError,
+    assert_workflow_quantity_mutation_allowed,
+)
 
 
 def _now() -> str:
@@ -450,6 +454,13 @@ class BackendContainerContentService:
     def update_current_substance(
         self, identity: str, values: Dict[str, Any]
     ) -> Dict[str, Any]:
+        """按期望修订更新当前内容物，并保护活动工作流数量预留。
+
+        参数：内容物身份与完整更新值。返回更新后的 Backend 同形内容物。异常：
+        实例不存在、修订冲突、字段非法或修改后余量侵占活动预留时抛
+        ``BackendContractError``；成功写入与历史事件在同一库存事务提交。
+        """
+
         current = self.get_current_substance(identity)
         normalized = self._substance_values(values)
         if normalized["material_uuid"] != current["material_uuid"]:
@@ -466,6 +477,19 @@ class BackendContainerContentService:
         event_type = "add" if delta > 0 else "adjust"
         now = _now()
         with self.store.transaction() as conn:
+            try:
+                assert_workflow_quantity_mutation_allowed(
+                    conn,
+                    inventory_type="current_substance",
+                    inventory_uuid=identity,
+                    quantity=float(normalized["quantity"]),
+                    current_unit=str(current["quantity_unit"]),
+                    next_unit=str(normalized["quantity_unit"]),
+                )
+            except WorkflowQuantityReservationError as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             composition = self._build_composition(conn, values.get("components") or [])
             cursor = conn.execute(
                 """UPDATE current_substance SET update_time=?,description=?,meta_data=?,
@@ -505,8 +529,29 @@ class BackendContainerContentService:
         return self.get_current_substance(identity)
 
     def delete_current_substance(self, identity: str) -> None:
+        """软删除当前内容物；活动工作流仍有数量预留时关闭式拒绝。
+
+        参数：内容物 UUID。返回无。异常：实例不存在时返回资源未找到；删除会把
+        可用数量降到预留以下时返回数据冲突。重复删除仍按不存在处理，不产生重复
+        库存事实。
+        """
+
+        current = self.get_current_substance(identity)
         now = _now()
         with self.store.transaction() as conn:
+            try:
+                assert_workflow_quantity_mutation_allowed(
+                    conn,
+                    inventory_type="current_substance",
+                    inventory_uuid=identity,
+                    quantity=0,
+                    current_unit=str(current["quantity_unit"]),
+                    next_unit=str(current["quantity_unit"]),
+                )
+            except WorkflowQuantityReservationError as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             cursor = conn.execute(
                 "UPDATE current_substance SET deleted_at=?,update_time=? "
                 "WHERE uuid=? AND deleted_at IS NULL",

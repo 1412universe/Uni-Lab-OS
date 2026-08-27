@@ -12,6 +12,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import math
 import secrets
 import sqlite3
 import threading
@@ -22,12 +23,17 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request, WebSocket
+from fastapi.responses import JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 
-from unilabos.app.scheduler.dispatch import DispatchPayload
+from unilabos.app.scheduler.dispatch import CommittedJobOutcome, DispatchPayload
 
 _PROTOCOL_VERSION = 1
 _COMMAND_RETRY_SECONDS = 0.5
+
+
+class LocalEdgeOutcomeConflict(ValueError):
+    """表示不可变 Edge 结果与首次提交冲突。"""
 
 
 class LocalEdgeAuthorityStore:
@@ -546,27 +552,140 @@ class LocalEdgeAuthorityStore:
         *,
         command_uuid: str,
         job_token: str,
+        idempotency_key: str,
         payload: dict[str, Any],
     ) -> tuple[dict[str, Any], bool]:
+        """幂等保存 Edge 作业不可变结果。
+
+        参数：``job_uuid``、``command_uuid`` 与 ``job_token`` 共同授权同一个
+        工作流节点作业尝试（WorkflowNodeJobAttempt）；``idempotency_key`` 是
+        Backend HTTP 契约要求的稳定提交身份；``payload`` 保存结果终态与证据。
+        返回：规范结果及是否首次创建。异常：身份、终态或重复内容冲突时拒绝，
+        不覆盖首次已提交结果。
+        """
+
         row = self._authorized_job(job_uuid, command_uuid, job_token)
+        normalized_idempotency_key = str(idempotency_key or "").strip()
+        if not normalized_idempotency_key:
+            raise ValueError("Idempotency-Key is required")
+        task_uuid = str(uuid.UUID(_required_text(payload, "task_uuid")))
+        node_uuid = str(uuid.UUID(_required_text(payload, "node_uuid")))
+        if task_uuid != str(row["task_uuid"]) or node_uuid != str(row["node_uuid"]):
+            raise LocalEdgeOutcomeConflict("job task or node identity does not match")
         outcome = str(payload.get("outcome") or "")
         if outcome not in {"succeeded", "failed", "canceled", "timeout"}:
             raise ValueError("outcome is invalid")
-        unknown_ids = payload.get("unknown_command_ids") or []
-        if not isinstance(unknown_ids, list) or any(
-            not isinstance(value, str) or not value for value in unknown_ids
-        ):
-            raise ValueError("unknown_command_ids is invalid")
+        return_info = payload.get("return_info")
+        error_info = payload.get("error_info")
+        if return_info is None:
+            return_info = {}
+        if error_info is None:
+            error_info = []
+        if not isinstance(return_info, dict):
+            raise ValueError("return_info must be an object")
+        if not isinstance(error_info, list):
+            raise ValueError("error_info must be an array")
+        raw_unknown_ids = payload.get("unknown_command_ids")
+        if raw_unknown_ids is None:
+            raw_unknown_ids = []
+        unknown_ids = _normalize_unknown_command_ids(job_uuid, raw_unknown_ids)
+        raw_consumptions = payload.get("inventory_consumptions")
+        if raw_consumptions is None:
+            raw_consumptions = []
+        if not isinstance(raw_consumptions, list):
+            raise ValueError("inventory_consumptions must be an array")
+        inventory_consumptions: list[dict[str, Any]] = []
+        seen_inventory: set[tuple[str, str]] = set()
+        for index, consumption in enumerate(raw_consumptions):
+            if not isinstance(consumption, dict):
+                raise ValueError(
+                    f"inventory_consumptions[{index}] must be an object"
+                )
+            inventory_type = str(
+                consumption.get("inventory_type") or ""
+            ).strip().lower()
+            if inventory_type not in {"reagent", "current_substance"}:
+                raise ValueError(
+                    f"inventory_consumptions[{index}].inventory_type is invalid"
+                )
+            inventory_uuid = str(
+                uuid.UUID(_required_text(consumption, "inventory_uuid"))
+            )
+            actual_quantity = consumption.get("actual_quantity")
+            if (
+                isinstance(actual_quantity, bool)
+                or not isinstance(actual_quantity, (int, float))
+                or not math.isfinite(float(actual_quantity))
+                or float(actual_quantity) < 0
+            ):
+                raise ValueError(
+                    f"inventory_consumptions[{index}].actual_quantity is invalid"
+                )
+            quantity_unit = _required_text(consumption, "quantity_unit")
+            identity = (inventory_type, inventory_uuid)
+            if identity in seen_inventory:
+                raise ValueError(
+                    "inventory_consumptions contains a duplicate inventory"
+                )
+            seen_inventory.add(identity)
+            inventory_consumptions.append(
+                {
+                    "inventory_type": inventory_type,
+                    "inventory_uuid": inventory_uuid,
+                    "actual_quantity": float(actual_quantity),
+                    "quantity_unit": quantity_unit,
+                }
+            )
+        inventory_consumptions.sort(
+            key=lambda item: (item["inventory_type"], item["inventory_uuid"])
+        )
         normalized = {
             "outcome": outcome,
-            "return_info": payload.get("return_info") or {},
-            "error_info": payload.get("error_info") or [],
+            "return_info": return_info,
+            "error_info": error_info,
             "unknown_command_ids": unknown_ids,
+            "inventory_consumptions": inventory_consumptions,
         }
-        encoded = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
         existing = row["outcome_json"]
-        if existing is not None and str(existing) != encoded:
-            raise ValueError("job outcome conflicts with its first committed result")
+        if existing is None:
+            committed_at = _utc_now()
+            stored_outcome = {
+                **normalized,
+                "_idempotency_key": normalized_idempotency_key,
+                "_result_uuid": str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"unilab:local-edge-job-result:{job_uuid}",
+                    )
+                ),
+                "_create_time": committed_at,
+                "_update_time": committed_at,
+                "_committed_at": committed_at,
+                "_edge_command_uuid": str(uuid.UUID(command_uuid)),
+            }
+        else:
+            try:
+                stored_outcome = json.loads(str(existing))
+            except (TypeError, ValueError) as error:
+                raise RuntimeError("stored job outcome is corrupted") from error
+            expected = {
+                **normalized,
+                "_idempotency_key": normalized_idempotency_key,
+            }
+            observed = {
+                key: stored_outcome.get(key)
+                for key in expected
+            }
+            if observed != expected:
+                raise LocalEdgeOutcomeConflict(
+                    "job outcome conflicts with its first committed result"
+                )
+        encoded = json.dumps(
+            stored_outcome,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         is_new = existing is None
         status = "unknown" if unknown_ids else "outcome_pending"
         with self._lock:
@@ -588,13 +707,22 @@ class LocalEdgeAuthorityStore:
                 ),
             )
             self._connection.commit()
-        return normalized, is_new
+        return {
+            **normalized,
+            "_result": _job_result_projection(
+                job_uuid=job_uuid,
+                stored_outcome=stored_outcome,
+            ),
+        }, is_new
 
     def mark_outcome_projected(self, job_uuid: str) -> None:
         with self._lock:
             self._connection.execute(
                 """
-                UPDATE local_edge_job SET status = 'completed',
+                UPDATE local_edge_job SET status = CASE
+                        WHEN unknown_command_ids_json = '[]' THEN 'completed'
+                        ELSE 'unknown'
+                    END,
                     projected_at = COALESCE(projected_at, ?), updated_at = ?
                 WHERE job_uuid = ?
                 """,
@@ -611,7 +739,7 @@ class LocalEdgeAuthorityStore:
         return row is not None and row["projected_at"] is not None
 
     def pending_outcome_projections(self, *, limit: int = 1000) -> list[dict[str, Any]]:
-        """读取无 UNKNOWN 证据且尚未投影的 Edge 不可变结果。"""
+        """读取尚未投影的 Edge 不可变结果，包含待人工收敛的 UNKNOWN 证据。"""
 
         with self._lock:
             rows = self._connection.execute(
@@ -620,7 +748,6 @@ class LocalEdgeAuthorityStore:
                 FROM local_edge_job
                 WHERE outcome_json IS NOT NULL
                   AND projected_at IS NULL
-                  AND unknown_command_ids_json = '[]'
                 ORDER BY updated_at, job_uuid
                 LIMIT ?
                 """,
@@ -629,7 +756,11 @@ class LocalEdgeAuthorityStore:
         return [
             {
                 "job_uuid": str(row["job_uuid"]),
-                "outcome": json.loads(str(row["outcome_json"])),
+                "outcome": {
+                    key: value
+                    for key, value in json.loads(str(row["outcome_json"])).items()
+                    if not key.startswith("_")
+                },
             }
             for row in rows
         ]
@@ -720,7 +851,7 @@ class LocalEdgeAuthorityStore:
             self._connection.execute(
                 """
                 UPDATE local_edge_job SET status = 'outcome_pending',
-                    unknown_command_ids_json = '[]', updated_at = ?
+                    unknown_command_ids_json = '[]', projected_at = NULL, updated_at = ?
                 WHERE job_uuid = ?
                 """,
                 (time.time(), normalized),
@@ -832,16 +963,76 @@ class LocalEdgeAuthorityStore:
         return int(row["value"]) + 1 if row is not None else 1
 
 
+def _committed_outcome(payload: dict[str, Any]) -> CommittedJobOutcome:
+    """把已校验的 Edge 结果恢复为保真投影对象。
+
+    参数：``payload`` 是本地 Edge 发件箱中已提交的公共结果字段。返回：保留
+    Backend 终态、返回值、错误证据、未知命令和实际库存消耗的不可变结果。
+    异常：持久数据形状损坏时抛出 ``ValueError``，并保持该结果待投影，避免用
+    默认值掩盖数据损坏。
+    """
+
+    return_info = payload.get("return_info")
+    error_info = payload.get("error_info")
+    unknown_command_ids = payload.get("unknown_command_ids")
+    inventory_consumptions = payload.get("inventory_consumptions", [])
+    if not isinstance(return_info, dict):
+        raise ValueError("committed return_info must be an object")
+    if not isinstance(error_info, list):
+        raise ValueError("committed error_info must be an array")
+    if not isinstance(unknown_command_ids, list) or any(
+        not isinstance(value, str) for value in unknown_command_ids
+    ):
+        raise ValueError("committed unknown_command_ids must be a string array")
+    if not isinstance(inventory_consumptions, list) or any(
+        not isinstance(value, dict) for value in inventory_consumptions
+    ):
+        raise ValueError("committed inventory_consumptions must be an object array")
+    return CommittedJobOutcome(
+        outcome=str(payload.get("outcome") or ""),
+        return_info=dict(return_info),
+        error_info=list(error_info),
+        unknown_command_ids=list(unknown_command_ids),
+        inventory_consumptions=[dict(value) for value in inventory_consumptions],
+    )
+
+
+def _legacy_outcome(payload: dict[str, Any]) -> tuple[bool, Any, str]:
+    """把保真结果降级成旧四参数完成回调。
+
+    参数：``payload`` 是已提交结果。返回：旧调度器需要的成功标记、返回值与
+    终态类型；失败、取消和超时不再全部伪装成 ``normal``。异常：结果字段损坏
+    时由 :func:`_committed_outcome` 抛出，调用方不会提前确认投影。
+    """
+
+    committed = _committed_outcome(payload)
+    result = committed.return_info.get("return_value", committed.return_info)
+    return (
+        committed.outcome == "succeeded",
+        result,
+        "normal" if committed.outcome == "succeeded" else committed.outcome,
+    )
+
+
 class LocalEdgeControlAuthority:
     """Dispatcher plus loopback protocol authority owned by Local Backend."""
 
     def __init__(self, store: LocalEdgeAuthorityStore, *, api_key: str) -> None:
+        """绑定本地 Edge 持久事实与协议密钥。
+
+        参数：``store`` 是命令、反馈与结果的唯一写权威；``api_key`` 用于本地 Edge
+        传输鉴别。返回无。异常：密钥为空时抛 ``ValueError``，不创建监听器状态。
+        """
+
         if not api_key:
             raise ValueError("Local Edge authority requires an API key")
         self.store = store
         self.api_key = api_key
         self.device_state = None
         self._listeners: list[Callable[[str, bool, Any, str], None]] = []
+        self._outcome_listeners: list[
+            Callable[[str, CommittedJobOutcome], None]
+        ] = []
         self._feedback_listeners: list[Callable[[str, dict[str, Any]], None]] = []
 
     def start(self) -> None:
@@ -857,6 +1048,18 @@ class LocalEdgeControlAuthority:
         self, listener: Callable[[str, bool, Any, str], None]
     ) -> None:
         self._listeners.append(listener)
+
+    def add_job_outcome_listener(
+        self,
+        listener: Callable[[str, CommittedJobOutcome], None],
+    ) -> None:
+        """注册不可变作业结果的保真投影监听器。
+
+        参数：``listener`` 接收作业 UUID 和完整 Edge 结果证据。返回无。异常：
+        监听器异常在提交或重放时向上传播，使结果保持待投影而不是被误确认。
+        """
+
+        self._outcome_listeners.append(listener)
 
     def add_job_feedback_listener(
         self,
@@ -914,41 +1117,89 @@ class LocalEdgeControlAuthority:
         *,
         command_uuid: str,
         job_token: str,
+        idempotency_key: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
-        outcome, _is_new = self.store.save_outcome(
+        """提交 Edge 结果并在有持久消费者时确认投影。
+
+        参数：作业、命令、令牌和 ``idempotency_key`` 共同标识同一次 HTTP
+        结果提交；``payload`` 是 Backend-shaped outcome。返回：结果身份、状态及
+        首次创建标记。异常：授权、幂等或投影失败原样传播，未成功投影的结果会
+        保留并在重启后进行投递重放（DeliveryReplay）。
+        """
+
+        outcome, is_new = self.store.save_outcome(
             job_uuid,
             command_uuid=command_uuid,
             job_token=job_token,
+            idempotency_key=idempotency_key,
             payload=payload,
         )
-        if outcome["unknown_command_ids"]:
-            return {"uuid": job_uuid, "status": "unknown"}
         if not self.store.is_outcome_projected(job_uuid):
-            succeeded = outcome["outcome"] == "succeeded"
-            return_info = outcome["return_info"]
-            result = (
-                return_info.get("return_value")
-                if isinstance(return_info, dict) and "return_value" in return_info
-                else return_info
+            exact_targets = tuple(self._outcome_listeners)
+            legacy_targets = (
+                tuple(self._listeners)
+                if not exact_targets and not outcome["unknown_command_ids"]
+                else ()
             )
-            for listener in tuple(self._listeners):
-                listener(job_uuid, succeeded, result, "normal")
-            self.store.mark_outcome_projected(job_uuid)
-        return {"uuid": job_uuid, "status": "completed"}
+            if exact_targets:
+                committed = _committed_outcome(outcome)
+                for listener in exact_targets:
+                    listener(job_uuid, committed)
+            elif legacy_targets:
+                success, result, suc_type = _legacy_outcome(outcome)
+                for listener in legacy_targets:
+                    listener(job_uuid, success, result, suc_type)
+            if exact_targets or legacy_targets:
+                self.store.mark_outcome_projected(job_uuid)
+        status = (
+            "unknown"
+            if outcome["unknown_command_ids"]
+            else (
+                "completed"
+                if self.store.is_outcome_projected(job_uuid)
+                else "outcome_pending"
+            )
+        )
+        return {
+            "result": dict(outcome["_result"]),
+            "status": status,
+            "created": is_new,
+        }
 
     def resolve_unknown_committed(self, job_uuid: str) -> None:
+        """以 Edge 明确取消证据结算此前结果不明的作业。
+
+        参数：``job_uuid`` 是原作业身份。返回无。异常：投影监听器故障原样传播，
+        且不会提前确认结果；没有监听器时保留待投影事实。
+        """
+
         if not self.store.resolve_unknown_committed(job_uuid):
             return
         if not self.store.is_outcome_projected(job_uuid):
-            for listener in tuple(self._listeners):
-                listener(job_uuid, False, None, "canceled")
-            self.store.mark_outcome_projected(job_uuid)
+            exact_targets = tuple(self._outcome_listeners)
+            legacy_targets = tuple(self._listeners) if not exact_targets else ()
+            if exact_targets:
+                committed = CommittedJobOutcome(
+                    outcome="canceled",
+                    return_info={},
+                    error_info=[],
+                    unknown_command_ids=[],
+                    inventory_consumptions=[],
+                )
+                for listener in exact_targets:
+                    listener(job_uuid, committed)
+            else:
+                for listener in legacy_targets:
+                    listener(job_uuid, False, None, "canceled")
+            if exact_targets or legacy_targets:
+                self.store.mark_outcome_projected(job_uuid)
 
     def replay_pending_projections(
         self,
         *,
         feedback_listener: Callable[[str, dict[str, Any]], None] | None = None,
+        outcome_listener: Callable[[str, CommittedJobOutcome], None] | None = None,
         finished_listener: Callable[[str, bool, Any, str], None] | None = None,
     ) -> dict[str, int]:
         """重放 Edge 已提交但工作流库尚未确认的证据。
@@ -968,6 +1219,13 @@ class LocalEdgeControlAuthority:
             if finished_listener is not None
             else tuple(self._listeners)
         )
+        outcome_targets = (
+            (outcome_listener,)
+            if outcome_listener is not None
+            else tuple(self._outcome_listeners)
+        )
+        if outcome_targets:
+            finished_targets = ()
         projected_feedback = 0
         for pending in self.store.pending_feedback_projections():
             if not feedback_targets:
@@ -982,18 +1240,17 @@ class LocalEdgeControlAuthority:
 
         projected_outcomes = 0
         for pending in self.store.pending_outcome_projections():
-            if not finished_targets:
+            if not outcome_targets and not finished_targets:
                 break
             outcome = pending["outcome"]
-            succeeded = outcome["outcome"] == "succeeded"
-            return_info = outcome.get("return_info") or {}
-            result = (
-                return_info.get("return_value")
-                if isinstance(return_info, dict) and "return_value" in return_info
-                else return_info
-            )
-            for listener in finished_targets:
-                listener(pending["job_uuid"], succeeded, result, "normal")
+            if outcome_targets:
+                committed = _committed_outcome(outcome)
+                for listener in outcome_targets:
+                    listener(pending["job_uuid"], committed)
+            else:
+                succeeded, result, suc_type = _legacy_outcome(outcome)
+                for listener in finished_targets:
+                    listener(pending["job_uuid"], succeeded, result, suc_type)
             self.store.mark_outcome_projected(pending["job_uuid"])
             projected_outcomes += 1
         return {
@@ -1005,7 +1262,12 @@ class LocalEdgeControlAuthority:
 def create_local_edge_control_router(
     authority: LocalEdgeControlAuthority,
 ) -> APIRouter:
-    """Create the production-shaped HTTP/WebSocket adapter for Local Backend."""
+    """创建与 Backend 同形的本地 Edge HTTP/WebSocket 适配器。
+
+    参数：``authority`` 提供唯一命令、反馈和不可变结果权威。返回可挂载的
+    ``APIRouter``。异常：请求身份、载荷或幂等冲突分别映射为稳定 HTTP 状态；
+    构造本身不启动线程也不修改持久事实。
+    """
 
     router = APIRouter(prefix="/api/v1/edge", tags=["local-edge-control"])
 
@@ -1072,23 +1334,38 @@ def create_local_edge_control_router(
     def commit_outcome(
         job_uuid: str,
         payload: dict[str, Any],
+        idempotency_key: str = Header(alias="Idempotency-Key"),
         x_command_uuid: str = Header(alias="X-Command-UUID"),
         x_job_token: str = Header(alias="X-Job-Token"),
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
+        """提交或重放完整作业结果。
+
+        参数：路径 Job、结果载荷及三个请求头共同约束身份与幂等。返回首次 201、
+        同结果重放 200，并携带完整 ``WorkflowNodeJobResult``。异常：不存在为
+        404、身份无效为 401、首次结果冲突为 409、其他非法载荷为 400。
+        """
+
         try:
             result = authority.commit_outcome(
                 job_uuid,
                 command_uuid=x_command_uuid,
                 job_token=x_job_token,
+                idempotency_key=idempotency_key,
                 payload=payload,
             )
         except KeyError as error:
             raise HTTPException(status_code=404, detail="Job not found") from error
         except PermissionError as error:
             raise HTTPException(status_code=401, detail=str(error)) from error
-        except (RuntimeError, ValueError) as error:
+        except LocalEdgeOutcomeConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
-        return _envelope(result)
+        except (RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        created = bool(result.pop("created", False))
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content=_envelope(dict(result["result"])),
+        )
 
     @router.post("/jobs/{job_uuid}/resolve-unknown")
     def resolve_unknown(
@@ -1193,6 +1470,97 @@ def _required_text(payload: dict[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} is required")
     return value.strip()
+
+
+def _normalize_unknown_command_ids(job_uuid: str, values: Any) -> list[str]:
+    """规范结果不明命令身份并验证至少一个身份属于当前 Job。
+
+    参数：``job_uuid`` 是当前工作流节点作业；``values`` 是 Edge 上报的命令身份
+    数组。返回：去重排序后的规范命令身份。异常：数组形状、命令格式、长度或归属
+    不合法时抛 ``ValueError``；空数组表示结果明确，不产生物理执行未知状态。
+    """
+
+    if not isinstance(values, list):
+        raise ValueError("unknown_command_ids must be an array")
+    normalized_job = str(uuid.UUID(job_uuid))
+    normalized: set[str] = set()
+    belongs_to_job = False
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError("unknown_command_ids must contain strings")
+        command_id = value.strip()
+        if not command_id.startswith("workflow-node-job:") or len(command_id) > 512:
+            raise ValueError("unknown_command_ids contains an invalid command identity")
+        identity = command_id.removeprefix("workflow-node-job:")
+        job_identity, separator, child_identity = identity.partition(":")
+        try:
+            command_job_uuid = str(uuid.UUID(job_identity))
+        except ValueError as error:
+            raise ValueError(
+                "unknown_command_ids contains an invalid command UUID"
+            ) from error
+        if job_identity != command_job_uuid:
+            raise ValueError("unknown_command_ids command UUID is not canonical")
+        if separator and (
+            not child_identity
+            or len(child_identity) > 128
+            or any(
+                not (
+                    character.isascii()
+                    and (character.isalnum() or character in "-_.")
+                )
+                for character in child_identity
+            )
+        ):
+            raise ValueError("unknown_command_ids contains an invalid child identity")
+        belongs_to_job = belongs_to_job or command_job_uuid == normalized_job
+        normalized.add(command_id)
+    ordered = sorted(normalized)
+    if ordered and not belongs_to_job:
+        raise ValueError("unknown_command_ids does not contain this Job command")
+    if len("unresolved_unknown_command:" + ",".join(ordered)) > 1024:
+        raise ValueError("unknown_command_ids is too long")
+    return ordered
+
+
+def _job_result_projection(
+    *,
+    job_uuid: str,
+    stored_outcome: dict[str, Any],
+) -> dict[str, Any]:
+    """把本地不可变结果投影为 Backend ``WorkflowNodeJobResult`` 响应。
+
+    参数：``job_uuid`` 是父作业身份；``stored_outcome`` 是首次提交后持久化的结果
+    与内部身份。返回：稳定的公共结果 DTO。异常：持久字段损坏时抛 ``RuntimeError``，
+    禁止以新身份覆盖首次结果；重复 HTTP 提交返回完全相同的结果身份和时间。
+    """
+
+    try:
+        result_uuid = str(uuid.UUID(str(stored_outcome["_result_uuid"])))
+        command_uuid = str(uuid.UUID(str(stored_outcome["_edge_command_uuid"])))
+        committed_at = str(stored_outcome["_committed_at"])
+        create_time = str(stored_outcome["_create_time"])
+        update_time = str(stored_outcome["_update_time"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("stored job outcome identity is corrupted") from error
+    return {
+        "uuid": result_uuid,
+        "create_time": create_time,
+        "update_time": update_time,
+        "meta_data": {
+            "inventory_consumptions": [
+                dict(item) for item in stored_outcome["inventory_consumptions"]
+            ],
+            "unknown_command_ids": list(stored_outcome["unknown_command_ids"]),
+        },
+        "workflow_node_job_uuid": str(uuid.UUID(job_uuid)),
+        "edge_command_uuid": command_uuid,
+        "idempotency_key": str(stored_outcome["_idempotency_key"]),
+        "outcome": str(stored_outcome["outcome"]),
+        "return_info": dict(stored_outcome["return_info"]),
+        "error_info": list(stored_outcome["error_info"]),
+        "committed_at": committed_at,
+    }
 
 
 def _token_hash(value: str) -> str:

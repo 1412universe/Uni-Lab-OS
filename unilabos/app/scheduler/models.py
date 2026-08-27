@@ -100,6 +100,11 @@ class WorkflowNode:
     )  # action 参数（会被父节点传参覆写）
     # 任务创建时冻结的动作合同（Action Contract）；None 仅表示遗留直接调用。
     param_schema: dict[str, Any] | None = None
+    # 冻结计划中的执行责任；物料转移仍由设备动作通道执行，但用于证明
+    # access_region 的显式释放边界，不能在编译时退化成普通 device_action。
+    executor_kind: str = "device_action"
+    # 冻结的节点执行策略；调度阶段禁止回读可变工作流图补齐。
+    execution_policy: Dict[str, Any] = field(default_factory=dict)
     # 与云端 workflow_node 类型枚举一致：Group / ILab / py_script / tool_call /
     # manual_confirm / Transfer（Edge 目前只执行 ILab；Transfer 仅规范化/透传，
     # 比较请用 is_ilab()，容忍大小写差异）
@@ -257,6 +262,9 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
     if raw_param_schema is not None and not isinstance(raw_param_schema, Mapping):
         raise TypeError("param_schema 必须是对象或 None")
     param_schema = dict(raw_param_schema) if raw_param_schema is not None else None
+    raw_execution_policy = data.get("execution_policy") or {}
+    if not isinstance(raw_execution_policy, Mapping):
+        raise TypeError("execution_policy 必须是对象")
     return WorkflowNode(
         id=str(data["id"]),
         job_id=str(data.get("job_id", "") or ""),
@@ -265,6 +273,8 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
         action_type=data.get("action_type", "") or "",
         param=dict(data.get("param") or {}),
         param_schema=param_schema,
+        executor_kind=str(data.get("executor_kind") or "device_action").strip(),
+        execution_policy=dict(raw_execution_policy),
         node_type=normalize_node_type(data.get("node_type") or data.get("type")),
         manual_continues_device_action=bool(
             data.get("manual_continues_device_action", False)

@@ -1359,12 +1359,20 @@ class WorkflowStore:
         description: Optional[str],
         meta_data: Dict[str, Any],
         plan_builder: Callable[[Dict[str, Any]], PreparedTaskInput],
+        inventory_allocation_builder: Optional[
+            Callable[
+                [sqlite3.Connection, Dict[str, Any], PreparedTaskInput],
+                List[Dict[str, Any]],
+            ]
+        ] = None,
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
         参数：工作流、任务、运行模式与目标标识创建意图；说明和元数据是公开
         请求事实；``plan_builder`` 必须从事务内读取的同一应用图返回已解析输入、
-        冻结快照、执行计划（ExecutionPlan）及作业。返回：提交后的任务投影。
+        冻结快照、执行计划（ExecutionPlan）及作业；可选
+        ``inventory_allocation_builder`` 在首次写入前用同一工作流事务锁校验
+        数量型库存绑定并返回既有分配表行。返回：提交后的任务投影。
         异常：图不存在、计划或输入无效及数据库失败均回滚任务和全部作业写入。
         """
 
@@ -1374,6 +1382,11 @@ class WorkflowStore:
             prepared = plan_builder(graph)
             plan = prepared.execution_plan
             jobs = prepared.jobs
+            inventory_allocations = (
+                inventory_allocation_builder(conn, graph, prepared)
+                if inventory_allocation_builder is not None
+                else []
+            )
             effective_run_mode = str(plan["run_mode"])
             effective_target = plan.get("target_node_uuid")
             control_status = "paused" if effective_run_mode == "step" else "active"
@@ -1445,6 +1458,51 @@ class WorkflowStore:
                     from_status=None,
                     to_status="pending",
                     now=now,
+                )
+            for allocation in inventory_allocations:
+                conn.execute(
+                    """
+                    INSERT INTO workflow_inventory_allocation(
+                        uuid,workflow_task_uuid,workflow_node_job_uuid,
+                        requirement_key,inventory_type,inventory_uuid,
+                        material_uuid,reserved_quantity,quantity_unit,status,
+                        revision,reserved_at,consumed_at,released_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,'reserved',1,?,NULL,NULL)
+                    """,
+                    (
+                        allocation["uuid"],
+                        task_uuid,
+                        allocation["workflow_node_job_uuid"],
+                        allocation["requirement_key"],
+                        allocation["inventory_type"],
+                        allocation["inventory_uuid"],
+                        allocation["material_uuid"],
+                        allocation["reserved_quantity"],
+                        allocation["quantity_unit"],
+                        now,
+                    ),
+                )
+            if inventory_allocations:
+                conn.execute(
+                    """
+                    INSERT INTO workflow_inventory_saga(
+                        workflow_task_uuid,status,operation_key,payload,last_error,
+                        attempt,update_time
+                    ) VALUES (?, 'reserved', ?, ?, NULL, 1, ?)
+                    """,
+                    (
+                        task_uuid,
+                        f"reserve:{task_uuid}",
+                        _json(
+                            {
+                                "allocation_uuids": [
+                                    allocation["uuid"]
+                                    for allocation in inventory_allocations
+                                ]
+                            }
+                        ),
+                        now,
+                    ),
                 )
             self._append_event(
                 conn,

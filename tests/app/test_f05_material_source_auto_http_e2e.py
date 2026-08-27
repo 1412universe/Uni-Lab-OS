@@ -140,7 +140,7 @@ def test_slot_range_waits_then_allocates_on_same_task_and_jobs(
     assert [job["uuid"] for job in jobs_after] == [
         job["uuid"] for job in jobs_before
     ]
-    assert [job["status"] for job in jobs_after] == ["succeeded", "dispatched"]
+    assert [job["status"] for job in jobs_after] == ["succeeded", "running"]
     assert jobs_after[0]["return_info"]["material"]["uuid"] == selected_uuid
     assert jobs_after[1]["param"] == {"plate": {"uuid": selected_uuid}}
     assert runtime.dispatcher.dispatched[0]["action_args"] == {

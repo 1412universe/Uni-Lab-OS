@@ -162,16 +162,27 @@ class WorkflowSpecCompiler:
                         f"物料来源作业执行种类非法：{node_uuid}",
                     )
                 continue
-            if kind not in {"device_action", "manual_confirm"}:
+            if kind not in {"device_action", "material_transfer", "manual_confirm"}:
                 raise WorkflowSpecCompilationError(
                     "unsupported_executor_kind", f"旧调度器不支持执行种类：{kind}"
+                )
+            if kind == "material_transfer" and str(
+                job.get("executor_kind") or ""
+            ) != "material_transfer":
+                raise WorkflowSpecCompilationError(
+                    "unsupported_executor_kind",
+                    f"物料转移作业执行种类非法：{node_uuid}",
                 )
             job_uuid = canonical_uuid(
                 job.get("uuid"), "invalid_job_identity", f"jobs[{node_uuid}].uuid"
             )
             continues_device_action = bool(node.get("continues_device_action", False))
             device_id = str(node.get("device_id") or "").strip()
-            if kind == "device_action" or continues_device_action:
+            dispatches_device_action = kind in {
+                "device_action",
+                "material_transfer",
+            } or continues_device_action
+            if dispatches_device_action:
                 if not device_id:
                     raise WorkflowSpecCompilationError(
                         "invalid_executor_binding", f"设备动作缺少固定执行器：{node_uuid}"
@@ -180,7 +191,7 @@ class WorkflowSpecCompiler:
                 device_id = "manual-confirmation"
             action_name = str(node.get("action_name") or "").strip()
             action_type = str(node.get("action_type") or "").strip()
-            if kind == "device_action" or continues_device_action:
+            if dispatches_device_action:
                 if not action_name or not action_type:
                     raise WorkflowSpecCompilationError(
                         "invalid_action_contract", f"设备动作合同不完整：{node_uuid}"
@@ -201,7 +212,7 @@ class WorkflowSpecCompiler:
             requirements = self._material_requirements(node, node_uuid=node_uuid)
             param_schema = (
                 self._param_schema(node, node_uuid=node_uuid)
-                if kind == "device_action" or continues_device_action
+                if dispatches_device_action
                 else None
             )
             compiled.append(
@@ -213,6 +224,8 @@ class WorkflowSpecCompiler:
                     action_type=action_type,
                     param=self._merge_final_param(planned_param, job_param),
                     param_schema=param_schema,
+                    executor_kind=kind,
+                    execution_policy=deepcopy(dict(node.get("execution_policy") or {})),
                     node_type=("manual_confirm" if kind == "manual_confirm" else "ILab"),
                     manual_continues_device_action=continues_device_action,
                     disabled=False,

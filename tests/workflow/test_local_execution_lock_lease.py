@@ -25,6 +25,10 @@ from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
 SECOND_TASK_UUID = "21000000-0000-4000-8000-000000000002"
 SECOND_NODE_UUID = "31000000-0000-4000-8000-000000000002"
 SECOND_JOB_UUID = "41000000-0000-4000-8000-000000000002"
+RELEASE_NODE_UUID = "31000000-0000-4000-8000-000000000003"
+RELEASE_JOB_UUID = "41000000-0000-4000-8000-000000000003"
+SECOND_RELEASE_NODE_UUID = "31000000-0000-4000-8000-000000000004"
+SECOND_RELEASE_JOB_UUID = "41000000-0000-4000-8000-000000000004"
 SITE_UUID = "71000000-0000-4000-8000-000000000001"
 _CREATED_AT = "2026-08-05T00:00:01Z"
 
@@ -136,6 +140,183 @@ def _seed_second_task(
                 SECOND_NODE_UUID,
             ),
         )
+
+
+def _seed_release_job(
+    store: WorkflowStore,
+    *,
+    task_uuid: str,
+    node_uuid: str,
+    job_uuid: str,
+    topological_index: int = 1,
+) -> None:
+    """在既有任务中追加一个负责结束访问区域的物料转移作业。
+
+    参数：存储、父任务、节点和作业身份共同确定同一执行计划内的释放边界；
+    ``topological_index`` 表示释放节点晚于入口节点。返回无。异常：底层 SQLite
+    写入失败原样传播。测试只复用既有作业表，不创建新的访问区域专用表。
+    """
+
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO workflow_node_job(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_uuid,
+                feedback_sequence, topological_index, executor_kind,
+                execution_policy, execution_timeout_seconds, status, attempt,
+                param, feedback_data, return_info, control_data, error_info
+            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 0, ?,
+                      'material_transfer', '{}', 0, 'pending', 1, '{}', '{}',
+                      '{}', '{}', '[]')
+            """,
+            (
+                job_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                task_uuid,
+                node_uuid,
+                topological_index,
+            ),
+        )
+
+
+def _access_region_request(*, release_job_uuid: str) -> dict[str, str]:
+    """构造 Backend 业务语义一致的跨节点访问区域占用请求。
+
+    参数：``release_job_uuid`` 是真正释放长锁的后续物料转移作业。返回：不依赖
+    SQLite 表名的公开锁请求。异常：无；固定 UUID 与规范小写区域键均由测试控制。
+    """
+
+    region_key = "s08-s09-reagent-corridor"
+    return {
+        "lock_key": f"access_region/{MATERIAL_UUID}/{region_key}",
+        "scope": "access_region",
+        "material_uuid": MATERIAL_UUID,
+        "access_region_key": region_key,
+        "lease_owner_job_uuid": release_job_uuid,
+    }
+
+
+def test_access_region_is_held_until_release_job_finishes(
+    store: WorkflowStore,
+) -> None:
+    """入口动作完成后访问区域仍被持有，直到显式释放作业明确完成。
+
+    参数：``store`` 是隔离工作流权威。返回无。异常：任一准入、持有者身份、
+    业务范围投影或释放时机不符合 Backend 合同即由断言暴露。
+    """
+
+    _seed_task(store, with_material=False)
+    _seed_release_job(
+        store,
+        task_uuid=TASK_UUID,
+        node_uuid=RELEASE_NODE_UUID,
+        job_uuid=RELEASE_JOB_UUID,
+    )
+    _seed_second_task(store)
+    _seed_release_job(
+        store,
+        task_uuid=SECOND_TASK_UUID,
+        node_uuid=SECOND_RELEASE_NODE_UUID,
+        job_uuid=SECOND_RELEASE_JOB_UUID,
+    )
+    projection = TaskRuntimeProjection(store)
+
+    first = projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+            _access_region_request(release_job_uuid=RELEASE_JOB_UUID),
+        ],
+    )
+    assert first["jobs"][0]["status"] == "dispatched"
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_job_finished(job_uuid=JOB_UUID, scheduler_state="success")
+
+    carried = projection.list_execution_locks(RELEASE_JOB_UUID)
+    assert [(item["scope"], item["state"]) for item in carried] == [
+        ("access_region", "reserved")
+    ]
+    blocked = projection.project_pre_dispatch(
+        task_uuid=SECOND_TASK_UUID,
+        job_uuid=SECOND_JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-b", "scope": "device"},
+            _access_region_request(release_job_uuid=SECOND_RELEASE_JOB_UUID),
+        ],
+    )
+    assert blocked["jobs"][0]["status"] == "pending"
+    assert blocked["jobs"][0]["wait_reason"]["code"] == "operation_lease"
+
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=RELEASE_JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    projection.project_dispatch_accepted(RELEASE_JOB_UUID)
+    projection.project_job_finished(
+        job_uuid=RELEASE_JOB_UUID,
+        scheduler_state="success",
+    )
+    release_states = {
+        item["state"] for item in projection.list_execution_locks(RELEASE_JOB_UUID)
+    }
+    assert release_states == {
+        "released"
+    }
+
+    retried = projection.project_pre_dispatch(
+        task_uuid=SECOND_TASK_UUID,
+        job_uuid=SECOND_JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-b", "scope": "device"},
+            _access_region_request(release_job_uuid=SECOND_RELEASE_JOB_UUID),
+        ],
+    )
+    assert retried["jobs"][0]["status"] == "dispatched"
+
+
+def test_cleanup_settled_releases_access_region_owned_by_pending_release_job(
+    store: WorkflowStore,
+) -> None:
+    """异常任务完成物理清理时必须回收尚未运行释放作业持有的区域锁。
+
+    参数：``store`` 是隔离工作流权威。返回无。异常：清理状态和长锁释放不在
+    同一事务闭环时由断言暴露，避免任务已 settled 但区域永久不可用。
+    """
+
+    _seed_task(store, with_material=False)
+    _seed_release_job(
+        store,
+        task_uuid=TASK_UUID,
+        node_uuid=RELEASE_NODE_UUID,
+        job_uuid=RELEASE_JOB_UUID,
+    )
+    projection = TaskRuntimeProjection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+            _access_region_request(release_job_uuid=RELEASE_JOB_UUID),
+        ],
+    )
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_job_finished(job_uuid=JOB_UUID, scheduler_state="failed")
+
+    projection.project_cleanup_settled(TASK_UUID)
+
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    release_states = {
+        item["state"] for item in projection.list_execution_locks(RELEASE_JOB_UUID)
+    }
+    assert release_states == {
+        "released"
+    }
 
 
 def test_material_parent_lock_blocks_child_site_until_explicit_result(
@@ -258,8 +439,10 @@ def test_restart_projects_edge_committed_outcome_before_marking_job_unknown(
     projection.project_dispatch_accepted(JOB_UUID)
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
 
-    def replay(*, feedback_listener, finished_listener):
-        del feedback_listener
+    def replay(*, feedback_listener, outcome_listener, finished_listener):
+        """模拟重启重放一条成功结果；监听器为注入端口，返回重放计数。"""
+
+        del feedback_listener, outcome_listener
         finished_listener(JOB_UUID, True, {"completed": True}, "normal")
         return {"feedback": 0, "outcomes": 1}
 

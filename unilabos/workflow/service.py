@@ -33,25 +33,33 @@ from unilabos.workflow.composite_invocation import (
     CompositeInvocationInvalid,
     expand_composite_invocation,
 )
+from unilabos.workflow.definition_edit import (
+    WorkflowDefinitionInvalid,
+    duplicate_graph,
+)
+from unilabos.workflow.definition_edit import (
+    create_edge as build_workflow_edge,
+)
+from unilabos.workflow.definition_edit import (
+    create_node as build_workflow_node,
+)
+from unilabos.workflow.definition_edit import (
+    duplicate_node as build_duplicated_node,
+)
+from unilabos.workflow.definition_edit import (
+    patch_node as build_patched_node,
+)
 from unilabos.workflow.device_action_run import (
     DeviceActionRunConflict,
     DeviceActionRunInputError,
     DeviceActionRunService,
     DeviceActionRunUnavailable,
 )
-from unilabos.workflow.definition_edit import (
-    WorkflowDefinitionInvalid,
-    create_edge as build_workflow_edge,
-    create_node as build_workflow_node,
-    duplicate_graph,
-    duplicate_node as build_duplicated_node,
-    patch_node as build_patched_node,
-)
 from unilabos.workflow.event_reader import DurableEventReader
 from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.graph_validation import GraphValidationError
-from unilabos.workflow.job_evidence import JobEvidenceStore
 from unilabos.workflow.intervention import WorkflowInterventionStore
+from unilabos.workflow.job_evidence import JobEvidenceStore
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
 from unilabos.workflow.models import (
     CandidateChangeset,
@@ -473,12 +481,24 @@ class WorkflowService:
         self,
         delivery: WorkflowInterventionDelivery,
     ) -> None:
-        """把设备异常报告与决定投递接到持久工作流干预。"""
+        """把设备异常报告与决定投递接到持久工作流干预。
+
+        参数：``delivery`` 是当前本地设备执行端口。返回无。绑定后立即重投此前
+        已选但未明确接受的决定；投递仍不可达时保留 ``unknown``，不会阻止服务
+        启动，也不会伪造设备已恢复执行。
+        """
 
         self._intervention_delivery = delivery
         delivery.add_error_decision_required_listener(
             self.open_workflow_intervention_from_report
         )
+        for intervention in self._intervention_store().list_replayable_selected():
+            if not self._deliver_workflow_intervention(intervention):
+                logger.warning(
+                    "工作流干预恢复投递仍不可达 intervention_uuid=%s job_uuid=%s",
+                    intervention["uuid"],
+                    intervention["workflow_node_job_uuid"],
+                )
 
     # 工作流（Workflow）与图（Graph） -------------------------------------
 
@@ -1221,12 +1241,15 @@ class WorkflowService:
         input_value: Dict[str, Any],
         description: Optional[str],
         meta_data: Dict[str, Any],
+        inventory_bindings: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """从已应用工作流图创建一次工作流任务（WorkflowTask）及其作业。
 
         参数：``workflow_uuid`` 是工作流定义身份；``run_mode`` 是普通、单步或
         单节点运行模式；``target_node_uuid`` 是单节点运行目标；``input_value``
-        是任务输入；``description`` 与 ``meta_data`` 是用户说明和公开元数据。
+        是任务输入；``description`` 与 ``meta_data`` 是用户说明和公开元数据；
+        ``inventory_bindings`` 把本次执行的逻辑数量需求绑定到具体试剂或当前
+        内容物库存。
         返回：同一事务创建的工作流任务及工作流节点作业（WorkflowNodeJob）投影。
         异常：身份、运行模式、输入或执行计划不合法时抛出稳定工作流错误；输入
         合同解析、默认值填充与计划绑定全部在同一创建事务的首次写入前完成。
@@ -1244,9 +1267,14 @@ class WorkflowService:
         try:
             input_value = normalize_json_object(input_value)
             meta_data = normalize_json_object(meta_data)
+            normalized_inventory_bindings = [
+                normalize_json_object(binding)
+                for binding in (inventory_bindings or [])
+            ]
         except ValueError:
             raise WorkflowError("invalid_input") from None
         description = self._optional_text(description)
+        task_uuid = str(uuid4())
 
         def plan_builder(graph: Dict[str, Any]) -> PreparedTaskInput:
             """在创建事务内冻结本次工作流任务（WorkflowTask）输入和计划。
@@ -1264,28 +1292,90 @@ class WorkflowService:
                 target_node_uuid=target_node_uuid,
             )
 
+        def inventory_allocation_builder(
+            connection: Any,
+            graph: Dict[str, Any],
+            prepared: PreparedTaskInput,
+        ) -> List[Dict[str, Any]]:
+            """在 Task/Jobs 首次写入前校验并冻结数量型库存分配。
+
+            参数：``connection`` 是工作流写事务；``graph/prepared`` 来自同一
+            应用图。返回：现有分配表待插入行。异常：执行包含库存需求但没有
+            可用调度桥/库存权威时关闭式失败，禁止创建无法执行的半任务。
+            """
+
+            prepare = getattr(
+                self._task_scheduler_bridge,
+                "prepare_inventory_allocations",
+                None,
+            )
+            if callable(prepare):
+                return prepare(
+                    connection,
+                    graph=graph,
+                    prepared=prepared,
+                    task_uuid=task_uuid,
+                    bindings=normalized_inventory_bindings,
+                )
+            active_nodes = {
+                str(job.get("workflow_node_uuid")) for job in prepared.jobs
+            }
+            has_active_requirements = any(
+                isinstance(requirement, Mapping)
+                and str(requirement.get("consume_node_uuid")) in active_nodes
+                for requirement in graph.get("inventory_requirements", [])
+            )
+            if has_active_requirements or normalized_inventory_bindings:
+                raise StoreConflict("工作流数量型库存未装配本地库存权威")
+            return []
+
+        task_created = False
+
+        def discard_uncommitted_inventory() -> None:
+            """补偿本次 Task 创建回滚前写入库存权威的数量预留。"""
+
+            discard = getattr(
+                self._task_scheduler_bridge,
+                "discard_uncommitted_inventory",
+                None,
+            )
+            if callable(discard):
+                discard(task_uuid)
+
         try:
             task = self._store.create_task_with_jobs(
                 workflow_uuid=workflow_uuid,
-                task_uuid=str(uuid4()),
+                task_uuid=task_uuid,
                 run_mode=run_mode,
                 target_node_uuid=target_node_uuid,
                 description=description,
                 meta_data=meta_data,
                 plan_builder=plan_builder,
+                inventory_allocation_builder=inventory_allocation_builder,
             )
+            task_created = True
             if self._task_scheduler_bridge is None:
                 return task
             # ``aggregate`` 来自调度同步推进后的标准持久投影，不返回创建事务中的
             # 过期 ``pending`` 快照。
             aggregate = self._task_scheduler_bridge.submit(task)
             return aggregate["task"]
-        except TaskSchedulerBridgeError:
-            raise WorkflowError("internal_error") from None
-        except TaskInputError:
+        except (TaskSchedulerBridgeError, TaskInputError, StoreConflict) as error:
+            if not task_created:
+                try:
+                    discard_uncommitted_inventory()
+                except Exception:
+                    raise WorkflowError("internal_error") from None
+            if isinstance(error, TaskSchedulerBridgeError):
+                raise WorkflowError("internal_error") from None
             raise WorkflowError("invalid_input") from None
-        except StoreConflict:
-            raise WorkflowError("invalid_input") from None
+        except Exception:
+            if not task_created:
+                try:
+                    discard_uncommitted_inventory()
+                except Exception:
+                    raise WorkflowError("internal_error") from None
+            raise
 
     def command_workflow_task(
         self,
@@ -1595,6 +1685,75 @@ class WorkflowService:
             raise WorkflowConflict("conflict") from None
         except TaskSchedulerBridgeError:
             raise WorkflowError("internal_error") from None
+
+    def list_task_inventory_consumptions(
+        self, task_uuid: str
+    ) -> List[Dict[str, Any]]:
+        """读取一个工作流任务的数量型库存消费事实。
+
+        参数：``task_uuid`` 是任务身份。返回：统一库存台账还原的消费列表；未
+        装配库存权威时为空。异常：非法任务身份映射为公共参数错误。
+        """
+
+        try:
+            task_uuid = validate_uuid(task_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        try:
+            self._store.get_task(task_uuid)
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        reader = getattr(
+            self._task_scheduler_bridge,
+            "list_task_inventory_consumptions",
+            None,
+        )
+        return reader(task_uuid) if callable(reader) else []
+
+    def list_job_inventory_consumptions(
+        self, job_uuid: str
+    ) -> List[Dict[str, Any]]:
+        """读取一个工作流节点作业的数量型库存消费事实。
+
+        参数：``job_uuid`` 是作业身份。返回：统一库存台账还原的消费列表；未
+        装配库存权威时为空。异常：非法作业身份映射为公共参数错误。
+        """
+
+        try:
+            job_uuid = validate_uuid(job_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        try:
+            self._store.get_job(job_uuid)
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        reader = getattr(
+            self._task_scheduler_bridge,
+            "list_job_inventory_consumptions",
+            None,
+        )
+        return reader(job_uuid) if callable(reader) else []
+
+    def list_reagent_inventory_consumptions(
+        self, reagent_uuid: str
+    ) -> List[Dict[str, Any]]:
+        """读取一个试剂库存实例的工作流消费谱系。
+
+        参数：``reagent_uuid`` 是库存实例身份。返回：统一库存台账还原的消费
+        列表，允许已删除库存保留历史；未装配库存权威时为空。异常：非法身份映射
+        为公共参数错误。
+        """
+
+        try:
+            reagent_uuid = validate_uuid(reagent_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        reader = getattr(
+            self._task_scheduler_bridge,
+            "list_reagent_inventory_consumptions",
+            None,
+        )
+        return reader(reagent_uuid) if callable(reader) else []
 
     def get_workflow_task(self, task_uuid: str) -> Dict[str, Any]:
         try:
@@ -1910,6 +2069,7 @@ class WorkflowService:
                 revision=revision,
                 option_id=option_id,
                 idempotency_key=idempotency_key,
+                result=result,
             )
             if intervention["delivery_status"] == "accepted":
                 return {
@@ -1917,29 +2077,9 @@ class WorkflowService:
                     "command_uuid": intervention["edge_command_uuid"],
                     "created": False,
                 }
-            delivery = self._intervention_delivery
-            if delivery is None:
-                self._intervention_store().mark_delivery(identity, accepted=False)
+            if not self._deliver_workflow_intervention(intervention):
                 raise WorkflowConflict("conflict")
-            selected = dict(intervention["selected_option"])
-            payload: dict[str, Any] = {
-                "option": selected,
-                "action": str(selected.get("action") or option_id),
-            }
-            if result is not None:
-                payload["result"] = result
-            elif "result" in selected:
-                payload["result"] = selected["result"]
-            accepted = delivery.resolve_error_decision(
-                str(intervention["edge_command_uuid"]),
-                payload,
-            )
-            delivered = self._intervention_store().mark_delivery(
-                identity,
-                accepted=accepted,
-            )
-            if not accepted:
-                raise WorkflowConflict("conflict")
+            delivered = self._intervention_store().get(identity)
             return {
                 "intervention": delivered,
                 "command_uuid": delivered["edge_command_uuid"],
@@ -1951,6 +2091,48 @@ class WorkflowService:
             raise WorkflowError("not_found") from None
         except StoreConflict:
             raise WorkflowConflict("conflict") from None
+
+    def _deliver_workflow_intervention(
+        self,
+        intervention: Mapping[str, Any],
+    ) -> bool:
+        """用持久冻结载荷向本地设备幂等投递一次干预决定。
+
+        参数：``intervention`` 是已选干预投影。返回：设备明确接受时为真；端口
+        缺失或拒绝时为假并把状态记为 ``unknown``。异常：持久事实损坏或数据库
+        写失败原样传播；同一 ``edge_command_uuid`` 始终作为稳定投递身份。
+        """
+
+        identity = str(intervention["uuid"])
+        delivery = self._intervention_delivery
+        if delivery is None:
+            self._intervention_store().mark_delivery(identity, accepted=False)
+            return False
+        meta_data = intervention.get("meta_data")
+        payload = (
+            dict(meta_data["delivery_payload"])
+            if isinstance(meta_data, Mapping)
+            and isinstance(meta_data.get("delivery_payload"), Mapping)
+            else {
+                "option": dict(intervention["selected_option"]),
+                "action": str(
+                    intervention["selected_option"].get("action")
+                    or intervention.get("selected_option_id")
+                    or ""
+                ),
+                **(
+                    {"result": intervention["selected_option"]["result"]}
+                    if "result" in intervention["selected_option"]
+                    else {}
+                ),
+            }
+        )
+        accepted = delivery.resolve_error_decision(
+            str(intervention["edge_command_uuid"]),
+            payload,
+        )
+        self._intervention_store().mark_delivery(identity, accepted=accepted)
+        return accepted
 
     def _build_execution_plan(
         self,

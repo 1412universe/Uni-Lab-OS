@@ -247,8 +247,14 @@ class WorkflowInterventionStore:
         revision: int,
         option_id: str,
         idempotency_key: str,
+        result: Any = None,
     ) -> tuple[dict[str, Any], bool]:
-        """按修订与幂等键选择设备已经提供的一个处理方案。"""
+        """按修订与幂等键选择并持久冻结设备处理方案。
+
+        参数：干预身份、修订、选项、幂等键和可选人工结果。返回：当前干预与是否
+        首次选择。异常：修订/选项过期或同一幂等请求携带不同结果时冲突；实际投递
+        载荷写入既有 ``meta_data`` JSON，服务重建后无需新表即可安全重投。
+        """
 
         normalized_option = option_id.strip()
         normalized_key = idempotency_key.strip()
@@ -269,15 +275,6 @@ class WorkflowInterventionStore:
                 )
             if int(row["revision"]) != revision:
                 raise StoreConflict("干预修订已经过期")
-            if row["status"] == "selected":
-                if (
-                    row["selected_option_id"] == normalized_option
-                    and row["decision_idempotency_key"] == normalized_key
-                ):
-                    return _row(row), False
-                raise StoreConflict("干预已经选择了另一处理方案")
-            if row["status"] != "open":
-                raise StoreConflict("干预已经不再开放")
             options = _load(row["options"])
             selected = next(
                 (item for item in options if item.get("id") == normalized_option),
@@ -285,18 +282,44 @@ class WorkflowInterventionStore:
             )
             if selected is None:
                 raise StoreConflict("选择的方案不是设备提供的候选项")
+            delivery_payload: dict[str, Any] = {
+                "option": selected,
+                "action": str(selected.get("action") or normalized_option),
+            }
+            if result is not None:
+                delivery_payload["result"] = result
+            elif "result" in selected:
+                delivery_payload["result"] = selected["result"]
+            if row["status"] == "selected":
+                if (
+                    row["selected_option_id"] == normalized_option
+                    and row["decision_idempotency_key"] == normalized_key
+                ):
+                    existing_meta = _load(row["meta_data"])
+                    if (
+                        isinstance(existing_meta, Mapping)
+                        and existing_meta.get("delivery_payload") is not None
+                        and existing_meta.get("delivery_payload") != delivery_payload
+                    ):
+                        raise StoreConflict("同一干预幂等请求携带了不同结果")
+                    return _row(row), False
+                raise StoreConflict("干预已经选择了另一处理方案")
+            if row["status"] != "open":
+                raise StoreConflict("干预已经不再开放")
             connection.execute(
                 """
                 UPDATE workflow_intervention
                 SET status = 'selected', selected_option_id = ?,
                     selected_option = ?, decision_idempotency_key = ?,
-                    delivery_status = 'pending', decided_at = ?, update_time = ?
+                    meta_data = ?, delivery_status = 'pending',
+                    decided_at = ?, update_time = ?
                 WHERE uuid = ? AND status = 'open'
                 """,
                 (
                     normalized_option,
                     _json(selected),
                     normalized_key,
+                    _json({"delivery_payload": delivery_payload}),
                     now,
                     now,
                     intervention_uuid,
@@ -314,6 +337,28 @@ class WorkflowInterventionStore:
                 now=now,
             )
             return _row(decided), True
+
+    def list_replayable_selected(self, *, limit: int = 500) -> list[dict[str, Any]]:
+        """读取尚未明确投递成功的已选干预。
+
+        参数：``limit`` 限制单次恢复规模。返回：按决定时间排序的 pending/unknown
+        记录；已接受决定不会重投。异常：非法上限抛 ``StoreConflict``。
+        """
+
+        if not 1 <= limit <= 500:
+            raise StoreConflict("干预恢复 limit 非法")
+        with self._store._lock:
+            rows = self._store._conn.execute(
+                """
+                SELECT * FROM workflow_intervention
+                WHERE status='selected'
+                  AND delivery_status IN ('pending','unknown')
+                  AND deleted_at IS NULL
+                ORDER BY decided_at ASC,uuid ASC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_row(row) for row in rows]
 
     def mark_delivery(self, intervention_uuid: str, *, accepted: bool) -> dict[str, Any]:
         """记录决定是否成功交给仍在等待的设备动作。"""

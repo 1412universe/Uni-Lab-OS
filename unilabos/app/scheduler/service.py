@@ -46,6 +46,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Set
 from unilabos.app.scheduler.dag_state import WorkflowRun
 from unilabos.app.scheduler.dispatch import (
     CancelDispatchState,
+    CommittedJobOutcome,
     Dispatcher,
     RecordingDispatcher,
     build_job_start_payload,
@@ -88,6 +89,10 @@ from unilabos.utils.tracing import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class ExecutionPolicyError(ValueError):
+    """冻结节点执行策略无法安全转成持久调度声明。"""
 
 
 def _resource_argument_uuid(value: Any, *, argument_name: str) -> str:
@@ -233,6 +238,9 @@ class EdgeScheduler:
             Callable[[str, Dict[str, Any]], None]
         ] = []
         self._job_finished_listeners: List[Callable[[str, bool, Any, str], None]] = []
+        self._job_outcome_listeners: List[
+            Callable[[str, CommittedJobOutcome], None]
+        ] = []
         self._job_settled_listeners: List[Callable[[str, bool, Any, str], None]] = []
         # 准入重试监听器把尚未注册为旧调度运行的来源受阻任务接到同一个公开
         # 重排触发点；监听器本身仍由工作流任务桥拥有。
@@ -452,6 +460,18 @@ class EdgeScheduler:
 
         self._job_finished_listeners.append(listener)
 
+    def add_job_outcome_listener(
+        self,
+        listener: Callable[[str, CommittedJobOutcome], None],
+    ) -> None:
+        """注册 Backend-shaped 不可变结果监听器。
+
+        参数：``listener`` 接收作业 UUID 与完整终态证据。返回无。异常：无；实际
+        回调异常在结果投影时向上传播，调度器会保留在途状态供投递重放。
+        """
+
+        self._job_outcome_listeners.append(listener)
+
     def add_job_feedback_listener(
         self,
         listener: Callable[[str, Dict[str, Any]], None],
@@ -480,11 +500,26 @@ class EdgeScheduler:
             current for current in self._job_finished_listeners if current != listener
         ]
 
+    def remove_job_outcome_listener(
+        self,
+        listener: Callable[[str, CommittedJobOutcome], None],
+    ) -> None:
+        """幂等移除不可变结果监听器。
+
+        参数：``listener`` 是此前注册的同一回调。返回无。异常：无；未注册时保持
+        原集合不变。
+        """
+
+        self._job_outcome_listeners = [
+            current for current in self._job_outcome_listeners if current != listener
+        ]
+
     def replay_persisted_edge_projections(
         self,
         *,
         feedback_listener: Callable[[str, Dict[str, Any]], None],
-        finished_listener: Callable[[str, bool, Any, str], None],
+        outcome_listener: Callable[[str, CommittedJobOutcome], None] | None = None,
+        finished_listener: Callable[[str, bool, Any, str], None] | None = None,
     ) -> Dict[str, int]:
         """把 Edge 本地已提交证据直接重放给持久工作流投影。
 
@@ -498,6 +533,7 @@ class EdgeScheduler:
             return {"feedback": 0, "outcomes": 0}
         result = replay(
             feedback_listener=feedback_listener,
+            outcome_listener=outcome_listener,
             finished_listener=finished_listener,
         )
         if not isinstance(result, Mapping):
@@ -589,6 +625,20 @@ class EdgeScheduler:
 
         for listener in tuple(self._job_finished_listeners):
             listener(job_id, success, ret_value, suc_type)
+
+    def _notify_job_outcome(
+        self,
+        job_id: str,
+        outcome: CommittedJobOutcome,
+    ) -> None:
+        """在释放在途状态前投递完整不可变结果。
+
+        参数：``job_id`` 是作业身份；``outcome`` 是 Edge 已提交终态与证据。返回
+        无。异常：任一持久投影失败时原样传播，调用方不得释放在途作业和占用。
+        """
+
+        for listener in tuple(self._job_outcome_listeners):
+            listener(job_id, outcome)
 
     def on_job_feedback(self, job_id: str, sample: Dict[str, Any]) -> None:
         """把 Edge 已提交反馈同步投递给工作流持久投影。"""
@@ -886,6 +936,44 @@ class EdgeScheduler:
 
     # ── 触发点 2：子 action 完成 ──────────────────────────────
 
+    def on_job_outcome(
+        self,
+        job_id: str,
+        outcome: CommittedJobOutcome,
+    ) -> Dict[str, Any]:
+        """按 Backend-shaped 结果结算本地作业（Job）。
+
+        参数：``job_id`` 是稳定作业身份；``outcome`` 保留 Edge 已提交的成功、
+        失败、取消或超时终态及证据。返回：本轮工作流状态和后续派发摘要。异常：
+        持久投影或库存结算失败原样传播；不会把失败类终态压缩成普通失败。
+        """
+
+        if outcome.unknown_command_ids:
+            # 结果不明不是失败终态。先把证据投影为 ExecutionUnknown，同时保留
+            # scheduler 的在途作业和动作资源占用，等待设备或人工完成物理对账。
+            with self._lock:
+                if job_id not in self._inflight:
+                    logger.warning("[EdgeScheduler] unknown Job outcome: %s", job_id)
+                    return {"dispatched": []}
+                self._notify_job_outcome(job_id, outcome)
+                return {
+                    "state": "execution_unknown",
+                    "dispatched": [],
+                }
+
+        success = outcome.outcome == "succeeded"
+        ret_value = outcome.return_info.get(
+            "return_value",
+            outcome.return_info,
+        )
+        return self._finish_job_with_trace(
+            job_id,
+            success,
+            ret_value,
+            "normal" if success else outcome.outcome,
+            committed_outcome=outcome,
+        )
+
     def on_job_finished(
         self,
         job_id: str,
@@ -893,9 +981,39 @@ class EdgeScheduler:
         ret_value: Any = None,
         suc_type: str = "normal",
     ) -> Dict[str, Any]:
+        """结算旧执行适配器的四参数完成回调。
+
+        参数：作业身份、成功标记、返回值与旧异常分类。返回：工作流状态和后续派发
+        摘要。异常：投影或库存结算失败原样传播。新 Edge HTTP 路径应使用
+        :meth:`on_job_outcome`，本方法只保留旧执行适配器兼容。
+        """
+
+        return self._finish_job_with_trace(job_id, success, ret_value, suc_type)
+
+    def _finish_job_with_trace(
+        self,
+        job_id: str,
+        success: bool,
+        ret_value: Any,
+        suc_type: str,
+        *,
+        committed_outcome: CommittedJobOutcome | None = None,
+    ) -> Dict[str, Any]:
+        """在同一追踪边界内完成保真或旧式结果结算。
+
+        参数：前四项是旧调度结果；``committed_outcome`` 存在时是优先投影的完整
+        Edge 证据。返回结算摘要。异常：结算错误向上传播；追踪句柄始终关闭。
+        """
+
         action_trace = self._job_spans.get(job_id)
         if action_trace is None:
-            return self._on_job_finished(job_id, success, ret_value, suc_type)
+            return self._on_job_finished(
+                job_id,
+                success,
+                ret_value,
+                suc_type,
+                committed_outcome=committed_outcome,
+            )
         try:
             with action_trace.activate():
                 add_event(
@@ -909,7 +1027,13 @@ class EdgeScheduler:
                 )
                 if not success:
                     action_trace.error("action execution failed")
-                return self._on_job_finished(job_id, success, ret_value, suc_type)
+                return self._on_job_finished(
+                    job_id,
+                    success,
+                    ret_value,
+                    suc_type,
+                    committed_outcome=committed_outcome,
+                )
         finally:
             action_trace.end()
             self._job_spans.pop(job_id, None)
@@ -920,6 +1044,8 @@ class EdgeScheduler:
         success: bool,
         ret_value: Any = None,
         suc_type: str = "normal",
+        *,
+        committed_outcome: CommittedJobOutcome | None = None,
     ) -> Dict[str, Any]:
         """作业（Job）完成回调：写回结果、清理依赖并强制重排。
 
@@ -954,7 +1080,10 @@ class EdgeScheduler:
             # 标准完成事实必须先持久化；任一监听器失败时保留在途作业与资源锁，
             # 允许设备对同一结果进行投递重放（DeliveryReplay）。库存消费本身也
             # 以相同 workflow/node/attempt 幂等，重放不会重复扣减。
-            self._notify_job_finished(job_id, success, ret_value, suc_type)
+            if committed_outcome is not None:
+                self._notify_job_outcome(job_id, committed_outcome)
+            else:
+                self._notify_job_finished(job_id, success, ret_value, suc_type)
             self._inflight.pop(job_id, None)
             self._job_resource_locks.pop(job_id, None)
 
@@ -1269,15 +1398,23 @@ class EdgeScheduler:
                     resolved_args,
                     resolved_site=resolved_site,
                 )
-            except (MaterialLockSchemaError, SiteTargetResolutionError) as error:
+                access_region_locks = self._access_region_execution_locks(
+                    run,
+                    task.node,
+                )
+            except (
+                ExecutionPolicyError,
+                MaterialLockSchemaError,
+                SiteTargetResolutionError,
+            ) as error:
                 logger.error(
                     "[EdgeScheduler] 动作资源锁解析失败 "
                     "wf=%s node=%s code=%s path=%s: %s",
                     task.workflow_id,
                     task.node.id,
-                    error.code,
+                    getattr(error, "code", "invalid_execution_policy"),
                     getattr(error, "path", "/"),
-                    error.message,
+                    getattr(error, "message", str(error)),
                 )
                 run.mark_failed(task.node.id)
                 continue
@@ -1310,6 +1447,7 @@ class EdgeScheduler:
                             "site_uuid": parts[3],
                         }
                     )
+            execution_locks.extend(access_region_locks)
             if device_conflict or conflicting_lock_keys:
                 blocking_job = next(
                     (
@@ -1670,6 +1808,51 @@ class EdgeScheduler:
         # 设备驱动沿用库位名称；稳定 UUID 只用于身份解析和本地互斥。
         canonical_args["site"] = target.name
         return canonical_args, target
+
+    @staticmethod
+    def _access_region_execution_locks(run: Any, node: Any) -> list[dict[str, Any]]:
+        """把冻结访问区域策略转换为由后续作业持有的持久占用声明。
+
+        参数：``run`` 是当前工作流运行，``node`` 是准备派发的入口节点。返回：
+        零或一个 ``access_region`` 请求；释放作业身份直接来自同一冻结规格。
+        异常：策略损坏、释放节点缺失或释放作业没有稳定身份时抛
+        ``ExecutionPolicyError``，禁止退化为普通短锁继续执行。
+        """
+
+        policy = getattr(node, "execution_policy", {})
+        access = policy.get("access_region") if isinstance(policy, Mapping) else None
+        if access is None:
+            return []
+        if not isinstance(access, Mapping):
+            raise ExecutionPolicyError("access_region 必须是对象")
+        region_key = str(access.get("key") or "").strip()
+        material_uuid = str(access.get("lock_material_uuid") or "").strip()
+        release_node_uuid = str(access.get("release_node_uuid") or "").strip()
+        release_node = next(
+            (
+                candidate
+                for candidate in run.spec.nodes
+                if candidate.id == release_node_uuid
+            ),
+            None,
+        )
+        if (
+            not region_key
+            or not material_uuid
+            or release_node is None
+            or release_node.executor_kind != "material_transfer"
+            or not release_node.job_id
+        ):
+            raise ExecutionPolicyError("访问区域缺少有效的物料转移释放作业")
+        return [
+            {
+                "lock_key": f"access_region/{material_uuid}/{region_key}",
+                "scope": "access_region",
+                "material_uuid": material_uuid,
+                "access_region_key": region_key,
+                "lease_owner_job_uuid": release_node.job_id,
+            }
+        ]
 
     def _resource_lock_keys(
         self,

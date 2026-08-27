@@ -324,7 +324,7 @@ def test_device_action_run_api_submits_only_created_job_to_edge_scheduler(
         assert created.status_code == 201
         created_data = created.json()["data"]
         assert created_data["task"]["status"] == "running"
-        assert created_data["job"]["status"] == "dispatched"
+        assert created_data["job"]["status"] == "running"
         assert dispatcher.dispatched == [
             {
                 "job_id": created_data["job"]["uuid"],
