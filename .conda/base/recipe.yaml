@@ -3,7 +3,7 @@
 
 package:
   name: unilabos
-  version: 0.11.3
+  version: 0.11.4
 
 source:
   path: ../../unilabos
@@ -61,7 +61,7 @@ requirements:
   - msgcenterpy >=0.1.8,<0.2
   - pylabrobot ==0.2.1
   - pylibftdi
-  - uni-lab::unilabos-env ==0.11.3
+  - uni-lab::unilabos-env ==0.11.4
 
 about:
   repository: https://github.com/deepmodeling/Uni-Lab-OS

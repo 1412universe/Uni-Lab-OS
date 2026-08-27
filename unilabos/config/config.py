@@ -134,7 +134,7 @@ class OTelConfig:
     insecure = True
     service_name = "uni-lab-edge"  # 对齐云端 uni-lab-http / uni-lab-scheduler
     service_namespace = "unilab"
-    service_version = "0.11.3"
+    service_version = "0.11.4"
     deployment_environment = ""
     headers = ""  # 逗号分隔 key=value；不得写入日志
     resource_attributes = ""  # 逗号分隔 key=value；敏感键会被过滤

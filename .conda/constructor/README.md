@@ -44,10 +44,10 @@ micromamba 避开 Conda channel 中连字符/下划线过渡元包的重复规�
 离线依赖集的 conda-standalone 26.3.2.post1。安装完成后的 Runtime 仍包含正式的
 `conda` 命令。
 
-从仓库根目录构建当前平台（版本默认与当前配置中的 `0.11.3` 一致）：
+从仓库根目录构建当前平台（版本默认与当前配置中的 `0.11.4` 一致）：
 
 ```bash
-export UNILABOS_INSTALLER_VERSION=0.11.3
+export UNILABOS_INSTALLER_VERSION=0.11.4
 export UNILABOS_INSTALLER_PACKAGE=unilabos
 constructor .conda/constructor \
   --platform linux-64 \

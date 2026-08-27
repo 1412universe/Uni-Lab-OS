@@ -174,7 +174,7 @@ class TracingSettings:
     enabled: bool = False
     service_name: str = "uni-lab-edge"
     service_namespace: str = "unilab"
-    service_version: str = "0.11.3"
+    service_version: str = "0.11.4"
     deployment_environment: str = ""
     endpoint: str = ""
     protocol: str = "grpc"
@@ -254,7 +254,7 @@ class TracingSettings:
             ).strip(),
             service_version=(
                 os.environ.get("OTEL_SERVICE_VERSION")
-                or str(configured("service_version", "0.11.3"))
+                or str(configured("service_version", "0.11.4"))
             ).strip(),
             deployment_environment=(
                 os.environ.get("OTEL_DEPLOYMENT_ENVIRONMENT")

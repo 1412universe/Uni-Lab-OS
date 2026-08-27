@@ -6,7 +6,7 @@ RUN micromamba install -y -n base \
       -c uni-lab \
       -c robostack-staging \
       -c conda-forge \
-      unilabos-env=0.11.3 \
+      unilabos-env=0.11.4 \
     && micromamba clean --all --yes
 
 COPY setup.py setup.cfg /opt/unilabos/
