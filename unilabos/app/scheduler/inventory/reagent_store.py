@@ -1,6 +1,6 @@
 """试剂（Reagent）公共合同的 SQLite 结构迁移。
 
-本模块只声明 v8 新增结构；``InventoryStore`` 仍是 ``inventory.db`` 唯一迁移
+本模块只声明 v9 新增结构；``InventoryStore`` 仍是 ``inventory.db`` 唯一迁移
 入口。试剂变化复用 Edge 既有 ``inventory_ledger`` 与 ``sync_outbox``，不创建
 第二套物料台账。
 """
@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
-_SCHEMA_V8_REAGENT = r"""
+_SCHEMA_V9_REAGENT = r"""
 CREATE TABLE IF NOT EXISTS inventory_ledger (
     ledger_id INTEGER PRIMARY KEY AUTOINCREMENT,
     occurred_at INTEGER NOT NULL,
@@ -253,13 +253,13 @@ def _migrate_legacy_material_ledger(connection: sqlite3.Connection) -> None:
 
 
 def migrate_reagent_schema(connection: sqlite3.Connection) -> None:
-    """幂等创建 v8 试剂身份、实例并扩展 Edge 统一台账。
+    """幂等创建 v9 试剂身份、实例并扩展 Edge 统一台账。
 
     参数：``connection`` 是 ``InventoryStore`` 独占的 SQLite 连接。返回：无。
     异常：任何 SQLite 结构或约束错误原样抛出，由唯一迁移入口终止启动。
     """
 
-    connection.executescript(_SCHEMA_V8_REAGENT)
+    connection.executescript(_SCHEMA_V9_REAGENT)
     existing = {
         row[1]
         for row in connection.execute(

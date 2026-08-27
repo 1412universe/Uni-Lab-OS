@@ -587,7 +587,10 @@ class TaskRuntimeProjection:
             template_uuid = str(
                 raw_binding.get("resource_template_uuid") or ""
             ).strip()
-            custody_policy = str(raw_binding.get("custody_policy") or "").strip()
+            custody_policy = str(
+                raw_binding.get("custody_policy")
+                or MaterialCustodyPolicy.TASK_EXCLUSIVE.value
+            ).strip()
             if not node_uuid or not material_uuid or not template_uuid or not custody_policy:
                 raise StoreConflict("物料来源绑定身份不能为空")
             if custody_policy not in {member.value for member in MaterialCustodyPolicy}:

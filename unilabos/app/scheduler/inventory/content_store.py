@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-_SCHEMA_V9_CONTAINER_CONTENT = r"""
+_SCHEMA_V10_CONTAINER_CONTENT = r"""
 CREATE TABLE IF NOT EXISTS sample (
     uuid TEXT PRIMARY KEY NOT NULL,
     create_time DATETIME NOT NULL,
@@ -60,7 +60,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_current_substance_material_active
 def migrate_container_content_schema(connection: sqlite3.Connection) -> None:
     """幂等创建 Backend 同形的样品与当前内容物表。"""
 
-    connection.executescript(_SCHEMA_V9_CONTAINER_CONTENT)
+    connection.executescript(_SCHEMA_V10_CONTAINER_CONTENT)
 
 
 __all__ = ["migrate_container_content_schema"]

@@ -425,7 +425,9 @@ def test_shared_source_allows_two_live_tasks_and_serializes_actions(
     ).json()["data"]
 
     assert first_task_uuid != second_task_uuid
-    assert [job["status"] for job in first_jobs] == ["succeeded", "dispatched"]
+    # 本地派发器已明确接受设备动作后，持久作业应立即从 dispatched 投影为
+    # running；第二个任务仍因共享物料动作锁保持 pending。
+    assert [job["status"] for job in first_jobs] == ["succeeded", "running"]
     assert [job["status"] for job in second_jobs] == ["succeeded", "pending"]
     assert {
         first_jobs[0]["return_info"]["material"]["custody_policy"],
@@ -448,5 +450,5 @@ def test_shared_source_allows_two_live_tasks_and_serializes_actions(
     second_after = runtime.client.get(
         f"/api/v1/workflow-tasks/{second_task_uuid}/jobs"
     ).json()["data"]
-    assert second_after[1]["status"] == "dispatched"
+    assert second_after[1]["status"] == "running"
     assert len(runtime.dispatcher.dispatched) == 2

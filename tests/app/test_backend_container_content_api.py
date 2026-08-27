@@ -63,15 +63,15 @@ def _reagent_info(client: TestClient) -> str:
     return response.json()["data"]["uuid"]
 
 
-def test_v8_database_adds_sample_and_current_substance_tables(tmp_path) -> None:
-    """既有试剂版数据库重开后幂等升级到容器内容 v9。"""
+def test_v9_database_adds_sample_and_current_substance_tables(tmp_path) -> None:
+    """既有试剂版数据库重开后幂等升级到容器内容 v10。"""
 
     database = tmp_path / "inventory.db"
     store = InventoryStore(str(database))
     with store.transaction() as connection:
         connection.execute("DROP TABLE current_substance")
         connection.execute("DROP TABLE sample")
-        connection.execute("PRAGMA user_version = 8")
+        connection.execute("PRAGMA user_version = 9")
     store.close()
 
     reopened = InventoryStore(str(database))
@@ -81,7 +81,7 @@ def test_v8_database_adds_sample_and_current_substance_tables(tmp_path) -> None:
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    assert reopened.query_one("PRAGMA user_version") == {"user_version": 9}
+    assert reopened.query_one("PRAGMA user_version") == {"user_version": 10}
     assert {"sample", "current_substance"} <= tables
     reopened.close()
 

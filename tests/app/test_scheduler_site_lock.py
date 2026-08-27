@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -406,12 +406,12 @@ def test_invalid_site_selection_fails_closed(
     site_uuid: str,
     site: str,
     expected_code: str,
-    caplog: pytest.LogCaptureFixture,
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     """验证非法库位选择全部失败关闭。
 
     参数：``inventory`` 是隔离库存；``site_uuid``、``site`` 和
-    ``expected_code`` 描述错误样例；``caplog`` 捕获稳定诊断。返回：无。
+    ``expected_code`` 描述错误样例；``capfd`` 捕获稳定诊断。返回：无。
     异常：非法选择被派发或诊断漂移时由断言报告。
     """
 
@@ -439,7 +439,7 @@ def test_invalid_site_selection_fails_closed(
     assert (
         scheduler.workflow_snapshot(f"wf-invalid-{expected_code}")["state"] == "failed"
     )
-    assert expected_code in caplog.text
+    assert expected_code in capfd.readouterr().err
 
 
 def test_occupied_site_is_rejected_before_dispatch(

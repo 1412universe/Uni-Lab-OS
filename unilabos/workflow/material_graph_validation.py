@@ -683,8 +683,18 @@ def _is_material_source_node(
     ``material_source`` 时为真。
     """
 
-    template_uuid = _field(node, "workflow_node_template_uuid")
-    template = templates.get(template_uuid)
+    # 计算节点等内置节点允许不绑定节点模板；缺少模板不是物料图错误，只表示
+    # 不能从模板目录判定为物料来源，随后继续兼容旧 ``type`` 字段。
+    template_uuid = (
+        node.get("workflow_node_template_uuid")
+        if isinstance(node, Mapping)
+        else getattr(node, "workflow_node_template_uuid", None)
+    )
+    template = (
+        templates.get(template_uuid)
+        if isinstance(template_uuid, str) and template_uuid
+        else None
+    )
     if template is not None and (
         template.get("node_type") == "material_source"
         or template.get("type") == "material_source"
