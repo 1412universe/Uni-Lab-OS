@@ -1572,6 +1572,34 @@ class WorkflowStore:
             "page_size": page_size,
         }
 
+    def list_recoverable_tasks(
+        self,
+        *,
+        statuses: Iterable[str] = ("pending", "running", "canceling"),
+    ) -> List[Dict[str, Any]]:
+        """按持久创建顺序返回启动扫描需要处理的 Task。
+
+        参数：``statuses`` 是调用方明确允许恢复的非终态集合。返回：按
+        ``create_time, uuid`` 升序排列的完整任务投影；该顺序同时是容量等待的
+        稳定公平顺序，进程重启不会改变。异常：空状态集合返回空数组。
+        """
+
+        normalized = tuple(dict.fromkeys(str(status).strip() for status in statuses))
+        normalized = tuple(status for status in normalized if status)
+        if not normalized:
+            return []
+        placeholders = ", ".join("?" for _ in normalized)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT * FROM workflow_task
+                WHERE deleted_at IS NULL AND status IN ({placeholders})
+                ORDER BY create_time ASC, uuid ASC
+                """,
+                normalized,
+            ).fetchall()
+        return [self._task_row(row) for row in rows]
+
     def list_jobs(self, task_uuid: str) -> List[Dict[str, Any]]:
         self.get_task(task_uuid)
         with self._lock:

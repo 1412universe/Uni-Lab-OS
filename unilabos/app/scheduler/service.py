@@ -90,6 +90,10 @@ from unilabos.utils.tracing import (
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_MAX_IN_FLIGHT_JOBS = 100
+_DEFAULT_MAX_ACTIVE_TASKS = 500
+_DEFAULT_MAX_TASKS_PER_WORKFLOW = 100
+
 
 class ExecutionPolicyError(ValueError):
     """冻结节点执行策略无法安全转成持久调度声明。"""
@@ -163,6 +167,9 @@ class EdgeScheduler:
         timeline_capacity: int = 400,
         monitor: Any = None,
         history: Any = None,
+        max_in_flight_jobs: int = _DEFAULT_MAX_IN_FLIGHT_JOBS,
+        max_active_tasks: int = _DEFAULT_MAX_ACTIVE_TASKS,
+        max_tasks_per_workflow: int = _DEFAULT_MAX_TASKS_PER_WORKFLOW,
     ):
         """装配本地执行态调度器（Scheduler）。
 
@@ -179,7 +186,22 @@ class EdgeScheduler:
             timeline_capacity: 内存时间线最多保留的作业数量。
             monitor: 实时监控事件输出适配器。
             history: 遗留工作流执行历史存储。
+            max_in_flight_jobs: 全局尚未收敛的在途作业上限。
+            max_active_tasks: 全局运行中工作流任务上限。
+            max_tasks_per_workflow: 同一工作流定义的运行任务上限。
         """
+
+        for field, value in (
+            ("max_in_flight_jobs", max_in_flight_jobs),
+            ("max_active_tasks", max_active_tasks),
+            ("max_tasks_per_workflow", max_tasks_per_workflow),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{field} 必须是正整数")
+        if max_tasks_per_workflow > max_active_tasks:
+            raise ValueError(
+                "max_tasks_per_workflow 不能大于 max_active_tasks"
+            )
 
         self._orderer = orderer or StableLocalOrderer()
         self._dispatcher = dispatcher or RecordingDispatcher()
@@ -217,6 +239,11 @@ class EdgeScheduler:
         self._monitor = monitor
         # 工作流执行历史（WorkflowHistoryStore，独立 SQLite）；None = 不落盘
         self._history = history
+        # 容量裁决由标准 Task/Job 持久状态完成；调度器只公开同一组配置，禁止
+        # 另建进程内计数权威。默认值与 Backend 主线保持一致。
+        self._max_in_flight_jobs = max_in_flight_jobs
+        self._max_active_tasks = max_active_tasks
+        self._max_tasks_per_workflow = max_tasks_per_workflow
         # 长生命周期根 span：workflow → action/job。只保存上下文/句柄，不保存 payload。
         self._workflow_spans: Dict[str, DetachedSpan] = {}
         self._job_spans: Dict[str, DetachedSpan] = {}
@@ -255,6 +282,24 @@ class EdgeScheduler:
         """
 
         return self._inventory
+
+    @property
+    def max_in_flight_jobs(self) -> int:
+        """返回全局在途作业容量。"""
+
+        return self._max_in_flight_jobs
+
+    @property
+    def max_active_tasks(self) -> int:
+        """返回全局运行任务容量。"""
+
+        return self._max_active_tasks
+
+    @property
+    def max_tasks_per_workflow(self) -> int:
+        """返回同一工作流定义的运行任务容量。"""
+
+        return self._max_tasks_per_workflow
 
     def _emit_monitor(
         self, channel: str, event_type: str, data: Dict[str, Any]

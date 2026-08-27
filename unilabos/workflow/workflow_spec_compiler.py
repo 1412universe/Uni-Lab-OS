@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime, timezone
 from typing import Any
 
 from unilabos.app.scheduler.inventory.domain import MaterialRequirement
@@ -125,9 +127,28 @@ class WorkflowSpecCompiler:
             edges=compiled_edges,
             handles=compiled_handles,
             priority=task.get("priority", 1.0),
+            submitted_at=self._submitted_at(task.get("create_time")),
             lab_id=str(task.get("lab_id") or "").strip(),
             run_mode=str(task.get("run_mode") or plan.get("run_mode") or "normal"),
         )
+
+    @staticmethod
+    def _submitted_at(value: Any) -> float:
+        """优先使用持久 Task 创建时间，兼容未带读模型字段的直接编译调用。"""
+
+        normalized = str(value or "").strip()
+        if not normalized:
+            return time.time()
+        try:
+            parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise WorkflowSpecCompilationError(
+                "invalid_task_snapshot",
+                "task_snapshot.create_time 不是合法时间",
+            ) from error
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
 
     def _compile_nodes(
         self,

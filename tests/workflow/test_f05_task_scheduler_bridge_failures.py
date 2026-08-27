@@ -346,6 +346,9 @@ class _FailOnceProjection:
         job_uuid: str,
         resolved_param: Mapping[str, Any],
         execution_locks: list[Mapping[str, Any]],
+        max_active_tasks: int = 500,
+        max_tasks_per_workflow: int = 100,
+        max_in_flight_jobs: int = 100,
     ) -> dict[str, Any]:
         """委托派发前投影；参数含最终解析参数，返回标准聚合。"""
 
@@ -354,6 +357,9 @@ class _FailOnceProjection:
             job_uuid=job_uuid,
             resolved_param=resolved_param,
             execution_locks=execution_locks,
+            max_active_tasks=max_active_tasks,
+            max_tasks_per_workflow=max_tasks_per_workflow,
+            max_in_flight_jobs=max_in_flight_jobs,
         )
 
     def project_dispatch_accepted(self, job_uuid: str) -> dict[str, Any]:

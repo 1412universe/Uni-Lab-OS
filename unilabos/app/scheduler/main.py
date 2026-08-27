@@ -17,6 +17,12 @@
                              ~/.unilabos/workflow_history.db；"off" 关闭）
     ULAB_ESTIMATE_MODE       时长预估模式：declared / historical / auto（默认 auto）
     ULAB_ESTIMATE_DEFAULT_S  预估兜底默认时长（秒），默认 60
+    ULAB_SCHEDULER_MAX_INFLIGHT_JOBS
+                             全局在途作业容量，默认 100
+    ULAB_SCHEDULER_MAX_ACTIVE_TASKS
+                             全局运行任务容量，默认 500
+    ULAB_SCHEDULER_MAX_TASKS_PER_WORKFLOW
+                             同一工作流定义的运行任务容量，默认 100
 """
 
 from __future__ import annotations
@@ -38,6 +44,19 @@ def build_estimator() -> DurationEstimator:
         mode=os.environ.get("ULAB_ESTIMATE_MODE", "auto").strip() or "auto",
         default_s=float(os.environ.get("ULAB_ESTIMATE_DEFAULT_S", "60")),
     )
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    """读取正整数环境变量；非法配置在进程启动时立即失败。"""
+
+    raw_value = os.environ.get(name, str(default)).strip()
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise ValueError(f"{name} 必须是正整数") from error
+    if value < 1:
+        raise ValueError(f"{name} 必须是正整数")
+    return value
 
 
 def _build_device_state():
@@ -101,6 +120,18 @@ def build_scheduler(inventory=None, history=None) -> EdgeScheduler:
         estimator=estimator,
         monitor=monitor_bus,
         history=history,
+        max_in_flight_jobs=_positive_env_int(
+            "ULAB_SCHEDULER_MAX_INFLIGHT_JOBS",
+            100,
+        ),
+        max_active_tasks=_positive_env_int(
+            "ULAB_SCHEDULER_MAX_ACTIVE_TASKS",
+            500,
+        ),
+        max_tasks_per_workflow=_positive_env_int(
+            "ULAB_SCHEDULER_MAX_TASKS_PER_WORKFLOW",
+            100,
+        ),
     )
 
 

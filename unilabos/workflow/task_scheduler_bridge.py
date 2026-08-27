@@ -63,6 +63,13 @@ class TaskSchedulerBridge:
         self._scheduler = scheduler
         self._compiler = compiler or WorkflowSpecCompiler()
         self._projection = projection or TaskRuntimeProjection(store)
+        self._max_in_flight_jobs = int(
+            getattr(scheduler, "max_in_flight_jobs", 100)
+        )
+        self._max_active_tasks = int(getattr(scheduler, "max_active_tasks", 500))
+        self._max_tasks_per_workflow = int(
+            getattr(scheduler, "max_tasks_per_workflow", 100)
+        )
         self._cancel_ack_timeout_seconds = max(
             0.01,
             float(cancel_ack_timeout_seconds),
@@ -495,34 +502,26 @@ class TaskSchedulerBridge:
             finished_listener=self._replay_persisted_job_finished,
         )
         recovered: list[dict[str, Any]] = []
-        for status in ("running", "pending", "canceling"):
-            page = 1
-            while True:
-                task_page = self._store.list_tasks(
-                    page=page,
-                    page_size=200,
-                    status=status,
+        # Backend 启动扫描包含普通 pending Task，并按 create_time/uuid 稳定排序。
+        # Local 使用同一顺序恢复，保证创建已提交、调度调用尚未发生的崩溃窗口
+        # 能以原 Task/Job 身份幂等重入。
+        for task in self._store.list_recoverable_tasks():
+            try:
+                if task.get("status") == "pending" and not (
+                    task.get("run_mode") == "step"
+                    and task.get("control_status") == "paused"
+                ):
+                    aggregate = self.submit(task)
+                else:
+                    aggregate = self._recover_running_task(task)
+            except Exception:  # 单任务损坏不影响其他恢复
+                logger.exception(
+                    "活动工作流任务无法安全恢复：%s",
+                    task.get("uuid"),
                 )
-                tasks = task_page["items"]
-                for task in tasks:
-                    if status == "pending" and not (
-                        task.get("run_mode") == "step"
-                        and task.get("control_status") == "paused"
-                    ):
-                        continue
-                    try:
-                        aggregate = self._recover_running_task(task)
-                    except Exception:  # noqa: BLE001 - 单任务损坏不影响其他恢复
-                        logger.exception(
-                            "活动工作流任务无法安全恢复：%s",
-                            task.get("uuid"),
-                        )
-                        continue
-                    if aggregate is not None:
-                        recovered.append(aggregate)
-                if page * 200 >= int(task_page["total"]):
-                    break
-                page += 1
+                continue
+            if aggregate is not None:
+                recovered.append(aggregate)
         return recovered
 
     def _recover_terminal_inventory_cleanup(self) -> None:
@@ -874,16 +873,20 @@ class TaskSchedulerBridge:
             pass
 
     def _retry_pending_admissions(self) -> None:
-        """重试全部尚未注册到旧调度器的物料来源准入。
+        """按持久顺序重试明确处于物料来源准入等待的 Task。
 
         参数：无。返回无；每个工作流任务（WorkflowTask）只在本轮重试一次，仍
         受阻时由 ``submit`` 重新登记。异常：存储、准入或调度失败原样传播，禁止
         在公开重排失败时继续派发其他普通动作。
         """
 
-        for task_uuid in tuple(self._admission_pending_tasks):
+        pending = set(self._admission_pending_tasks)
+        for task in self._store.list_recoverable_tasks(statuses=("pending",)):
+            task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
+            if task_uuid not in pending:
+                continue
             self._admission_pending_tasks.discard(task_uuid)
-            self.submit(self._store.get_task(task_uuid))
+            self.submit(task)
 
     def _on_job_pre_dispatch(self, dispatching: Mapping[str, Any]) -> bool | None:
         """在物理派发前提交标准作业派发意图。
@@ -913,6 +916,9 @@ class TaskSchedulerBridge:
             job_uuid=job_uuid,
             resolved_param=resolved_args,
             execution_locks=execution_locks,
+            max_active_tasks=self._max_active_tasks,
+            max_tasks_per_workflow=self._max_tasks_per_workflow,
+            max_in_flight_jobs=self._max_in_flight_jobs,
         )
         projected_job = next(
             (job for job in aggregate["jobs"] if job["uuid"] == job_uuid),
@@ -956,6 +962,8 @@ class TaskSchedulerBridge:
                 if waiting.get("blocking_job_id")
                 else None
             ),
+            max_active_tasks=self._max_active_tasks,
+            max_tasks_per_workflow=self._max_tasks_per_workflow,
         )
 
     def _on_job_dispatch_accepted(self, job_uuid: str) -> None:
@@ -1343,6 +1351,10 @@ class TaskSchedulerBridge:
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
             return
+        # 正常完成回调来自当前调度运行；重启后的 Edge 结果重放则可能只有持久
+        # Job→Task 路由而没有对应内存运行。记录这一区别，用于在释放持久派发
+        # 容量后主动唤醒其他已经恢复、仍在调度器中等待的作业。
+        replayed_without_runtime = self._scheduler.workflow_snapshot(task_uuid) is None
         # ``continue`` 只在下一个节点没有断点时复用既有单步派发原语；断点或
         # 显式 ``step`` 会先创建新 Hold，绝不越过物理派发边界。
         debug_action = self._store.advance_debug_after_job_finished(task_uuid)
@@ -1385,6 +1397,11 @@ class TaskSchedulerBridge:
                 self._projection.project_cleanup_settled(task_uuid)
         if task_uuid not in self._task_by_job.values():
             self._submitted_tasks.discard(task_uuid)
+        if replayed_without_runtime:
+            # Edge 发件箱重放发生在旧调度运行已经丢失之后；此时不会经过
+            # ``EdgeScheduler._on_job_finished`` 尾部的自动重排，需要显式唤醒
+            # 其他已恢复运行。容量仍由数据库状态判定，不依赖这个内存触发器。
+            self._scheduler.reschedule()
 
     def _aggregate(self, task_uuid: str) -> dict[str, Any]:
         """读取一个标准任务/作业聚合。

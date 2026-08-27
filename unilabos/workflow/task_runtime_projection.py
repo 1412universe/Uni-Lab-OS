@@ -28,6 +28,10 @@ from unilabos.workflow.manual_confirmation import (
     open_manual_confirmation,
 )
 from unilabos.workflow.material_source import MaterialCustodyPolicy
+from unilabos.workflow.scheduler_capacity import (
+    activate_workflow_task,
+    admit_job_dispatch,
+)
 from unilabos.workflow.store import (
     StoreConflict,
     StoreNotFound,
@@ -884,6 +888,9 @@ class TaskRuntimeProjection:
         job_uuid: str,
         resolved_param: Mapping[str, Any] | None = None,
         execution_locks: Sequence[Mapping[str, Any]] | None = None,
+        max_active_tasks: int = 500,
+        max_tasks_per_workflow: int = 100,
+        max_in_flight_jobs: int = 100,
     ) -> dict[str, Any]:
         """在物理派发前原子推进目标作业及父任务。
 
@@ -908,6 +915,42 @@ class TaskRuntimeProjection:
                 raise StoreConflict(f"作业不能进入 dispatched：{job_uuid}")
             if task_row["status"] not in {"pending", "running"}:
                 raise StoreConflict(f"任务不能开始派发：{task_uuid}")
+            if task_row["status"] == "pending":
+                activation = activate_workflow_task(
+                    connection,
+                    task_uuid=task_uuid,
+                    max_active_tasks=max_active_tasks,
+                    max_tasks_per_workflow=max_tasks_per_workflow,
+                )
+                if not activation.available:
+                    self._append_invalidation(
+                        connection,
+                        task_uuid=task_uuid,
+                        now=utc_now(),
+                    )
+                    return self._aggregate(connection, task_uuid)
+                task_row = self._task_row(connection, task_uuid)
+                WorkflowStore._append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    kind="task_transition",
+                    from_status="pending",
+                    to_status="running",
+                    now=utc_now(),
+                )
+            dispatch_capacity = admit_job_dispatch(
+                connection,
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                max_in_flight_jobs=max_in_flight_jobs,
+            )
+            if not dispatch_capacity.available:
+                self._append_invalidation(
+                    connection,
+                    task_uuid=task_uuid,
+                    now=utc_now(),
+                )
+                return self._aggregate(connection, task_uuid)
             lock_decision = try_acquire_execution_locks(
                 connection,
                 task_uuid=task_uuid,
@@ -939,26 +982,6 @@ class TaskRuntimeProjection:
             ).rowcount
             if updated_jobs != 1:
                 raise StoreConflict(f"作业派发前状态发生并发变化：{job_uuid}")
-            if task_row["status"] == "pending":
-                updated_tasks = connection.execute(
-                    """
-                    UPDATE workflow_task
-                    SET status = 'running', started_at = COALESCE(started_at, ?),
-                        update_time = ?
-                    WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
-                    """,
-                    (projected_at, projected_at, task_uuid),
-                ).rowcount
-                if updated_tasks != 1:
-                    raise StoreConflict(f"任务启动状态发生并发变化：{task_uuid}")
-                WorkflowStore._append_runtime_event(
-                    connection,
-                    task_uuid=task_uuid,
-                    kind="task_transition",
-                    from_status="pending",
-                    to_status="running",
-                    now=projected_at,
-                )
             WorkflowStore._append_runtime_event(
                 connection,
                 task_uuid=task_uuid,
@@ -993,6 +1016,8 @@ class TaskRuntimeProjection:
         execution_locks: Sequence[Mapping[str, Any]] | None,
         blocking_task_uuid: str | None = None,
         blocking_job_uuid: str | None = None,
+        max_active_tasks: int = 500,
+        max_tasks_per_workflow: int = 100,
     ) -> dict[str, Any]:
         """在旧调度器内存占用先命中时保留持久等待身份与可解释原因。"""
 
@@ -1005,6 +1030,28 @@ class TaskRuntimeProjection:
                 return self._aggregate(connection, task_uuid)
             if task_row["status"] not in {"pending", "running"}:
                 raise StoreConflict(f"任务不能等待执行资源：{task_uuid}")
+            if task_row["status"] == "pending":
+                activation = activate_workflow_task(
+                    connection,
+                    task_uuid=task_uuid,
+                    max_active_tasks=max_active_tasks,
+                    max_tasks_per_workflow=max_tasks_per_workflow,
+                )
+                if not activation.available:
+                    self._append_invalidation(
+                        connection,
+                        task_uuid=task_uuid,
+                        now=utc_now(),
+                    )
+                    return self._aggregate(connection, task_uuid)
+                WorkflowStore._append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    kind="task_transition",
+                    from_status="pending",
+                    to_status="running",
+                    now=utc_now(),
+                )
             record_execution_lock_wait(
                 connection,
                 task_uuid=task_uuid,
