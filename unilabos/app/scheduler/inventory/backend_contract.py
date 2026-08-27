@@ -348,6 +348,8 @@ class BackendResourceService:
         parent_uuid = _optional(values.get("parent_uuid"))
         barcode = str(values.get("barcode") or "")
         name = str(values.get("name") or "").strip()
+        inline_reagent = values.get("reagent")
+        content_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
         if not template_uuid or not name:
             raise BackendContractError(
                 INVALID_PARAMETER, "resource_template_uuid and name are required"
@@ -403,6 +405,20 @@ class BackendResourceService:
                     self._apply_site_placement(
                         conn, material_uuid, template_uuid, placement
                     )
+                if inline_reagent is not None:
+                    # 物料与内容物必须共享当前事务；不能先提交空容器，再调用独立
+                    # ``POST /reagents``，否则中途失败会留下半成品。
+                    from unilabos.app.scheduler.inventory.reagent_contract import (
+                        BackendReagentService,
+                    )
+
+                    reagent_values = dict(inline_reagent)
+                    reagent_values["material_uuid"] = material_uuid
+                    content_snapshot = BackendReagentService(
+                        self.store,
+                        edge_id=self.edge_id,
+                        lab_id=self.lab_id,
+                    ).create_reagent_in_transaction(conn, reagent_values)
         except BackendContractError:
             raise
         except sqlite3.IntegrityError as exc:
@@ -412,6 +428,8 @@ class BackendResourceService:
             ) from exc
         result = self.get_material(material_uuid)
         result["children"] = []
+        if content_snapshot is not None:
+            result.update(content_snapshot)
         return result
 
     def list_materials(

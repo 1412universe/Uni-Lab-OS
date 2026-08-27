@@ -50,8 +50,9 @@ class ReagentInfoUpdateRequest(ReagentModel):
     meta_data: Optional[Dict[str, Any]] = None
 
 
-class ReagentCreateRequest(ReagentModel):
-    material_uuid: UUID
+class MaterialReagentRequest(ReagentModel):
+    """创建容器时可内联携带的试剂字段，不包含容器物料身份。"""
+
     reagent_info_uuid: Optional[UUID] = None
     cas: str = ""
     physical_state: str = "unknown"
@@ -64,6 +65,12 @@ class ReagentCreateRequest(ReagentModel):
     observed_at: Optional[datetime] = None
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReagentCreateRequest(MaterialReagentRequest):
+    """为已存在容器单独创建试剂实例的请求。"""
+
+    material_uuid: UUID
 
 
 class ReagentUpdateRequest(ReagentModel):
@@ -207,4 +214,4 @@ def create_reagent_router(service: BackendReagentService) -> APIRouter:
     return router
 
 
-__all__ = ["create_reagent_router"]
+__all__ = ["MaterialReagentRequest", "create_reagent_router"]

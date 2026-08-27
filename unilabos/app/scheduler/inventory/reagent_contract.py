@@ -388,6 +388,25 @@ class BackendReagentService:
     def create_reagent(self, values: Dict[str, Any]) -> Dict[str, Any]:
         """在一个活动容器物料中登记试剂实例并原子追加入库台账。"""
 
+        with self.store.transaction() as conn:
+            created = self.create_reagent_in_transaction(conn, values)
+        result = self.get_reagent(created["reagent"]["uuid"])
+        result["reagent_info"] = created["reagent_info"]
+        return result
+
+    def create_reagent_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        values: Dict[str, Any],
+    ) -> Dict[str, Dict[str, Any]]:
+        """复用调用方事务创建试剂，并返回试剂与化学身份快照。
+
+        参数：``conn`` 是已经开启的库存写事务；``values`` 与独立创建试剂的
+        HTTP 输入一致且必须含 ``material_uuid``。返回：可嵌入物料创建响应的
+        ``reagent`` 与 ``reagent_info``。异常：容器、身份、数量或内容互斥校验
+        失败时抛出 Backend 合同错误，由调用方统一回滚整个事务。
+        """
+
         material_uuid = str(values.get("material_uuid") or "")
         info_uuid = _optional_text(values.get("reagent_info_uuid"))
         cas = _optional_text(values.get("cas"))
@@ -404,56 +423,64 @@ class BackendReagentService:
         identity = str(uuid4())
         now = _now()
         try:
-            with self.store.transaction() as conn:
-                self._require_container(conn, material_uuid)
-                # 延迟导入避免共享容器规则在模块初始化时形成循环依赖。
-                from unilabos.app.scheduler.inventory.content_rules import (
-                    ensure_container_empty,
-                )
+            self._require_container(conn, material_uuid)
+            # 延迟导入避免共享容器规则在模块初始化时形成循环依赖。
+            from unilabos.app.scheduler.inventory.content_rules import (
+                ensure_container_empty,
+            )
 
-                ensure_container_empty(conn, material_uuid)
-                if cas:
-                    cas = normalize_cas(cas)
-                    info = conn.execute(
-                        "SELECT * FROM reagent_info WHERE LOWER(cas)=LOWER(?) "
-                        "AND deleted_at IS NULL",
-                        (cas,),
-                    ).fetchone()
-                else:
-                    info = conn.execute(
-                        "SELECT * FROM reagent_info WHERE uuid=? AND deleted_at IS NULL",
-                        (info_uuid,),
-                    ).fetchone()
-                if info is None:
-                    raise BackendContractError(
-                        RESOURCE_NOT_FOUND, "reagent identity is not registered"
-                    )
-                conn.execute(
-                    """INSERT INTO reagent(uuid,create_time,update_time,description,meta_data,
-                    material_uuid,reagent_info_uuid,concentration_value,concentration_unit,
-                    quantity,quantity_unit,revision,physical_state,density_g_per_ml,density_source)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        identity, now, now, _optional_text(values.get("description")),
-                        _dump(values.get("meta_data") or {}), material_uuid, info["uuid"],
-                        concentration, concentration_unit, quantity, unit, 1,
-                        info["physical_state"], info["density_g_per_ml"],
-                        "dictionary" if info["density_g_per_ml"] is not None else None,
-                    ),
+            ensure_container_empty(conn, material_uuid)
+            if cas:
+                cas = normalize_cas(cas)
+                info = conn.execute(
+                    "SELECT * FROM reagent_info WHERE LOWER(cas)=LOWER(?) "
+                    "AND deleted_at IS NULL",
+                    (cas,),
+                ).fetchone()
+            else:
+                info = conn.execute(
+                    "SELECT * FROM reagent_info WHERE uuid=? AND deleted_at IS NULL",
+                    (info_uuid,),
+                ).fetchone()
+            if info is None:
+                raise BackendContractError(
+                    RESOURCE_NOT_FOUND, "reagent identity is not registered"
                 )
-                self._append_history(
-                    conn, material_uuid=material_uuid, reagent_uuid=identity,
-                    event_type="add", quantity_delta=quantity, quantity_unit=unit,
-                    revision=1, values=values, recorded_at=now,
-                )
+            conn.execute(
+                """INSERT INTO reagent(uuid,create_time,update_time,description,meta_data,
+                material_uuid,reagent_info_uuid,concentration_value,concentration_unit,
+                quantity,quantity_unit,revision,physical_state,density_g_per_ml,density_source)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    identity, now, now, _optional_text(values.get("description")),
+                    _dump(values.get("meta_data") or {}), material_uuid, info["uuid"],
+                    concentration, concentration_unit, quantity, unit, 1,
+                    info["physical_state"], info["density_g_per_ml"],
+                    "dictionary" if info["density_g_per_ml"] is not None else None,
+                ),
+            )
+            self._append_history(
+                conn, material_uuid=material_uuid, reagent_uuid=identity,
+                event_type="add", quantity_delta=quantity, quantity_unit=unit,
+                revision=1, values=values, recorded_at=now,
+            )
         except sqlite3.IntegrityError as error:
             raise BackendContractError(
                 RESOURCE_DATA_CONFLICT,
                 "selected container already has reagent content",
             ) from error
-        result = self.get_reagent(identity)
-        result["reagent_info"] = self.get_reagent_info(result["reagent_info_uuid"])
-        return result
+        reagent = conn.execute(
+            "SELECT * FROM reagent WHERE uuid=? AND deleted_at IS NULL",
+            (identity,),
+        ).fetchone()
+        if reagent is None:  # pragma: no cover - 同一事务内插入后的防御性检查。
+            raise BackendContractError(RESOURCE_NOT_FOUND, "reagent does not exist")
+        reagent_row = dict(reagent)
+        reagent_row["meta_data"] = _json(reagent_row.get("meta_data"), {})
+        return {
+            "reagent": reagent_row,
+            "reagent_info": _info_row(info),
+        }
 
     def list_reagents(
         self, *, page: int = 1, page_size: int = 20, material_uuid: str = "",

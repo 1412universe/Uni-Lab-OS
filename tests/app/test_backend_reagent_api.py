@@ -20,8 +20,8 @@ def _client(tmp_path) -> tuple[TestClient, InventoryStore]:
     return TestClient(app), store
 
 
-def _container(client: TestClient) -> str:
-    """同步带 container 标签的试剂瓶模板并创建一个空容器。"""
+def _container_template(client: TestClient) -> str:
+    """同步带 ``container`` 标签的试剂瓶模板并返回稳定 UUID。"""
 
     template = client.post(
         "/api/v1/resource-templates",
@@ -42,16 +42,106 @@ def _container(client: TestClient) -> str:
             ]
         },
     ).json()["data"]["templates"][0]
+    return template["uuid"]
+
+
+def _container(client: TestClient) -> str:
+    """创建一个不携带内容物的旧式空容器。"""
+
+    template_uuid = _container_template(client)
     response = client.post(
         "/api/v1/materials",
         json={
-            "resource_template_uuid": template["uuid"],
+            "resource_template_uuid": template_uuid,
             "name": "乙醇瓶",
             "barcode": "LOCAL-ETHANOL-001",
         },
     )
     assert response.status_code == 201
     return response.json()["data"]["uuid"]
+
+
+def test_material_create_can_atomically_include_reagent(tmp_path) -> None:
+    """公共物料创建接口可在同一事务内创建容器和试剂内容。"""
+
+    client, store = _client(tmp_path)
+    template_uuid = _container_template(client)
+    info_uuid = _reagent_info(client)
+
+    created = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "name": "内联乙醇瓶",
+            "barcode": "LOCAL-INLINE-ETHANOL-001",
+            "reagent": {
+                "reagent_info_uuid": info_uuid,
+                "quantity": 500,
+                "quantity_unit": "mL",
+                "concentration_value": 95,
+                "concentration_unit": "%",
+                "source": "frontend:workbench",
+                "meta_data": {"batch": "A-001"},
+            },
+        },
+    )
+
+    assert created.status_code == 201
+    assert created.json()["code"] == 0
+    result = created.json()["data"]
+    assert result["reagent"]["material_uuid"] == result["uuid"]
+    assert result["reagent"]["reagent_info_uuid"] == info_uuid
+    assert result["reagent"]["quantity"] == 500
+    assert result["reagent_info"]["uuid"] == info_uuid
+    assert store.query_one(
+        "SELECT COUNT(*) AS count FROM material WHERE barcode=?",
+        ("LOCAL-INLINE-ETHANOL-001",),
+    ) == {"count": 1}
+    assert store.query_one(
+        "SELECT COUNT(*) AS count FROM reagent WHERE material_uuid=?",
+        (result["uuid"],),
+    ) == {"count": 1}
+    assert store.query_one(
+        "SELECT COUNT(*) AS count FROM inventory_ledger "
+        "WHERE material_uuid=? AND subject_type='reagent'",
+        (result["uuid"],),
+    ) == {"count": 1}
+    assert store.query_one(
+        "SELECT COUNT(*) AS count FROM sync_outbox "
+        "WHERE aggregate_id=? AND aggregate_type='reagent'",
+        (result["reagent"]["uuid"],),
+    ) == {"count": 1}
+    store.close()
+
+
+def test_invalid_inline_reagent_rolls_back_material(tmp_path) -> None:
+    """内联试剂校验失败时不得留下半成品容器。"""
+
+    client, store = _client(tmp_path)
+    template_uuid = _container_template(client)
+
+    rejected = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "name": "不应保留的容器",
+            "barcode": "LOCAL-INLINE-ROLLBACK-001",
+            "reagent": {
+                "cas": "67-56-1",
+                "quantity": 10,
+                "quantity_unit": "mL",
+            },
+        },
+    )
+
+    assert rejected.json()["code"] == 4001
+    assert store.query_one(
+        "SELECT COUNT(*) AS count FROM material WHERE barcode=?",
+        ("LOCAL-INLINE-ROLLBACK-001",),
+    ) == {"count": 0}
+    assert store.query_one("SELECT COUNT(*) AS count FROM reagent") == {"count": 0}
+    assert store.query_one("SELECT COUNT(*) AS count FROM sync_outbox") == {"count": 0}
+    store.close()
 
 
 def _reagent_info(client: TestClient) -> str:

@@ -32,7 +32,10 @@ from unilabos.app.scheduler.inventory.content_api import (
 from unilabos.app.scheduler.inventory.content_contract import (
     BackendContainerContentService,
 )
-from unilabos.app.scheduler.inventory.reagent_api import create_reagent_router
+from unilabos.app.scheduler.inventory.reagent_api import (
+    MaterialReagentRequest,
+    create_reagent_router,
+)
 from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
 
 
@@ -95,6 +98,12 @@ class MaterialRequest(BackendModel):
     config: Dict[str, Any] = Field(default_factory=dict)
     relative_position: Optional[RelativePositionRequest] = None
     site_placement: Optional[SitePlacementRequest] = None
+
+
+class MaterialCreateRequest(MaterialRequest):
+    """创建物料时可选地在同一事务装入试剂。"""
+
+    reagent: Optional[MaterialReagentRequest] = None
 
 
 class MaterialStateRequest(BackendModel):
@@ -200,7 +209,7 @@ def create_backend_resource_router(
         return _call(service.delete_resource_template, str(template_uuid))
 
     @router.post("/materials")
-    def create_material(body: MaterialRequest) -> JSONResponse:
+    def create_material(body: MaterialCreateRequest) -> JSONResponse:
         return _call(
             service.create_material,
             body.model_dump(mode="json"),
