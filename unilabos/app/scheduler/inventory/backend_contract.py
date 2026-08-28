@@ -121,17 +121,68 @@ class BackendResourceService:
                 TEMPLATE_DEFINITION_INVALID,
                 "resource names are required and must be unique",
             )
+        runtime_catalog = self.store.runtime_device_template_catalog
+        runtime_catalog_required = (
+            self.store.runtime_device_template_catalog_required
+        )
+        runtime_device_names = self.store.runtime_device_template_names
+        # 安装运行时目录后，当前领域包中已有设备仍按原同步接口幂等返回身份，
+        # 但不写 SQLite；未知设备或用 resource 类型覆盖设备名会关闭式失败。
+        runtime_identity_by_name: dict[str, str] = {}
+        for resource, name in zip(resources, normalized_names):
+            registry_type = str(
+                resource.get("registry_type") or "resource"
+            ).strip().lower()
+            if name in runtime_device_names and registry_type != "device":
+                raise BackendContractError(
+                    TEMPLATE_DATA_CONFLICT,
+                    "resource template name is owned by the runtime device catalog",
+                )
+            if registry_type == "device" and runtime_catalog is None:
+                if runtime_catalog_required:
+                    raise BackendContractError(
+                        TEMPLATE_DATA_CONFLICT,
+                        "runtime device template catalog is not ready",
+                    )
+                continue
+            if runtime_catalog is not None:
+                runtime_uuid = runtime_catalog.resolve_uuid(name)
+                if registry_type == "device":
+                    if not runtime_uuid:
+                        raise BackendContractError(
+                            TEMPLATE_DATA_CONFLICT,
+                            "device templates are owned by the runtime package catalog",
+                        )
+                    runtime_identity_by_name[name] = runtime_uuid
+                elif runtime_uuid:
+                    raise BackendContractError(
+                        TEMPLATE_DATA_CONFLICT,
+                        "resource template name conflicts with a runtime device",
+                    )
         # ``identities`` 只记录本次事务最终采用的活动资源模板稳定身份。
         identities: List[Dict[str, str]] = []
         try:
             with self.store.transaction() as conn:
                 for resource, name in zip(resources, normalized_names):
+                    runtime_uuid = runtime_identity_by_name.get(name)
+                    if runtime_uuid is not None:
+                        identities.append({"uuid": runtime_uuid, "name": name})
+                        continue
                     # ``existing`` 只能是当前活动业务 ID；软删除历史不得被复活。
                     existing = conn.execute(
-                        "SELECT uuid,meta_data FROM resource_template "
+                        "SELECT uuid,meta_data,resource_type FROM resource_template "
                         "WHERE name = ? AND deleted_at IS NULL",
                         (name,),
                     ).fetchone()
+                    if (
+                        runtime_catalog_required
+                        and existing is not None
+                        and str(existing["resource_type"]) == "device"
+                    ):
+                        raise BackendContractError(
+                            TEMPLATE_DATA_CONFLICT,
+                            "persisted device templates are read-only during runtime catalog startup",
+                        )
                     template_uuid = str(existing["uuid"]) if existing else str(uuid4())
                     existing_meta = _json(existing["meta_data"], {}) if existing else {}
                     source_uri = resource.get("source_uri")
@@ -267,14 +318,15 @@ class BackendResourceService:
             values.append(resource_type.strip())
         offset = (page - 1) * page_size
         rows = self.store.query_all(
-            "SELECT uuid,name,display_name,resource_type,icon,tags "
+            "SELECT uuid,create_time,name,display_name,resource_type,icon,tags "
             f"FROM resource_template WHERE {' AND '.join(where)} "
-            "ORDER BY create_time DESC,uuid DESC LIMIT ? OFFSET ?",
-            (*values, page_size + 1, offset),
+            "ORDER BY create_time DESC,uuid DESC",
+            tuple(values),
         )
-        page_rows = rows[:page_size]
-        return {
-            "items": [
+        entries = [
+            (
+                str(row["create_time"]),
+                str(row["uuid"]),
                 {
                     "uuid": row["uuid"],
                     "name": row["name"],
@@ -282,15 +334,46 @@ class BackendResourceService:
                     "resource_type": row["resource_type"],
                     "tags": _json(row["tags"], []),
                     **({"icon": row["icon"]} if row["icon"] is not None else {}),
-                }
-                for row in page_rows
-            ],
-            "has_more": len(rows) > page_size,
+                },
+            )
+            for row in rows
+        ]
+        runtime_catalog = self.store.runtime_device_template_catalog
+        if runtime_catalog is not None and resource_type.strip() in {"", "device"}:
+            normalized_keyword = keyword.strip().lower()
+            for detail in runtime_catalog.list():
+                if normalized_keyword and normalized_keyword not in str(
+                    detail["name"]
+                ).lower() and normalized_keyword not in str(
+                    detail["display_name"]
+                ).lower():
+                    continue
+                entries.append(
+                    (
+                        str(detail["create_time"]),
+                        str(detail["uuid"]),
+                        self._resource_template_summary_from_detail(
+                            detail,
+                            include_tags=True,
+                        ),
+                    )
+                )
+        entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+        items = [entry[2] for entry in entries]
+        page_items = items[offset : offset + page_size]
+        return {
+            "items": page_items,
+            "has_more": len(items) > offset + page_size,
             "page": page,
             "page_size": page_size,
         }
 
     def get_resource_template(self, template_uuid: str) -> Dict[str, Any]:
+        runtime_catalog = self.store.runtime_device_template_catalog
+        if runtime_catalog is not None:
+            runtime_detail = runtime_catalog.get(template_uuid)
+            if runtime_detail is not None:
+                return runtime_detail
         row = self.store.query_one(
             "SELECT * FROM resource_template WHERE uuid=? AND deleted_at IS NULL",
             (template_uuid,),
@@ -312,14 +395,29 @@ class BackendResourceService:
         return result
 
     def delete_resource_template(self, template_uuid: str) -> None:
+        runtime_catalog = self.store.runtime_device_template_catalog
+        if runtime_catalog is not None and runtime_catalog.contains_uuid(template_uuid):
+            raise BackendContractError(
+                TEMPLATE_DATA_CONFLICT,
+                "runtime device templates can only be changed by the domain package",
+            )
         with self.store.transaction() as conn:
             row = conn.execute(
-                "SELECT uuid FROM resource_template WHERE uuid=? AND deleted_at IS NULL",
+                "SELECT uuid,name,resource_type FROM resource_template "
+                "WHERE uuid=? AND deleted_at IS NULL",
                 (template_uuid,),
             ).fetchone()
             if row is None:
                 raise BackendContractError(
                     RESOURCE_TEMPLATE_NOT_FOUND, "Resource template not found"
+                )
+            if self.store.runtime_device_template_catalog_required and (
+                str(row["resource_type"]) == "device"
+                or str(row["name"]) in self.store.runtime_device_template_names
+            ):
+                raise BackendContractError(
+                    TEMPLATE_DATA_CONFLICT,
+                    "runtime device templates can only be changed by the domain package",
                 )
             in_use = conn.execute(
                 "SELECT 1 FROM material WHERE resource_template_uuid=? "
@@ -343,6 +441,13 @@ class BackendResourceService:
     # Material ----------------------------------------------------------
 
     def create_material(self, values: Dict[str, Any]) -> Dict[str, Any]:
+        """创建物料或设备实例，并从对应模板权威校验模板身份。
+
+        参数：``values`` 保持既有 Backend 物料写入合同。返回：新实例详情。
+        设备模板从当前进程内目录解析，物料模板从 SQLite 解析；两者均继续使用
+        同一个 ``resource_template_uuid`` 外部字段。
+        """
+
         material_uuid = str(uuid4())
         template_uuid = str(values.get("resource_template_uuid") or "")
         parent_uuid = _optional(values.get("parent_uuid"))
@@ -354,9 +459,13 @@ class BackendResourceService:
             raise BackendContractError(
                 INVALID_PARAMETER, "resource_template_uuid and name are required"
             )
+        runtime_catalog = self.store.runtime_device_template_catalog
+        runtime_template = (
+            runtime_catalog.get(template_uuid) if runtime_catalog is not None else None
+        )
         try:
             with self.store.transaction() as conn:
-                template = conn.execute(
+                template = runtime_template or conn.execute(
                     "SELECT resource_type FROM resource_template "
                     "WHERE uuid=? AND deleted_at IS NULL",
                     (template_uuid,),
@@ -373,8 +482,8 @@ class BackendResourceService:
                     """
                     INSERT INTO material(
                         uuid,create_time,update_time,deleted_at,description,meta_data,
-                        resource_template_uuid,parent_uuid,class,barcode,name,config,data
-                    ) VALUES (?,?,?,NULL,?,?,?,?,?,?,?,?,?)
+                        resource_template_uuid,parent_uuid,class,type,barcode,name,config,data
+                    ) VALUES (?,?,?,NULL,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         material_uuid,
@@ -384,6 +493,7 @@ class BackendResourceService:
                         _dump(values.get("meta_data") or {}),
                         template_uuid,
                         parent_uuid,
+                        str(template["resource_type"]),
                         str(template["resource_type"]),
                         barcode,
                         name,
@@ -615,7 +725,7 @@ class BackendResourceService:
             "resource_template.resource_type AS template_resource_type "
             "FROM material "
             "JOIN material_inventory ON material_inventory.material_uuid=material.uuid "
-            "JOIN resource_template ON resource_template.uuid=material.resource_template_uuid "
+            "LEFT JOIN resource_template ON resource_template.uuid=material.resource_template_uuid "
             "WHERE material.deleted_at IS NULL ORDER BY material.create_time,material.uuid"
         )
         return {
@@ -627,15 +737,9 @@ class BackendResourceService:
                     ),
                     "sites": self.list_sites(material["uuid"]),
                     "current_site_uuid": self._current_site_uuid(material["uuid"]),
-                    "handles": [
-                        self._resource_handle_row(handle)
-                        for handle in self.store.query_all(
-                            "SELECT * FROM resource_handle_template "
-                            "WHERE resource_template_uuid=? AND deleted_at IS NULL "
-                            "ORDER BY io_type,name,uuid",
-                            (material["resource_template_uuid"],),
-                        )
-                    ],
+                    "handles": self._resource_template_handles(
+                        material["resource_template_uuid"]
+                    ),
                     "resource_template": self._resource_template_summary(
                         material["resource_template_uuid"]
                     ),
@@ -1097,6 +1201,11 @@ class BackendResourceService:
         return result
 
     def _resource_template_summary(self, template_uuid: str) -> Dict[str, Any]:
+        runtime_catalog = self.store.runtime_device_template_catalog
+        if runtime_catalog is not None:
+            detail = runtime_catalog.get(template_uuid)
+            if detail is not None:
+                return self._resource_template_summary_from_detail(detail)
         row = self.store.query_one(
             "SELECT uuid,name,display_name,resource_type,icon FROM resource_template "
             "WHERE uuid=? AND deleted_at IS NULL",
@@ -1113,6 +1222,44 @@ class BackendResourceService:
         if row.get("icon") is not None:
             result["icon"] = row["icon"]
         return result
+
+    @staticmethod
+    def _resource_template_summary_from_detail(
+        detail: Dict[str, Any],
+        *,
+        include_tags: bool = False,
+    ) -> Dict[str, Any]:
+        """从内存设备模板详情构造原有列表或物料图摘要。"""
+
+        result = {
+            "uuid": detail["uuid"],
+            "name": detail["name"],
+            "display_name": detail["display_name"],
+            "resource_type": detail["resource_type"],
+        }
+        if include_tags:
+            result["tags"] = list(detail.get("tags") or [])
+        if detail.get("icon") is not None:
+            result["icon"] = detail["icon"]
+        return result
+
+    def _resource_template_handles(self, template_uuid: str) -> List[Dict[str, Any]]:
+        """从内存设备目录或 SQLite 物料模板读取资源 Handle。"""
+
+        runtime_catalog = self.store.runtime_device_template_catalog
+        if runtime_catalog is not None:
+            detail = runtime_catalog.get(template_uuid)
+            if detail is not None:
+                return list(detail.get("handles") or [])
+        return [
+            self._resource_handle_row(handle)
+            for handle in self.store.query_all(
+                "SELECT * FROM resource_handle_template "
+                "WHERE resource_template_uuid=? AND deleted_at IS NULL "
+                "ORDER BY io_type,name,uuid",
+                (template_uuid,),
+            )
+        ]
 
     @classmethod
     def _site_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:

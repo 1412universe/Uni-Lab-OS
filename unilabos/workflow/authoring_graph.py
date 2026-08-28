@@ -325,8 +325,23 @@ def build_candidate_graph(
     workflow["uuid"] = program.workflow_uuid
     workflow["name"] = program.display_name
     workflow["description"] = program.description
-    workflow_meta = dict(workflow.get("meta_data") or {})
-    unilab_meta = dict(workflow_meta.get("unilab") or {})
+    existing_meta = dict(workflow.get("meta_data") or {})
+    unilab_meta = dict(existing_meta.get("unilab") or {})
+    root_fields = set(unilab_meta.get("authoring_root_fields") or [])
+    if program.tags is not None:
+        workflow["tags"] = deepcopy(program.tags)
+        root_fields.add("tags")
+    if program.meta_data is None:
+        workflow_meta = {
+            key: deepcopy(value)
+            for key, value in existing_meta.items()
+            if key != "unilab"
+        }
+    else:
+        workflow_meta = deepcopy(program.meta_data)
+        root_fields.add("meta_data")
+    if root_fields:
+        unilab_meta["authoring_root_fields"] = sorted(root_fields)
     unilab_meta.update(
         {
             "authoring_function_name": program.function_name,

@@ -48,17 +48,29 @@ normal reads exclude it after `deleted_at` becomes non-null.
 _Avoid_: Physical row deletion, empty status, hidden alias
 
 **Workflow**:
-A reusable persisted graph definition owned by the selected Authority. Workspace
-Python is an authoring source, not a replica of a Backend-owned Workflow.
+A reusable graph definition owned by the selected Authority. Backend Authority
+may persist it; Local Authority rebuilds it into a process-local catalog from an
+authorized domain-package Python source. JSON and Python imports are normalized
+to that Python source before they become Local definitions.
 _Avoid_: One execution, runtime snapshot, Run
 
 **Workspace Workflow Source**:
-Editable project source that may become a Workflow definition while `local` is
-Authority; it has no implicit write relationship to a Backend-owned Workflow.
+Authorized domain-package Python source that is AST-scanned, compiled, and
+validated into the Local Workflow Catalog on every OS start; it has no implicit
+write relationship to a Backend-owned Workflow.
 _Avoid_: Backend definition, remote replica, implicit publication
 
+**Local Workflow Catalog**:
+The process-local, non-durable set of validated Workflow definitions used by
+Local Authority. Domain-package workflows, including JSON/Python imports, are
+rebuilt at startup; API edits to an imported Workflow are written back to the
+same registered Python source before the in-memory revision advances.
+_Avoid_: SQLite definition authority, temporary upload, Backend replica
+
 **Workflow Task**:
-One execution created from a frozen Workflow graph.
+One durable execution created from a frozen Workflow graph. Its snapshot,
+execution plan, jobs, results, reservations, and recovery facts survive Local
+Workflow Catalog replacement or process restart.
 _Avoid_: Workflow definition, Run alias
 
 **Edge-only Inventory Interface**:

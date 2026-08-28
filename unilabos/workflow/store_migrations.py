@@ -106,6 +106,66 @@ def ensure_device_action_run_schema(connection: sqlite3.Connection) -> None:
     )
 
 
+def ensure_ephemeral_workflow_reference_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """解除持久任务对可消失工作流定义的数据库外键依赖。
+
+    参数：``connection`` 是 ``WorkflowStore`` 初始化事务持有的唯一写连接。
+    返回：无；函数只移除 ``workflow_task.workflow_uuid`` 到 ``workflow`` 的旧外键，
+    字段本身继续保存来源工作流身份。异常：表结构不符合已知合同或改写失败时关闭式
+    失败，由调用方回滚初始化事务。
+
+    Local 模式的工作流定义由领域包源码在进程内重建，而 Task/Job 必须跨重启保留。
+    因此运行事实可以引用一个当前进程已经不存在的定义身份，但不能因此被 SQLite
+    拒绝恢复。这里沿用本文件既有的精确 ``writable_schema`` 迁移方式，不新增表。
+    """
+
+    row = connection.execute(
+        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'workflow_task'"
+    ).fetchone()
+    table_sql = str(row["sql"] or "") if row is not None else ""
+    foreign_key_clause = (
+        ",\n    FOREIGN KEY(workflow_uuid) REFERENCES workflow(uuid)"
+    )
+    if foreign_key_clause not in table_sql:
+        # 已迁移的 Local 运行库不再含该约束；其他 workflow_task 外键由子表承担，
+        # 不能在这里做模糊字符串删除。
+        if any(
+            str(item["table"]) == "workflow"
+            and str(item["from"]) == "workflow_uuid"
+            for item in connection.execute(
+                "PRAGMA foreign_key_list(workflow_task)"
+            ).fetchall()
+        ):
+            raise sqlite3.OperationalError("workflow_task 定义外键结构无法安全迁移")
+        return
+
+    schema_version = int(connection.execute("PRAGMA schema_version").fetchone()[0])
+    connection.execute("PRAGMA writable_schema = ON")
+    try:
+        connection.execute(
+            """
+            UPDATE sqlite_schema
+            SET sql = replace(sql, ?, '')
+            WHERE type = 'table' AND name = 'workflow_task'
+            """,
+            (foreign_key_clause,),
+        )
+        connection.execute(f"PRAGMA schema_version = {schema_version + 1}")
+    finally:
+        connection.execute("PRAGMA writable_schema = OFF")
+
+    if any(
+        str(item["table"]) == "workflow"
+        and str(item["from"]) == "workflow_uuid"
+        for item in connection.execute(
+            "PRAGMA foreign_key_list(workflow_task)"
+        ).fetchall()
+    ):
+        raise sqlite3.OperationalError("workflow_task 定义外键迁移未生效")
+
+
 def ensure_task_material_admission_schema(connection: sqlite3.Connection) -> None:
     """补齐本地任务物料准入（TaskMaterialAdmission）的持久事实。
 

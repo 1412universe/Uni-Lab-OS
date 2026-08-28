@@ -8,13 +8,14 @@ from typing import Any
 
 import pytest
 
+from unilabos.registry.template_identity import device_template_uuid
 from unilabos.registry.template_projection import (
     RegistryTemplateProjection,
     RegistryTemplateProjectionError,
 )
 from unilabos.workflow.store import WorkflowStore
 
-HOST_TEMPLATE_UUID = "10000000-0000-4000-8000-000000000001"
+HOST_TEMPLATE_UUID = device_template_uuid("host_node")
 PLATE_TEMPLATE_UUID = "10000000-0000-4000-8000-000000000002"
 PUMP_TEMPLATE_UUID = "10000000-0000-4000-8000-000000000003"
 PLATE_SOURCE_IDENTITY = "lab.resources:plate_96"

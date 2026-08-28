@@ -24,7 +24,7 @@ _SITE_TYPES = frozenset({"well", "tipspot", "tip_spot", "tip-spot"})
 _SOURCE_KEY = "resource_graph_bootstrap_source"
 _FINGERPRINT_KEY = "resource_graph_bootstrap_fingerprint"
 _FINGERPRINT_VERSION_KEY = "resource_graph_bootstrap_fingerprint_version"
-_FINGERPRINT_VERSION = "3"
+_FINGERPRINT_VERSION = "4"
 _HOST_EXECUTOR_ID = "host_node"
 
 logger = logging.getLogger(__name__)
@@ -41,14 +41,17 @@ def bootstrap_local_resource_graph(
     registry_snapshot: RegistryTemplateSnapshot,
     source_id: str,
     material_rendering_by_template: Mapping[str, Mapping[str, Any]] | None = None,
+    activate_runtime_device_catalog: bool = True,
 ) -> dict[str, Any]:
     """预校验并原子提交本地资源图的物料（Material）与库位（Site）。
 
     参数：``store`` 是当前主机唯一库存 SQLite；``resource_tree_set`` 提供产品
     ``dump()`` 快照；``registry_snapshot`` 冻结同代资源模板定义；``source_id``
     标识资源图来源；``material_rendering_by_template`` 是工作区编译后、仅指向
-    OS 公开 HTTP 路由的模型快照。返回：``imported`` 或 ``unchanged`` 幂等
-    回执。异常：身份、拓扑、数值、模板、模型路径、既有权威或指纹冲突时
+    OS 公开 HTTP 路由的模型快照；``activate_runtime_device_catalog`` 控制该
+    独立入口是否在资源图提交后立即发布设备目录，完整产品启动可延迟到工作流
+    fixed-point。返回：``imported`` 或 ``unchanged`` 幂等回执。异常：身份、
+    拓扑、数值、模板、模型路径、既有权威或指纹冲突时
     抛出 ``ResourceGraphBootstrapError``；
     物料、位置、库位与指纹始终在同一事务提交或全部回滚。
     """
@@ -77,13 +80,15 @@ def bootstrap_local_resource_graph(
         material_rendering_by_template=material_rendering_by_template,
     )
     try:
-        resolve_template_uuid = synchronize_local_template_identities(
+        identity_synchronization = synchronize_local_template_identities(
             inventory_store=store,
             registry_snapshot=registry_snapshot,
         )
-        _resolve_projection_templates(projection, resolve_template_uuid)
+        _resolve_projection_templates(projection, identity_synchronization)
         fingerprint = _fingerprint(source_name, registry_snapshot, projection)
         status = _commit_projection(store, source_name, fingerprint, projection)
+        if activate_runtime_device_catalog:
+            identity_synchronization.activate_runtime_device_catalog()
     except ResourceGraphBootstrapError:
         raise
     except Exception as error:
@@ -560,7 +565,7 @@ def _commit_projection(
                     return "unchanged"
                 if (
                     stored_source == source_name
-                    and stored_fingerprint_version in {None, "2"}
+                    and stored_fingerprint_version in {None, "2", "3"}
                     and _projection_matches_persisted_rows(
                         connection,
                         projection,

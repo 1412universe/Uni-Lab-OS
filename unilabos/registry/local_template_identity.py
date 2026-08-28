@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timezone
 from typing import Any
 
 from unilabos.app.scheduler.inventory.backend_contract import (
@@ -14,7 +17,9 @@ from unilabos.registry.action_template_projection import (
     ActionTemplateProjectionError,
     compile_action_template_handles,
 )
+from unilabos.registry.runtime_device_catalog import RuntimeDeviceTemplateCatalog
 from unilabos.registry.template_projection import (
+    RegistryTemplateProjection,
     RegistryTemplateProjectionError,
     compile_resource_template_source_aliases,
 )
@@ -30,37 +35,96 @@ from unilabos.workflow.source_identity import (
 _ACTION_CONTRACT_PREFLIGHT_UUID = "00000000-0000-4000-8000-000000000001"
 
 
+class LocalTemplateIdentitySynchronization:
+    """保存已验证但尚未发布的本地模板身份代际。
+
+    物料模板同步可以先提交到 SQLite；设备模板目录必须等动作模板与领域工作流
+    全部构成一个完整目录后再显式激活，避免启动失败时泄漏半代设备定义。
+    """
+
+    __slots__ = ("_device_catalog", "_inventory_store", "_resolver", "_activated")
+
+    def __init__(
+        self,
+        *,
+        inventory_store: InventoryStore,
+        device_catalog: RuntimeDeviceTemplateCatalog,
+        resolver: Callable[[str], str],
+    ) -> None:
+        """冻结本次候选代际；构造本身不发布设备模板目录。"""
+
+        self._inventory_store = inventory_store
+        self._device_catalog = device_catalog
+        self._resolver = resolver
+        self._activated = False
+
+    def __call__(self, resource_identity: str) -> str:
+        """按本次冻结代际解析资源模板业务身份。"""
+
+        return self._resolver(resource_identity)
+
+    def activate_runtime_device_catalog(self) -> None:
+        """迁移旧引用并一次发布已完整验证的设备模板目录。"""
+
+        if self._activated:
+            return
+        current = self._inventory_store.runtime_device_template_catalog
+        if current is not None:
+            if current.fingerprint != self._device_catalog.fingerprint:
+                raise RuntimeError("库存服务启动后不得切换设备模板目录代际")
+            self._activated = True
+            return
+        _retire_legacy_persisted_device_templates(
+            self._inventory_store,
+            device_catalog=self._device_catalog,
+        )
+        self._inventory_store.install_runtime_device_template_catalog(
+            self._device_catalog
+        )
+        self._activated = True
+
+
 def synchronize_local_template_identities(
     *,
     inventory_store: InventoryStore,
     registry_snapshot: RegistryTemplateSnapshot,
-) -> Callable[[str], str]:
-    """原子同步单代本地模板身份并返回关闭式解析器。
+) -> LocalTemplateIdentitySynchronization:
+    """同步物料模板身份并返回尚未发布的设备目录候选。
 
     参数说明：``inventory_store`` 是本地库存资源模板写权威；
     ``registry_snapshot`` 是组合根冻结的不可变注册表快照（Registry Snapshot）。
-    返回：解析本代注册表（Registry）业务 ID、显式资源 ``source_fqid`` 或唯一
-    资源 ``class.module`` 兼容别名的只读函数；未知或实现复用导致歧义的身份返回
-    空串供投影层关闭式失败。
+    返回：可调用的本地模板身份候选；它解析本代注册表（Registry）业务 ID、
+    显式资源 ``source_fqid`` 或唯一资源 ``class.module`` 兼容别名。调用方必须
+    在设备、动作与领域工作流全部验证通过后显式激活设备目录。
     异常：业务 ID、源码别名、同步回执或 UUID 不完整、不唯一、不可解析时抛出
     ``RegistryTemplateProjectionError``；所有快照预校验均发生在库存写事务之前。
     """
 
-    # ``template_definitions`` 是本代设备与物料资源模板的完整分离定义。
+    # ``template_definitions`` 只用于跨类型名称/源码别名完整预校验；设备定义
+    # 随后进入内存 Catalog，只有物料资源模板进入 SQLite。
     template_definitions = registry_snapshot.detached_definitions()
+    resource_definitions = registry_snapshot.detached_resources()
+    device_definitions = registry_snapshot.detached_devices()
+    # 一旦产品组合选择领域包目录作为设备模板权威，后续任一启动失败都不得让
+    # 公共写接口退回 SQLite 创建设备模板或写入同名物料模板。门禁在库存同步
+    # 前携带候选设备名设置，且不可撤销。
+    inventory_store.require_runtime_device_template_catalog(
+        str(definition.get("id") or "") for definition in device_definitions
+    )
+    device_catalog = RuntimeDeviceTemplateCatalog(registry_snapshot)
     # ``template_name_by_alias`` 在任何库存写入前证明业务 ID 和源码别名一一归属。
     template_name_by_alias = _prevalidate_template_aliases(template_definitions)
     _prevalidate_action_resource_template_aliases(
-        registry_snapshot.detached_devices(),
+        device_definitions,
         template_name_by_alias=template_name_by_alias,
     )
     try:
         # ``synchronization`` 是活动资源模板身份同步事务的规范回执。
         synchronization = (
             BackendResourceService(inventory_store).sync_resource_templates(
-                template_definitions
+                resource_definitions
             )
-            if template_definitions
+            if resource_definitions
             else {"templates": []}
         )
     except BackendContractError as error:
@@ -71,14 +135,27 @@ def synchronize_local_template_identities(
     # ``template_uuid_by_name`` 是经回执验证的活动业务 ID 到稳定 UUID 的全集。
     template_uuid_by_name = _validated_receipt_identities(
         synchronization,
-        expected_names=set(template_name_by_alias.values()),
+        expected_names={str(item["id"]) for item in resource_definitions},
     )
+    for device_definition in device_definitions:
+        device_name = str(device_definition["id"])
+        template_uuid_by_name[device_name] = device_catalog.resolve_uuid(device_name)
     # ``template_uuid_by_alias`` 只在当前快照代际内存活，不建立第二持久身份权威。
     template_uuid_by_alias = {
         alias: template_uuid_by_name[template_name]
         for alias, template_name in template_name_by_alias.items()
     }
-
+    # 先用真实物料模板身份完整编译设备与动作目录；失败时不得安装部分设备代际。
+    preflight_projection = RegistryTemplateProjection.in_memory(
+        authority_id="local-preflight",
+        resource_template_identity_resolver=lambda identity: (
+            template_uuid_by_alias.get(identity, "")
+        ),
+    )
+    try:
+        preflight_projection.refresh(registry_snapshot)
+    finally:
+        preflight_projection.close()
     def resolve_resource_template_identity(resource_identity: str) -> str:
         """解析当前代资源模板业务 ID 或源码别名。
 
@@ -89,7 +166,143 @@ def synchronize_local_template_identities(
 
         return template_uuid_by_alias.get(resource_identity, "")
 
-    return resolve_resource_template_identity
+    return LocalTemplateIdentitySynchronization(
+        inventory_store=inventory_store,
+        device_catalog=device_catalog,
+        resolver=resolve_resource_template_identity,
+    )
+
+
+def _retire_legacy_persisted_device_templates(
+    inventory_store: InventoryStore,
+    *,
+    device_catalog: RuntimeDeviceTemplateCatalog,
+) -> None:
+    """把旧版持久设备模板引用迁到内存目录身份并软删除活动行。
+
+    参数：``inventory_store`` 是已升级为混合模板引用的库存库；
+    ``device_catalog`` 是当前启动代际。返回：无。只处理名称仍存在于当前领域包
+    且 ``resource_type=device`` 的旧行；物料和库位引用在同一事务替换为确定性
+    UUID。当前包已移除且仍被引用的旧设备关闭式失败；无引用旧设备只做软删除，
+    保留 UUID、Handle 和版本历史。
+    """
+
+    try:
+        with inventory_store.transaction() as connection:
+            catalog_items = device_catalog.list()
+            device_names = tuple(str(item["name"]) for item in catalog_items)
+            if device_names:
+                name_markers = ",".join("?" for _ in device_names)
+                conflicting_resource = connection.execute(
+                    "SELECT name FROM resource_template "
+                    f"WHERE name IN ({name_markers}) "
+                    "AND resource_type<>'device' AND deleted_at IS NULL LIMIT 1",
+                    device_names,
+                ).fetchone()
+                if conflicting_resource is not None:
+                    raise RegistryTemplateProjectionError(
+                        "设备模板业务名已被活动物料模板占用: "
+                        f"{conflicting_resource['name']}"
+                    )
+            runtime_name_by_uuid = {
+                str(item["uuid"]): str(item["name"]) for item in catalog_items
+            }
+            if runtime_name_by_uuid:
+                uuid_markers = ",".join("?" for _ in runtime_name_by_uuid)
+                for collision in connection.execute(
+                    "SELECT uuid,name,resource_type FROM resource_template "
+                    f"WHERE uuid IN ({uuid_markers}) AND deleted_at IS NULL",
+                    tuple(runtime_name_by_uuid),
+                ).fetchall():
+                    expected_name = runtime_name_by_uuid[str(collision["uuid"])]
+                    if (
+                        str(collision["resource_type"]) != "device"
+                        or str(collision["name"]) != expected_name
+                    ):
+                        raise RegistryTemplateProjectionError(
+                            "设备模板确定性 UUID 已被其他活动模板占用: "
+                            f"{collision['uuid']}"
+                        )
+            legacy_rows = connection.execute(
+                "SELECT uuid,name FROM resource_template "
+                "WHERE resource_type='device' AND deleted_at IS NULL "
+                "ORDER BY name,uuid"
+            ).fetchall()
+            replacements: dict[str, str] = {}
+            legacy_uuids: list[str] = []
+            for row in legacy_rows:
+                previous_uuid = str(row["uuid"])
+                replacement = device_catalog.resolve_uuid(str(row["name"]))
+                legacy_uuids.append(previous_uuid)
+                if replacement:
+                    replacements[previous_uuid] = replacement
+            if not legacy_uuids:
+                return
+            unknown_uuids = set(legacy_uuids) - set(replacements)
+            if unknown_uuids:
+                markers = ",".join("?" for _ in unknown_uuids)
+                referenced = connection.execute(
+                    "SELECT resource_template_uuid FROM material "
+                    f"WHERE resource_template_uuid IN ({markers}) LIMIT 1",
+                    tuple(sorted(unknown_uuids)),
+                ).fetchone()
+                if referenced is not None:
+                    raise RegistryTemplateProjectionError(
+                        "旧设备模板已被当前领域包移除但仍有物料实例引用"
+                    )
+            for previous_uuid, replacement_uuid in replacements.items():
+                connection.execute(
+                    "UPDATE material SET resource_template_uuid=? "
+                    "WHERE resource_template_uuid=?",
+                    (replacement_uuid, previous_uuid),
+                )
+            for site in connection.execute(
+                "SELECT uuid,allowed_resource_template_uuids FROM site"
+            ).fetchall():
+                try:
+                    allowed = json.loads(str(site["allowed_resource_template_uuids"]))
+                except (TypeError, ValueError):
+                    allowed = []
+                if not isinstance(allowed, list):
+                    continue
+                if any(str(item) in unknown_uuids for item in allowed):
+                    raise RegistryTemplateProjectionError(
+                        "旧设备模板已被当前领域包移除但仍有库位约束引用"
+                    )
+                migrated = [replacements.get(str(item), str(item)) for item in allowed]
+                if migrated != allowed:
+                    connection.execute(
+                        "UPDATE site SET allowed_resource_template_uuids=? WHERE uuid=?",
+                        (
+                            json.dumps(
+                                sorted(set(migrated)),
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                            site["uuid"],
+                        ),
+                    )
+            placeholders = ",".join("?" for _ in legacy_uuids)
+            now = (
+                datetime.now(timezone.utc)
+                .isoformat(timespec="milliseconds")
+                .replace("+00:00", "Z")
+            )
+            connection.execute(
+                "UPDATE resource_handle_template SET deleted_at=?,update_time=? "
+                f"WHERE resource_template_uuid IN ({placeholders}) "
+                "AND deleted_at IS NULL",
+                (now, now, *legacy_uuids),
+            )
+            connection.execute(
+                "UPDATE resource_template SET deleted_at=?,update_time=? "
+                f"WHERE uuid IN ({placeholders}) AND deleted_at IS NULL",
+                (now, now, *legacy_uuids),
+            )
+    except sqlite3.Error as error:
+        raise RegistryTemplateProjectionError(
+            "旧版持久设备模板迁移到内存目录失败"
+        ) from error
 
 
 def _prevalidate_template_aliases(
@@ -299,4 +512,7 @@ def _validated_receipt_identities(
     return template_uuid_by_name
 
 
-__all__ = ["synchronize_local_template_identities"]
+__all__ = [
+    "LocalTemplateIdentitySynchronization",
+    "synchronize_local_template_identities",
+]

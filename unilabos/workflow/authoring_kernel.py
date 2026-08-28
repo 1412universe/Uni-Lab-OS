@@ -49,6 +49,8 @@ class AuthoringCatalogSnapshot:
     actions: tuple[AuthoringCatalogAction, ...]
     _by_business_key: Mapping[tuple[str, str], AuthoringCatalogAction]
     _by_template_uuid: Mapping[str, AuthoringCatalogAction]
+    _by_template_key: Mapping[str, AuthoringCatalogAction]
+    _template_key_by_uuid: Mapping[str, str]
     _resource_template_uuid_by_symbol: Mapping[str, str]
     _resource_template_symbol_by_uuid: Mapping[str, str]
 
@@ -87,6 +89,8 @@ class AuthoringCatalogSnapshot:
         actions: list[AuthoringCatalogAction] = []
         by_business_key: dict[tuple[str, str], AuthoringCatalogAction] = {}
         by_template_uuid: dict[str, AuthoringCatalogAction] = {}
+        by_template_key: dict[str, AuthoringCatalogAction] = {}
+        template_key_by_uuid: dict[str, str] = {}
         for node in sorted(nodes, key=lambda item: str(item["uuid"])):
             class_identity = node.get("class")
             action_name = node.get("name")
@@ -110,6 +114,11 @@ class AuthoringCatalogSnapshot:
                 raise AuthoringCatalogError("工作流创作目录动作业务身份重复")
             by_business_key[business_key] = action
             by_template_uuid[node_uuid] = action
+            template_key = _catalog_template_key(node)
+            if template_key in by_template_key:
+                raise AuthoringCatalogError("工作流创作目录模板名称身份重复")
+            by_template_key[template_key] = action
+            template_key_by_uuid[node_uuid] = template_key
             actions.append(action)
 
         resource_uuid_by_symbol: dict[str, str] = {}
@@ -161,6 +170,8 @@ class AuthoringCatalogSnapshot:
             actions=tuple(actions),
             _by_business_key=MappingProxyType(by_business_key),
             _by_template_uuid=MappingProxyType(by_template_uuid),
+            _by_template_key=MappingProxyType(by_template_key),
+            _template_key_by_uuid=MappingProxyType(template_key_by_uuid),
             _resource_template_uuid_by_symbol=MappingProxyType(
                 resource_uuid_by_symbol
             ),
@@ -251,6 +262,31 @@ class AuthoringCatalogSnapshot:
         except (KeyError, TypeError, ValueError):
             raise AuthoringCatalogError("工作流创作目录缺少模板 UUID") from None
 
+    def require_template_key(self, template_key: str) -> AuthoringCatalogAction:
+        """按 ``设备名.动作名`` 取得唯一目录动作。
+
+        参数：``template_key`` 是工作流内部持久模板引用。返回：同一不可变动作
+        聚合；未知名称键关闭式失败，不回退 SQLite 或模糊匹配。
+        """
+
+        try:
+            return self._by_template_key[template_key]
+        except (KeyError, TypeError):
+            raise AuthoringCatalogError("工作流创作目录缺少模板名称身份") from None
+
+    def template_key_for_uuid(self, template_uuid: str) -> str:
+        """把外部模板 UUID 转换为内部稳定名称键。"""
+
+        try:
+            return self._template_key_by_uuid[validate_uuid(template_uuid)]
+        except (KeyError, TypeError, ValueError):
+            raise AuthoringCatalogError("工作流创作目录缺少模板 UUID") from None
+
+    def template_uuid_for_key(self, template_key: str) -> str:
+        """把内部稳定名称键转换为外部兼容 UUID。"""
+
+        return str(self.require_template_key(template_key).template["uuid"])
+
 
 class AuthoringKernel(Protocol):
     """工作流服务（WorkflowService）可依赖的纯创作编译接口。"""
@@ -289,6 +325,37 @@ class AuthoringKernel(Protocol):
         source_uri: str,
     ) -> CandidateCompilation:
         """共同验证候选图和源码是否语义等价。"""
+
+
+def _catalog_template_key(node: Mapping[str, Any]) -> str:
+    """由模板固化的父设备名和动作名生成内部名称键。
+
+    参数：``node`` 是完整节点模板。返回：``设备名.动作名``；父设备摘要缺失、
+    名称为空或动作名包含点号时关闭式失败，防止产生不可逆的歧义引用。
+    """
+
+    meta_data = node.get("meta_data")
+    unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
+    resource_template = (
+        unilab.get("resource_template") if isinstance(unilab, Mapping) else None
+    )
+    if not isinstance(resource_template, Mapping) and isinstance(meta_data, Mapping):
+        resource_template = meta_data.get("resource_template")
+    device_name = (
+        resource_template.get("name")
+        if isinstance(resource_template, Mapping)
+        else None
+    )
+    if not isinstance(device_name, str) or not device_name:
+        # 独立编译器测试和旧的内存调用方可能只提供设备实现类；该值仍是稳定
+        # 名称身份，不回退到模板 UUID。生产 Registry 投影始终走上面的设备名。
+        device_name = node.get("class")
+    action_name = node.get("name")
+    if not isinstance(device_name, str) or not device_name:
+        raise AuthoringCatalogError("节点模板缺少父设备或实现类稳定业务名")
+    if not isinstance(action_name, str) or not action_name or "." in action_name:
+        raise AuthoringCatalogError("节点模板动作业务名不能用于名称身份")
+    return f"{device_name}.{action_name}"
 
 
 def _required_uuid(entity: Mapping[str, Any], field: str) -> str:

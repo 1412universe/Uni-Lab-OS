@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+import unilabos.workflow.composition as workflow_composition
+from unilabos.app.scheduler.inventory.backend_api import (
+    install_backend_resource_api,
+)
 from unilabos.app.scheduler.inventory.backend_contract import (
     TEMPLATE_DATA_CONFLICT,
     BackendContractError,
@@ -17,12 +23,16 @@ from unilabos.app.scheduler.inventory.backend_contract import (
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.registry.ast_registry_scanner import _parse_file
 from unilabos.registry.registry import Registry
+from unilabos.registry.template_identity import device_template_uuid
 from unilabos.registry.template_projection import RegistryTemplateProjectionError
 from unilabos.registry.template_snapshot import RegistryTemplateSnapshot
 from unilabos.workflow.composition import (
     compose_local_workflow_template_runtime,
     get_workflow_service,
     reset_workflow_service_for_test,
+)
+from unilabos.workflow.published_workflow_runtime import (
+    PublishedWorkflowGenerationError,
 )
 
 
@@ -136,6 +146,16 @@ class Pump:
         }
         for definition in scanned_devices
     ]
+    # 设备级 Handle 使用冻结快照的 Backend 字段名，覆盖内存设备详情映射。
+    built_devices[0]["handles"] = [
+        {
+            "handler_key": "plate_in",
+            "data_type": "plate",
+            "label": "反应板入口",
+            "io_type": "target",
+            "data_key": "plate",
+        }
+    ]
     built_resources = [
         {
             "id": str(definition["resource_id"]),
@@ -205,9 +225,9 @@ def test_local_composition_creates_missing_inventory_template_identities(
 ) -> None:
     """本地组合必须先创建缺失身份，再发布可查询的工作流模板投影。
 
-    参数说明：``tmp_path`` 隔离库存与工作流数据库。返回：无；断言设备和物料
-    资源模板（ResourceTemplate）均进入 inventory.db，动作所有者与物料占位符
-    （ResourceSlot）允许集都引用同一批稳定 UUID。
+    参数说明：``tmp_path`` 隔离库存与工作流数据库。返回：无；断言只有物料
+    资源模板（ResourceTemplate）进入 inventory.db，设备与动作留在内存目录，
+    动作所有者与物料占位符（ResourceSlot）仍引用稳定 UUID。
     """
 
     reset_workflow_service_for_test()
@@ -223,7 +243,7 @@ def test_local_composition_creates_missing_inventory_template_identities(
             registry=registry,
         )
 
-        # ``template_identities`` 是库存权威提交的设备/物料模板活动 UUID 映射。
+        # ``template_identities`` 只包含仍由 SQLite 承担的物料模板身份。
         template_identities = _active_template_identities(inventory_store)
         # ``action`` 是从同代投影查询到的转移动作（Action）模板及连接点集合。
         action = projection.snapshot().require_action(
@@ -237,8 +257,8 @@ def test_local_composition_creates_missing_inventory_template_identities(
             if handle["io_type"] == "target" and handle["handle_key"] == "plate"
         )
 
-        assert set(template_identities) == {"plate_96", "pump"}
-        assert action.template["resource_template_uuid"] == template_identities["pump"]
+        assert set(template_identities) == {"plate_96"}
+        assert action.template["resource_template_uuid"] == device_template_uuid("pump")
         assert plate_input["meta_data"]["unilab"][
             "allowed_resource_template_uuids"
         ] == (template_identities["plate_96"],)
@@ -248,6 +268,79 @@ def test_local_composition_creates_missing_inventory_template_identities(
             )
             == template_identities["plate_96"]
         )
+        # 对外资源模板 API 仍能读取设备详情，但 SQLite 中没有设备模板行。
+        resource_service = BackendResourceService(inventory_store)
+        device_uuid = device_template_uuid("pump")
+        device_detail = resource_service.get_resource_template(device_uuid)
+        assert device_detail["name"] == "pump"
+        assert device_detail["handles"] == [
+            {
+                "uuid": device_detail["handles"][0]["uuid"],
+                "create_time": "1970-01-01T00:00:00Z",
+                "update_time": "1970-01-01T00:00:00Z",
+                "description": "",
+                "meta_data": {},
+                "resource_template_uuid": device_uuid,
+                "name": "plate_in",
+                "display_name": "反应板入口",
+                "type": "plate",
+                "io_type": "target",
+                "key": "plate",
+            }
+        ]
+        assert {
+            item["name"]
+            for item in resource_service.list_resource_templates(
+                page=1,
+                page_size=100,
+                keyword="",
+                resource_type="device",
+            )["items"]
+        } == {"pump"}
+        assert (
+            inventory_store.query_one(
+                "SELECT COUNT(*) AS count FROM resource_template "
+                "WHERE resource_type='device'"
+            )["count"]
+            == 0
+        )
+        # 原有物料实例写接口仍接受对外设备模板 UUID；校验来源已切到内存目录。
+        device_material = resource_service.create_material(
+            {
+                "resource_template_uuid": device_uuid,
+                "name": "测试泵实例",
+                "barcode": "PUMP-001",
+            }
+        )
+        assert device_material["resource_template_uuid"] == device_uuid
+        graph_device = next(
+            item
+            for item in resource_service.material_graph()["nodes"]
+            if item["material"]["uuid"] == device_material["uuid"]
+        )
+        assert graph_device["material"]["type"] == "device"
+        assert graph_device["resource_template"]["name"] == "pump"
+        # 同步当前领域包设备定义仍幂等成功，但不会重新写入 SQLite。
+        device_receipt = resource_service.sync_resource_templates(
+            RegistryTemplateSnapshot.from_registry(registry).detached_devices()
+        )
+        assert device_receipt == {
+            "templates": [{"uuid": device_uuid, "name": "pump"}]
+        }
+        assert inventory_store.query_all(
+            "SELECT uuid FROM resource_template WHERE resource_type='device' "
+            "AND deleted_at IS NULL"
+        ) == []
+        app = FastAPI()
+        install_backend_resource_api(app, resource_service)
+        update_response = TestClient(app).put(
+            f"/api/v1/resource-templates/{device_uuid}",
+            json={"display_name": "接口不得覆盖的设备名"},
+        )
+        assert update_response.json()["code"] == TEMPLATE_DATA_CONFLICT
+        assert resource_service.get_resource_template(device_uuid)[
+            "display_name"
+        ] == "测试泵"
     finally:
         reset_workflow_service_for_test()
         inventory_store.close()
@@ -326,15 +419,11 @@ def test_local_composition_preserves_business_identities_for_shared_implementati
 
         assert set(template_identities) == {
             "plate_96",
-            "pump",
-            "shared_device_a",
-            "shared_device_b",
             "shared_resource_a",
             "shared_resource_b",
         }
-        assert (
-            template_identities["shared_device_a"]
-            != template_identities["shared_device_b"]
+        assert device_template_uuid("shared_device_a") != device_template_uuid(
+            "shared_device_b"
         )
         assert (
             template_identities["shared_resource_a"]
@@ -375,9 +464,11 @@ def test_local_composition_reuses_existing_business_identity_uuid(
         first_result = BackendResourceService(inventory_store).sync_resource_templates(
             frozen_registry.detached_definitions()
         )
-        # ``expected_identities`` 是回执承诺且后续组合必须复用的活动 UUID 映射。
+        # ``expected_identities`` 只保留组合后仍由 SQLite 持有的物料模板身份。
         expected_identities = {
-            str(item["name"]): str(item["uuid"]) for item in first_result["templates"]
+            str(item["name"]): str(item["uuid"])
+            for item in first_result["templates"]
+            if item["name"] == "plate_96"
         }
 
         # ``projection`` 必须引用预置回执中的同一活动资源模板身份。
@@ -399,7 +490,7 @@ def test_local_composition_reuses_existing_business_identity_uuid(
         )
 
         assert _active_template_identities(inventory_store) == expected_identities
-        assert action.template["resource_template_uuid"] == expected_identities["pump"]
+        assert action.template["resource_template_uuid"] == device_template_uuid("pump")
         assert plate_input["meta_data"]["unilab"][
             "allowed_resource_template_uuids"
         ] == (expected_identities["plate_96"],)
@@ -475,6 +566,50 @@ def test_local_composition_restart_keeps_template_identity_stable(
     finally:
         reset_workflow_service_for_test()
         restarted_store.close()
+
+
+def test_runtime_device_catalog_rejects_sqlite_device_template_writes(
+    tmp_path: Path,
+) -> None:
+    """运行时设备目录启用后不得再通过 Backend 合同写 SQLite 设备模板。
+
+    参数：``tmp_path`` 隔离库存与工作流数据库。返回：无；断言即使设备名不在
+    当前领域包中，设备模板写入也会关闭式失败，而物料模板既有行保持不变。
+    """
+
+    reset_workflow_service_for_test()
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        registry = _build_registry(tmp_path)
+        compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=registry,
+        )
+        persisted_before = _active_template_identities(inventory_store)
+
+        with pytest.raises(
+            BackendContractError,
+            match="runtime package catalog",
+        ) as error:
+            BackendResourceService(inventory_store).sync_resource_templates(
+                [
+                    {
+                        "id": "external_pump",
+                        "display_name": "接口创建的泵",
+                        "registry_type": "device",
+                    }
+                ]
+            )
+
+        assert error.value.code == TEMPLATE_DATA_CONFLICT
+        assert _active_template_identities(inventory_store) == persisted_before
+        assert inventory_store.query_all(
+            "SELECT uuid FROM resource_template WHERE resource_type='device'"
+        ) == []
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
 
 
 def test_local_composition_rejects_conflicting_resource_source_aliases(
@@ -697,6 +832,134 @@ def test_local_composition_fails_closed_when_inventory_sync_is_rejected(
                 inventory_store=inventory_store,
                 registry=_build_registry(tmp_path),
             )
+        assert get_workflow_service() is None
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
+
+
+def test_workflow_catalog_failure_does_not_publish_or_migrate_device_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """领域工作流目录失败时不得发布设备目录或迁移旧设备模板。
+
+    参数：临时目录隔离数据库，``monkeypatch`` 在设备/动作预检通过后注入领域
+    工作流代际失败。返回：无；断言旧设备模板仍是活动持久事实，运行时设备目录
+    仍未安装，证明三个目录共同成功前没有半代设备定义对外可见。
+    """
+
+    reset_workflow_service_for_test()
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    registry = _build_registry(tmp_path)
+    try:
+        # 模拟升级前仍在 SQLite 的设备模板；成功启动才允许迁移并软删除。
+        BackendResourceService(inventory_store).sync_resource_templates(
+            RegistryTemplateSnapshot.from_registry(registry).detached_definitions()
+        )
+
+        def fail_generation(**_arguments: Any) -> None:
+            raise PublishedWorkflowGenerationError("测试领域工作流目录无效")
+
+        monkeypatch.setattr(
+            workflow_composition,
+            "build_published_workflow_generation",
+            fail_generation,
+        )
+        with pytest.raises(
+            RegistryTemplateProjectionError,
+            match="测试领域工作流目录无效",
+        ):
+            compose_local_workflow_template_runtime(
+                tmp_path,
+                inventory_store=inventory_store,
+                registry=registry,
+            )
+
+        assert inventory_store.runtime_device_template_catalog is None
+        assert inventory_store.query_one(
+            "SELECT COUNT(*) AS count FROM resource_template "
+            "WHERE resource_type='device' AND deleted_at IS NULL"
+        )["count"] == 1
+        legacy_device = inventory_store.query_one(
+            "SELECT uuid FROM resource_template "
+            "WHERE name='pump' AND resource_type='device' AND deleted_at IS NULL"
+        )
+        unknown_device = deepcopy(
+            registry.obtain_registry_device_info()[0]
+        )
+        unknown_device["id"] = "untrusted_device_after_failed_startup"
+        with pytest.raises(BackendContractError) as rejected:
+            BackendResourceService(inventory_store).sync_resource_templates(
+                [unknown_device]
+            )
+        assert rejected.value.code == TEMPLATE_DATA_CONFLICT
+        assert inventory_store.query_one(
+            "SELECT COUNT(*) AS count FROM resource_template "
+            "WHERE resource_type='device' AND deleted_at IS NULL"
+        )["count"] == 1
+        with pytest.raises(BackendContractError) as name_collision:
+            BackendResourceService(inventory_store).sync_resource_templates(
+                [
+                    {
+                        "id": "pump",
+                        "display_name": "伪装成物料模板的同名设备",
+                        "registry_type": "resource",
+                    }
+                ]
+            )
+        assert name_collision.value.code == TEMPLATE_DATA_CONFLICT
+        with pytest.raises(BackendContractError) as delete_rejected:
+            BackendResourceService(inventory_store).delete_resource_template(
+                str(legacy_device["uuid"])
+            )
+        assert delete_rejected.value.code == TEMPLATE_DATA_CONFLICT
+        assert get_workflow_service() is None
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
+
+
+def test_runtime_catalog_activation_rejects_preexisting_material_name_collision(
+    tmp_path: Path,
+) -> None:
+    """启动前已存在的同名物料模板不得与内存设备目录形成双权威。
+
+    参数：``tmp_path`` 隔离库存与工作流数据库。返回：无；先用旧入口持久化名为
+    ``pump`` 的物料模板，再加载同名设备包，断言目录激活关闭式失败且原事实未被
+    改写、运行时目录和工作流权威均未发布。
+    """
+
+    reset_workflow_service_for_test()
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        receipt = BackendResourceService(inventory_store).sync_resource_templates(
+            [
+                {
+                    "id": "pump",
+                    "display_name": "旧版同名物料模板",
+                    "registry_type": "resource",
+                }
+            ]
+        )
+        with pytest.raises(
+            RegistryTemplateProjectionError,
+            match="已被活动物料模板占用",
+        ):
+            compose_local_workflow_template_runtime(
+                tmp_path,
+                inventory_store=inventory_store,
+                registry=_build_registry(tmp_path),
+            )
+
+        assert inventory_store.runtime_device_template_catalog is None
+        assert inventory_store.query_one(
+            "SELECT uuid,resource_type FROM resource_template "
+            "WHERE name='pump' AND deleted_at IS NULL"
+        ) == {
+            "uuid": receipt["templates"][0]["uuid"],
+            "resource_type": "resource",
+        }
         assert get_workflow_service() is None
     finally:
         reset_workflow_service_for_test()

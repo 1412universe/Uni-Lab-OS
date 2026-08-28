@@ -20,7 +20,12 @@ from unilabos.workflow.authoring_material import (
     MaterialSourceDeclaration,
     parse_material_source_declaration,
 )
-from unilabos.workflow.models import CandidateSourceMapEntry, validate_uuid
+from unilabos.workflow.models import (
+    CandidateSourceMapEntry,
+    normalize_json_array,
+    normalize_json_object,
+    validate_uuid,
+)
 from unilabos.workflow.source_coordinates import (
     codepoint_offset_to_utf16_column,
     source_lines,
@@ -133,6 +138,8 @@ class WorkflowProgram:
     function_docstring: str | None
     display_name: str
     description: str | None
+    tags: list[Any] | None
+    meta_data: dict[str, Any] | None
     imports: tuple[tuple[str, str], ...]
     devices: tuple[DeviceDeclaration, ...]
     input_contract: dict[str, Any]
@@ -221,7 +228,7 @@ def parse_authoring_source(
     # ``function_docstring`` 只由 Python AST 的规范函数文档语义读取；普通首表达式
     # 不会成为文档，且整个过程不 import、compile 或执行作者代码。
     function_docstring = ast.get_docstring(function, clean=True)
-    workflow_uuid, display_name, description = _workflow_declaration(
+    workflow_uuid, display_name, description, tags, meta_data = _workflow_declaration(
         function,
         imports,
     )
@@ -280,6 +287,8 @@ def parse_authoring_source(
         function_docstring=function_docstring,
         display_name=display_name,
         description=description,
+        tags=tags,
+        meta_data=meta_data,
         imports=tuple(sorted(imports.items())),
         devices=tuple(devices),
         input_contract=input_contract,
@@ -500,11 +509,12 @@ def _device_declaration(
 def _workflow_declaration(
     function: ast.FunctionDef,
     imports: dict[str, str],
-) -> tuple[str, str, str | None]:
+) -> tuple[str, str, str | None, list[Any] | None, dict[str, Any] | None]:
     """读取工作流定义装饰器的稳定元数据。
 
     参数说明：``function`` 是唯一函数，``imports`` 用于识别装饰器；返回工作流
-    UUID、展示名和可选描述。位置参数、动态值或重复字段失败关闭。
+    UUID、展示名、可选描述、标签和公开元数据。位置参数、动态值或重复字段
+    失败关闭；标签和元数据只接受有限 JSON 字面量。
     """
 
     declarations = [
@@ -522,7 +532,13 @@ def _workflow_declaration(
     if declaration.args:
         _fail("invalid_workflow_declaration", "工作流声明不接受位置参数", declaration)
     values = _literal_keywords(declaration, "invalid_workflow_declaration")
-    if set(values) - {"workflow_uuid", "displayname", "description"}:
+    if set(values) - {
+        "workflow_uuid",
+        "displayname",
+        "description",
+        "tags",
+        "meta_data",
+    }:
         _fail("invalid_workflow_declaration", "工作流声明包含未知字段", declaration)
     try:
         workflow_uuid = validate_uuid(values["workflow_uuid"])
@@ -534,7 +550,30 @@ def _workflow_declaration(
         _fail("invalid_workflow_declaration", "工作流展示名不能为空", declaration)
     if description is not None and not isinstance(description, str):
         _fail("invalid_workflow_declaration", "工作流描述必须是字符串", declaration)
-    return workflow_uuid, display_name.strip(), description
+    try:
+        tags = (
+            normalize_json_array(values["tags"])
+            if "tags" in values
+            else None
+        )
+        meta_data = (
+            normalize_json_object(values["meta_data"])
+            if "meta_data" in values
+            else None
+        )
+    except ValueError:
+        _fail(
+            "invalid_workflow_declaration",
+            "工作流标签和公开元数据必须是 JSON 字面量",
+            declaration,
+        )
+    if meta_data is not None and "unilab" in meta_data:
+        _fail(
+            "invalid_workflow_declaration",
+            "工作流公开元数据不能覆盖系统保留的 unilab 字段",
+            declaration,
+        )
+    return workflow_uuid, display_name.strip(), description, tags, meta_data
 
 
 def _workflow_parameters(

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from tests.registry.test_template_projection import FakeRegistry
+from unilabos.registry.template_identity import device_template_uuid
 from unilabos.registry.template_projection import (
     RegistryTemplateProjection,
     RegistryTemplateProjectionError,
@@ -149,13 +150,8 @@ def test_invalid_catalog_generation_rolls_back_before_durable_publish(
 
     restarted = _projection(database_path)
     assert restarted.snapshot().fingerprint == good_snapshot.fingerprint
-    assert (
-        restarted.snapshot()
-        .require_action(
-            "lab.devices:Pump",
-            "transfer",
-        )
-        .template["resource_template_uuid"]
-        == PRIMARY_RESOURCE_TEMPLATE_UUID
-    )
+    assert restarted.snapshot().require_action(
+        "lab.devices:Pump",
+        "transfer",
+    ).template["resource_template_uuid"] == device_template_uuid("pump")
     restarted.close()

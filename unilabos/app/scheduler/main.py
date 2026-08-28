@@ -151,17 +151,23 @@ def build_workflow_service(
     from unilabos.workflow.store import WorkflowStore
     from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
 
-    workflow_store = WorkflowStore(database_path)
+    workflow_store = WorkflowStore(
+        database_path,
+        persist_workflow_definitions=False,
+    )
+    workflow_definitions = WorkflowStore(":memory:")
     bridge = TaskSchedulerBridge(workflow_store, scheduler=scheduler)
     try:
         service = WorkflowService(
             workflow_store,
+            definition_store=workflow_definitions,
             task_scheduler_bridge=bridge,
         )
         bridge.recover_active_tasks()
     except BaseException:
         bridge.close()
         workflow_store.close()
+        workflow_definitions.close()
         raise
     return service, bridge
 

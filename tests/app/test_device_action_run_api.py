@@ -9,13 +9,14 @@ from fastapi.testclient import TestClient
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
+from unilabos.registry.template_identity import device_template_uuid
 from unilabos.registry.template_projection import RegistryTemplateProjection
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
 
 DEVICE_MATERIAL_UUID = "10000000-0000-4000-8000-000000000001"
-DEVICE_RESOURCE_TEMPLATE_UUID = "20000000-0000-4000-8000-000000000001"
+DEVICE_RESOURCE_TEMPLATE_UUID = device_template_uuid("contract-device")
 OTHER_RESOURCE_TEMPLATE_UUID = "20000000-0000-4000-8000-000000000002"
 IDEMPOTENCY_KEY = "device-run-contract-1"
 

@@ -58,10 +58,12 @@ def candidate_changeset(
         ),
         "deleted_edge_uuids": sorted(set(applied_edges) - set(candidate_edges)),
     }
-    candidate_unilab = (candidate["workflow"].get("meta_data") or {}).get("unilab")
-    applied_unilab = (applied["workflow"].get("meta_data") or {}).get("unilab")
-    reserved_changed = canonical_json(candidate_unilab) != canonical_json(
-        applied_unilab
+    candidate_workflow = _workflow_definition_semantics(candidate["workflow"])
+    applied_workflow = _workflow_definition_semantics(applied["workflow"])
+    # ``reserved_metadata_changed`` 是既有 wire 字段名。它现在承载完整工作流根
+    # 语义变化（名称、描述、标签和公开元数据），保留名称以兼容现有客户端。
+    reserved_changed = canonical_json(candidate_workflow) != canonical_json(
+        applied_workflow
     )
     graph_changed = reserved_changed or any(expected.values())
     return CandidateChangeset.model_validate(
@@ -71,6 +73,18 @@ def candidate_changeset(
             "reserved_metadata_changed": reserved_changed,
         }
     ).model_dump()
+
+
+def _workflow_definition_semantics(workflow: Mapping[str, Any]) -> dict[str, Any]:
+    """提取 Python 领域源码能够表达的工作流根对象语义。"""
+
+    return {
+        "uuid": workflow.get("uuid"),
+        "name": workflow.get("name"),
+        "description": workflow.get("description"),
+        "tags": deepcopy(workflow.get("tags") or []),
+        "meta_data": deepcopy(workflow.get("meta_data") or {}),
+    }
 
 
 def semantic_graph_equal(left: Any, right: Any) -> bool:

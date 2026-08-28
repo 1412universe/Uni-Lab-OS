@@ -64,7 +64,7 @@ def _reagent_info(client: TestClient) -> str:
 
 
 def test_v9_database_adds_sample_and_current_substance_tables(tmp_path) -> None:
-    """既有试剂版数据库重开后幂等升级到容器内容 v10。"""
+    """既有试剂版数据库重开后幂等升级到容器内容 v10 与模板引用 v11。"""
 
     database = tmp_path / "inventory.db"
     store = InventoryStore(str(database))
@@ -81,7 +81,7 @@ def test_v9_database_adds_sample_and_current_substance_tables(tmp_path) -> None:
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    assert reopened.query_one("PRAGMA user_version") == {"user_version": 10}
+    assert reopened.query_one("PRAGMA user_version") == {"user_version": 11}
     assert {"sample", "current_substance"} <= tables
     reopened.close()
 

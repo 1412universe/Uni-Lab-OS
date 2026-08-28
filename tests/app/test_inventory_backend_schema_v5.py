@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from unilabos.app.scheduler.inventory import store as store_module
 from unilabos.app.scheduler.inventory.store import InventoryStore
 
@@ -117,6 +119,14 @@ def test_v4_migrates_to_backend_tables_without_losing_edge_inventory(tmp_path):
         "parent_uuid",
         "barcode",
     } <= material_columns
+    # 设备模板已由启动内存目录承担；物料模板引用不再错误地强制只指向
+    # SQLite resource_template，父物料自关联仍由数据库保护。
+    material_foreign_keys = {
+        row["table"]
+        for row in store.query_all("PRAGMA foreign_key_list(material)")
+    }
+    assert "resource_template" not in material_foreign_keys
+    assert "material" in material_foreign_keys
 
     occupant = store.query_one("SELECT * FROM material WHERE uuid='occupant'")
     assert occupant["parent_uuid"] == "owner"
@@ -134,6 +144,80 @@ def test_v4_migrates_to_backend_tables_without_losing_edge_inventory(tmp_path):
     assert site["material_uuid"] == "owner"
     assert site["occupied_material_uuid"] == "occupant"
     store.close()
+
+
+def test_v11_hybrid_template_migration_rolls_back_before_foreign_key_violation(
+    tmp_path,
+) -> None:
+    """v11 重建发现旧父物料引用损坏时不得提交半迁移结构。
+
+    参数：``tmp_path`` 隔离一份模拟 v10 的库存库。返回：无；断言外键检查在
+    提交前执行，失败后仍保留 v10 的模板外键、版本号和原表名。
+    """
+
+    database = tmp_path / "inventory.db"
+    InventoryStore(str(database)).close()
+    connection = sqlite3.connect(database)
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.executescript(
+        """
+        DROP TABLE material;
+        CREATE TABLE material (
+            uuid TEXT PRIMARY KEY NOT NULL,
+            create_time DATETIME NOT NULL,
+            update_time DATETIME NOT NULL,
+            deleted_at DATETIME,
+            description TEXT,
+            meta_data TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta_data)),
+            resource_template_uuid TEXT NOT NULL,
+            parent_uuid TEXT,
+            class TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT '',
+            barcode TEXT NOT NULL,
+            name TEXT NOT NULL,
+            config TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(config)),
+            data TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+            CHECK (parent_uuid IS NULL OR parent_uuid <> uuid),
+            FOREIGN KEY (resource_template_uuid)
+                REFERENCES resource_template (uuid) ON DELETE RESTRICT,
+            FOREIGN KEY (parent_uuid) REFERENCES material (uuid) ON DELETE RESTRICT
+        );
+        INSERT INTO resource_template(
+            uuid,create_time,update_time,meta_data,name,display_name,resource_type,
+            model,tags,data_schema,config_schema,pose,config_info,available_sites,
+            scene,device_params,ui_overlay
+        ) VALUES (
+            'template-v10','now','now','{}','template-v10','Template v10','material',
+            '{}','[]','{}','{}','{}','[]','[]','[]','{}','{}'
+        );
+        INSERT INTO material(
+            uuid,create_time,update_time,meta_data,resource_template_uuid,
+            parent_uuid,class,type,barcode,name,config,data
+        ) VALUES (
+            'orphan','now','now','{}','template-v10','missing-parent',
+            'material','material','ORPHAN','Orphan','{}','{}'
+        );
+        PRAGMA user_version = 10;
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(sqlite3.IntegrityError, match="invalid foreign keys"):
+        InventoryStore(str(database))
+
+    reopened = sqlite3.connect(database)
+    try:
+        assert reopened.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert {
+            row[2] for row in reopened.execute("PRAGMA foreign_key_list(material)")
+        } == {"material", "resource_template"}
+        assert reopened.execute(
+            "SELECT COUNT(*) FROM sqlite_master "
+            "WHERE type='table' AND name='material_v10'"
+        ).fetchone()[0] == 0
+    finally:
+        reopened.close()
 
 
 def test_fresh_v5_legacy_views_write_the_canonical_material_once(tmp_path):

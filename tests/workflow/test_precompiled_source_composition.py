@@ -32,10 +32,11 @@ def test_precompiled_source_plan_skips_manifest_rediscovery(
     class FakeStore:
         """隔离真实 SQLite 的工作流存储（WorkflowStore）替身。"""
 
-        def __init__(self, _database_path: Path) -> None:
+        def __init__(self, _database_path: Path | str, **_options: object) -> None:
             """接受组合根的数据库路径。
 
-            参数：``_database_path`` 是本测试不实际打开的 SQLite 路径。
+            参数：``_database_path`` 是本测试不实际打开的 SQLite 路径；
+            ``_options`` 接收运行事实库和内存定义目录的角色选项。
             返回：无。异常：无。
             """
 

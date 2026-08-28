@@ -28,8 +28,7 @@ def start_embedded_scheduler_runtime(
         setup_edge_scheduler,
         shutdown_edge_services,
     )
-    from unilabos.config.config import HostLinkConfig
-    from unilabos.config.config import BasicConfig, EdgeControlConfig
+    from unilabos.config.config import BasicConfig, EdgeControlConfig, HostLinkConfig
     from unilabos.registry.template_snapshot import RegistryTemplateSnapshot
 
     arguments = context.arguments
@@ -56,6 +55,11 @@ def start_embedded_scheduler_runtime(
         resource_graph_source_id=context.graph_source_id,
         material_shapes=context.material_shapes,
         material_model_catalog=context.material_model_catalog,
+        # 完整工作区还有领域工作流源码固定点；库存资源图先落事实，设备目录由
+        # Workflow 组合根的 before_publish 屏障统一激活，避免半代对外可见。
+        defer_runtime_device_catalog_activation=(
+            BasicConfig.workflow_source_discovery_plan is not None
+        ),
     )
     print_status(
         f"本地调试物料服务已启用 (SQLite WAL: {inventory_db})",

@@ -185,20 +185,14 @@ def _workflow_authoring_boundary(
 ) -> None:
     """限制作者源码可以改变的工作流字段。
 
-    参数说明：候选可改变名称、描述和保留 ``meta_data.unilab``；UUID、修订、
-    标签、投影时间和非保留元数据必须保持权威值，否则失败关闭。
+    参数说明：领域 Python 可改变名称、描述、标签和公开元数据，编译器负责生成
+    ``meta_data.unilab``；稳定 UUID、修订和投影时间仍必须保持服务权威值。
     """
 
-    for field in ("uuid", "revision", "tags", "create_time", "update_time"):
+    for field in ("uuid", "revision", "create_time", "update_time"):
         if field in candidate or field in base:
             if not strict_json_equal(candidate.get(field), base.get(field)):
                 _fail("候选结果改变了非创作工作流字段")
-    candidate_meta = dict(candidate["meta_data"])
-    base_meta = dict(base["meta_data"])
-    candidate_meta.pop("unilab", None)
-    base_meta.pop("unilab", None)
-    if not strict_json_equal(candidate_meta, base_meta):
-        _fail("候选结果改变了非创作工作流元数据")
 
 
 def _nodes(

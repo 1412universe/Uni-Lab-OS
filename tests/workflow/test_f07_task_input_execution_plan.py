@@ -335,6 +335,61 @@ def test_http_task_input_and_snapshot_remain_frozen_after_workflow_evolves(
         store.close()
 
 
+def test_ephemeral_definition_creates_durable_restart_safe_task(
+    tmp_path: Path,
+) -> None:
+    """进程内工作流定义应能创建不依赖定义表的持久 Task 快照。
+
+    参数：``tmp_path`` 隔离运行事实文件库。返回：无；定义目录关闭后，重新打开
+    文件库仍能读取 Task、输入和冻结图，且文件库从未写入 workflow 定义行。
+    """
+
+    database_path = tmp_path / "ephemeral-definition-runtime.db"
+    runtime_store = WorkflowStore(
+        database_path,
+        persist_workflow_definitions=False,
+    )
+    definition_store = WorkflowStore(":memory:")
+    service = WorkflowService(
+        runtime_store,
+        definition_store=definition_store,
+    )
+    client = TestClient(create_workflow_app(service))
+    try:
+        workflow_uuid = _create_workflow(client, definition_store)
+        response = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "run_mode": "normal",
+                "input": {"count": 4},
+                "meta_data": {},
+            },
+        )
+        assert response.status_code == 201
+        task = response.json()["data"]
+        assert runtime_store.count_rows("workflow") == 0
+        assert runtime_store.count_rows("workflow_node") == 0
+        assert task["workflow_uuid"] == workflow_uuid
+        assert task["workflow_snapshot"]["workflow"]["uuid"] == workflow_uuid
+        task_uuid = task["uuid"]
+    finally:
+        service.close()
+
+    reopened = WorkflowStore(
+        database_path,
+        persist_workflow_definitions=False,
+    )
+    try:
+        recovered = reopened.get_task(task_uuid)
+        assert recovered["input"] == {"count": 4, "label": "automatic"}
+        assert recovered["workflow_snapshot"]["workflow"]["uuid"] == workflow_uuid
+        assert reopened.count_rows("workflow") == 0
+        assert reopened._conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        reopened.close()
+
+
 def test_resource_slot_task_input_is_resolved_by_material_authority() -> None:
     """ResourceSlot 任务输入须由物料权威解析并校验模板允许集合。
 

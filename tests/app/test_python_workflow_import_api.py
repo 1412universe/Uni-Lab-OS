@@ -309,17 +309,27 @@ def test_python_file_import_openapi_and_scheduler_cors_contract(tmp_path: Any) -
         service.close()
 
 
-def test_python_file_import_survives_workflow_store_restart(tmp_path: Any) -> None:
-    """导入形成的工作流定义必须在进程重启后保持相同身份和完整图。
+def test_python_file_import_is_process_local_and_disappears_after_restart(
+    tmp_path: Any,
+) -> None:
+    """临时导入只安装进程内定义，重启后消失且文件库不留定义。
 
-    参数：``tmp_path`` 是跨两次服务生命周期复用的 SQLite 目录。返回：无；第二
-    个服务只从持久事实读取相同工作流 UUID、节点身份和导入来源摘要。
+    参数：``tmp_path`` 是跨两次服务生命周期复用的运行事实 SQLite 目录。返回：
+    无；第一进程立即可读，第二进程返回不存在，且文件库始终没有定义行。
     """
 
     database_path = tmp_path / "workflow_history.db"
     engine = _engine()
-    first_store = WorkflowStore(database_path)
-    first_service = WorkflowService(first_store, compiler=engine)
+    first_store = WorkflowStore(
+        database_path,
+        persist_workflow_definitions=False,
+    )
+    first_definitions = WorkflowStore(":memory:")
+    first_service = WorkflowService(
+        first_store,
+        definition_store=first_definitions,
+        compiler=engine,
+    )
     try:
         imported = _upload(
             TestClient(create_workflow_app(first_service)),
@@ -328,24 +338,32 @@ def test_python_file_import_survives_workflow_store_restart(tmp_path: Any) -> No
         )
         assert imported.status_code == 201
         assert imported.json()["code"] == 0
+        assert first_definitions.count_rows("workflow") == 1
+        assert first_store.count_rows("workflow") == 0
+        assert first_store.count_rows("workflow_node") == 0
     finally:
         first_service.close()
 
-    reopened_store = WorkflowStore(database_path)
-    reopened_service = WorkflowService(reopened_store, compiler=engine)
+    reopened_store = WorkflowStore(
+        database_path,
+        persist_workflow_definitions=False,
+    )
+    reopened_definitions = WorkflowStore(":memory:")
+    reopened_service = WorkflowService(
+        reopened_store,
+        definition_store=reopened_definitions,
+        compiler=engine,
+    )
     try:
         response = TestClient(create_workflow_app(reopened_service)).get(
             f"/api/v1/workflows/{WORKFLOW_UUID}/graph"
         )
         assert response.status_code == 200
-        graph = response.json()["data"]
-        assert graph["workflow"]["uuid"] == WORKFLOW_UUID
-        assert [node["uuid"] for node in graph["nodes"]] == [
-            PREPARE_NODE_UUID,
-            ANALYZE_NODE_UUID,
-        ]
-        provenance = graph["workflow"]["meta_data"]["unilab"]["python_import"]
-        assert provenance["file_name"] == "restart-safe.py"
-        assert provenance["source_hash"].startswith("sha256:")
+        assert response.json() == {
+            "code": 3002,
+            "error": {"msg": "请求的资源不存在"},
+        }
+        assert reopened_store.count_rows("workflow") == 0
+        assert reopened_definitions.count_rows("workflow") == 0
     finally:
         reopened_service.close()

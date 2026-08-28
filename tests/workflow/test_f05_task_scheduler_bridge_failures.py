@@ -71,14 +71,14 @@ def test_composition_closes_store_when_shared_bridge_construction_fails(
     captured_stores: list[WorkflowStore] = []
     real_store_type = composition.WorkflowStore
 
-    def open_store(database_path: Path) -> WorkflowStore:
+    def open_store(database_path: Path | str, **options: Any) -> WorkflowStore:
         """记录组合根创建的工作流存储（WorkflowStore）。
 
         参数：``database_path`` 是待打开的 SQLite 数据库路径。返回：真实存储并
         保留其身份供关闭断言使用；异常：真实存储构造错误原样传播。
         """
 
-        opened_store = real_store_type(database_path)
+        opened_store = real_store_type(database_path, **options)
         captured_stores.append(opened_store)
         return opened_store
 
@@ -134,7 +134,9 @@ def test_composition_closes_store_when_shared_bridge_construction_fails(
     assert remove_pre_dispatch_listener.call_count == 0
     assert add_finished_listener.call_count == 0
     assert remove_finished_listener.call_count == 0
-    _assert_store_closed(captured_stores[0])
+    assert len(captured_stores) == 2
+    for captured_store in captured_stores:
+        _assert_store_closed(captured_store)
 
 
 def test_composition_closes_shared_bridge_when_service_construction_fails(
@@ -151,14 +153,14 @@ def test_composition_closes_shared_bridge_when_service_construction_fails(
     captured_stores: list[WorkflowStore] = []
     real_store_type = composition.WorkflowStore
 
-    def open_store(database_path: Path) -> WorkflowStore:
+    def open_store(database_path: Path | str, **options: Any) -> WorkflowStore:
         """记录组合根创建的工作流存储（WorkflowStore）。
 
         参数：``database_path`` 是待打开的 SQLite 数据库路径。返回：真实存储并
         保留其身份供关闭断言使用；异常：真实存储构造错误原样传播。
         """
 
-        opened_store = real_store_type(database_path)
+        opened_store = real_store_type(database_path, **options)
         captured_stores.append(opened_store)
         return opened_store
 
@@ -214,7 +216,9 @@ def test_composition_closes_shared_bridge_when_service_construction_fails(
     remove_finished_listener.assert_called_once_with(
         add_finished_listener.call_args.args[0]
     )
-    _assert_store_closed(captured_stores[0])
+    assert len(captured_stores) == 2
+    for captured_store in captured_stores:
+        _assert_store_closed(captured_store)
 
 
 def _locked_task(store: WorkflowStore) -> dict[str, Any]:

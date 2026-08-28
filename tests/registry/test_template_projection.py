@@ -9,6 +9,10 @@ from typing import Any
 import pytest
 
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.registry.template_identity import (
+    action_template_uuid,
+    device_template_uuid,
+)
 from unilabos.registry.template_projection import (
     RegistryTemplateProjection,
     RegistryTemplateProjectionError,
@@ -18,6 +22,7 @@ from unilabos.workflow.composition import (
     compose_local_workflow_template_runtime,
     reset_workflow_service_for_test,
 )
+from unilabos.workflow.models import WorkflowNodeWrite
 from unilabos.workflow.store import WorkflowStore
 
 RESOURCE_TEMPLATE_UUID = "10000000-0000-4000-8000-000000000001"
@@ -343,6 +348,42 @@ def _projection(database_path: Path) -> RegistryTemplateProjection:
     )
 
 
+def _in_memory_projection() -> RegistryTemplateProjection:
+    """建立不读写工作流模板表的设备动作内存投影。"""
+
+    return RegistryTemplateProjection.in_memory(
+        authority_id="local",
+        resource_template_identity_resolver=lambda resource_name: {
+            "lab.resources:plate_96": ALLOWED_MATERIAL_TEMPLATE_UUID,
+        }.get(resource_name, ""),
+    )
+
+
+def test_in_memory_projection_keeps_identity_across_cold_start() -> None:
+    """两个没有共享数据库的目录实例必须按设备名和动作名恢复同一 UUID。"""
+
+    first_projection = _in_memory_projection()
+    first_action = first_projection.refresh(FakeRegistry()).require_action(
+        "lab.devices:Pump",
+        "transfer",
+    )
+    first_projection.close()
+
+    second_projection = _in_memory_projection()
+    second_action = second_projection.refresh(FakeRegistry()).require_action(
+        "lab.devices:Pump",
+        "transfer",
+    )
+    second_projection.close()
+
+    assert second_action.template["uuid"] == first_action.template["uuid"]
+    assert (
+        second_action.template["resource_template_uuid"]
+        == (first_action.template["resource_template_uuid"])
+    )
+    assert second_action.detached_handles() == first_action.detached_handles()
+
+
 def test_projection_reuses_active_business_identity_across_refresh_and_restart(
     tmp_path: Path,
 ) -> None:
@@ -409,10 +450,10 @@ def test_projection_rejects_invalid_explicit_uuid_before_persisting(
     restarted_projection.close()
 
 
-def test_projection_allocates_new_generation_after_omission_and_reintroduction(
+def test_projection_restores_deterministic_identity_after_omission_and_reintroduction(
     tmp_path: Path,
 ) -> None:
-    """无显式 UUID 的模板被完整刷新遗漏后，重新引入必须分配新一代身份。
+    """模板被完整刷新遗漏后，按稳定业务名重新引入必须恢复同一身份。
 
     参数说明：``tmp_path`` 隔离工作流数据库；测试同时确认空投影已经提交，而不是
     继续从内存快照返回已软删除的动作。
@@ -439,8 +480,8 @@ def test_projection_allocates_new_generation_after_omission_and_reintroduction(
         "lab.devices:Pump",
         "transfer",
     )
-    assert next_action.template["uuid"] != first_template_uuid
-    assert tuple(str(handle["uuid"]) for handle in next_action.handles) != (
+    assert next_action.template["uuid"] == first_template_uuid
+    assert tuple(str(handle["uuid"]) for handle in next_action.handles) == (
         first_handle_uuids
     )
     projection.close()
@@ -662,7 +703,7 @@ def test_projection_fingerprint_is_stable_across_identical_refresh_and_restart(
     assert second_snapshot.actions[0].template["meta_data"]["unilab"][
         "resource_template"
     ] == {
-        "uuid": RESOURCE_TEMPLATE_UUID,
+        "uuid": device_template_uuid("pump"),
         "name": "pump",
         "display_name": "注射泵",
     }
@@ -696,15 +737,10 @@ def test_local_runtime_shares_projection_with_authoring_compiler(
         assert workflow_service.compiler.template_catalog_fingerprint == (
             projection.snapshot().fingerprint
         )
-        assert (
-            projection.snapshot()
-            .require_action(
-                "lab.devices:Pump",
-                "transfer",
-            )
-            .template["resource_template_uuid"]
-            == RESOURCE_TEMPLATE_UUID
-        )
+        assert projection.snapshot().require_action(
+            "lab.devices:Pump",
+            "transfer",
+        ).template["resource_template_uuid"] == device_template_uuid("pump")
         # ``device_action_run`` 证明组合根注入了同一库存权威的设备物料解析器，
         # 而非仅在直接构造服务的合同测试中可用。
         action_template = (
@@ -726,6 +762,53 @@ def test_local_runtime_shares_projection_with_authoring_compiler(
         )
         assert device_action_run["created"] is True
         assert device_action_run["job"]["material_uuid"] == DEVICE_MATERIAL_UUID
+
+        # 工作流内部持久化名称键，公共读模型继续返回原 UUID 字段。
+        workflow = workflow_service.create_workflow(
+            name="名称模板引用",
+            tags=[],
+            description=None,
+            meta_data={},
+        )
+        node_uuid = "40000000-0000-4000-8000-000000000001"
+        graph = workflow_service._store.save_graph(
+            workflow["uuid"],
+            revision=1,
+            nodes=[
+                WorkflowNodeWrite(
+                    uuid=node_uuid,
+                    workflow_node_template_uuid=action_template["uuid"],
+                    material_uuid=DEVICE_MATERIAL_UUID,
+                    name="输送",
+                    type="ILab",
+                    pose={"x": 0, "y": 0},
+                    param={"volume": 2.0},
+                    execution_policy={},
+                    meta_data={},
+                )
+            ],
+            edges=[],
+        )
+        stored_reference = workflow_service._store._conn.execute(
+            "SELECT workflow_node_template_uuid FROM workflow_node WHERE uuid=?",
+            (node_uuid,),
+        ).fetchone()[0]
+        assert stored_reference == "pump.transfer"
+        assert (
+            graph["nodes"][0]["workflow_node_template_uuid"] == action_template["uuid"]
+        )
+        assert (
+            workflow_service._store._conn.execute(
+                "SELECT COUNT(*) FROM workflow_node_template"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            workflow_service._store._conn.execute(
+                "SELECT COUNT(*) FROM workflow_handle_template"
+            ).fetchone()[0]
+            == 0
+        )
     finally:
         reset_workflow_service_for_test()
         inventory_store.close()
@@ -754,19 +837,17 @@ def test_invalid_typed_action_preserves_previous_complete_projection(
     restarted_projection.close()
 
 
-def test_explicit_uuid_conflict_rolls_back_without_leaking_store_error(
+def test_explicit_uuid_cannot_override_name_identity(
     tmp_path: Path,
 ) -> None:
-    """活动业务键换绑另一个显式 UUID 必须回滚并返回投影领域错误。
+    """显式 UUID 不得覆盖由设备名和动作名生成的身份。
 
-    参数说明：``tmp_path`` 隔离数据库；测试证明显式身份优先不等于允许改写已有
-    活动身份映射，且调用方不需要理解 SQLite 存储异常。
+    参数：``tmp_path`` 隔离数据库。返回：无；先发布名称身份，再证明不一致的
+    遗留显式 UUID 会被关闭式拒绝且上一代保持不变。
     """
 
     projection = _projection(tmp_path / "workflow_history.db")
-    previous_snapshot = projection.refresh(
-        FakeRegistry(explicit_uuid=EXPLICIT_NODE_UUID_A)
-    )
+    previous_snapshot = projection.refresh(FakeRegistry())
 
     with pytest.raises(RegistryTemplateProjectionError, match="身份"):
         projection.refresh(FakeRegistry(explicit_uuid=EXPLICIT_NODE_UUID_B))
@@ -775,6 +856,6 @@ def test_explicit_uuid_conflict_rolls_back_without_leaking_store_error(
         "lab.devices:Pump",
         "transfer",
     )
-    assert current_action.template["uuid"] == EXPLICIT_NODE_UUID_A
+    assert current_action.template["uuid"] == action_template_uuid("pump", "transfer")
     assert projection.snapshot().fingerprint == previous_snapshot.fingerprint
     projection.close()

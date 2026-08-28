@@ -31,6 +31,26 @@ class _RecordingStore:
 
         return {"uuid": workflow_uuid}
 
+    def get_graph(self, workflow_uuid: str) -> dict[str, Any]:
+        """返回创建 Task 时冻结的最小进程内工作流图。"""
+
+        return {
+            "workflow": {
+                "uuid": workflow_uuid,
+                "create_time": "2026-08-28T00:00:00Z",
+                "update_time": "2026-08-28T00:00:00Z",
+                "meta_data": {},
+                "name": "recording workflow",
+                "tags": [],
+                "revision": 1,
+            },
+            "nodes": [],
+            "edges": [],
+            "node_templates": [],
+            "handle_templates": [],
+            "inventory_requirements": [],
+        }
+
     def create_task_with_jobs(self, **values: Any) -> dict[str, Any]:
         """模拟原子创建任务/作业。
 

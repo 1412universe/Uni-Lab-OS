@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+import sqlite3
 from pathlib import Path
 
 from tests.registry.test_f05_material_source_catalog import _Registry
@@ -13,8 +13,6 @@ from unilabos.workflow.composition import (
     compose_local_workflow_template_runtime,
     reset_workflow_service_for_test,
 )
-from unilabos.workflow.source_discovery import discover_editable_sources
-from unilabos.workflow.store import WorkflowStore
 
 from .test_c1_r2_static_expansion_contract import (
     CHILD_WORKFLOW_UUID,
@@ -66,71 +64,6 @@ def _write_package(selected_root: Path) -> None:
         f"    source: {PACKAGE_ID}/workflows/parent.py\n",
         encoding="utf-8",
     )
-
-
-def _seed_applied_child(working_dir: Path, selected_root: Path) -> None:
-    """在产品启动前写入同修订已应用的叶工作流与来源注册事实。
-
-    参数：``working_dir`` 是产品工作目录，``selected_root`` 是授权包根。返回：
-    无；提交来源与应用快照。异常：发现、SQLite 或文件读取失败时原样传播。
-    """
-
-    plan = discover_editable_sources((selected_root,))
-    store = WorkflowStore(working_dir / "workflow_history.db")
-    try:
-        store.install_discovered_sources(
-            [
-                {
-                    "workflow_uuid": item.workflow_uuid,
-                    "package_id": item.package_id,
-                    "package_root": str(item.package_root),
-                    "relative_path": item.relative_path,
-                    "source_uri": item.source_uri,
-                }
-                for item in plan.registrations
-            ]
-        )
-        graph = store.get_graph(CHILD_WORKFLOW_UUID)
-        source_hash = "sha256:" + hashlib.sha256(
-            _child_source().encode("utf-8")
-        ).hexdigest()
-        meta_data = {
-            "unilab": {
-                "authoring_function_name": "prepare_sample",
-                "input_contract": {"version": 1, "parameters": []},
-                "output_contract": {"version": 1, "outputs": []},
-                "output_bindings": {},
-            }
-        }
-        applied_source = {
-            "workflow_revision": graph["workflow"]["revision"],
-            "python_source": _child_source(),
-            "source_hash": source_hash,
-            "source_map": [],
-            "compiler_version": "fixture",
-            "template_catalog_fingerprint": "sha256:" + "4" * 64,
-        }
-        with store.transaction() as connection:
-            connection.execute(
-                "UPDATE workflow SET name = ?, description = ?, meta_data = ? "
-                "WHERE uuid = ?",
-                (
-                    "Published child",
-                    "Production fixture",
-                    json.dumps(meta_data, sort_keys=True),
-                    CHILD_WORKFLOW_UUID,
-                ),
-            )
-            connection.execute(
-                "UPDATE workflow_authoring SET applied_source = ? "
-                "WHERE workflow_uuid = ?",
-                (
-                    json.dumps(applied_source, sort_keys=True),
-                    CHILD_WORKFLOW_UUID,
-                ),
-            )
-    finally:
-        store.close()
 
 
 def _parent_source() -> str:
@@ -193,20 +126,19 @@ def _contract_extension(template: object) -> dict[str, object]:
     return extension
 
 
-def test_product_composition_publishes_and_restores_workflow_templates(
+def test_product_composition_publishes_and_rebuilds_workflow_templates(
     tmp_path: Path,
 ) -> None:
-    """生产组合发布同代工作流模板，并在重启后保留身份与可编译性。
+    """生产组合发布同代工作流模板，并在重启后从源码重建相同身份。
 
     参数：``tmp_path`` 隔离产品数据库与包根。返回：无；断言发布、应用重建与
-    重启恢复。异常：产品组合或断言失败时由 pytest 报告。
+    重启重建。异常：产品组合或断言失败时由 pytest 报告。
     """
 
     reset_workflow_service_for_test()
     selected_root = tmp_path / "editable"
     selected_root.mkdir()
     _write_package(selected_root)
-    _seed_applied_child(tmp_path, selected_root)
     inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
     try:
         service, projection = compose_local_workflow_template_runtime(
@@ -242,24 +174,30 @@ def test_product_composition_publishes_and_restores_workflow_templates(
         assert [item["uuid"] for item in page["items"]] == [first_template_uuid]
 
         authoring = service.get_authoring(CHILD_WORKFLOW_UUID)
-        candidate = authoring["candidate"]
-        assert candidate is not None, authoring["draft"]["diagnostics"]
-        applied = service.apply_authoring(
-            CHILD_WORKFLOW_UUID,
-            candidate_hash=candidate["candidate_hash"],
-        )
+        assert authoring["state"] == "applied"
+        assert authoring["candidate"] is None
+        assert authoring["draft"]["diagnostics"] == []
         refreshed = projection.snapshot().require_action(
             f"{CHILD_MODULE}:prepare_sample",
             f"workflow:{CHILD_WORKFLOW_UUID}",
         )
         extension = _contract_extension(refreshed.detached_template())
-        assert extension["workflow_revision"] == applied["apply_result"][
-            "workflow_revision"
-        ]
+        assert extension["workflow_revision"] == service.get_graph(
+            CHILD_WORKFLOW_UUID
+        )["workflow"]["revision"]
         assert service.compiler is not None
         assert service.compiler.template_catalog_fingerprint == (
             projection.snapshot().fingerprint
         )
+        with sqlite3.connect(tmp_path / "workflow_history.db") as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM workflow_node_template"
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT COUNT(*) FROM workflow_handle_template"
+            ).fetchone()[0] == 0
+            assert connection.execute("SELECT COUNT(*) FROM workflow").fetchone()[0] == 0
+            assert connection.execute("SELECT COUNT(*) FROM workflow_node").fetchone()[0] == 0
 
         reset_workflow_service_for_test()
         restarted, restarted_projection = compose_local_workflow_template_runtime(
@@ -293,7 +231,6 @@ def test_composite_task_persists_only_parent_workflow_authority(
     selected_root = tmp_path / "editable"
     selected_root.mkdir()
     _write_package(selected_root)
-    _seed_applied_child(tmp_path, selected_root)
     inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
     try:
         service, _projection = compose_local_workflow_template_runtime(
@@ -303,12 +240,9 @@ def test_composite_task_persists_only_parent_workflow_authority(
             editable_package_roots=(selected_root,),
         )
         parent_authoring = service.get_authoring(PARENT_WORKFLOW_UUID)
-        candidate = parent_authoring["candidate"]
-        assert candidate is not None, parent_authoring["draft"]["diagnostics"]
-        service.apply_authoring(
-            PARENT_WORKFLOW_UUID,
-            candidate_hash=candidate["candidate_hash"],
-        )
+        assert parent_authoring["state"] == "applied"
+        assert parent_authoring["candidate"] is None
+        assert parent_authoring["draft"]["diagnostics"] == []
         parent_graph = service.get_graph(PARENT_WORKFLOW_UUID)
         assert {node["uuid"] for node in parent_graph["nodes"]} == {
             INVOCATION_UUID

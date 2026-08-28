@@ -509,9 +509,12 @@ def test_product_composition_does_not_publish_after_catalog_rebuild_failure(
         registry_snapshot: Any,
     ) -> Any:
         nonlocal refresh_count
-        refresh_count += 1
-        if refresh_count == 2:
-            raise RuntimeError("自动应用后目录刷新失败")
+        # 本地身份同步会先用独立 ``local-preflight`` 投影验证纯设备/动作目录；
+        # 本探针只统计承载领域工作流扩展的正式 ``local`` 投影代际。
+        if projection._authority_id == "local":
+            refresh_count += 1
+            if refresh_count == 2:
+                raise RuntimeError("自动应用后目录刷新失败")
         return original_refresh(projection, registry_snapshot)
 
     monkeypatch.setattr(
@@ -531,6 +534,7 @@ def test_product_composition_does_not_publish_after_catalog_rebuild_failure(
         assert captured.value.code == "template_catalog_unavailable"
         assert composition.get_workflow_service() is None
         assert composition.get_registry_template_projection() is None
+        assert inventory_store.runtime_device_template_catalog is None
     finally:
         composition.reset_workflow_service_for_test()
         inventory_store.close()

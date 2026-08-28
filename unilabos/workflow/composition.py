@@ -14,6 +14,10 @@ from unilabos.app.scheduler.inventory.resource_reference import (
 from unilabos.registry.local_template_identity import (
     synchronize_local_template_identities,
 )
+from unilabos.registry.template_identity import (
+    TemplateIdentityError,
+    action_template_uuid,
+)
 from unilabos.registry.template_projection import (
     RegistryTemplateProjection,
     RegistryTemplateProjectionError,
@@ -23,6 +27,8 @@ from unilabos.registry.template_snapshot import (
     RegistryTemplateSnapshotError,
 )
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
+from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
+from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.composite import CompositeAuthoring
 from unilabos.workflow.published_workflow_runtime import (
     PublishedWorkflowGeneration,
@@ -48,6 +54,39 @@ _compiler_rebuilder: Optional[Callable[[], AuthoringCompiler]] = None
 _editable_package_roots: tuple[Path, ...] = ()
 _editable_source_discovery_plan: Optional[EditableSourceDiscoveryPlan] = None
 _source_monitor_enabled = True
+_fixed_point_activation_enabled = False
+_runtime_template_snapshot_provider: Any = None
+
+
+class _MutableTemplateSnapshotProvider:
+    """只为冷启动复合工作流固定点提供可回滚的目录快照接缝。"""
+
+    def __init__(self) -> None:
+        """建立尚未发布任何目录的提供者。"""
+
+        self._snapshot: AuthoringCatalogSnapshot | None = None
+
+    def snapshot(self) -> AuthoringCatalogSnapshot:
+        """返回当前候选或最终目录；未绑定时关闭式失败。"""
+
+        if self._snapshot is None:
+            raise RuntimeError("工作流模板目录尚未发布")
+        return self._snapshot
+
+    def current(self) -> AuthoringCatalogSnapshot | None:
+        """返回当前可选快照，供原子刷新失败时保存回滚点。"""
+
+        return self._snapshot
+
+    def replace(
+        self,
+        snapshot: AuthoringCatalogSnapshot | None,
+    ) -> AuthoringCatalogSnapshot | None:
+        """替换当前快照并返回旧值，供失败路径原样回滚。"""
+
+        previous = self._snapshot
+        self._snapshot = snapshot
+        return previous
 
 
 @dataclass
@@ -81,26 +120,30 @@ def _cleanup_partial_composition(
     *,
     original_error: BaseException,
     workflow_store: WorkflowStore,
+    workflow_definition_store: WorkflowStore,
     task_scheduler_bridge: Any,
 ) -> None:
     """按反向所有权清理尚未发布的工作流运行时组合。
 
     参数：``original_error`` 是必须保留的启动异常；``workflow_store`` 是待关闭的
-    工作流存储（WorkflowStore）；``task_scheduler_bridge`` 是可能已注册调度监听器
-    的唯一公共桥。返回无；每个清理异常只附加为原异常说明，不掩盖首个构造或
-    恢复故障。
+    持久运行事实库，``workflow_definition_store`` 是待关闭的进程内定义目录；
+    ``task_scheduler_bridge`` 是可能已注册调度监听器的唯一公共桥。返回无；每个
+    清理异常只附加为原异常说明，不掩盖首个构造或恢复故障。
     """
 
     # ``owned_resources`` 按创建顺序列出，关闭时反向遍历，先注销桥再关闭存储。
     owned_resources = (
         ("工作流存储", workflow_store),
+        ("工作流定义目录", workflow_definition_store),
         ("工作流任务调度桥", task_scheduler_bridge),
     )
+    closed_ids: set[int] = set()
     for resource_name, resource in reversed(owned_resources):
-        if resource is None:
+        if resource is None or id(resource) in closed_ids:
             continue
         try:
             resource.close()
+            closed_ids.add(id(resource))
         except BaseException as cleanup_error:  # noqa: BLE001 - 清理不能掩盖原始异常
             original_error.add_note(f"{resource_name}清理失败: {cleanup_error}")
 
@@ -132,10 +175,14 @@ def compose_workflow_runtime(
     scheduler: Optional[Any] = None,
     start_source_monitor: bool = True,
     workflow_activation_progress: Callable[[int, int], None] | None = None,
+    template_snapshot_provider: Any = None,
+    workflow_definition_store: WorkflowStore | None = None,
+    activate_sources_to_fixed_point: bool = False,
+    before_publish: Callable[[], None] | None = None,
 ) -> WorkflowService:
     """装配工作区唯一的工作流权威、启动恢复和草稿监视。
 
-    参数：``working_dir`` 决定现有工作流 SQLite 路径；``compiler`` 是可信工作流
+    参数：``working_dir`` 决定持久运行事实 SQLite 路径；``compiler`` 是可信工作流
     创作编译器；``compiler_rebuilder`` 在应用后原子刷新完整模板代际；
     ``editable_package_roots`` 是唯一允许发现源码的显式授权目录；
     ``editable_source_discovery_plan`` 是包目录（PackageCatalog）
@@ -144,7 +191,12 @@ def compose_workflow_runtime(
     本地调度模式装配的现有调度器（EdgeScheduler）；``start_source_monitor``
     仅供非工作区遗留入口保留逐源码监视，工作区必须传 ``False`` 并由统一文件
     世代监视器拥有刷新；``workflow_activation_progress`` 报告已完成真实编译的
-    工作流源码数量和总数，不参与运行时组合身份。
+    工作流源码数量和总数，不参与运行时组合身份；
+    ``workflow_definition_store`` 是组合根内部复用的进程内定义目录，普通调用方
+    省略后由本函数创建；``activate_sources_to_fixed_point`` 要求领域包工作流在
+    ready 前按组合依赖完整应用。
+    ``before_publish`` 是完整来源激活、任务恢复均成功后的最后一道原子发布
+    屏障；回调失败按启动失败清理服务，且不会设置进程级工作流权威。
     返回：完成来源注册与启动恢复后发布的进程唯一工作流服务（WorkflowService）。
     异常：同时提供授权目录与预编译计划，或运行期间
     切换数据库、编译器、授权目录或来源计划时关闭式失败。
@@ -152,9 +204,9 @@ def compose_workflow_runtime(
 
     global _compiler, _compiler_rebuilder, _database_path
     global _editable_package_roots, _editable_source_discovery_plan, _failed_runtime
-    global _monitor, _service, _source_monitor_enabled
-    # 后端形态合同（Backend-shaped Contract）的定义/任务与遗留执行历史共享
-    # ``workflow_history.db``，但继续使用相互独立的表。
+    global _monitor, _runtime_template_snapshot_provider, _service
+    global _fixed_point_activation_enabled, _source_monitor_enabled
+    # ``workflow_history.db`` 只保存 Task/Job 等运行事实；定义由本次进程目录持有。
     database_path = Path(working_dir).resolve() / "workflow_history.db"
     configured_roots = _configured_package_roots(editable_package_roots)
     if configured_roots and editable_source_discovery_plan is not None:
@@ -180,6 +232,8 @@ def compose_workflow_runtime(
                 raise RuntimeError(
                     "工作流权威（Workflow Authority）运行期间不能切换目录重建器"
                 )
+            if template_snapshot_provider is not _runtime_template_snapshot_provider:
+                raise RuntimeError("工作流权威运行期间不能切换模板目录提供者")
             if configured_roots != _editable_package_roots:
                 raise RuntimeError(
                     "工作流权威（Workflow Authority）运行期间不能切换可编辑包"
@@ -190,17 +244,61 @@ def compose_workflow_runtime(
                 )
             if bool(start_source_monitor) != _source_monitor_enabled:
                 raise RuntimeError("工作流权威运行期间不能切换源码监视所有权")
+            if bool(activate_sources_to_fixed_point) != _fixed_point_activation_enabled:
+                raise RuntimeError("工作流权威运行期间不能切换源码激活策略")
             if workflow_activation_progress is not None:
                 total = len(_service.list_registered_sources())
                 workflow_activation_progress(total, total)
             return _service
-        # ``workflow_store`` 是本地标准工作流任务（WorkflowTask）/工作流节点作业
-        # （WorkflowNodeJob）写模型；执行桥与应用服务必须共享同一实例。
-        workflow_store = WorkflowStore(database_path)
+        # 文件库只持久化 WorkflowTask/WorkflowNodeJob 等运行事实；工作流定义、
+        # 图、来源注册和创作状态全部进入本次进程独占的内存目录。
+        workflow_store = (
+            WorkflowStore(
+                database_path,
+                template_snapshot_provider=template_snapshot_provider,
+                persist_workflow_definitions=False,
+            )
+            if template_snapshot_provider is not None
+            else WorkflowStore(
+                database_path,
+                persist_workflow_definitions=False,
+            )
+        )
+        try:
+            definition_store = (
+                workflow_definition_store
+                if workflow_definition_store is not None
+                else (
+                    WorkflowStore(
+                        ":memory:",
+                        template_snapshot_provider=template_snapshot_provider,
+                    )
+                    if template_snapshot_provider is not None
+                    else WorkflowStore(":memory:")
+                )
+            )
+        except BaseException as definition_store_error:
+            try:
+                workflow_store.close()
+            except BaseException as close_error:
+                definition_store_error.add_note(
+                    f"持久运行事实库清理失败: {close_error}"
+                )
+            raise
         task_scheduler_bridge = None
         new_service: Optional[WorkflowService] = None
         new_monitor: Optional[WorkflowSourceMonitor] = None
         try:
+            # 发现计划同时决定启动来源与用户导入的默认领域包写入目标。只有一个
+            # 实际包根时才允许自动落盘；多包场景禁止按顺序猜测目标。
+            discovery_plan = (
+                editable_source_discovery_plan
+                if editable_source_discovery_plan is not None
+                else discover_editable_sources(configured_roots)
+            )
+            source_target = DomainWorkflowSourceTarget.from_discovery_plan(
+                discovery_plan
+            )
             if scheduler is not None:
                 task_scheduler_bridge = TaskSchedulerBridge(
                     workflow_store,
@@ -208,8 +306,10 @@ def compose_workflow_runtime(
                 )
             new_service = WorkflowService(
                 workflow_store,
+                definition_store=definition_store,
                 compiler=compiler,
                 compiler_rebuilder=compiler_rebuilder,
+                source_target=source_target,
                 material_resolver=material_resolver,
                 task_scheduler_bridge=task_scheduler_bridge,
             )
@@ -232,13 +332,11 @@ def compose_workflow_runtime(
                     new_service.bind_intervention_delivery(intervention_delivery)
             # ``discovery_plan`` 是全量文件预校验结果；服务在单事务中注册后，
             # 才能恢复草稿并建立一致的监视基线。
-            discovery_plan = (
-                editable_source_discovery_plan
-                if editable_source_discovery_plan is not None
-                else discover_editable_sources(configured_roots)
-            )
             new_service.replace_discovered_source_authorizations(discovery_plan)
-            if editable_source_discovery_plan is not None:
+            if (
+                editable_source_discovery_plan is not None
+                or activate_sources_to_fixed_point
+            ):
                 # managed-local 工作区把同代 PackageCatalog 当作激活权威；OS
                 # 只有在子到父的组合依赖全部推进到固定点后才能发布 ready。
                 if workflow_activation_progress is None:
@@ -256,10 +354,13 @@ def compose_workflow_runtime(
                 task_scheduler_bridge.recover_active_tasks()
             if start_source_monitor:
                 new_monitor = WorkflowSourceMonitor(new_service)
+            if before_publish is not None:
+                before_publish()
         except BaseException as startup_error:
             _cleanup_partial_composition(
                 original_error=startup_error,
                 workflow_store=workflow_store,
+                workflow_definition_store=definition_store,
                 task_scheduler_bridge=task_scheduler_bridge,
             )
             raise
@@ -269,10 +370,12 @@ def compose_workflow_runtime(
         _database_path = database_path
         _compiler = compiler
         _compiler_rebuilder = compiler_rebuilder
+        _runtime_template_snapshot_provider = template_snapshot_provider
         _editable_package_roots = configured_roots
         _editable_source_discovery_plan = editable_source_discovery_plan
         _monitor = new_monitor
         _source_monitor_enabled = bool(start_source_monitor)
+        _fixed_point_activation_enabled = bool(activate_sources_to_fixed_point)
         if new_monitor is None:
             return new_service
         try:
@@ -284,10 +387,12 @@ def compose_workflow_runtime(
             _database_path = None
             _compiler = None
             _compiler_rebuilder = None
+            _runtime_template_snapshot_provider = None
             _editable_package_roots = ()
             _editable_source_discovery_plan = None
             _monitor = None
             _source_monitor_enabled = True
+            _fixed_point_activation_enabled = False
             cleanup_owner = _RuntimeCleanupOwner(new_service, new_monitor)
             _failed_runtime = cleanup_owner
             try:
@@ -350,7 +455,6 @@ def compose_local_workflow_template_runtime(
     """
 
     global _template_projection
-    database_path = Path(working_dir).resolve() / "workflow_history.db"
     with _lock:
         if _template_projection is not None:
             # 已发布的模板投影必须复用原编译器和授权目录组合身份。
@@ -362,6 +466,8 @@ def compose_local_workflow_template_runtime(
                 editable_source_discovery_plan=editable_source_discovery_plan,
                 start_source_monitor=start_source_monitor,
                 workflow_activation_progress=workflow_activation_progress,
+                template_snapshot_provider=_template_projection,
+                activate_sources_to_fixed_point=True,
             )
             return service, _template_projection
         if _service is not None:
@@ -378,10 +484,11 @@ def compose_local_workflow_template_runtime(
             raise RegistryTemplateProjectionError(str(error)) from error
         # ``resolve_resource_template_identity`` 是当前注册表（Registry）代际唯一的
         # 资源模板（ResourceTemplate）业务 ID/源码别名到活动 UUID 解析器。
-        resolve_resource_template_identity = synchronize_local_template_identities(
+        identity_synchronization = synchronize_local_template_identities(
             inventory_store=inventory_store,
             registry_snapshot=registry_snapshot,
         )
+        resolve_resource_template_identity = identity_synchronization
 
         def resolve_material_identity(
             material_uuid: str,
@@ -427,7 +534,11 @@ def compose_local_workflow_template_runtime(
             }
             for item in publication_plan.registrations
         )
-        publication_store = WorkflowStore(database_path)
+        publication_template_provider = _MutableTemplateSnapshotProvider()
+        publication_store = WorkflowStore(
+            ":memory:",
+            template_snapshot_provider=publication_template_provider,
+        )
         published_generation: PublishedWorkflowGeneration | None = None
 
         def extend_template_generation(
@@ -441,8 +552,35 @@ def compose_local_workflow_template_runtime(
             应用快照不一致时转换为 ``RegistryTemplateProjectionError``。
             """
 
-            del base_handles
             nonlocal published_generation
+            base_node_uuid_by_key = {
+                (str(node["resource_template_uuid"]), str(node["name"])): str(
+                    node["uuid"]
+                )
+                for node in base_nodes
+            }
+            resolved_base_handles: list[dict[str, Any]] = []
+            for raw_handle in base_handles:
+                handle = dict(raw_handle)
+                parent_key = handle.pop("node_business_key", None)
+                if not isinstance(parent_key, (list, tuple)) or len(parent_key) != 2:
+                    raise RegistryTemplateProjectionError(
+                        "候选 Handle 缺少父动作名称身份"
+                    )
+                try:
+                    handle["workflow_node_template_uuid"] = base_node_uuid_by_key[
+                        (str(parent_key[0]), str(parent_key[1]))
+                    ]
+                except KeyError:
+                    raise RegistryTemplateProjectionError(
+                        "候选 Handle 引用了未知父动作"
+                    ) from None
+                resolved_base_handles.append(handle)
+            base_snapshot = AuthoringCatalogSnapshot.from_entities(
+                base_nodes,
+                resolved_base_handles,
+            )
+            previous_snapshot = publication_template_provider.replace(base_snapshot)
             try:
                 generation = build_published_workflow_generation(
                     registrations=active_registrations,
@@ -450,12 +588,27 @@ def compose_local_workflow_template_runtime(
                     base_node_templates=base_nodes,
                 )
             except PublishedWorkflowGenerationError as error:
+                publication_template_provider.replace(previous_snapshot)
                 raise RegistryTemplateProjectionError(str(error)) from error
-            published_generation = generation
-            return generation.node_templates, generation.handle_templates
+            except BaseException:
+                publication_template_provider.replace(previous_snapshot)
+                raise
+            try:
+                named_nodes = tuple(
+                    _assign_published_template_identity(node)
+                    for node in generation.node_templates
+                )
+            except TemplateIdentityError as error:
+                publication_template_provider.replace(previous_snapshot)
+                raise RegistryTemplateProjectionError(str(error)) from error
+            published_generation = PublishedWorkflowGeneration(
+                source_catalog=generation.source_catalog,
+                node_templates=named_nodes,
+                handle_templates=generation.handle_templates,
+            )
+            return named_nodes, generation.handle_templates
 
-        projection = RegistryTemplateProjection(
-            publication_store,
+        projection = RegistryTemplateProjection.in_memory(
             authority_id="local",
             resource_template_identity_resolver=resolve_resource_template_identity,
             generation_extension=extend_template_generation,
@@ -475,7 +628,13 @@ def compose_local_workflow_template_runtime(
                 关闭陈旧编译入口。
                 """
 
-                snapshot = projection.refresh(registry_snapshot)
+                previous_snapshot = publication_template_provider.current()
+                try:
+                    snapshot = projection.refresh(registry_snapshot)
+                except BaseException:
+                    publication_template_provider.replace(previous_snapshot)
+                    raise
+                publication_template_provider.replace(snapshot)
                 if published_generation is None:
                     raise RegistryTemplateProjectionError(
                         "已发布工作流目录扩展未执行"
@@ -501,12 +660,51 @@ def compose_local_workflow_template_runtime(
                 scheduler=scheduler,
                 start_source_monitor=start_source_monitor,
                 workflow_activation_progress=workflow_activation_progress,
+                template_snapshot_provider=projection,
+                workflow_definition_store=publication_store,
+                activate_sources_to_fixed_point=True,
+                # 领域源码完成子到父固定点激活、运行任务恢复后，才把设备模板
+                # 候选代际装入库存服务；任一更早失败都不会迁移或发布设备目录。
+                before_publish=(
+                    identity_synchronization.activate_runtime_device_catalog
+                ),
             )
         except BaseException:
             projection.close()
+            publication_store.close()
             raise
         _template_projection = projection
         return service, projection
+
+
+def _assign_published_template_identity(
+    raw_template: dict[str, Any],
+) -> dict[str, Any]:
+    """为领域包工作流模板生成与设备动作一致的确定性外部 UUID。
+
+    参数：``raw_template`` 是已校验发布合同节点。返回：保留原合同并补充
+    ``uuid`` 的分离字典；稳定身份为 ``宿主设备模板名.工作流动作名``。
+    """
+
+    template = dict(raw_template)
+    meta_data = template.get("meta_data")
+    resource_template = (
+        meta_data.get("resource_template")
+        if isinstance(meta_data, dict)
+        else None
+    )
+    device_name = (
+        resource_template.get("name")
+        if isinstance(resource_template, dict)
+        else None
+    )
+    action_name = template.get("name")
+    if not isinstance(device_name, str) or not device_name:
+        raise TemplateIdentityError("发布工作流模板缺少宿主设备模板名")
+    if not isinstance(action_name, str) or not action_name:
+        raise TemplateIdentityError("发布工作流模板缺少动作模板名")
+    template["uuid"] = action_template_uuid(device_name, action_name)
+    return template
 
 
 def get_workflow_service() -> Optional[WorkflowService]:
@@ -539,7 +737,8 @@ def shutdown_workflow_runtime() -> None:
 
     global _compiler, _compiler_rebuilder, _database_path
     global _editable_package_roots, _editable_source_discovery_plan, _failed_runtime
-    global _monitor, _service, _source_monitor_enabled, _template_projection
+    global _monitor, _runtime_template_snapshot_provider, _service
+    global _fixed_point_activation_enabled, _source_monitor_enabled, _template_projection
     with _lock:
         if _failed_runtime is not None:
             # 失败运行时是一个整体清理所有者；任一步再次失败都保留原对象和已完成
@@ -557,10 +756,12 @@ def shutdown_workflow_runtime() -> None:
         _database_path = None
         _compiler = None
         _compiler_rebuilder = None
+        _runtime_template_snapshot_provider = None
         _editable_package_roots = ()
         _editable_source_discovery_plan = None
         _template_projection = None
         _source_monitor_enabled = True
+        _fixed_point_activation_enabled = False
 
 
 # 保留既有测试接缝名称；生产重启与退出统一调用上面的生命周期入口。

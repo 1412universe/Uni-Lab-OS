@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -17,9 +18,11 @@ from unilabos.app.scheduler.inventory.content_store import (
     migrate_container_content_schema,
 )
 from unilabos.app.scheduler.inventory.reagent_store import migrate_reagent_schema
+from unilabos.registry.runtime_device_catalog import RuntimeDeviceTemplateCatalog
 
 # v8 已由生产分支用于物料来源绑定；试剂和容器内容依次占用后续版本。
-SCHEMA_VERSION = 10
+# v11 把物料模板引用改为由 SQLite 物料模板与内存设备目录共同校验。
+SCHEMA_VERSION = 11
 
 
 class InvalidCursorAdvance(ValueError):
@@ -900,6 +903,52 @@ _SCHEMA_V7_RESOURCE_TEMPLATE_AVAILABLE_SITES = (
     "AND json_type(available_sites) = 'array')"
 )
 
+# v11：``material.resource_template_uuid`` 是跨两个模板权威的稳定引用。
+# 物料模板仍在 SQLite，由写服务验证；设备模板来自启动代际内存目录，因此
+# 不能再用一个指向 ``resource_template`` 的物理外键表达。
+_SCHEMA_V11_HYBRID_TEMPLATE_REFERENCE = r"""
+BEGIN IMMEDIATE;
+ALTER TABLE material RENAME TO material_v10;
+CREATE TABLE material (
+    uuid TEXT PRIMARY KEY NOT NULL,
+    create_time DATETIME NOT NULL,
+    update_time DATETIME NOT NULL,
+    deleted_at DATETIME,
+    description TEXT,
+    meta_data TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(meta_data)),
+    resource_template_uuid TEXT NOT NULL,
+    parent_uuid TEXT,
+    class TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT '',
+    barcode TEXT NOT NULL,
+    name TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(config)),
+    data TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(data)),
+    CHECK (parent_uuid IS NULL OR parent_uuid <> uuid),
+    FOREIGN KEY (parent_uuid) REFERENCES material (uuid) ON DELETE RESTRICT
+);
+INSERT INTO material(
+    uuid,create_time,update_time,deleted_at,description,meta_data,
+    resource_template_uuid,parent_uuid,class,type,barcode,name,config,data
+)
+SELECT
+    uuid,create_time,update_time,deleted_at,description,meta_data,
+    resource_template_uuid,parent_uuid,class,type,barcode,name,config,data
+FROM material_v10;
+DROP TABLE material_v10;
+CREATE UNIQUE INDEX ux_barcode_active
+    ON material (LOWER(barcode))
+    WHERE deleted_at IS NULL AND barcode <> '';
+CREATE UNIQUE INDEX ux_material_root_name_active
+    ON material (LOWER(name))
+    WHERE deleted_at IS NULL AND parent_uuid IS NULL;
+CREATE INDEX idx_material_template_active
+    ON material (resource_template_uuid) WHERE deleted_at IS NULL;
+CREATE INDEX idx_material_parent_active
+    ON material (parent_uuid)
+    WHERE deleted_at IS NULL AND parent_uuid IS NOT NULL;
+"""
+
 # v8：物料来源（MaterialSource）在任务准入时冻结具体物料绑定。任务全程独占
 # 仍由 inventory_reservation 持有；共享来源只写本表，动作执行期互斥由调度器的
 # 物料执行锁/声明负责。selector_json 用于幂等重放时拒绝同一任务尝试偷换选择器。
@@ -969,8 +1018,13 @@ class InventoryStore:
     """SQLite WAL 存储：单连接 + 进程内写锁（单写者）."""
 
     def __init__(self, path: str = ":memory:"):
+        """打开库存数据库并预留当前进程的设备模板目录槽位。"""
+
         self.path = path
         self._lock = threading.RLock()
+        self._runtime_device_template_catalog: RuntimeDeviceTemplateCatalog | None = None
+        self._runtime_device_template_catalog_required = False
+        self._runtime_device_template_names: frozenset[str] = frozenset()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
@@ -1076,6 +1130,8 @@ class InventoryStore:
             # v10 增加样品与当前内容物。二者与试剂共用同一容器内容互斥规则；
             # 当前内容物数量事件继续复用统一 inventory_ledger + sync_outbox。
             migrate_container_content_schema(self._conn)
+            if current < 11:
+                self._migrate_hybrid_template_reference()
             if current >= 5:
                 # A development build may have added the v6 column before the
                 # deterministic backfill was introduced; keep this idempotent.
@@ -1090,6 +1146,102 @@ class InventoryStore:
             # Idempotent repair/backfill statements also open an implicit SQLite
             # transaction when the schema version is already current.
             self._conn.commit()
+
+    def _migrate_hybrid_template_reference(self) -> None:
+        """移除仅能表达 SQLite 模板的物料模板外键。
+
+        参数：无。返回：无。迁移保持 ``material`` 的所有业务列、索引和父物料
+        自关联；子表继续引用重建后的同名表。没有旧模板外键的兼容数据库直接
+        返回；失败时回滚并恢复外键检查。
+        """
+
+        foreign_keys = self._conn.execute(
+            "PRAGMA foreign_key_list(material)"
+        ).fetchall()
+        if not any(row["table"] == "resource_template" for row in foreign_keys):
+            return
+        self._conn.commit()
+        self._conn.execute("PRAGMA foreign_keys = OFF")
+        self._conn.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            self._conn.executescript(_SCHEMA_V11_HYBRID_TEMPLATE_REFERENCE)
+            violations = self._conn.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise sqlite3.IntegrityError(
+                    "v11 material template reference migration left invalid foreign keys"
+                )
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+        finally:
+            self._conn.execute("PRAGMA legacy_alter_table = OFF")
+            self._conn.execute("PRAGMA foreign_keys = ON")
+
+    def require_runtime_device_template_catalog(
+        self,
+        device_names: Iterable[str] = (),
+    ) -> None:
+        """声明本进程设备模板只能来自待发布或已发布的运行时目录。
+
+        参数：``device_names`` 是本次待发布代际中的设备业务名。返回：无；标记
+        和已知名称一旦设置即不撤销。即使后续工作流 fixed-point 启动失败，设备
+        模板写接口也必须关闭式拒绝，不能退回 SQLite 第二权威或写入同名资源。
+        """
+
+        normalized_names = frozenset(
+            str(name).strip() for name in device_names if str(name).strip()
+        )
+        with self._lock:
+            self._runtime_device_template_catalog_required = True
+            self._runtime_device_template_names |= normalized_names
+
+    @property
+    def runtime_device_template_catalog_required(self) -> bool:
+        """返回当前进程是否已经进入运行时设备目录单权威模式。"""
+
+        with self._lock:
+            return self._runtime_device_template_catalog_required
+
+    @property
+    def runtime_device_template_names(self) -> frozenset[str]:
+        """返回当前进程已声明由运行时目录拥有的设备业务名。"""
+
+        with self._lock:
+            return self._runtime_device_template_names
+
+    def install_runtime_device_template_catalog(
+        self,
+        catalog: RuntimeDeviceTemplateCatalog,
+    ) -> None:
+        """安装当前进程唯一的设备模板内存目录。
+
+        参数：``catalog`` 必须提供稳定 ``fingerprint``、``get``、``list`` 与
+        ``resolve_uuid`` 接口。返回：无；相同代际可幂等重装，不允许在库存服务
+        存活期间静默切换到另一代设备定义。
+        """
+
+        if not isinstance(catalog, RuntimeDeviceTemplateCatalog):
+            raise TypeError("设备模板内存目录类型无效")
+        fingerprint = catalog.fingerprint
+        if not isinstance(fingerprint, str) or not fingerprint:
+            raise TypeError("设备模板内存目录缺少代际指纹")
+        with self._lock:
+            current = self._runtime_device_template_catalog
+            if current is not None and current.fingerprint != fingerprint:
+                raise RuntimeError("库存服务启动后不得切换设备模板目录代际")
+            self._runtime_device_template_catalog_required = True
+            self._runtime_device_template_names |= frozenset(
+                str(item["name"]) for item in catalog.list()
+            )
+            self._runtime_device_template_catalog = catalog
+
+    @property
+    def runtime_device_template_catalog(self) -> RuntimeDeviceTemplateCatalog | None:
+        """返回当前启动代际的设备模板内存目录；未安装时返回 ``None``。"""
+
+        with self._lock:
+            return self._runtime_device_template_catalog
 
     def close(self) -> None:
         with self._lock:

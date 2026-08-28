@@ -1,4 +1,4 @@
-"""后端形态工作流权威（Backend-shaped Workflow Authority）的 SQLite 事实。"""
+"""Backend 形状的进程内工作流定义与 SQLite 运行事实存储。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Protocol,
     Tuple,
 )
 from uuid import uuid4
@@ -27,6 +28,10 @@ from unilabos.workflow import source_bootstrap
 from unilabos.workflow.authoring_candidate_hash import (
     AuthoringCandidateHashError,
     compute_authoring_candidate_hash,
+)
+from unilabos.workflow.authoring_kernel import (
+    AuthoringCatalogError,
+    AuthoringCatalogSnapshot,
 )
 from unilabos.workflow.graph_validation import (
     CodedGraphValidationError,
@@ -42,6 +47,7 @@ from unilabos.workflow.models import (
 )
 from unilabos.workflow.store_migrations import (
     ensure_device_action_run_schema,
+    ensure_ephemeral_workflow_reference_schema,
     ensure_execution_lock_schema,
     ensure_local_cancellation_schema,
     ensure_task_material_admission_schema,
@@ -89,6 +95,13 @@ class StoreAuthoringConflict(StoreConflict):
     def __init__(self, code: str):
         super().__init__(code)
         self.code = code
+
+
+class TemplateSnapshotProvider(Protocol):
+    """提供最近一次完整设备与动作内存目录的窄接口。"""
+
+    def snapshot(self) -> AuthoringCatalogSnapshot:
+        """返回一个不可变且可供整次 Store 操作复用的目录快照。"""
 
 
 _SCHEMA = """
@@ -425,17 +438,35 @@ CREATE INDEX IF NOT EXISTS ix_workflow_runtime_journal_job_sequence
 
 
 class WorkflowStore:
-    """由单一连接持有的 SQLite Workflow Authority。
+    """由单一连接持有的工作流定义目录或持久运行事实库。
 
-    Store 方法用一个进程内可重入锁串行化事务。Workflow 专属编排锁由
-    ``WorkflowService`` 持有，使文件与数据库操作共享同一临界区。
+    定义角色使用 ``:memory:``，运行角色使用文件 SQLite；两者复用相同事务与
+    投影代码但不形成双权威。Store 方法用进程内可重入锁串行化事务，Workflow
+    专属编排锁由 ``WorkflowService`` 持有。
     """
 
-    def __init__(self, db_path: str | Path):
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        template_snapshot_provider: TemplateSnapshotProvider | None = None,
+        persist_workflow_definitions: bool = True,
+    ) -> None:
+        """建立工作流持久事实存储并绑定可选内存模板目录。
+
+        参数：``db_path`` 是工作流 SQLite 路径；提供
+        ``template_snapshot_provider`` 时，所有模板读取只使用其不可变快照且不
+        回退模板表；省略时保留隔离测试和遗留调用的 SQLite 模板适配器。
+        ``persist_workflow_definitions=False`` 表示该文件连接只持有 Task/Job 等
+        运行事实，并解除 Task 对可消失工作流定义的外键依赖。
+        """
+
         initialization_deadline = (
             monotonic() + _STORE_INITIALIZATION_BUSY_TIMEOUT_SECONDS
         )
         self.path = str(db_path)
+        self._template_snapshot_provider = template_snapshot_provider
+        self._persist_workflow_definitions = persist_workflow_definitions
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -469,46 +500,49 @@ class WorkflowStore:
                 )
                 try:
                     ensure_device_action_run_schema(self._conn)
+                    if not self._persist_workflow_definitions:
+                        ensure_ephemeral_workflow_reference_schema(self._conn)
                     ensure_task_material_admission_schema(self._conn)
                     ensure_execution_lock_schema(self._conn)
                     ensure_local_cancellation_schema(self._conn)
                     ensure_workflow_inventory_schema(self._conn)
-                    columns = {
-                        row["name"]
-                        for row in self._conn.execute(
-                            "PRAGMA table_info(workflow_authoring)"
-                        ).fetchall()
-                    }
-                    if "writeback_generation" not in columns:
-                        self._conn.execute(
+                    if self._persist_workflow_definitions:
+                        columns = {
+                            row["name"]
+                            for row in self._conn.execute(
+                                "PRAGMA table_info(workflow_authoring)"
+                            ).fetchall()
+                        }
+                        if "writeback_generation" not in columns:
+                            self._conn.execute(
+                                """
+                                ALTER TABLE workflow_authoring
+                                ADD COLUMN writeback_generation TEXT
+                                """
+                            )
+                        legacy_markers = self._conn.execute(
                             """
-                            ALTER TABLE workflow_authoring
-                            ADD COLUMN writeback_generation TEXT
-                            """
-                        )
-                    legacy_markers = self._conn.execute(
-                        """
-                        SELECT workflow_uuid
-                        FROM workflow_authoring
-                        WHERE writeback_status = 'pending'
-                          AND writeback_source IS NOT NULL
-                          AND writeback_expected_hash IS NOT NULL
-                          AND writeback_generation IS NULL
-                        """
-                    ).fetchall()
-                    for marker in legacy_markers:
-                        self._conn.execute(
-                            """
-                            UPDATE workflow_authoring
-                            SET writeback_generation = ?
-                            WHERE workflow_uuid = ?
-                              AND writeback_status = 'pending'
+                            SELECT workflow_uuid
+                            FROM workflow_authoring
+                            WHERE writeback_status = 'pending'
                               AND writeback_source IS NOT NULL
                               AND writeback_expected_hash IS NOT NULL
                               AND writeback_generation IS NULL
                             """,
-                            (str(uuid4()), marker["workflow_uuid"]),
-                        )
+                        ).fetchall()
+                        for marker in legacy_markers:
+                            self._conn.execute(
+                                """
+                                UPDATE workflow_authoring
+                                SET writeback_generation = ?
+                                WHERE workflow_uuid = ?
+                                  AND writeback_status = 'pending'
+                                  AND writeback_source IS NOT NULL
+                                  AND writeback_expected_hash IS NOT NULL
+                                  AND writeback_generation IS NULL
+                                """,
+                                (str(uuid4()), marker["workflow_uuid"]),
+                            )
                 except BaseException:
                     self._conn.rollback()
                     raise
@@ -821,32 +855,48 @@ class WorkflowStore:
             ]
             node_templates: List[Dict[str, Any]] = []
             handle_templates: List[Dict[str, Any]] = []
+            catalog_snapshot = (
+                self._template_snapshot_provider.snapshot()
+                if template_uuids and self._template_snapshot_provider is not None
+                else None
+            )
             if template_uuids:
-                marks = ",".join("?" for _ in template_uuids)
-                template_rows = database.execute(
-                    f"""
-                    SELECT * FROM workflow_node_template
-                    WHERE uuid IN ({marks}) AND deleted_at IS NULL
-                    ORDER BY create_time, uuid
-                    """,
-                    template_uuids,
-                ).fetchall()
-                handle_rows = database.execute(
-                    f"""
-                    SELECT * FROM workflow_handle_template
-                    WHERE workflow_node_template_uuid IN ({marks})
-                      AND deleted_at IS NULL
-                    ORDER BY create_time, uuid
-                    """,
-                    template_uuids,
-                ).fetchall()
-                node_templates = [self._node_template_row(row) for row in template_rows]
-                handle_templates = [
-                    self._handle_template_row(row) for row in handle_rows
-                ]
+                if catalog_snapshot is not None:
+                    node_templates, handle_templates = self._catalog_entities(
+                        template_uuids,
+                        snapshot=catalog_snapshot,
+                    )
+                else:
+                    marks = ",".join("?" for _ in template_uuids)
+                    template_rows = database.execute(
+                        f"""
+                        SELECT * FROM workflow_node_template
+                        WHERE uuid IN ({marks}) AND deleted_at IS NULL
+                        ORDER BY create_time, uuid
+                        """,
+                        template_uuids,
+                    ).fetchall()
+                    handle_rows = database.execute(
+                        f"""
+                        SELECT * FROM workflow_handle_template
+                        WHERE workflow_node_template_uuid IN ({marks})
+                          AND deleted_at IS NULL
+                        ORDER BY create_time, uuid
+                        """,
+                        template_uuids,
+                    ).fetchall()
+                    node_templates = [
+                        self._node_template_row(row) for row in template_rows
+                    ]
+                    handle_templates = [
+                        self._handle_template_row(row) for row in handle_rows
+                    ]
         return {
             "workflow": workflow,
-            "nodes": [self._node_row(row) for row in node_rows],
+            "nodes": [
+                self._public_node_row(row, snapshot=catalog_snapshot)
+                for row in node_rows
+            ],
             "edges": [self._edge_row(row) for row in edge_rows],
             "inventory_requirements": [
                 self._inventory_requirement_row(row)
@@ -855,6 +905,78 @@ class WorkflowStore:
             "node_templates": node_templates,
             "handle_templates": handle_templates,
         }
+
+    def _catalog_entities(
+        self,
+        template_uuids: Iterable[str],
+        *,
+        snapshot: AuthoringCatalogSnapshot | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """从一个不可变目录快照分离指定模板及全部 Handle。
+
+        参数：``template_uuids`` 是工作流图实际引用的模板身份；调用方可传入已经
+        冻结的 ``snapshot`` 保证一次事务不混用代际。返回：按 UUID 排序的节点和
+        Handle 普通字典；目录未装配或任一身份缺失时关闭式失败。
+        """
+
+        provider = self._template_snapshot_provider
+        if provider is None:
+            raise RuntimeError("工作流存储没有装配内存模板目录")
+        current_snapshot = snapshot or provider.snapshot()
+        actions = []
+        for template_reference in sorted(set(template_uuids)):
+            try:
+                actions.append(current_snapshot.require_template(template_reference))
+            except AuthoringCatalogError:
+                try:
+                    actions.append(
+                        current_snapshot.require_template_key(template_reference)
+                    )
+                except AuthoringCatalogError as error:
+                    raise StoreNotFound(
+                        f"workflow node template {template_reference} not found"
+                    ) from error
+        node_templates = [action.detached_template() for action in actions]
+        handle_templates = [
+            handle
+            for action in actions
+            for handle in action.detached_handles()
+        ]
+        node_templates.sort(key=lambda item: str(item["uuid"]))
+        handle_templates.sort(key=lambda item: str(item["uuid"]))
+        return node_templates, handle_templates
+
+    def _public_node_row(
+        self,
+        row: sqlite3.Row,
+        *,
+        snapshot: AuthoringCatalogSnapshot | None = None,
+    ) -> Dict[str, Any]:
+        """把内部名称模板引用恢复为既有外部 UUID 字段。
+
+        参数：``row`` 是工作流节点持久行。返回：原 Backend-shaped 节点投影；
+        SQLite 遗留适配器保持原值，内存目录模式严格解析名称键。
+        """
+
+        result = self._node_row(row)
+        reference = result.get("workflow_node_template_uuid")
+        if reference is None or self._template_snapshot_provider is None:
+            return result
+        current_snapshot = snapshot or self._template_snapshot_provider.snapshot()
+        try:
+            # 启动迁移前创建的节点可能已经保存外部 UUID；仍按同一目录验证。
+            external_uuid = str(
+                current_snapshot.require_template(reference).template["uuid"]
+            )
+        except AuthoringCatalogError:
+            try:
+                external_uuid = current_snapshot.template_uuid_for_key(reference)
+            except AuthoringCatalogError as error:
+                raise StoreNotFound(
+                    f"workflow node template {reference} not found"
+                ) from error
+        result["workflow_node_template_uuid"] = external_uuid
+        return result
 
     def get_published_workflow_snapshot(
         self,
@@ -913,6 +1035,48 @@ class WorkflowStore:
                 validate_workflow_io_contract=validate_workflow_io_contract,
             )
         return self.get_graph(workflow_uuid)
+
+    def preview_graph_replacement(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+        nodes: List[WorkflowNodeWrite],
+        edges: List[WorkflowEdgeWrite],
+        inventory_requirements: Optional[
+            List[WorkflowInventoryRequirementWrite]
+        ] = None,
+        protect_reserved_metadata: bool = False,
+        validate_workflow_io_contract: bool = False,
+    ) -> Dict[str, Any]:
+        """在回滚事务中构造完整图替换后的精确候选投影。
+
+        参数与 :meth:`save_graph` 相同。返回：经过同一模板、身份、连线和工作流
+        输入/输出合同校验，但仍保持当前修订号的完整图。异常：与真实保存完全
+        一致。无论成功或失败，本方法都回滚全部节点、连线、事件和时间字段，供
+        领域源码写回链在触碰内存权威前生成并验证规范 Python。
+        """
+
+        with self._lock:
+            self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._reconcile_graph(
+                    self._conn,
+                    workflow_uuid=workflow_uuid,
+                    expected_revision=revision,
+                    nodes=nodes,
+                    edges=edges,
+                    inventory_requirements=inventory_requirements,
+                    advance_revision=False,
+                    protect_reserved_metadata=protect_reserved_metadata,
+                    validate_workflow_io_contract=validate_workflow_io_contract,
+                )
+                candidate = self.get_graph(workflow_uuid, conn=self._conn)
+            except BaseException:
+                self._conn.rollback()
+                raise
+            self._conn.rollback()
+        return candidate
 
     def _reconcile_graph(
         self,
@@ -994,31 +1158,51 @@ class WorkflowStore:
         )
         templates: Dict[str, Dict[str, Any]] = {}
         handles: Dict[str, Dict[str, Any]] = {}
+        catalog_snapshot = (
+            self._template_snapshot_provider.snapshot()
+            if template_uuids and self._template_snapshot_provider is not None
+            else None
+        )
         if template_uuids:
-            marks = ",".join("?" for _ in template_uuids)
-            template_rows = conn.execute(
-                f"""
-                SELECT * FROM workflow_node_template
-                WHERE uuid IN ({marks}) AND deleted_at IS NULL
-                """,
-                template_uuids,
-            ).fetchall()
-            templates = {
-                row["uuid"]: self._node_template_row(row) for row in template_rows
-            }
-            handle_rows = conn.execute(
-                f"""
-                SELECT * FROM workflow_handle_template
-                WHERE workflow_node_template_uuid IN ({marks})
-                  AND deleted_at IS NULL
-                """,
-                template_uuids,
-            ).fetchall()
-            handles = {
-                row["uuid"]: self._handle_template_row(row) for row in handle_rows
-            }
+            if catalog_snapshot is not None:
+                catalog_nodes, catalog_handles = self._catalog_entities(
+                    template_uuids,
+                    snapshot=catalog_snapshot,
+                )
+                templates = {item["uuid"]: item for item in catalog_nodes}
+                handles = {item["uuid"]: item for item in catalog_handles}
+            else:
+                marks = ",".join("?" for _ in template_uuids)
+                template_rows = conn.execute(
+                    f"""
+                    SELECT * FROM workflow_node_template
+                    WHERE uuid IN ({marks}) AND deleted_at IS NULL
+                    """,
+                    template_uuids,
+                ).fetchall()
+                templates = {
+                    row["uuid"]: self._node_template_row(row)
+                    for row in template_rows
+                }
+                handle_rows = conn.execute(
+                    f"""
+                    SELECT * FROM workflow_handle_template
+                    WHERE workflow_node_template_uuid IN ({marks})
+                      AND deleted_at IS NULL
+                    """,
+                    template_uuids,
+                ).fetchall()
+                handles = {
+                    row["uuid"]: self._handle_template_row(row)
+                    for row in handle_rows
+                }
         effective_params = {
-            node.uuid: self._graph_node_param(conn, node) for node in nodes
+            node.uuid: self._graph_node_param(
+                conn,
+                node,
+                catalog_snapshot=catalog_snapshot,
+            )
+            for node in nodes
         }
         effective_node_meta_data: Dict[str, Dict[str, Any]] = {}
         for node in nodes:
@@ -1060,6 +1244,8 @@ class WorkflowStore:
                 node,
                 now,
                 protect_reserved_metadata=protect_reserved_metadata,
+                effective_param=effective_params[node.uuid],
+                catalog_snapshot=catalog_snapshot,
             )
         for edge in edges:
             self._upsert_edge(
@@ -1179,7 +1365,11 @@ class WorkflowStore:
         now: str,
         *,
         protect_reserved_metadata: bool,
+        effective_param: Dict[str, Any],
+        catalog_snapshot: AuthoringCatalogSnapshot | None = None,
     ) -> None:
+        """按同一冻结模板代际写入一个工作流节点。"""
+
         existing = conn.execute(
             "SELECT workflow_uuid, create_time, meta_data "
             "FROM workflow_node WHERE uuid = ?",
@@ -1192,11 +1382,23 @@ class WorkflowStore:
             existing["meta_data"] if existing is not None else None,
             enabled=protect_reserved_metadata,
         )
+        template_reference = node.workflow_node_template_uuid
+        if (
+            template_reference is not None
+            and self._template_snapshot_provider is not None
+        ):
+            try:
+                snapshot = catalog_snapshot or self._template_snapshot_provider.snapshot()
+                template_reference = snapshot.template_key_for_uuid(template_reference)
+            except AuthoringCatalogError as error:
+                raise StoreNotFound(
+                    f"workflow node template {template_reference} not found"
+                ) from error
         values = (
             node.description,
             _json(meta_data),
             workflow_uuid,
-            node.workflow_node_template_uuid,
+            template_reference,
             node.parent_uuid,
             node.material_uuid,
             node.name,
@@ -1204,7 +1406,7 @@ class WorkflowStore:
             node.type,
             node.icon,
             _json(node.pose),
-            _json(self._graph_node_param(conn, node)),
+            _json(effective_param),
             node.footer,
             node.action_name,
             node.action_type,
@@ -1243,14 +1445,35 @@ class WorkflowStore:
             (now, *values, node.uuid),
         )
 
-    @staticmethod
     def _graph_node_param(
+        self,
         conn: sqlite3.Connection,
         node: WorkflowNodeWrite,
+        *,
+        catalog_snapshot: AuthoringCatalogSnapshot | None = None,
     ) -> Dict[str, Any]:
+        """解析节点显式参数或所引用模板的默认参数。
+
+        参数：``conn`` 仅供遗留 SQLite 模板适配器读取；``node`` 是候选节点；
+        ``catalog_snapshot`` 是本事务已经冻结的内存目录代际。返回：普通参数字典。
+        """
+
         if node.param is not None:
             return node.param
         if node.workflow_node_template_uuid is None:
+            return {}
+        if self._template_snapshot_provider is not None:
+            snapshot = catalog_snapshot or self._template_snapshot_provider.snapshot()
+            try:
+                template = snapshot.require_template(
+                    node.workflow_node_template_uuid
+                ).template
+            except AuthoringCatalogError:
+                return {}
+            for field in ("goal_default", "goal"):
+                fallback = template.get(field)
+                if isinstance(fallback, Mapping) and fallback:
+                    return dict(fallback)
             return {}
         template = conn.execute(
             """
@@ -1386,12 +1609,14 @@ class WorkflowStore:
                 List[Dict[str, Any]],
             ]
         ] = None,
+        applied_graph: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
         参数：工作流、任务、运行模式与目标标识创建意图；说明和元数据是公开
-        请求事实；``plan_builder`` 必须从事务内读取的同一应用图返回已解析输入、
-        冻结快照、执行计划（ExecutionPlan）及作业；可选
+        请求事实；``applied_graph`` 是进程内定义目录一次读取的不可变应用图，
+        省略时仅为兼容持久定义 Store 从当前事务读取；``plan_builder`` 必须从该
+        同一应用图返回已解析输入、冻结快照、执行计划（ExecutionPlan）及作业；可选
         ``inventory_allocation_builder`` 在首次写入前用同一工作流事务锁校验
         数量型库存绑定并返回既有分配表行。返回：提交后的任务投影。
         异常：图不存在、计划或输入无效及数据库失败均回滚任务和全部作业写入。
@@ -1399,7 +1624,12 @@ class WorkflowStore:
 
         now = utc_now()
         with self.transaction() as conn:
-            graph = self.get_graph(workflow_uuid, conn=conn)
+            if applied_graph is None:
+                if not self._persist_workflow_definitions:
+                    raise StoreConflict("运行事实库创建任务时缺少工作流图快照")
+                graph = self.get_graph(workflow_uuid, conn=conn)
+            else:
+                graph = applied_graph
             prepared = plan_builder(graph)
             plan = prepared.execution_plan
             jobs = prepared.jobs
@@ -2259,6 +2489,17 @@ class WorkflowStore:
         模板投影；模板不存在或已软删除时抛出 ``StoreNotFound``。
         """
 
+        if self._template_snapshot_provider is not None:
+            try:
+                return (
+                    self._template_snapshot_provider.snapshot()
+                    .require_template(template_uuid)
+                    .detached_template()
+                )
+            except AuthoringCatalogError as error:
+                raise StoreNotFound(
+                    f"workflow node template {template_uuid} not found"
+                ) from error
         with self._lock:
             row = self._conn.execute(
                 """
@@ -2607,20 +2848,21 @@ class WorkflowStore:
                     semantic_workflow_meta_data=candidate_meta,
                     validate_workflow_io_contract=True,
                 )
-                workflow_meta = dict(workflow["meta_data"])
-                workflow_meta.pop("unilab", None)
-                if "unilab" in candidate_meta:
-                    if candidate_meta["unilab"] is not None:
-                        workflow_meta["unilab"] = candidate_meta["unilab"]
+                # 领域 Python 是工作流定义权威；候选已经由 AST 与目录固定点
+                # 验证，因此公开元数据和系统生成的 ``unilab`` 元数据都以候选
+                # 根对象为准，不能继续保留内存投影中的陈旧公开字段。
+                workflow_meta = dict(candidate_meta)
                 conn.execute(
                     """
                     UPDATE workflow
-                    SET meta_data = ?, name = ?, description = ?, update_time = ?
+                    SET meta_data = ?, name = ?, tags = ?, description = ?,
+                        update_time = ?
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
                     (
                         _json(workflow_meta),
                         graph_workflow["name"],
+                        _json(graph_workflow.get("tags") or []),
                         graph_workflow.get("description"),
                         now,
                         workflow_uuid,
@@ -2686,18 +2928,24 @@ class WorkflowStore:
         authority_id: str,
         now: str,
     ) -> None:
-        """在应用事务内确保候选引用的最小目录投影已持久化。
+        """在应用事务内验证候选目录，或为遗留模式持久化最小投影。
 
         参数说明：``conn`` 是当前唯一写事务；两个模板数组已经过服务层候选校验；
-        ``authority_id`` 绑定本次编译目录指纹，``now`` 是事务时间。新实体原子
-        插入，已有 UUID 必须语义相同才能复用；本方法不承担 F03 持久目录的发现、
-        版本管理或删除权威。
+        ``authority_id`` 绑定本次编译目录指纹，``now`` 是事务时间。内存目录模式
+        只核对候选与当前代际完全一致，绝不写模板表；未装配目录的遗留模式才原子
+        插入最小投影。
         """
 
         if not isinstance(node_templates, list) or not isinstance(
             handle_templates, list
         ):
             raise StoreConflict("Candidate Catalog 投影必须是数组")
+        if self._template_snapshot_provider is not None:
+            self._validate_in_memory_authoring_catalog(
+                node_templates=node_templates,
+                handle_templates=handle_templates,
+            )
+            return
         for template in node_templates:
             if not isinstance(template, dict):
                 raise StoreConflict("Candidate NodeTemplate 必须是对象")
@@ -2803,6 +3051,71 @@ class WorkflowStore:
                     handle.get("data_key"),
                 ),
             )
+
+    def _validate_in_memory_authoring_catalog(
+        self,
+        *,
+        node_templates: List[Dict[str, Any]],
+        handle_templates: List[Dict[str, Any]],
+    ) -> None:
+        """证明候选模板是当前内存代际的只读子集。
+
+        参数：两个数组来自候选工作流快照。返回：无；未知 UUID、重复实体或同一
+        UUID 语义漂移时拒绝应用，且不访问 ``workflow_*_template`` SQLite 表。
+        """
+
+        snapshot = self._template_snapshot_provider.snapshot()
+        candidate_node_by_uuid = self._unique_catalog_entities(
+            node_templates,
+            entity_name="NodeTemplate",
+        )
+        candidate_handle_by_uuid = self._unique_catalog_entities(
+            handle_templates,
+            entity_name="HandleTemplate",
+        )
+        expected_nodes, expected_handles = self._catalog_entities(
+            candidate_node_by_uuid,
+            snapshot=snapshot,
+        )
+        expected_node_by_uuid = {str(item["uuid"]): item for item in expected_nodes}
+        expected_handle_by_uuid = {
+            str(item["uuid"]): item for item in expected_handles
+        }
+        for template_uuid, candidate in candidate_node_by_uuid.items():
+            expected = expected_node_by_uuid.get(template_uuid)
+            if expected is None or not self._catalog_entity_matches(
+                expected,
+                candidate,
+            ):
+                raise StoreConflict("Candidate NodeTemplate 与当前内存目录不一致")
+        if set(candidate_handle_by_uuid) != set(expected_handle_by_uuid):
+            raise StoreConflict("Candidate HandleTemplate 与当前内存目录不一致")
+        for handle_uuid, candidate in candidate_handle_by_uuid.items():
+            if not self._catalog_entity_matches(
+                expected_handle_by_uuid[handle_uuid],
+                candidate,
+            ):
+                raise StoreConflict("Candidate HandleTemplate 与当前内存目录不一致")
+
+    @staticmethod
+    def _unique_catalog_entities(
+        candidates: List[Dict[str, Any]],
+        *,
+        entity_name: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """按 UUID 索引候选目录实体并拒绝重复或非法元素。"""
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                raise StoreConflict(f"Candidate {entity_name} 必须是对象")
+            template_uuid = candidate.get("uuid")
+            if not isinstance(template_uuid, str) or not template_uuid:
+                raise StoreConflict(f"Candidate {entity_name} 缺少 UUID")
+            if template_uuid in result:
+                raise StoreConflict(f"Candidate {entity_name} UUID 重复")
+            result[template_uuid] = candidate
+        return result
 
     @staticmethod
     def _catalog_entity_matches(
@@ -2951,6 +3264,39 @@ class WorkflowStore:
             }
             for row in rows
         ]
+
+    def append_forwarded_events(
+        self,
+        events: Iterable[Mapping[str, Any]],
+    ) -> None:
+        """把进程内定义目录的失效通知追加到持久全局事件流。
+
+        参数：``events`` 是按定义目录局部序号递增的已提交事件；这里只复制事件
+        类型、载荷和发生时间，并由运行事实库分配新的全局游标。返回无。异常：
+        事件形状非法或 SQLite 写入失败时整批回滚，不发布部分通知。
+
+        该投影只保存“小型失效通知”，不保存工作流定义或图；客户端收到通知后
+        仍须重新读取当前进程目录，不能从事件恢复工作流权威。
+        """
+
+        normalized: list[tuple[str, Dict[str, Any], str]] = []
+        for raw_event in events:
+            event = str(raw_event.get("event") or "").strip()
+            data = raw_event.get("data")
+            create_time = str(raw_event.get("create_time") or "").strip()
+            if not event or not isinstance(data, Mapping) or not create_time:
+                raise ValueError("工作流定义事件形状无效")
+            normalized.append((event, dict(data), create_time))
+        if not normalized:
+            return
+        with self.transaction() as conn:
+            for event, data, create_time in normalized:
+                self._append_event(
+                    conn,
+                    event=event,
+                    data=data,
+                    now=create_time,
+                )
 
     @staticmethod
     def _append_event(

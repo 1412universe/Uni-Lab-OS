@@ -158,8 +158,8 @@ def test_restart_uses_only_current_roots_and_exact_reauthorization_recovers(
 ) -> None:
     """A+B 注册历史重启为仅 A 时必须停用 B，完全相同身份重授权后恢复。
 
-    参数：``tmp_path`` 隔离持久数据库和两个授权包。返回：无；证明历史注册不是
-    当前授权，停用不删除已应用工作流定义，重授权仍复用原身份。
+    参数：``tmp_path`` 隔离持久运行库和两个授权包。返回：无；证明当前进程只
+    从本轮授权包重建定义，停用包的定义立即消失，重授权仍复用源码身份。
     """
 
     working_dir = tmp_path / "runtime"
@@ -199,7 +199,9 @@ def test_restart_uses_only_current_roots_and_exact_reauthorization_recovers(
         WORKFLOW_A_UUID
     ]
     _assert_source_access_rejected(only_a, WORKFLOW_B_UUID)
-    assert only_a.get_workflow(WORKFLOW_B_UUID)["uuid"] == WORKFLOW_B_UUID
+    with pytest.raises(WorkflowError) as missing_b:
+        only_a.get_workflow(WORKFLOW_B_UUID)
+    assert missing_b.value.code == "not_found"
     composition.reset_workflow_service_for_test()
 
     hidden_root_b.rename(root_b)
@@ -218,8 +220,8 @@ def test_empty_current_roots_do_not_activate_or_read_historical_sources(
 ) -> None:
     """空 allowlist 重启不得访问任何既有来源路径。
 
-    参数：``tmp_path`` 隔离持久数据库和历史包。返回：无；证明工作流定义仍可读，
-    但来源枚举和全部创作文件入口均拒绝历史注册。
+    参数：``tmp_path`` 隔离持久运行库和历史包。返回：无；证明空授权集合不会从
+    文件 SQLite 恢复旧定义，来源枚举和全部创作文件入口也拒绝历史注册。
     """
 
     working_dir = tmp_path / "runtime"
@@ -245,7 +247,9 @@ def test_empty_current_roots_do_not_activate_or_read_historical_sources(
 
     assert empty.list_registered_sources() == []
     _assert_source_access_rejected(empty, WORKFLOW_A_UUID)
-    assert empty.get_workflow(WORKFLOW_A_UUID)["uuid"] == WORKFLOW_A_UUID
+    with pytest.raises(WorkflowError) as missing_workflow:
+        empty.get_workflow(WORKFLOW_A_UUID)
+    assert missing_workflow.value.code == "not_found"
 
 
 def test_single_source_replacement_activates_exact_identity_only(

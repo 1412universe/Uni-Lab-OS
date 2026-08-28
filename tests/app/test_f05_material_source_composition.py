@@ -12,6 +12,7 @@ from tests.registry.test_f05_material_source_catalog import (
 from tests.workflow.test_authoring_engine import WORKFLOW_UUID, _applied_graph
 from tests.workflow.test_f05_material_source_authoring import MATERIAL_SOURCE_NODE_UUID
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.registry.template_identity import device_template_uuid
 from unilabos.workflow.composition import (
     compose_local_workflow_template_runtime,
     reset_workflow_service_for_test,
@@ -142,7 +143,7 @@ def test_local_composition_shares_frozen_resource_template_projection(
             projection.snapshot()
             .require_material_source()
             .template["resource_template_uuid"]
-            == template_rows["host_node"]
+            == device_template_uuid("host_node")
         )
     finally:
         reset_workflow_service_for_test()

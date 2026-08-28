@@ -10,10 +10,19 @@ from unilabos.registry.action_template_projection import (
     compile_action_template_handles,
     goal_parameter_schema,
 )
+from unilabos.registry.in_memory_template_projection_store import (
+    InMemoryRegistryTemplateProjectionStore,
+)
 from unilabos.registry.template_delta import (
     TemplateProjectionDelta,
     TemplateProjectionDeltaError,
     build_template_projection_delta,
+)
+from unilabos.registry.template_identity import (
+    TemplateIdentityError,
+    action_handle_uuid,
+    action_template_uuid,
+    device_template_uuid,
 )
 from unilabos.registry.template_snapshot import (
     RegistryTemplateSnapshot,
@@ -148,7 +157,7 @@ class RegistryTemplateProjection:
 
     def __init__(
         self,
-        workflow_store: WorkflowStore,
+        workflow_store: WorkflowStore | None,
         *,
         authority_id: str,
         resource_template_identity_resolver: Callable[[str], str],
@@ -157,6 +166,8 @@ class RegistryTemplateProjection:
             tuple[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]],
         ]
         | None = None,
+        projection_store: Any | None = None,
+        close_callback: Callable[[], None] | None = None,
     ) -> None:
         """装配设备注册表（Registry）模板投影及资源模板身份解析器。
 
@@ -170,7 +181,14 @@ class RegistryTemplateProjection:
         ``RegistryTemplateProjectionError``，不得发布部分目录。
         """
 
-        self._store = RegistryTemplateProjectionStore(workflow_store)
+        if projection_store is not None and workflow_store is not None:
+            raise TypeError("模板投影不能同时绑定 SQLite 与内存存储")
+        if projection_store is None:
+            if workflow_store is None:
+                raise TypeError("模板投影缺少存储适配器")
+            projection_store = RegistryTemplateProjectionStore(workflow_store)
+        self._store = projection_store
+        self._close_callback = close_callback
         self._authority_id = authority_id
         self._resource_template_identity_resolver = resource_template_identity_resolver
         if generation_extension is not None and not callable(generation_extension):
@@ -191,6 +209,35 @@ class RegistryTemplateProjection:
             )
         except (AuthoringCatalogError, TemplateProjectionIdentityConflict) as error:
             raise RegistryTemplateProjectionError(str(error)) from error
+
+    @classmethod
+    def in_memory(
+        cls,
+        *,
+        authority_id: str,
+        resource_template_identity_resolver: Callable[[str], str],
+        generation_extension: Callable[
+            [Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]],
+            tuple[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]],
+        ]
+        | None = None,
+        close_callback: Callable[[], None] | None = None,
+    ) -> "RegistryTemplateProjection":
+        """建立不读写 SQLite 模板表的进程内投影。
+
+        参数：权威、物料模板身份解析器及可选发布工作流扩展与普通构造函数一致；
+        ``close_callback`` 仅释放扩展函数拥有的工作流事实存储。返回：空代际投影，
+        首次 ``refresh`` 完整校验成功后才发布目录。
+        """
+
+        return cls(
+            None,
+            authority_id=authority_id,
+            resource_template_identity_resolver=resource_template_identity_resolver,
+            generation_extension=generation_extension,
+            projection_store=InMemoryRegistryTemplateProjectionStore(),
+            close_callback=close_callback,
+        )
 
     def refresh(self, registry: Any) -> AuthoringCatalogSnapshot:
         """从一次完整设备注册表快照原子发布新模板代际。
@@ -293,9 +340,13 @@ class RegistryTemplateProjection:
         return self._last_delta
 
     def close(self) -> None:
-        """关闭投影持有的本地工作流存储连接。"""
+        """关闭投影及其显式拥有的外部资源。"""
 
         self._store.close()
+        if self._close_callback is not None:
+            callback = self._close_callback
+            self._close_callback = None
+            callback()
 
     def _compile(
         self,
@@ -396,18 +447,14 @@ class RegistryTemplateProjection:
 
         if not isinstance(device, Mapping):
             raise RegistryTemplateProjectionError("设备注册表条目必须是对象")
-        # ``resource_identity`` 是库存资源模板的业务唯一名；设备源码身份描述驱动
-        # 实现位置，不能代替 inventory.db 中由注册表（Registry）``id`` 管理的模板身份。
+        # 设备模板是内存目录成员；稳定业务名直接生成 UUID，不查询库存 SQLite。
         resource_identity = device.get("id")
         if not isinstance(resource_identity, str) or not resource_identity:
             raise RegistryTemplateProjectionError("设备定义缺少稳定资源身份")
-        resource_template_uuid = self._resource_template_identity_resolver(
-            resource_identity
-        )
         try:
-            resource_template_uuid = validate_uuid(resource_template_uuid)
-        except (TypeError, ValueError):
-            raise RegistryTemplateProjectionError("设备资源模板身份解析失败")
+            resource_template_uuid = device_template_uuid(resource_identity)
+        except TemplateIdentityError as error:
+            raise RegistryTemplateProjectionError(str(error)) from error
 
         class_definition = device.get("class")
         if not isinstance(class_definition, Mapping):
@@ -455,25 +502,31 @@ class RegistryTemplateProjection:
                         self._resource_template_identity_resolver
                     ),
                 )
-            except ActionTemplateProjectionError as error:
+            except (ActionTemplateProjectionError, TemplateIdentityError) as error:
                 raise RegistryTemplateProjectionError(str(error)) from error
             nodes.append(node)
             handles.extend(action_handles)
         if resource_name == "host_node":
-            framework_node, framework_handle = self._compile_material_source(
-                resource_template_uuid=resource_template_uuid,
-                resource_name=resource_name,
-                resource_display_name=resource_display_name,
-            )
-            nodes.append(framework_node)
-            handles.append(framework_handle)
-            nodes.append(
-                self._compile_group(
+            try:
+                framework_node, framework_handle = self._compile_material_source(
                     resource_template_uuid=resource_template_uuid,
                     resource_name=resource_name,
                     resource_display_name=resource_display_name,
                 )
-            )
+            except TemplateIdentityError as error:
+                raise RegistryTemplateProjectionError(str(error)) from error
+            nodes.append(framework_node)
+            handles.append(framework_handle)
+            try:
+                nodes.append(
+                    self._compile_group(
+                        resource_template_uuid=resource_template_uuid,
+                        resource_name=resource_name,
+                        resource_display_name=resource_display_name,
+                    )
+                )
+            except TemplateIdentityError as error:
+                raise RegistryTemplateProjectionError(str(error)) from error
         return nodes, handles
 
     @staticmethod
@@ -493,6 +546,7 @@ class RegistryTemplateProjection:
         """
 
         return {
+            "uuid": action_template_uuid(resource_name, "group"),
             "resource_template_uuid": resource_template_uuid,
             "name": "group",
             "display_name": "分组",
@@ -561,6 +615,7 @@ class RegistryTemplateProjection:
             "x-unilabos-site-selector": dict(site_selector),
         }
         node = {
+            "uuid": action_template_uuid(resource_name, "material_source"),
             "resource_template_uuid": resource_template_uuid,
             "name": "material_source",
             "display_name": "Material Source",
@@ -648,6 +703,11 @@ class RegistryTemplateProjection:
                 }
             },
         }
+        handle["uuid"] = action_handle_uuid(
+            str(node["uuid"]),
+            io_type="source",
+            handle_key="material",
+        )
         return node, handle
 
     @staticmethod
@@ -693,7 +753,9 @@ class RegistryTemplateProjection:
         # 查询可变注册表后得到与创作时不同的并发边界。
         if action.get("always_free"):
             unilab_metadata["always_free"] = True
+        deterministic_uuid = action_template_uuid(resource_name, action_name)
         node = {
+            "uuid": deterministic_uuid,
             "resource_template_uuid": resource_template_uuid,
             "name": action_name,
             "display_name": (
@@ -712,17 +774,27 @@ class RegistryTemplateProjection:
         }
         if action.get("uuid") is not None:
             try:
-                node["uuid"] = validate_uuid(action["uuid"])
+                explicit_uuid = validate_uuid(action["uuid"])
             except (TypeError, ValueError):
                 raise RegistryTemplateProjectionError(
                     "节点模板显式 UUID 非法"
                 ) from None
+            if explicit_uuid != deterministic_uuid:
+                raise RegistryTemplateProjectionError(
+                    "节点模板显式 UUID 与设备名、动作名身份不一致"
+                )
 
         handles = compile_action_template_handles(
             schema,
             node_business_key=node_business_key,
             resource_template_identity_resolver=(resource_template_identity_resolver),
         )
+        for handle in handles:
+            handle["uuid"] = action_handle_uuid(
+                str(node["uuid"]),
+                io_type=str(handle["io_type"]),
+                handle_key=str(handle["handle_key"]),
+            )
         return node, handles
 
 

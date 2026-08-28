@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from unilabos.app.scheduler.inventory.backend_contract import (
+    TEMPLATE_DATA_CONFLICT,
     BackendContractError,
     BackendResourceService,
 )
@@ -192,7 +193,17 @@ def create_backend_resource_router(
         try:
             template_identity = str(template_uuid)
             current = service.get_resource_template(template_identity)
+            if (
+                current.get("resource_type") == "device"
+                and service.store.runtime_device_template_catalog_required
+            ):
+                raise BackendContractError(
+                    TEMPLATE_DATA_CONFLICT,
+                    "runtime device templates can only be changed by the domain package",
+                )
             definition = body.model_dump(by_alias=True, mode="json")
+            if "registry_type" not in body.model_fields_set:
+                definition["registry_type"] = current.get("resource_type") or "resource"
             if "handles" not in body.model_fields_set:
                 definition.pop("handles", None)
             if "available_sites" not in body.model_fields_set:

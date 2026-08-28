@@ -232,6 +232,16 @@ def render_authoring_python(
             f"    displayname={workflow.get('name')!r},",
         ]
     )
+    root_fields = _authoring_root_fields(workflow)
+    if "tags" in root_fields:
+        lines.append(
+            f"    tags={_stable_python_json(workflow.get('tags') or [])!r},"
+        )
+    if "meta_data" in root_fields:
+        lines.append(
+            "    meta_data="
+            f"{_stable_python_json(_public_workflow_meta_data(workflow))!r},"
+        )
     if workflow.get("description") is not None:
         lines.append(f"    description={workflow.get('description')!r},")
     lines.append(")")
@@ -385,6 +395,47 @@ def render_authoring_python(
         python_source="\n".join(lines).rstrip() + "\n",
         source_map=source_map,
     )
+
+
+def _public_workflow_meta_data(workflow: Mapping[str, Any]) -> dict[str, Any]:
+    """返回可由领域 Python 源码拥有的工作流公开元数据。"""
+
+    meta_data = workflow.get("meta_data")
+    public = dict(meta_data) if isinstance(meta_data, Mapping) else {}
+    public.pop("unilab", None)
+    return public
+
+
+def _authoring_root_fields(workflow: Mapping[str, Any]) -> set[str]:
+    """读取由领域 Python 明确拥有的可选工作流根字段。"""
+
+    meta_data = workflow.get("meta_data")
+    unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
+    values = (
+        unilab.get("authoring_root_fields")
+        if isinstance(unilab, Mapping)
+        else None
+    )
+    if not isinstance(values, list):
+        return set()
+    return {
+        value
+        for value in values
+        if value in {"tags", "meta_data"}
+    }
+
+
+def _stable_python_json(value: Any) -> Any:
+    """把 JSON 对象递归整理为可稳定 ``repr`` 的 Python 字面量。"""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _stable_python_json(value[key])
+            for key in sorted(value, key=str)
+        }
+    if isinstance(value, list):
+        return [_stable_python_json(item) for item in value]
+    return value
 
 
 def _append_function_docstring(*, lines: list[str], docstring: str) -> None:
