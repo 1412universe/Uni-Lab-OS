@@ -7,7 +7,7 @@ import json
 import re
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, FastAPI, Header, Query, Request
+from fastapi import APIRouter, Body, FastAPI, Header, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -557,6 +557,30 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
         return _success(
             service.import_legacy_workflow(payload=body.model_dump()),
+            status=201,
+        )
+
+    @router.post("/local/workflows/import-python", status_code=201)
+    def import_python_workflow(
+        python_file: Annotated[bytes, Body(media_type="text/x-python")],
+        file_name: Annotated[str, Header(alias="X-Workflow-Filename")],
+    ) -> JSONResponse:
+        """静态校验并原子导入一个 Local 模式 Python 工作流文件。
+
+        参数：请求体是原始 ``.py`` 文件字节，``X-Workflow-Filename`` 是不含路径
+        的文件名。返回：新建工作流完整图的统一响应。异常：非 UTF-8、非法文件
+        名、AST/模板/图校验失败或身份冲突由公共错误适配器处理。
+        """
+
+        try:
+            python_source = python_file.decode("utf-8")
+        except UnicodeDecodeError:
+            raise WorkflowError("invalid_input") from None
+        return _success(
+            service.import_python_workflow(
+                file_name=file_name,
+                python_source=python_source,
+            ),
             status=201,
         )
 
@@ -1210,6 +1234,7 @@ def install_workflow_api(
         """
 
         workflow_prefixes = (
+            "/api/v1/local/workflows",
             "/api/v1/workflows",
             "/api/v1/workflow-tasks",
             "/api/v1/workflow-node-jobs",

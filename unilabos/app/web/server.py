@@ -186,6 +186,7 @@ app.add_middleware(
         "Authorization",
         "Content-Type",
         "Accept",
+        "X-Workflow-Filename",
         "Last-Event-ID",
         "traceparent",
         "tracestate",

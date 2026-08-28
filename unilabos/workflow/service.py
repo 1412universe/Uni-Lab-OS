@@ -77,6 +77,10 @@ from unilabos.workflow.published_contract import (
     PublishedContractInvalid,
     PublishedWorkflowContractStore,
 )
+from unilabos.workflow.python_workflow_import import (
+    PythonWorkflowImportError,
+    validate_python_workflow_import,
+)
 from unilabos.workflow.run_preflight import build_run_preflight_report
 from unilabos.workflow.source_coordinates import source_ranges_fit
 from unilabos.workflow.source_discovery import (
@@ -1192,6 +1196,116 @@ class WorkflowService:
             raise WorkflowError(error.code) from None
         except StoreConflict:
             raise WorkflowError("invalid_input") from None
+
+    def import_python_workflow(
+        self,
+        *,
+        file_name: str,
+        python_source: str,
+    ) -> Dict[str, Any]:
+        """通过现有 AST 编译器原子导入一个 Python 工作流文件。
+
+        参数：``file_name`` 是上传时的单个 ``.py`` 文件名，``python_source`` 是
+        已按 UTF-8 解码的完整文件内容。返回：新建工作流的 Backend 形状完整图。
+        异常：文件边界、AST 声明、动作模板、节点或连线不合法时返回稳定工作流
+        错误；工作流、节点或连线身份已存在时返回冲突。
+
+        安全不变量：源码只进入静态 AST 编译器，绝不 import 或执行；只有完整候选
+        通过现有目录、图和身份校验后，才在一个 SQLite 事务中创建定义和完整图。
+        """
+
+        try:
+            # ``imported`` 冻结上传文件身份、工作流稳定 UUID 与源码摘要；此阶段
+            # 尚未创建任何工作流持久事实。
+            encoded = python_source.encode("utf-8")
+            imported = validate_python_workflow_import(
+                file_name=file_name,
+                python_source=python_source,
+                source_hash=_sha256(encoded),
+            )
+        except (AttributeError, PythonWorkflowImportError, UnicodeEncodeError):
+            raise WorkflowError("invalid_input") from None
+        if self.compiler is None:
+            raise WorkflowError("template_catalog_unavailable")
+
+        # ``initial_graph`` 是修订 1 的空基线，``compilation`` 只代表同一内存模板
+        # 代际产生的静态候选，二者都不是已提交的工作流定义。
+        initial_graph = imported.initial_graph()
+        try:
+            compilation = CandidateCompilation.model_validate(
+                self.compiler.compile(
+                    workflow_uuid=imported.workflow_uuid,
+                    workflow_revision=1,
+                    python_source=imported.python_source,
+                    source_uri=imported.source_uri,
+                    applied_graph=initial_graph,
+                )
+            )
+        except Exception:
+            raise WorkflowError("internal_error") from None
+        # ``candidate`` 经过图、源码范围、模板目录和全局节点/连线身份复核；只有
+        # 签发成功后才能进入下面唯一的 SQLite 写事务。
+        candidate = self._issue_candidate(
+            workflow_revision=1,
+            draft_hash=imported.source_hash,
+            compilation=compilation,
+            applied_graph=initial_graph,
+            draft_python_source=imported.python_source,
+        )
+        if candidate is None:
+            diagnostic = next(
+                (
+                    item
+                    for item in compilation.diagnostics
+                    if str(item.get("severity", "")).lower() == "error"
+                ),
+                None,
+            )
+            message = (
+                str(diagnostic.get("message"))
+                if isinstance(diagnostic, Mapping) and diagnostic.get("message")
+                else "Python 工作流未能生成可信候选图"
+            )
+            raise WorkflowError("draft_invalid", message=message)
+
+        graph = candidate["graph"]
+        workflow = graph["workflow"]
+        # ``python_import`` 来源证据属于系统保留元数据；编译器只追加创作合同，
+        # 两者在首次事务前合并，避免后续再写一次工作流定义。
+        graph_meta_data = dict(workflow.get("meta_data") or {})
+        initial_unilab = dict(
+            initial_graph["workflow"].get("meta_data", {}).get("unilab", {})
+        )
+        candidate_unilab = dict(graph_meta_data.get("unilab") or {})
+        graph_meta_data["unilab"] = {**initial_unilab, **candidate_unilab}
+        try:
+            return self._store.create_workflow_with_graph(
+                workflow_uuid=imported.workflow_uuid,
+                name=workflow["name"],
+                tags=list(workflow.get("tags") or []),
+                description=workflow.get("description"),
+                meta_data=graph_meta_data,
+                nodes=[
+                    WorkflowNodeWrite.model_validate(node) for node in graph["nodes"]
+                ],
+                edges=[
+                    WorkflowEdgeWrite.model_validate(edge) for edge in graph["edges"]
+                ],
+                node_templates=list(graph.get("node_templates") or []),
+                handle_templates=list(graph.get("handle_templates") or []),
+                template_catalog_fingerprint=candidate[
+                    "template_catalog_fingerprint"
+                ],
+                trusted_authoring_graph=True,
+            )
+        except StoreAuthoringConflict as error:
+            raise WorkflowConflict(error.code) from None
+        except StoreNotFound:
+            raise WorkflowConflict("template_catalog_conflict") from None
+        except StoreConflict:
+            raise WorkflowConflict("conflict") from None
+        except (KeyError, TypeError, ValidationError, ValueError):
+            raise WorkflowError("candidate_invalid") from None
 
     def _locate_graph_entity(
         self,

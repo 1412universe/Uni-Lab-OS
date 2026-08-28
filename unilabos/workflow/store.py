@@ -621,10 +621,18 @@ class WorkflowStore:
         meta_data: Dict[str, Any],
         nodes: List[WorkflowNodeWrite],
         edges: List[WorkflowEdgeWrite],
+        node_templates: List[Dict[str, Any]] | None = None,
+        handle_templates: List[Dict[str, Any]] | None = None,
+        template_catalog_fingerprint: str | None = None,
+        trusted_authoring_graph: bool = False,
     ) -> Dict[str, Any]:
         """在一个事务中创建工作流及其首版完整图。
 
-        参数：工作流字段构成新定义，``nodes``/``edges`` 已使用新身份重建引用。
+        参数：工作流字段构成新定义，``nodes``/``edges`` 已使用新身份重建引用；
+        ``node_templates``/``handle_templates`` 是 AST 编译候选实际引用的目录子集，
+        与工作流图在同一事务内校验或投影；``trusted_authoring_graph`` 只允许 AST
+        编译器生成的图保留系统创作元数据，普通复制和旧版导入仍禁止提交
+        ``meta_data.unilab``。
         返回修订为 1 的完整图；任何身份、模板或图语义错误都会回滚工作流主记录，
         因此复制/导入不会留下空壳工作流。
         """
@@ -649,6 +657,16 @@ class WorkflowStore:
                         _json(tags),
                     ),
                 )
+                if node_templates is not None or handle_templates is not None:
+                    if not template_catalog_fingerprint:
+                        raise StoreConflict("Candidate Catalog 缺少目录指纹")
+                    self._ensure_authoring_catalog_projection(
+                        conn,
+                        node_templates=node_templates or [],
+                        handle_templates=handle_templates or [],
+                        authority_id=template_catalog_fingerprint,
+                        now=now,
+                    )
                 self._reconcile_graph(
                     conn,
                     workflow_uuid=workflow_uuid,
@@ -656,7 +674,10 @@ class WorkflowStore:
                     nodes=nodes,
                     edges=edges,
                     advance_revision=False,
-                    protect_reserved_metadata=True,
+                    protect_reserved_metadata=not trusted_authoring_graph,
+                    semantic_workflow_meta_data=(
+                        meta_data if trusted_authoring_graph else None
+                    ),
                     validate_workflow_io_contract=True,
                 )
         except sqlite3.IntegrityError as exc:
