@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from unilabos.app.scheduler.inventory.backend_contract import (
     TEMPLATE_DATA_CONFLICT,
@@ -68,8 +68,19 @@ class ResourceTemplateUpdateRequest(BackendModel):
 
 
 class SitePlacementRequest(BackendModel):
-    action: str
+    action: Literal["place", "remove"]
     site_uuid: Optional[UUID] = None
+
+    @field_validator("action", mode="before")
+    @classmethod
+    def normalize_action(cls, value: Any) -> Any:
+        """把 Backend 接受的大小写动作规范为小写枚举值。
+
+        参数：``value`` 是未信任 JSON 动作。返回：字符串时去空白并转小写，其余
+        类型交给 Pydantic 拒绝。异常：非法枚举由字段校验统一报告。
+        """
+
+        return value.strip().lower() if isinstance(value, str) else value
 
 
 class RelativePositionRequest(BackendModel):
@@ -105,6 +116,21 @@ class MaterialCreateRequest(MaterialRequest):
     """创建物料时可选地在同一事务装入试剂。"""
 
     reagent: Optional[MaterialReagentRequest] = None
+
+
+class MaterialUpdateRequest(BackendModel):
+    """按字段更新物料；未出现或显式为 ``null`` 的字段保持原值。"""
+
+    resource_template_uuid: Optional[UUID] = None
+    parent_uuid: Optional[UUID] = None
+    barcode: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    meta_data: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None
+    relative_position: Optional[RelativePositionRequest] = None
+    site_placement: Optional[SitePlacementRequest] = None
+    expected_revision: Optional[int] = Field(default=None, ge=0)
 
 
 class MaterialStateRequest(BackendModel):
@@ -255,10 +281,22 @@ def create_backend_resource_router(
         return _call(service.get_material, str(material_uuid))
 
     @router.put("/materials/{material_uuid}")
-    def update_material(material_uuid: UUID, body: MaterialRequest) -> JSONResponse:
-        values = body.model_dump(mode="json")
+    def update_material(
+        material_uuid: UUID, body: MaterialUpdateRequest
+    ) -> JSONResponse:
+        """按字段修改物料，或通过 ``site_placement`` 执行人工上下料。
+
+        参数：路径 UUID 是物料稳定身份，``body`` 仅更新明确给出且非空的字段；
+        ``place`` 放入或换到目标库位，``remove`` 解除当前精确库位占用。返回：统一
+        数值信封中的最新物料详情。异常：参数、修订、模板、父级或库位
+        冲突由资源服务映射为稳定 Backend 错误码。
+        """
+
+        values = body.model_dump(mode="json", exclude_unset=True)
+        values["_specified_fields"] = set(body.model_fields_set)
         values["_relative_position_specified"] = (
             "relative_position" in body.model_fields_set
+            and body.relative_position is not None
         )
         return _call(
             service.update_material,

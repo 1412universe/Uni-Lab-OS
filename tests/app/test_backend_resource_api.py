@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -453,7 +455,13 @@ def test_site_uuid_is_position_identity_and_state_updates_material_projection(
     store.close()
 
 
-def test_relative_position_round_trips_and_explicit_null_soft_deletes(tmp_path):
+def test_relative_position_round_trips_and_explicit_null_preserves_value(tmp_path):
+    """物料相对位置应完整往返，显式 null 不删除已有位置。
+
+    参数：``tmp_path`` 提供隔离库存目录。返回：无；断言位置投影
+    与持久行都保持有效。异常：位置三态更新合同回归时测试失败。
+    """
+
     client, store = _client(tmp_path)
     template_uuid = _sync_template(client)
     payload = {
@@ -481,11 +489,104 @@ def test_relative_position_round_trips_and_explicit_null_soft_deletes(tmp_path):
     payload["relative_position"] = None
     updated = client.put(f"/api/v1/materials/{material['uuid']}", json=payload)
     assert updated.status_code == 200
-    assert updated.json()["data"]["relative_position"] is None
+    assert updated.json()["data"]["relative_position"]["position_x"] == 1.5
     assert store.query_one(
         "SELECT deleted_at FROM relative_position WHERE material_uuid=?",
         (material["uuid"],),
-    )["deleted_at"] is not None
+    )["deleted_at"] is None
+    store.close()
+
+
+def test_material_update_explicit_null_preserves_mutable_fields(tmp_path):
+    """Backend 兼容 PUT 应把显式 null 解释为保持物料当前值。
+
+    参数：``tmp_path`` 提供隔离库存目录。返回：无；断言所有显式
+    null 字段均保持原值。异常：本地接口与 Backend 三态更新合同
+    不一致时测试失败。
+    """
+
+    client, store = _client(tmp_path)
+    template_uuid = _sync_template(client)
+    parent = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "barcode": "NULL-PARENT",
+            "name": "Null Parent",
+        },
+    ).json()["data"]
+    created = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "parent_uuid": parent["uuid"],
+            "barcode": "NULL-PRESERVE",
+            "name": "Null Preserve",
+            "description": "原描述",
+            "meta_data": {"source": "test"},
+            "config": {"mode": "safe"},
+        },
+    ).json()["data"]
+
+    updated = client.put(
+        f"/api/v1/materials/{created['uuid']}",
+        json={
+            "parent_uuid": None,
+            "barcode": None,
+            "name": None,
+            "description": None,
+            "meta_data": None,
+            "config": None,
+            "site_placement": None,
+        },
+    )
+
+    assert updated.status_code == 200
+    detail = updated.json()["data"]
+    assert detail["parent_uuid"] == parent["uuid"]
+    assert detail["barcode"] == "NULL-PRESERVE"
+    assert detail["name"] == "Null Preserve"
+    assert detail["description"] == "原描述"
+    assert detail["meta_data"] == {"source": "test"}
+    assert detail["config"] == {"mode": "safe"}
+
+    cleared = client.put(
+        f"/api/v1/materials/{created['uuid']}",
+        json={"parent_uuid": "00000000-0000-0000-0000-000000000000"},
+    )
+    assert cleared.json()["code"] == 0
+    assert cleared.json()["data"]["parent_uuid"] is None
+    store.close()
+
+
+def test_material_update_rejects_resource_template_change(tmp_path):
+    """既有物料不得通过更新接口换用另一个模板。
+
+    参数：``tmp_path`` 提供隔离库存目录。返回：无；断言模板不可
+    变规则返回 ``6002``，且不推进物料修订。异常：合同回归时测试
+    失败。
+    """
+
+    client, store = _client(tmp_path)
+    current_template_uuid = _sync_template(client)
+    created = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": current_template_uuid,
+            "barcode": "IMMUTABLE-TEMPLATE",
+            "name": "Immutable Template",
+        },
+    ).json()["data"]
+
+    response = client.put(
+        f"/api/v1/materials/{created['uuid']}",
+        json={"resource_template_uuid": str(uuid4())},
+    )
+
+    assert response.json()["code"] == 6002
+    detail = client.get(f"/api/v1/materials/{created['uuid']}").json()["data"]
+    assert detail["resource_template_uuid"] == current_template_uuid
+    assert detail["revision"] == 1
     store.close()
 
 

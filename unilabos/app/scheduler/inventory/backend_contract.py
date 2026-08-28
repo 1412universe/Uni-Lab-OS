@@ -73,6 +73,19 @@ def _optional(value: Any) -> Any:
     return None if value in (None, "") else value
 
 
+def _optional_uuid(value: Any) -> Optional[str]:
+    """把未传、空串和全零 UUID 统一解释为未设置。
+
+    参数：``value`` 是已通过 HTTP DTO 校验的可空 UUID。返回：规范
+    UUID 字符串或 ``None``。异常：无；非空值交由调用方校验引用。
+    """
+
+    identity = str(value or "")
+    if identity in ("", "00000000-0000-0000-0000-000000000000"):
+        return None
+    return identity
+
+
 class BackendResourceService:
     """提供资源模板（ResourceTemplate）、物料（Material）与库位（Site）权威写入。"""
 
@@ -581,20 +594,29 @@ class BackendResourceService:
         }
 
     def get_material(self, material_uuid: str) -> Dict[str, Any]:
+        """读取物料当前详情、修订、相对位置与库位关系。
+
+        参数：``material_uuid`` 是物料稳定身份。返回：面向 Backend
+        公共合同的完整物料投影。异常：物料不存在时抛 ``6000``。
+        """
+
         row = self.store.query_one(
-            "SELECT * FROM material WHERE uuid=? AND deleted_at IS NULL",
+            "SELECT material.*,material_inventory.aggregate_version "
+            "FROM material JOIN material_inventory "
+            "ON material_inventory.material_uuid=material.uuid "
+            "WHERE material.uuid=? AND material.deleted_at IS NULL",
             (material_uuid,),
         )
         if row is None:
             raise BackendContractError(MATERIAL_NOT_FOUND, "Material not found")
-        result = self._material_row(row)
+        result = self._material_row(dict(row))
         position = self.store.query_one(
             "SELECT * FROM relative_position "
             "WHERE material_uuid=? AND deleted_at IS NULL",
             (material_uuid,),
         )
         result["relative_position"] = (
-            self._relative_position_row(position) if position else None
+            self._relative_position_row(dict(position)) if position else None
         )
         result["sites"] = self.list_sites(material_uuid)
         current_site = self.store.query_one(
@@ -607,19 +629,85 @@ class BackendResourceService:
     def update_material(
         self, material_uuid: str, values: Dict[str, Any]
     ) -> Dict[str, Any]:
+        """按 Backend 公共合同原子更新物料及其库位占用。
+
+        参数：``material_uuid`` 是物料稳定身份，``values`` 包含三态更新字段、可选
+        期望修订。返回：提交后的完整物料详情。异常：物料、父级、库位、修订或
+        唯一约束冲突时抛
+        ``BackendContractError``；事务失败不保留部分更新。
+        """
+
         try:
             with self.store.transaction() as conn:
                 current = self._require_material(conn, material_uuid)
-                template_uuid = str(values.get("resource_template_uuid") or "")
-                if template_uuid != current["resource_template_uuid"]:
+                specified_marker = values.get("_specified_fields")
+                specified = (
+                    set(specified_marker)
+                    if specified_marker is not None
+                    else {key for key in values if not key.startswith("_")}
+                )
+                template_uuid = str(current["resource_template_uuid"])
+                template_value = values.get("resource_template_uuid")
+                if (
+                    "resource_template_uuid" in specified
+                    and template_value is not None
+                    and str(template_value) != template_uuid
+                ):
                     raise BackendContractError(
                         MATERIAL_TEMPLATE_IMMUTABLE,
                         "Resource template of an existing material cannot be changed",
                     )
-                parent_uuid = _optional(values.get("parent_uuid"))
+                inventory = conn.execute(
+                    "SELECT aggregate_version FROM material_inventory "
+                    "WHERE material_uuid=?",
+                    (material_uuid,),
+                ).fetchone()
+                expected_revision = values.get("expected_revision")
+                if (
+                    expected_revision is not None
+                    and int(expected_revision) != int(inventory["aggregate_version"])
+                ):
+                    raise BackendContractError(
+                        RESOURCE_DATA_CONFLICT,
+                        "Material revision has changed",
+                    )
+                parent_uuid = (
+                    _optional_uuid(values.get("parent_uuid"))
+                    if "parent_uuid" in specified
+                    and values.get("parent_uuid") is not None
+                    else _optional_uuid(current["parent_uuid"])
+                )
                 if parent_uuid:
                     self._require_material(conn, parent_uuid, MATERIAL_PARENT_NOT_FOUND)
                     self._check_parent_cycle(conn, material_uuid, parent_uuid)
+                barcode = (
+                    str(values.get("barcode") or "")
+                    if "barcode" in specified and values.get("barcode") is not None
+                    else str(current["barcode"] or "")
+                )
+                name = (
+                    str(values.get("name") or "").strip()
+                    if "name" in specified and values.get("name") is not None
+                    else str(current["name"] or "")
+                )
+                description = (
+                    values.get("description")
+                    if "description" in specified
+                    and values.get("description") is not None
+                    else current["description"]
+                )
+                meta_data = (
+                    values.get("meta_data")
+                    if "meta_data" in specified
+                    and values.get("meta_data") is not None
+                    else _json(current["meta_data"], {})
+                )
+                config = (
+                    values.get("config")
+                    if "config" in specified
+                    and values.get("config") is not None
+                    else _json(current["config"], {})
+                )
                 conn.execute(
                     """
                     UPDATE material SET parent_uuid=?,barcode=?,name=?,description=?,
@@ -628,11 +716,11 @@ class BackendResourceService:
                     """,
                     (
                         parent_uuid,
-                        str(values.get("barcode") or ""),
-                        str(values.get("name") or "").strip(),
-                        values.get("description"),
-                        _dump(values.get("meta_data") or {}),
-                        _dump(values.get("config") or {}),
+                        barcode,
+                        name,
+                        description,
+                        _dump(meta_data),
+                        _dump(config),
                         _now(),
                         material_uuid,
                     ),
@@ -1046,15 +1134,22 @@ class BackendResourceService:
             ).fetchone()
             cursor = row["parent_uuid"] if row else None
 
-    @staticmethod
     def _apply_site_placement(
+        self,
         conn: sqlite3.Connection,
         material_uuid: str,
         template_uuid: str,
         placement: Dict[str, Any],
     ) -> None:
+        """在当前物料写事务中校验并修改精确库位占用。
+
+        参数：``conn`` 是库存事务；其余参数给出物料、模板和 place/remove 命令。
+        返回：无；成功时 place 同步父物料并占用目标库位，remove 仅解除精确库位。
+        异常：库位不存在、已占用、模板不允许或形成父级环时抛合同错误。
+        """
+
         action = str(placement.get("action") or "")
-        site_uuid = _optional(placement.get("site_uuid"))
+        site_uuid = _optional_uuid(placement.get("site_uuid"))
         if action == "remove":
             if site_uuid is not None:
                 raise BackendContractError(
@@ -1096,6 +1191,13 @@ class BackendResourceService:
             "UPDATE site SET occupied_material_uuid=NULL,update_time=? "
             "WHERE occupied_material_uuid=? AND deleted_at IS NULL",
             (_now(), material_uuid),
+        )
+        owner_material_uuid = str(site["material_uuid"])
+        self._check_parent_cycle(conn, material_uuid, owner_material_uuid)
+        conn.execute(
+            "UPDATE material SET parent_uuid=?,update_time=? "
+            "WHERE uuid=? AND deleted_at IS NULL",
+            (owner_material_uuid, _now(), material_uuid),
         )
         conn.execute(
             "UPDATE site SET occupied_material_uuid=?,update_time=? WHERE uuid=?",
@@ -1177,6 +1279,13 @@ class BackendResourceService:
 
     @classmethod
     def _material_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
+        """把 SQLite 物料行投影为 Backend 公共物料 DTO。
+
+        参数：``row`` 是物料行，可选携带聚合修订。返回：JSON
+        字段已解码的物料字典；存在修订时同步返回 ``revision``。
+        异常：缺少必需行字段时保留原生映射异常。
+        """
+
         result = cls._base_row(row)
         result.update(
             {
@@ -1189,6 +1298,8 @@ class BackendResourceService:
                 "data": _json(row.get("data"), {}),
             }
         )
+        if "aggregate_version" in row:
+            result["revision"] = int(row["aggregate_version"])
         return result
 
     @classmethod
