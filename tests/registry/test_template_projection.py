@@ -763,7 +763,7 @@ def test_local_runtime_shares_projection_with_authoring_compiler(
         assert device_action_run["created"] is True
         assert device_action_run["job"]["material_uuid"] == DEVICE_MATERIAL_UUID
 
-        # 工作流内部持久化名称键，公共读模型继续返回原 UUID 字段。
+        # 工作流内存目录保存名称键，公共读模型继续返回兼容 UUID 字段。
         workflow = workflow_service.create_workflow(
             name="名称模板引用",
             tags=[],
@@ -771,7 +771,7 @@ def test_local_runtime_shares_projection_with_authoring_compiler(
             meta_data={},
         )
         node_uuid = "40000000-0000-4000-8000-000000000001"
-        graph = workflow_service._store.save_graph(
+        graph = workflow_service.save_graph(
             workflow["uuid"],
             revision=1,
             nodes=[
@@ -789,7 +789,7 @@ def test_local_runtime_shares_projection_with_authoring_compiler(
             ],
             edges=[],
         )
-        stored_reference = workflow_service._store._conn.execute(
+        stored_reference = workflow_service._definition_store._conn.execute(
             "SELECT workflow_node_template_uuid FROM workflow_node WHERE uuid=?",
             (node_uuid,),
         ).fetchone()[0]

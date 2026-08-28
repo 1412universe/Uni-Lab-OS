@@ -815,6 +815,57 @@ class WorkflowStore:
                 (now, now, workflow_uuid),
             )
 
+    def discard_uncommitted_workflow(self, workflow_uuid: str) -> None:
+        """硬删除一次尚未对外成功的工作流定义创建。
+
+        该方法只供同时持有定义目录与运行事实库的 Service 导入补偿使用；调用方
+        必须先在工作流锁内证明运行库没有 Task。正常用户删除仍必须走软删除。
+        """
+
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT uuid FROM workflow WHERE uuid = ?",
+                (workflow_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow {workflow_uuid} not found")
+            conn.execute(
+                "DELETE FROM workflow_inventory_requirement WHERE workflow_uuid = ?",
+                (workflow_uuid,),
+            )
+            conn.execute(
+                "DELETE FROM workflow_source_registration WHERE workflow_uuid = ?",
+                (workflow_uuid,),
+            )
+            conn.execute(
+                "DELETE FROM workflow_authoring WHERE workflow_uuid = ?",
+                (workflow_uuid,),
+            )
+            conn.execute(
+                "DELETE FROM workflow_edge WHERE workflow_uuid = ?",
+                (workflow_uuid,),
+            )
+            conn.execute(
+                "DELETE FROM workflow_node WHERE workflow_uuid = ?",
+                (workflow_uuid,),
+            )
+            conn.execute(
+                "DELETE FROM workflow WHERE uuid = ?",
+                (workflow_uuid,),
+            )
+
+    def has_workflow_tasks(self, workflow_uuid: str) -> bool:
+        """返回运行事实库中是否已经存在该工作流创建的 Task。"""
+
+        with self._lock:
+            return (
+                self._conn.execute(
+                    "SELECT 1 FROM workflow_task WHERE workflow_uuid = ? LIMIT 1",
+                    (workflow_uuid,),
+                ).fetchone()
+                is not None
+            )
+
     def get_graph(
         self,
         workflow_uuid: str,

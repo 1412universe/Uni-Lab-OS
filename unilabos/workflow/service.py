@@ -646,7 +646,11 @@ class WorkflowService:
         identity = self.get_workflow(workflow_uuid)["uuid"]
         with self._authoring_lock(identity):
             self.get_workflow(identity)
+            if self._has_active_source(identity):
+                registration = self._registered_domain_source(identity)
+                self._unregister_domain_source(registration)
             self._definition_store.delete_workflow(identity)
+            self._remove_active_source_authorization(identity)
 
     def get_graph(self, workflow_uuid: str) -> Dict[str, Any]:
         identity = self.get_workflow(workflow_uuid)["uuid"]
@@ -1279,6 +1283,10 @@ class WorkflowService:
         if definition.get("inventory_requirements") not in (None, []):
             # Local 的数量型库存需求必须走已对齐的任务准入合同，不能静默丢弃。
             raise WorkflowError("invalid_input")
+        if self._source_target is None:
+            raise WorkflowError("source_target_unavailable")
+        if self.compiler is None:
+            raise WorkflowError("template_catalog_unavailable")
 
         old_to_new: Dict[str, str] = {}
         nodes: List[Dict[str, Any]] = []
@@ -1324,16 +1332,6 @@ class WorkflowService:
             meta_data = normalize_json_object(definition.get("meta_data"))
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
-            identity = str(uuid4())
-            created = self._definition_store.create_workflow_with_graph(
-                workflow_uuid=identity,
-                name=name_value.strip(),
-                tags=tags,
-                description=self._optional_text(definition.get("description")),
-                meta_data=public_meta_data,
-                nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
-                edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
-            )
         except (KeyError, TypeError, ValueError, ValidationError, WorkflowDefinitionInvalid):
             raise WorkflowError("invalid_input") from None
         except StoreNotFound:
@@ -1342,54 +1340,148 @@ class WorkflowService:
             raise WorkflowError(error.code) from None
         except StoreConflict:
             raise WorkflowError("invalid_input") from None
-        if self._source_target is None:
-            return created
-        if self.compiler is None:
-            self._definition_store.delete_workflow(identity)
-            raise WorkflowError("template_catalog_unavailable")
+        identity = str(uuid4())
         registration = self._source_target.registration(
             workflow_uuid=identity,
             file_name=DomainWorkflowSourceTarget.default_file_name(identity),
         )
-        source_meta_data = dict(created["workflow"].get("meta_data") or {})
-        source_meta_data["unilab"] = {
-            "source_bootstrap": self._source_bootstrap_metadata(registration),
-            "authoring_root_fields": ["meta_data", "tags"],
-        }
-        source_graph = self._authoring_graph_projection(created)
-        source_graph["workflow"]["meta_data"] = source_meta_data
-        compilation = CandidateCompilation.model_validate(
-            self.compiler.generate_python(
-                workflow_uuid=identity,
-                workflow_revision=int(created["workflow"]["revision"]),
-                graph=source_graph,
-                source_uri=registration.source_uri,
-            )
-        )
-        if not compilation.valid or compilation.normalized_python_source is None:
-            self._definition_store.delete_workflow(identity)
-            raise WorkflowError("candidate_invalid")
-        try:
-            self._provision_domain_source(
-                registration=registration,
-                python_source=compilation.normalized_python_source,
-            )
-        except WorkflowError:
-            self._definition_store.delete_workflow(identity)
-            raise
-        self._definition_store.update_workflow(
-            identity,
-            name=created["workflow"]["name"],
-            tags=list(created["workflow"].get("tags") or []),
-            description=created["workflow"].get("description"),
-            meta_data=source_meta_data,
-        )
-        created = self._definition_store.get_graph(identity)
-        return self._publish_imported_domain_workflow(
+        return self._commit_legacy_domain_import(
             registration=registration,
-            python_source=compilation.normalized_python_source,
-            created_graph=created,
+            name=name_value.strip(),
+            tags=tags,
+            description=self._optional_text(definition.get("description")),
+            meta_data=public_meta_data,
+            nodes=nodes,
+            edges=edges,
         )
+
+    def _commit_legacy_domain_import(
+        self,
+        *,
+        registration: EditableSourceRegistration,
+        name: str,
+        tags: List[Any],
+        description: Optional[str],
+        meta_data: Mapping[str, Any],
+        nodes: List[Dict[str, Any]],
+        edges: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """在工作流锁内把旧 JSON 规范化为首版领域 Python 定义。"""
+
+        identity = registration.workflow_uuid
+        source_registered = False
+        workflow_created = False
+        with self._authoring_lock(identity):
+            try:
+                created = self._definition_store.create_workflow_with_graph(
+                    workflow_uuid=identity,
+                    name=name,
+                    tags=tags,
+                    description=description,
+                    meta_data=dict(meta_data),
+                    nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
+                    edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
+                )
+                workflow_created = True
+            except (KeyError, TypeError, ValueError, ValidationError):
+                raise WorkflowError("invalid_input") from None
+            except StoreNotFound:
+                raise WorkflowError("not_found") from None
+            except StoreAuthoringConflict as error:
+                raise WorkflowError(error.code) from None
+            except StoreConflict:
+                raise WorkflowError("invalid_input") from None
+
+            try:
+                source_meta_data = dict(created["workflow"].get("meta_data") or {})
+                source_meta_data["unilab"] = {
+                    "source_bootstrap": self._source_bootstrap_metadata(registration),
+                    "authoring_root_fields": ["meta_data", "tags"],
+                }
+                source_graph = self._authoring_graph_projection(created)
+                source_graph["workflow"]["meta_data"] = source_meta_data
+                try:
+                    compilation = CandidateCompilation.model_validate(
+                        self.compiler.generate_python(
+                            workflow_uuid=identity,
+                            workflow_revision=int(created["workflow"]["revision"]),
+                            graph=source_graph,
+                            source_uri=registration.source_uri,
+                        )
+                    )
+                except Exception:
+                    raise WorkflowError("internal_error") from None
+                if (
+                    not compilation.valid
+                    or compilation.normalized_python_source is None
+                ):
+                    raise WorkflowError("candidate_invalid")
+
+                # 旧 JSON 图先经过公共图校验，再以生成的规范 Python 重编译。
+                # 重新创建首版图以带齐作者源码映射，同时保持 revision=1。
+                try:
+                    canonical = CandidateCompilation.model_validate(
+                        self.compiler.compile(
+                            workflow_uuid=identity,
+                            workflow_revision=1,
+                            python_source=compilation.normalized_python_source,
+                            source_uri=registration.source_uri,
+                            applied_graph=source_graph,
+                        )
+                    )
+                except Exception:
+                    raise WorkflowError("internal_error") from None
+                if not canonical.valid or canonical.graph is None:
+                    raise WorkflowError("candidate_invalid")
+                canonical_workflow = canonical.graph["workflow"]
+                self._definition_store.discard_uncommitted_workflow(identity)
+                workflow_created = False
+                created = self._definition_store.create_workflow_with_graph(
+                    workflow_uuid=identity,
+                    name=canonical_workflow["name"],
+                    tags=list(canonical_workflow.get("tags") or []),
+                    description=canonical_workflow.get("description"),
+                    meta_data=dict(canonical_workflow.get("meta_data") or {}),
+                    nodes=[
+                        WorkflowNodeWrite.model_validate(node)
+                        for node in canonical.graph["nodes"]
+                    ],
+                    edges=[
+                        WorkflowEdgeWrite.model_validate(edge)
+                        for edge in canonical.graph["edges"]
+                    ],
+                    node_templates=list(
+                        canonical.graph.get("node_templates") or []
+                    ),
+                    handle_templates=list(
+                        canonical.graph.get("handle_templates") or []
+                    ),
+                    template_catalog_fingerprint=(
+                        canonical.template_catalog_fingerprint
+                    ),
+                    trusted_authoring_graph=True,
+                )
+                workflow_created = True
+                self._provision_domain_source(
+                    registration=registration,
+                    python_source=compilation.normalized_python_source,
+                )
+                source_registered = True
+                return self._publish_imported_domain_workflow(
+                    registration=registration,
+                    python_source=compilation.normalized_python_source,
+                    created_graph=created,
+                )
+            except Exception as error:
+                rollback_failed = self._rollback_domain_import(
+                    registration,
+                    workflow_uuid=identity,
+                    source_was_registered=source_registered,
+                    workflow_was_created=workflow_created,
+                )
+                if rollback_failed:
+                    raise WorkflowError("source_publication_failed") from error
+                raise
 
     def import_python_workflow(
         self,
@@ -1421,40 +1513,30 @@ class WorkflowService:
             raise WorkflowError("invalid_input") from None
         if self.compiler is None:
             raise WorkflowError("template_catalog_unavailable")
-
-        registration = (
-            self._source_target.registration(
-                workflow_uuid=imported.workflow_uuid,
-                file_name=imported.file_name,
-            )
-            if self._source_target is not None
-            else None
+        if self._source_target is None:
+            raise WorkflowError("source_target_unavailable")
+        registration = self._source_target.registration(
+            workflow_uuid=imported.workflow_uuid,
+            file_name=imported.file_name,
         )
 
         # ``initial_graph`` 是修订 1 的空基线，``compilation`` 只代表同一内存模板
         # 代际产生的静态候选，二者都不是已提交的工作流定义。
         initial_graph = imported.initial_graph()
-        if registration is not None:
-            # 跨重启只保留可由领域包清单重建的来源事实；upload:// 追踪信息不能
-            # 成为内存图与冷启动图之间的隐藏差异。
-            initial_graph["workflow"]["meta_data"] = {
-                "unilab": {
-                    "source_bootstrap": self._source_bootstrap_metadata(
-                        registration
-                    )
-                }
+        # 跨重启只保留可由领域包清单重建的来源事实；upload:// 追踪信息不能
+        # 成为内存图与冷启动图之间的隐藏差异。
+        initial_graph["workflow"]["meta_data"] = {
+            "unilab": {
+                "source_bootstrap": self._source_bootstrap_metadata(registration)
             }
+        }
         try:
             compilation = CandidateCompilation.model_validate(
                 self.compiler.compile(
                     workflow_uuid=imported.workflow_uuid,
                     workflow_revision=1,
                     python_source=imported.python_source,
-                    source_uri=(
-                        registration.source_uri
-                        if registration is not None
-                        else imported.source_uri
-                    ),
+                    source_uri=registration.source_uri,
                     applied_graph=initial_graph,
                 )
             )
@@ -1495,46 +1577,83 @@ class WorkflowService:
         )
         candidate_unilab = dict(graph_meta_data.get("unilab") or {})
         graph_meta_data["unilab"] = {**initial_unilab, **candidate_unilab}
-        if registration is not None:
-            self._provision_domain_source(
-                registration=registration,
-                python_source=candidate["normalized_python_source"],
-            )
-        try:
-            created = self._definition_store.create_workflow_with_graph(
-                workflow_uuid=imported.workflow_uuid,
-                name=workflow["name"],
-                tags=list(workflow.get("tags") or []),
-                description=workflow.get("description"),
-                meta_data=graph_meta_data,
-                nodes=[
-                    WorkflowNodeWrite.model_validate(node) for node in graph["nodes"]
-                ],
-                edges=[
-                    WorkflowEdgeWrite.model_validate(edge) for edge in graph["edges"]
-                ],
-                node_templates=list(graph.get("node_templates") or []),
-                handle_templates=list(graph.get("handle_templates") or []),
-                template_catalog_fingerprint=candidate[
-                    "template_catalog_fingerprint"
-                ],
-                trusted_authoring_graph=True,
-            )
-        except StoreAuthoringConflict as error:
-            raise WorkflowConflict(error.code) from None
-        except StoreNotFound:
-            raise WorkflowConflict("template_catalog_conflict") from None
-        except StoreConflict:
-            raise WorkflowConflict("conflict") from None
-        except (KeyError, TypeError, ValidationError, ValueError):
-            raise WorkflowError("candidate_invalid") from None
-        if registration is None:
-            return created
-        return self._publish_imported_domain_workflow(
+        return self._commit_python_domain_import(
             registration=registration,
-            python_source=candidate["normalized_python_source"],
-            created_graph=created,
+            workflow=workflow,
+            graph=graph,
+            graph_meta_data=graph_meta_data,
+            candidate=candidate,
         )
+
+    def _commit_python_domain_import(
+        self,
+        *,
+        registration: EditableSourceRegistration,
+        workflow: Mapping[str, Any],
+        graph: Mapping[str, Any],
+        graph_meta_data: Mapping[str, Any],
+        candidate: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """在工作流锁内原子提交 Python 定义、领域来源及创作状态。"""
+
+        source_registered = False
+        workflow_created = False
+        with self._authoring_lock(registration.workflow_uuid):
+            try:
+                try:
+                    created = self._definition_store.create_workflow_with_graph(
+                        workflow_uuid=registration.workflow_uuid,
+                        name=str(workflow["name"]),
+                        tags=list(workflow.get("tags") or []),
+                        description=workflow.get("description"),
+                        meta_data=dict(graph_meta_data),
+                        nodes=[
+                            WorkflowNodeWrite.model_validate(node)
+                            for node in graph["nodes"]
+                        ],
+                        edges=[
+                            WorkflowEdgeWrite.model_validate(edge)
+                            for edge in graph["edges"]
+                        ],
+                        node_templates=list(graph.get("node_templates") or []),
+                        handle_templates=list(graph.get("handle_templates") or []),
+                        template_catalog_fingerprint=str(
+                            candidate["template_catalog_fingerprint"]
+                        ),
+                        trusted_authoring_graph=True,
+                    )
+                    workflow_created = True
+                except StoreAuthoringConflict as error:
+                    raise WorkflowConflict(error.code) from None
+                except StoreNotFound:
+                    raise WorkflowConflict("template_catalog_conflict") from None
+                except StoreConflict:
+                    raise WorkflowConflict("conflict") from None
+                except (KeyError, TypeError, ValidationError, ValueError):
+                    raise WorkflowError("candidate_invalid") from None
+                normalized_source = candidate.get("normalized_python_source")
+                if not isinstance(normalized_source, str) or not normalized_source:
+                    raise WorkflowError("candidate_invalid")
+                self._provision_domain_source(
+                    registration=registration,
+                    python_source=normalized_source,
+                )
+                source_registered = True
+                return self._publish_imported_domain_workflow(
+                    registration=registration,
+                    python_source=normalized_source,
+                    created_graph=created,
+                )
+            except Exception as error:
+                rollback_failed = self._rollback_domain_import(
+                    registration,
+                    workflow_uuid=registration.workflow_uuid,
+                    source_was_registered=source_registered,
+                    workflow_was_created=workflow_created,
+                )
+                if rollback_failed:
+                    raise WorkflowError("source_publication_failed") from error
+                raise
 
     @staticmethod
     def _source_bootstrap_metadata(
@@ -1571,7 +1690,7 @@ class WorkflowService:
         registration: EditableSourceRegistration,
         python_source: str,
     ) -> None:
-        """在定义进入内存目录前发布已验证 Python 和 manifest 登记。"""
+        """发布已验证 Python 与 manifest 登记，供导入事务随后激活。"""
 
         if self._source_target is None:
             raise WorkflowError("source_target_unavailable")
@@ -1583,6 +1702,83 @@ class WorkflowService:
         except DomainWorkflowSourceError as error:
             raise WorkflowError(error.code) from None
 
+    def _registered_domain_source(
+        self,
+        workflow_uuid: str,
+    ) -> EditableSourceRegistration:
+        """读取当前内存目录中的领域来源身份并恢复为强类型对象。"""
+
+        if self._source_target is None:
+            raise WorkflowError("source_target_unavailable")
+        try:
+            row = self._definition_store.get_source_registration(workflow_uuid)
+            return EditableSourceRegistration(
+                workflow_uuid=str(row["workflow_uuid"]),
+                package_id=str(row["package_id"]),
+                package_root=Path(str(row["package_root"])),
+                relative_path=str(row["relative_path"]),
+                source_uri=str(row["source_uri"]),
+            )
+        except (KeyError, StoreNotFound):
+            raise WorkflowError("source_target_unavailable") from None
+
+    def _unregister_domain_source(
+        self,
+        registration: EditableSourceRegistration,
+    ) -> None:
+        """从唯一领域包 manifest 注销来源，保留未登记 Python 文件。"""
+
+        if self._source_target is None:
+            raise WorkflowError("source_target_unavailable")
+        try:
+            self._source_target.unregister(registration=registration)
+        except DomainWorkflowSourceError as error:
+            raise WorkflowError(error.code) from None
+
+    def _remove_active_source_authorization(self, workflow_uuid: str) -> None:
+        """在源码注销或导入回滚后移除本进程的来源授权。"""
+
+        with self._active_sources_lock:
+            self._active_source_workflow_uuids = frozenset(
+                identity
+                for identity in self._active_source_workflow_uuids
+                if identity != workflow_uuid
+            )
+            self._active_source_dependencies.pop(workflow_uuid, None)
+
+    def _rollback_domain_import(
+        self,
+        registration: EditableSourceRegistration,
+        *,
+        workflow_uuid: str,
+        source_was_registered: bool,
+        workflow_was_created: bool,
+    ) -> bool:
+        """补偿失败导入；返回是否有任一步补偿失败。"""
+
+        rollback_failed = False
+        if workflow_was_created and self._store.has_workflow_tasks(workflow_uuid):
+            logger.error("拒绝回滚已有运行 Task 的工作流定义 %s", workflow_uuid)
+            return True
+        if source_was_registered:
+            try:
+                self._unregister_domain_source(registration)
+            except WorkflowError:
+                logger.exception("回滚工作流领域来源失败")
+                # manifest 仍是重启权威；保留本进程定义和授权，避免当前进程与
+                # 下次启动观察到两套相反事实。调用方返回可重试的发布失败。
+                return True
+        if workflow_was_created:
+            self._remove_active_source_authorization(workflow_uuid)
+            try:
+                self._definition_store.discard_uncommitted_workflow(workflow_uuid)
+            except StoreNotFound:
+                pass
+            except Exception:
+                logger.exception("回滚进程内工作流定义失败")
+                rollback_failed = True
+        return rollback_failed
+
     def _publish_imported_domain_workflow(
         self,
         *,
@@ -1590,12 +1786,11 @@ class WorkflowService:
         python_source: str,
         created_graph: Mapping[str, Any],
     ) -> Dict[str, Any]:
-        """登记并证明新领域源码与刚创建的内存图达到固定点。
+        """登记已验证领域源码并发布刚创建的内存图。
 
-        参数：来源已经写入领域包；``python_source`` 是规范作者源码；
-        ``created_graph`` 是同一次编译创建的修订 1 图。返回当前完整图。异常：
-        注册、重编译或固定点应用失败时传播稳定错误，领域源码仍作为下次冷启动
-        的恢复事实，不回退 SQLite。
+        参数：来源已经写入领域包；``python_source`` 与 ``created_graph`` 已在发布
+        前完成 AST、图和固定点校验。返回当前完整图。首次导入仍通过统一创作协调
+        器记录已应用源码；source-only 候选不会推进 HTTP ``revision=1`` 合同。
         """
 
         del python_source, created_graph
@@ -1683,7 +1878,6 @@ class WorkflowService:
         """
 
         workflow_uuid = self.get_workflow(workflow_uuid)["uuid"]
-        applied_graph = self.get_graph(workflow_uuid)
         run_mode = "normal" if run_mode == "" else run_mode
         if run_mode not in {"normal", "step", "single_node"}:
             raise WorkflowError("invalid_input")
@@ -1771,17 +1965,19 @@ class WorkflowService:
                 discard(task_uuid)
 
         try:
-            task = self._store.create_task_with_jobs(
-                workflow_uuid=workflow_uuid,
-                task_uuid=task_uuid,
-                run_mode=run_mode,
-                target_node_uuid=target_node_uuid,
-                description=description,
-                meta_data=meta_data,
-                plan_builder=plan_builder,
-                inventory_allocation_builder=inventory_allocation_builder,
-                applied_graph=applied_graph,
-            )
+            with self._authoring_lock(workflow_uuid):
+                applied_graph = self.get_graph(workflow_uuid)
+                task = self._store.create_task_with_jobs(
+                    workflow_uuid=workflow_uuid,
+                    task_uuid=task_uuid,
+                    run_mode=run_mode,
+                    target_node_uuid=target_node_uuid,
+                    description=description,
+                    meta_data=meta_data,
+                    plan_builder=plan_builder,
+                    inventory_allocation_builder=inventory_allocation_builder,
+                    applied_graph=applied_graph,
+                )
             task_created = True
             if self._task_scheduler_bridge is None:
                 return task
@@ -1908,7 +2104,6 @@ class WorkflowService:
         """创建带不可变起始点、断点和首个 Admission Hold 的调试任务。"""
 
         workflow_uuid = self.get_workflow(workflow_uuid)["uuid"]
-        applied_graph = self.get_graph(workflow_uuid)
         try:
             normalized_starts = [validate_uuid(value) for value in start_node_uuids]
             normalized_breakpoints = [
@@ -1940,21 +2135,23 @@ class WorkflowService:
             )
 
         try:
-            task = self._store.create_task_with_jobs(
-                workflow_uuid=workflow_uuid,
-                task_uuid=str(uuid4()),
-                run_mode="step",
-                target_node_uuid=None,
-                description=description,
-                meta_data=meta_data,
-                plan_builder=plan_builder,
-                applied_graph=applied_graph,
-            )
-            self._store.create_debug_configuration(
-                task_uuid=task["uuid"],
-                start_node_uuids=normalized_starts,
-                breakpoint_node_uuids=normalized_breakpoints,
-            )
+            with self._authoring_lock(workflow_uuid):
+                applied_graph = self.get_graph(workflow_uuid)
+                task = self._store.create_task_with_jobs(
+                    workflow_uuid=workflow_uuid,
+                    task_uuid=str(uuid4()),
+                    run_mode="step",
+                    target_node_uuid=None,
+                    description=description,
+                    meta_data=meta_data,
+                    plan_builder=plan_builder,
+                    applied_graph=applied_graph,
+                )
+                self._store.create_debug_configuration(
+                    task_uuid=task["uuid"],
+                    start_node_uuids=normalized_starts,
+                    breakpoint_node_uuids=normalized_breakpoints,
+                )
             if self._task_scheduler_bridge is None:
                 return task
             return self._task_scheduler_bridge.submit(task)["task"]

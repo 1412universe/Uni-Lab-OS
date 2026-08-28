@@ -208,6 +208,68 @@ class DomainWorkflowSourceTarget:
                 raise DomainWorkflowSourceError("source_identity_conflict") from error
         return registration
 
+    def unregister(
+        self,
+        *,
+        registration: EditableSourceRegistration,
+    ) -> None:
+        """以 CAS 从 ``package.yaml`` 注销一个工作流来源。
+
+        参数：``registration`` 必须是当前目标中已登记的同一 UUID 与路径。返回：
+        无。源码文件有意保留为未登记孤儿，便于人工恢复；后续启动只读取 manifest，
+        因而该工作流不会复活。身份已被外部改写时关闭式失败。
+        """
+
+        self._require_registration(registration)
+        with self._lock:
+            manifest, manifest_bytes = self._current_manifest()
+            by_uuid = {
+                item.workflow_uuid: item.relative_path for item in manifest.workflows
+            }
+            by_path = {
+                item.relative_path: item.workflow_uuid for item in manifest.workflows
+            }
+            existing_path = by_uuid.get(registration.workflow_uuid)
+            existing_uuid = by_path.get(registration.relative_path)
+            if existing_path is None and existing_uuid is None:
+                return
+            if (
+                existing_path != registration.relative_path
+                or existing_uuid != registration.workflow_uuid
+            ):
+                raise DomainWorkflowSourceError("source_identity_conflict")
+
+            published_manifest = yaml.safe_dump(
+                {
+                    "package": {"name": manifest.package_id},
+                    "workflows": [
+                        {
+                            "workflow_uuid": item.workflow_uuid,
+                            "source": (
+                                f"{manifest.package_id}/{item.relative_path}"
+                            ),
+                        }
+                        for item in manifest.workflows
+                        if item.workflow_uuid != registration.workflow_uuid
+                    ],
+                },
+                allow_unicode=True,
+                sort_keys=False,
+            ).encode("utf-8")
+            try:
+                parse_editable_package_manifest(published_manifest)
+                atomic_publish_source(
+                    parent_path=self.selected_root,
+                    target_name="package.yaml",
+                    content=published_manifest,
+                    byte_limit=MANIFEST_BYTE_LIMIT,
+                    expected_hash=_sha256(manifest_bytes),
+                )
+            except (SourceManifestError, SourcePublicationError) as error:
+                raise DomainWorkflowSourceError("source_publication_failed") from error
+            except SourcePublicationConflict as error:
+                raise DomainWorkflowSourceError("source_identity_conflict") from error
+
     def _current_manifest(self) -> tuple[EditablePackageManifest, bytes]:
         """读取并复核当前包目录与 manifest 身份。"""
 

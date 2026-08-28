@@ -16,7 +16,9 @@ from tests.workflow.test_authoring_engine import (
     _source,
 )
 from unilabos.app.workflow_api import create_workflow_app
+from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
 from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.source_discovery import discover_editable_sources
 from unilabos.workflow.store import WorkflowStore
 
 
@@ -27,10 +29,26 @@ def _client(tmp_path: Any) -> tuple[TestClient, WorkflowService, WorkflowStore]:
     由调用方在断言后关闭服务。
     """
 
-    engine = _engine()
-    store = WorkflowStore(tmp_path / "workflow_history.db")
-    service = WorkflowService(store, compiler=engine)
-    return TestClient(create_workflow_app(service)), service, store
+    selected_root = tmp_path / "domain"
+    (selected_root / "demo_domain").mkdir(parents=True)
+    selected_root.joinpath("package.yaml").write_text(
+        "package:\n  name: demo_domain\nworkflows: []\n",
+        encoding="utf-8",
+    )
+    plan = discover_editable_sources((selected_root,))
+    runtime_store = WorkflowStore(
+        tmp_path / "workflow_history.db",
+        persist_workflow_definitions=False,
+    )
+    definitions = WorkflowStore(":memory:")
+    service = WorkflowService(
+        runtime_store,
+        definition_store=definitions,
+        compiler=_engine(),
+        source_target=DomainWorkflowSourceTarget.from_discovery_plan(plan),
+    )
+    service.replace_discovered_source_authorizations(plan)
+    return TestClient(create_workflow_app(service)), service, definitions
 
 
 def _upload(
@@ -79,10 +97,16 @@ def test_python_file_import_compiles_and_creates_complete_graph_atomically(
         ]
         assert store.count_rows("workflow") == 1
         assert store.count_rows("workflow_node") == 2
-        provenance = graph["workflow"]["meta_data"]["unilab"]["python_import"]
-        assert provenance["file_name"] == "sample_workflow.py"
-        assert provenance["compiler_mode"] == "ast_only"
-        assert provenance["source_hash"].startswith("sha256:")
+        provenance = graph["workflow"]["meta_data"]["unilab"][
+            "source_bootstrap"
+        ]
+        assert provenance["relative_path"] == "workflows/sample_workflow.py"
+        assert provenance["source_uri"] == (
+            "package://demo_domain/workflows/sample_workflow.py"
+        )
+        authoring = service.get_authoring(WORKFLOW_UUID)
+        assert authoring["state"] == "applied"
+        assert authoring["workflow_revision"] == 1
 
         readback = client.get(f"/api/v1/workflows/{WORKFLOW_UUID}/graph")
         published = client.post(
@@ -309,13 +333,13 @@ def test_python_file_import_openapi_and_scheduler_cors_contract(tmp_path: Any) -
         service.close()
 
 
-def test_python_file_import_is_process_local_and_disappears_after_restart(
+def test_python_file_import_without_unique_domain_target_fails_closed(
     tmp_path: Any,
 ) -> None:
-    """临时导入只安装进程内定义，重启后消失且文件库不留定义。
+    """没有唯一领域包时导入必须失败，不能返回重启后会消失的假成功。
 
-    参数：``tmp_path`` 是跨两次服务生命周期复用的运行事实 SQLite 目录。返回：
-    无；第一进程立即可读，第二进程返回不存在，且文件库始终没有定义行。
+    参数：``tmp_path`` 提供隔离的运行事实 SQLite 目录。返回：无；接口报告来源
+    目标不可用，运行库和内存定义目录均不留下工作流。
     """
 
     database_path = tmp_path / "workflow_history.db"
@@ -331,39 +355,18 @@ def test_python_file_import_is_process_local_and_disappears_after_restart(
         compiler=engine,
     )
     try:
-        imported = _upload(
+        response = _upload(
             TestClient(create_workflow_app(first_service)),
             _source(),
             file_name="restart-safe.py",
         )
-        assert imported.status_code == 201
-        assert imported.json()["code"] == 0
-        assert first_definitions.count_rows("workflow") == 1
+        assert response.status_code == 200
+        assert response.json() == {
+            "code": 1,
+            "error": {"msg": "当前没有唯一可写的领域包，无法保存工作流源码"},
+        }
+        assert first_definitions.count_rows("workflow") == 0
         assert first_store.count_rows("workflow") == 0
         assert first_store.count_rows("workflow_node") == 0
     finally:
         first_service.close()
-
-    reopened_store = WorkflowStore(
-        database_path,
-        persist_workflow_definitions=False,
-    )
-    reopened_definitions = WorkflowStore(":memory:")
-    reopened_service = WorkflowService(
-        reopened_store,
-        definition_store=reopened_definitions,
-        compiler=engine,
-    )
-    try:
-        response = TestClient(create_workflow_app(reopened_service)).get(
-            f"/api/v1/workflows/{WORKFLOW_UUID}/graph"
-        )
-        assert response.status_code == 200
-        assert response.json() == {
-            "code": 3002,
-            "error": {"msg": "请求的资源不存在"},
-        }
-        assert reopened_store.count_rows("workflow") == 0
-        assert reopened_definitions.count_rows("workflow") == 0
-    finally:
-        reopened_service.close()

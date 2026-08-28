@@ -4,16 +4,52 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from tests.workflow.test_authoring_engine import _template
 from unilabos.app.workflow_api import create_workflow_app
+from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
+from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
+from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
 from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.source_discovery import discover_editable_sources
 from unilabos.workflow.store import WorkflowStore
 
 
-def _client(tmp_path):
+def _client(tmp_path, *, with_import: bool = False):
     """创建隔离的 Local 工作流定义服务。"""
 
     store = WorkflowStore(tmp_path / "workflow_definition_edit.db")
-    return TestClient(create_workflow_app(WorkflowService(store))), store
+    if not with_import:
+        return TestClient(create_workflow_app(WorkflowService(store))), store
+    selected_root = tmp_path / "domain"
+    (selected_root / "demo_domain").mkdir(parents=True)
+    selected_root.joinpath("package.yaml").write_text(
+        "package:\n  name: demo_domain\nworkflows: []\n",
+        encoding="utf-8",
+    )
+    plan = discover_editable_sources((selected_root,))
+    template, handles = _template(
+        "30000000-0000-4000-8000-000000000090",
+        name="noop",
+        handles=[],
+    )
+    engine = WorkflowAuthoringEngine(
+        catalog=AuthoringCatalogSnapshot.from_entities([template], handles)
+    )
+    with store.transaction() as connection:
+        store._ensure_authoring_catalog_projection(
+            connection,
+            node_templates=[template],
+            handle_templates=handles,
+            authority_id=engine.template_catalog_fingerprint,
+            now="2026-08-28T00:00:00+00:00",
+        )
+    service = WorkflowService(
+        store,
+        compiler=engine,
+        source_target=DomainWorkflowSourceTarget.from_discovery_plan(plan),
+    )
+    service.replace_discovered_source_authorizations(plan)
+    return TestClient(create_workflow_app(service)), store
 
 
 def _workflow(client: TestClient, name: str = "增量编辑") -> dict:
@@ -176,7 +212,7 @@ def test_batch_delete_rejects_unknown_identity_without_partial_write(tmp_path) -
 def test_legacy_import_accepts_wrapped_payload_and_rebuilds_identities(tmp_path) -> None:
     """旧版导入须原子创建首版图，并且不能沿用来源节点身份。"""
 
-    client, store = _client(tmp_path)
+    client, store = _client(tmp_path, with_import=True)
     old_node_uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
     response = client.post(
         "/api/v1/workflows/import",
@@ -185,7 +221,20 @@ def test_legacy_import_accepts_wrapped_payload_and_rebuilds_identities(tmp_path)
                 "workflow_name": "旧版流程",
                 "tags": ["legacy"],
                 "meta_data": {},
-                "nodes": [{"uuid": old_node_uuid, **_compute_node("旧计算节点")}],
+                "nodes": [
+                    {
+                        "uuid": old_node_uuid,
+                        "workflow_node_template_uuid": (
+                            "30000000-0000-4000-8000-000000000090"
+                        ),
+                        **{
+                            key: value
+                            for key, value in _compute_node("旧计算节点").items()
+                            if key != "type"
+                        },
+                        "description": "旧版节点说明",
+                    }
+                ],
                 "edges": [],
                 "inventory_requirements": [],
             }

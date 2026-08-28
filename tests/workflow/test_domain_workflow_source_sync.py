@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from tests.workflow.test_authoring_engine import (
@@ -16,9 +17,9 @@ from tests.workflow.test_authoring_engine import (
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
 from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
+from unilabos.workflow.service import WorkflowConflict, WorkflowError, WorkflowService
 from unilabos.workflow.source_discovery import discover_editable_sources
 from unilabos.workflow.store import WorkflowStore
-from unilabos.workflow.service import WorkflowService
 
 
 def _empty_domain_package(selected_root: Path) -> Path:
@@ -93,7 +94,7 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
         updated_workflow = service.update_workflow(
             WORKFLOW_UUID,
             name="领域包工作流",
-            tags=["production", "szlab"],
+            tags=["production", "domain"],
             description="修改后仍以领域 Python 为准",
             meta_data={"owner": "lab"},
         )
@@ -114,7 +115,7 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
         assert edited_graph["workflow"]["revision"] == 3
         source = source_path.read_text(encoding="utf-8")
         assert "displayname='领域包工作流'" in source
-        assert "tags=['production', 'szlab']" in source
+        assert "tags=['production', 'domain']" in source
         assert "meta_data={'owner': 'lab'}" in source
         assert "# [领域包加样]: 由工作台修改并回写" in source
         assert runtime_store.count_rows("workflow") == 0
@@ -129,7 +130,7 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
     try:
         rebuilt = reopened.get_graph(WORKFLOW_UUID)
         assert rebuilt["workflow"]["name"] == "领域包工作流"
-        assert rebuilt["workflow"]["tags"] == ["production", "szlab"]
+        assert rebuilt["workflow"]["tags"] == ["production", "domain"]
         assert rebuilt["workflow"]["meta_data"]["owner"] == "lab"
         assert next(
             node for node in rebuilt["nodes"] if node["uuid"] == PREPARE_NODE_UUID
@@ -241,3 +242,132 @@ def json_source():
         assert reopened_definitions.count_rows("workflow") == 1
     finally:
         reopened.close()
+
+
+def test_imported_workflow_delete_unregisters_manifest_and_survives_restart(
+    tmp_path: Path,
+) -> None:
+    """删除领域工作流应注销 manifest；保留的孤儿源码不得让它重启复活。"""
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    database_path = tmp_path / "workflow_history.db"
+    service, _runtime_store, _definitions = _service(
+        database_path=database_path,
+        selected_root=selected_root,
+    )
+    source_path = package_root / "workflows" / "sample_workflow.py"
+    try:
+        service.import_python_workflow(
+            file_name=source_path.name,
+            python_source=_source(),
+        )
+        service.delete_workflow(WORKFLOW_UUID)
+        assert source_path.is_file()
+        assert yaml.safe_load(
+            selected_root.joinpath("package.yaml").read_text(encoding="utf-8")
+        )["workflows"] == []
+        with pytest.raises(WorkflowError) as deleted:
+            service.get_workflow(WORKFLOW_UUID)
+        assert deleted.value.code == "not_found"
+    finally:
+        service.close()
+
+    reopened, _reopened_runtime, reopened_definitions = _service(
+        database_path=database_path,
+        selected_root=selected_root,
+    )
+    try:
+        with pytest.raises(WorkflowError) as deleted:
+            reopened.get_workflow(WORKFLOW_UUID)
+        assert deleted.value.code == "not_found"
+        assert reopened_definitions.count_rows("workflow") == 0
+    finally:
+        reopened.close()
+
+
+def test_python_import_identity_conflict_does_not_publish_manifest(
+    tmp_path: Path,
+) -> None:
+    """内存定义已占用 UUID 时，失败导入不得提前登记领域源码。"""
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+    )
+    definitions.create_workflow(
+        workflow_uuid=WORKFLOW_UUID,
+        name="既有内存工作流",
+        tags=[],
+        description=None,
+        meta_data={},
+    )
+    try:
+        with pytest.raises(WorkflowConflict):
+            service.import_python_workflow(
+                file_name="conflicting_workflow.py",
+                python_source=_source(),
+            )
+        assert yaml.safe_load(
+            selected_root.joinpath("package.yaml").read_text(encoding="utf-8")
+        )["workflows"] == []
+        assert not package_root.joinpath(
+            "workflows", "conflicting_workflow.py"
+        ).exists()
+    finally:
+        service.close()
+
+
+def test_python_import_rolls_back_manifest_when_activation_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """源码发布后的激活失败应补偿 manifest 和内存定义，不留下假导入。"""
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+    )
+    publish = service._publish_imported_domain_workflow
+
+    def fail_activation(**_kwargs: object) -> dict[str, object]:
+        raise WorkflowError("internal_error")
+
+    monkeypatch.setattr(
+        service,
+        "_publish_imported_domain_workflow",
+        fail_activation,
+    )
+    try:
+        with pytest.raises(WorkflowError) as failed:
+            service.import_python_workflow(
+                file_name="failed_activation.py",
+                python_source=_source(),
+            )
+        assert failed.value.code == "internal_error"
+        assert yaml.safe_load(
+            selected_root.joinpath("package.yaml").read_text(encoding="utf-8")
+        )["workflows"] == []
+        assert definitions.count_rows("workflow") == 0
+        assert package_root.joinpath(
+            "workflows", "failed_activation.py"
+        ).is_file()
+
+        monkeypatch.setattr(
+            service,
+            "_publish_imported_domain_workflow",
+            publish,
+        )
+        retried = service.import_python_workflow(
+            file_name="failed_activation.py",
+            python_source=_source(),
+        )
+        assert retried["workflow"]["uuid"] == WORKFLOW_UUID
+        assert retried["workflow"]["revision"] == 1
+        assert service.get_authoring(WORKFLOW_UUID)["state"] == "applied"
+    finally:
+        service.close()
