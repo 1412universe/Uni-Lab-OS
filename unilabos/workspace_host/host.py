@@ -31,10 +31,10 @@ from unilabos.app.edge_control.addressing import (
 from .discovery import WorkspaceHostLock, ensure_local_token
 from .launch import (
     LaunchPlan,
+    available_loopback_port,
     resolve_backend_launch,
     resolve_edge_launch,
     resolve_plc_launch,
-    available_loopback_port,
 )
 from .model import (
     COMPONENT_NAMES,
@@ -47,6 +47,7 @@ from .model import (
     utc_timestamp,
 )
 from .reset_safety import LocalResetInspectionError, inspect_local_reset_blockers
+from .scheduler_lifecycle import SchedulerLifecycleClient, SchedulerLifecycleError
 
 _STOP_TIMEOUT_SECONDS = 10.0
 # 工作区更新可能触发一次完整工作流依赖激活。Backend 会很早开放 health，但
@@ -87,6 +88,7 @@ class WorkspaceHost:
         self._endpoint = ""
         self._configuration = self._initial_configuration()
         self._components = {name: idle_component(name) for name in COMPONENT_NAMES}
+        self._scheduler_lifecycle = SchedulerLifecycleClient()
         self._restore_interrupted_components()
         self._closed = threading.Event()
         self._monitor = threading.Thread(
@@ -267,6 +269,20 @@ class WorkspaceHost:
             self._audit_locked(f"operation.{phase}", operation)
 
     def _dispatch(self, command: str, parameters: dict[str, object]) -> object:
+        """在串行生命周期边界内执行一个已持久化操作。
+
+        参数：``command`` 是 Host 公开命令，``parameters`` 是已校验 JSON 参数。
+        返回：命令结果或工作区快照。异常：未知命令、状态冲突和外部依赖失败均
+        抛 ``WorkspaceHostError``；调用者统一写入操作终态和审计记录。
+        """
+
+        if command == "workspace.start":
+            return self._start_workspace(parameters)
+        if command == "workspace.stop":
+            return self._stop_workspace()
+        if command == "workspace.restart":
+            self._stop_workspace()
+            return self._start_workspace(parameters)
         if command == "backend.start":
             return self._start_backend(parameters)
         if command == "backend.stop":
@@ -750,7 +766,145 @@ class WorkspaceHost:
             self._publish_locked("backend.ready", {"generation": plan.generation})
             return self._snapshot_locked()
 
+    def _start_workspace(self, parameters: dict[str, object]) -> dict[str, object]:
+        """用一个公开操作启动 Backend 与 Edge 两个独立进程。
+
+        参数：``parameters`` 是 Backend 启动参数。返回：两个进程均业务就绪且
+        调度器已退出排空状态后的工作区快照。异常：任一进程或恢复派发失败时
+        原样抛出；本次新建的 Backend 会回滚，既有 Backend 保留用于诊断。
+        """
+
+        with self._lock:
+            backend_ready = self._components["backend"].get("phase") == "ready"
+        backend_started = False
+        if not backend_ready:
+            self._start_backend(parameters)
+            backend_started = True
+        try:
+            self._start_edge()
+            self._resume_local_scheduler()
+            return self.snapshot()
+        except Exception:
+            # Edge 未就绪时不能留下一个只有调度、没有设备执行端的“半启动”工作区。
+            # 如果 Backend 本来就是用户单独启动的，则保留它供诊断使用。
+            with self._lock:
+                edge_active = self._components["edge"].get("phase") != "idle"
+            if edge_active:
+                self._stop_component("edge")
+            if backend_started:
+                self._stop_component("backend")
+            raise
+
+    def _stop_workspace(self) -> dict[str, object]:
+        """排空设备作业后，按 Edge、Backend 顺序停止双进程工作区。
+
+        参数：无。返回：两个进程停止后的工作区快照。异常：排空接口不可用、
+        响应无效或设备作业未在预算内结束时抛 ``WorkspaceHostError``，并保持
+        两个进程运行；排空完成后才允许进入进程终止阶段。
+        """
+
+        self._drain_local_scheduler()
+        self._stop_component("edge")
+        return self._stop_component("backend")
+
+    def _drain_local_scheduler(self) -> dict[str, object]:
+        """通过 Backend 的公开接口等待本地调度器安全排空。
+
+        参数：无。返回：调度器报告的已排空状态；Backend 已停止时返回本地
+        的零作业快照。异常：调度器地址缺失、远程权威或排空未收敛时抛出
+        ``WorkspaceHostError``；即使 Edge 已单独停止，只要 Backend 仍在运行也
+        必须先排空，避免遗漏持久层中的执行未知作业。
+        """
+
+        with self._lock:
+            backend_phase = self._components["backend"].get("phase")
+        if backend_phase == "idle":
+            return {"phase": "drained", "active_device_job_count": 0}
+        address = self._local_scheduler_address(required_for="stop")
+        if address is None:
+            return {"phase": "drained", "active_device_job_count": 0}
+        try:
+            status = self._scheduler_lifecycle.begin_and_wait(
+                address,
+                timeout=self.readiness_timeout,
+            )
+        except SchedulerLifecycleError as error:
+            raise WorkspaceHostError(
+                error.code,
+                error.message,
+                details=error.details,
+            ) from error
+        with self._lock:
+            self._publish_locked("workspace.drained", dict(status))
+        return status
+
+    def _resume_local_scheduler(self) -> dict[str, object] | None:
+        """在 Edge 就绪后恢复本地调度器派发，远程权威模式保持无操作。"""
+
+        address = self._local_scheduler_address(required_for="start")
+        if address is None:
+            return None
+        try:
+            status = self._scheduler_lifecycle.resume(
+                address,
+                timeout=self.readiness_timeout,
+            )
+        except SchedulerLifecycleError as error:
+            raise WorkspaceHostError(
+                "workspace_resume_failed",
+                error.message,
+                details=error.details,
+            ) from error
+        with self._lock:
+            self._publish_locked("workspace.scheduler-resumed", dict(status))
+        return status
+
+    def _local_scheduler_address(self, *, required_for: str) -> str | None:
+        """返回本地调度器地址，并拒绝把远程 Backend 当成本地进程控制。
+
+        参数：``required_for`` 仅用于错误诊断，取 ``start`` 或 ``stop``。返回：
+        本地 Backend 就绪时返回地址；Backend 已停止时返回 ``None``；启动远程
+        权威时也返回 ``None``（不需要本地恢复请求）。异常：停止远程权威或就绪
+        组件缺少地址时关闭式失败，避免误杀设备进程。
+        """
+
+        with self._lock:
+            backend = dict(self._components["backend"])
+        if backend.get("phase") == "idle":
+            return None
+        metadata = backend.get("metadata")
+        domain_mode = (
+            str(metadata.get("domainMode") or "local")
+            if isinstance(metadata, dict)
+            else "local"
+        )
+        if domain_mode != "local":
+            if required_for == "start":
+                # 远程 Backend 的 Scheduler 不在本机，启动本地 Edge 时不应
+                # 伪造一个本地恢复请求；远程任务仍由远端控制面管理。
+                return None
+            raise WorkspaceHostError(
+                "workspace_drain_unsupported",
+                "远程 Backend 权威不由本地 Workspace Host 排空；请先在远程停止任务",
+                details={"domainMode": domain_mode, "operation": required_for},
+            )
+        address = _optional_text(backend.get("address"))
+        if address is None:
+            raise WorkspaceHostError(
+                "workspace_drain_unavailable",
+                "本地 Backend 缺少调度器服务地址",
+                details={"operation": required_for},
+            )
+        return address
+
     def _start_edge(self) -> dict[str, object]:
+        """启动 Edge/驱动进程并等待其连接调度控制面。
+
+        参数：无；使用已就绪 Backend 的地址、领域模式和领域包范围。返回：
+        generation 对应就绪文件出现后的工作区快照。异常：Backend 不可用时先
+        启动 Backend；Edge 提前退出或超时则停止本次 Edge 进程并关闭式失败。
+        """
+
         with self._lock:
             if self._components["edge"]["phase"] == "ready":
                 return self._snapshot_locked()
@@ -773,6 +927,7 @@ class WorkspaceHost:
             with self._lock:
                 process = self._processes.get("edge")
                 if process is None or process.poll() is not None:
+                    self._stop_component("edge")
                     raise WorkspaceHostError("os_start_failed", "OS 在就绪前退出")
             if ready_file.is_file():
                 with self._lock:

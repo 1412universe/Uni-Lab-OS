@@ -1032,6 +1032,45 @@ def test_edge_http_unknown_outcome_preserves_inflight_job_for_reconciliation(
         bridge.close()
 
 
+def test_recovered_execution_unknown_job_blocks_scheduler_drain(
+    store: WorkflowStore,
+) -> None:
+    """重启后只存在于持久层的执行未知作业仍必须阻止安全停止。
+
+    参数：``store`` 是隔离任务权威。返回：无；断言新调度器未重放物理动作，
+    但排空状态仍报告原 Job。异常：持久事实漏出排空边界时测试失败。
+    """
+
+    task = _seed_task(store, with_material=False)
+    first_scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    first_bridge = _bridge(store, first_scheduler)
+    try:
+        first_bridge.submit(task)
+        first_scheduler.on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome="failed",
+                return_info={},
+                error_info=[{"code": "edge_disconnected"}],
+                unknown_command_ids=[f"workflow-node-job:{JOB_UUID}"],
+            ),
+        )
+    finally:
+        first_bridge.close()
+
+    restarted_scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    restarted_bridge = _bridge(store, restarted_scheduler)
+    try:
+        restarted_bridge.recover_active_tasks()
+        drain = restarted_scheduler.begin_drain()
+    finally:
+        restarted_bridge.close()
+
+    assert restarted_scheduler.snapshot()["inflight_jobs"] == {}
+    assert drain["phase"] == "draining"
+    assert drain["active_device_job_ids"] == [JOB_UUID]
+
+
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(
     store: WorkflowStore,
 ) -> None:

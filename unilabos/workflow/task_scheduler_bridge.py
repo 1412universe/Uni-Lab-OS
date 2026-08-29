@@ -124,6 +124,7 @@ class TaskSchedulerBridge:
         scheduler.add_job_outcome_listener(self._on_job_outcome)
         scheduler.add_job_finished_listener(self._on_job_finished)
         scheduler.add_job_settled_listener(self._on_job_settled)
+        scheduler.set_drain_blocker_provider(self.active_or_uncertain_job_ids)
 
     def prepare_inventory_allocations(
         self,
@@ -854,6 +855,7 @@ class TaskSchedulerBridge:
         self._scheduler.remove_job_outcome_listener(self._on_job_outcome)
         self._scheduler.remove_job_finished_listener(self._on_job_finished)
         self._scheduler.remove_job_settled_listener(self._on_job_settled)
+        self._scheduler.set_drain_blocker_provider(None)
         self._task_by_job.clear()
         self._submitted_tasks.clear()
         self._admission_pending_tasks.clear()
@@ -871,6 +873,53 @@ class TaskSchedulerBridge:
         # 并立即返回，已进入的回调则在此完成持久化后再退出。
         with self._manual_callback_lock:
             pass
+
+    def active_or_uncertain_job_ids(self) -> set[str]:
+        """返回阻止调度器安全排空的持久作业身份。
+
+        参数：无。返回：已经派发、运行、请求取消或执行结果未知的 Job UUID 集合；
+        尚未批准的人工确认与内部物料来源解析不属于设备在途作业。异常：持久库
+        读取失败原样传播，使排空关闭式失败，禁止把读取失败解释为空闲。
+        """
+
+        unsafe_statuses = {
+            "dispatched",
+            "running",
+            "cancel_requested",
+            "execution_unknown",
+        }
+        result: set[str] = set()
+        page = 1
+        page_size = 200
+        while True:
+            task_page = self._store.list_tasks(page=page, page_size=page_size)
+            for task in task_page["items"]:
+                task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
+                for job in self._store.list_jobs(task_uuid):
+                    if job.get("status") not in unsafe_statuses:
+                        continue
+                    if job.get("executor_kind") == "material_source":
+                        continue
+                    job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
+                    if (
+                        job.get("executor_kind") == "manual_confirm"
+                        and job.get("status") == "dispatched"
+                        and self._manual_confirmation_is_waiting(job_uuid)
+                    ):
+                        continue
+                    result.add(job_uuid)
+            if page * page_size >= int(task_page["total"]):
+                return result
+            page += 1
+
+    def _manual_confirmation_is_waiting(self, job_uuid: str) -> bool:
+        """判断人工确认 Job 是否仍停留在尚未派发设备动作的等待阶段。"""
+
+        try:
+            confirmation = self._manual_confirmations.get_by_job(job_uuid)
+        except StoreNotFound:
+            return False
+        return confirmation.get("status") == "pending"
 
     def _retry_pending_admissions(self) -> None:
         """按持久顺序重试明确处于物料来源准入等待的 Task。

@@ -244,6 +244,12 @@ class EdgeScheduler:
         self._max_in_flight_jobs = max_in_flight_jobs
         self._max_active_tasks = max_active_tasks
         self._max_tasks_per_workflow = max_tasks_per_workflow
+        # 排空（DRAIN）只停止新的设备作业派发；已经派发的作业仍可回传结果并
+        # 完成结算。状态只属于调度器权威，Workspace Host 通过 HTTP 查询。
+        self._draining = False
+        # 标准 Task/Job 持久层可能保留重启后不允许重放的执行未知作业；提供者
+        # 只返回身份，排空状态在读取时合并，不复制或改写持久权威。
+        self._drain_blocker_provider: Callable[[], set[str]] | None = None
         # 长生命周期根 span：workflow → action/job。只保存上下文/句柄，不保存 payload。
         self._workflow_spans: Dict[str, DetachedSpan] = {}
         self._job_spans: Dict[str, DetachedSpan] = {}
@@ -1209,6 +1215,8 @@ class EdgeScheduler:
                     "workflow_state": run.state.value,
                     "dispatched": [],
                 }
+            if self._draining and node.manual_continues_device_action:
+                raise ValueError("调度器正在排空，不能批准新的设备动作")
             if not node.manual_continues_device_action:
                 job.manual_action_dispatched = True
                 complete_without_dispatch = True
@@ -1349,6 +1357,11 @@ class EdgeScheduler:
         """
 
         self._reschedule_count += 1
+
+        # 排空期间仍允许在途作业通过 ``on_job_finished`` 完成状态结算，但不得
+        # 继续派发后继节点。恢复后会主动触发新一轮重排，不丢失 ready 节点。
+        if self._draining:
+            return []
 
         # 等料工作流每次重排重试预留（补料后自动恢复 RUNNING）
         if self._inventory is not None:
@@ -2121,6 +2134,100 @@ class EdgeScheduler:
 
     # ── 查询 ─────────────────────────────────────────────────
 
+    def begin_drain(self) -> dict[str, Any]:
+        """停止新设备作业派发，并返回当前排空状态。
+
+        参数：无。返回：包含阶段、是否接受派发和在途设备作业身份的稳定快照。
+        异常：不主动抛出异常；重复调用幂等。已有设备作业不会被取消或伪造完成，
+        只有它们通过原结果通道收敛后，阶段才从 ``draining`` 变为 ``drained``。
+        """
+
+        with self._lock:
+            self._draining = True
+            return self._drain_status_locked()
+
+    def set_drain_blocker_provider(
+        self,
+        provider: Callable[[], set[str]] | None,
+    ) -> None:
+        """装配或移除持久执行安全事实提供者。
+
+        参数：``provider`` 返回仍可能在设备侧执行或结果未知的 Job 身份集合；
+        ``None`` 表示移除。返回：无。异常：提供者异常在查询排空状态时原样传播，
+        使 HTTP/Host 关闭式失败；本方法不读取、缓存或修改持久 Task/Job。
+        """
+
+        with self._lock:
+            self._drain_blocker_provider = provider
+
+    def drain_status(self) -> dict[str, Any]:
+        """查询调度器是否已经安全排空。
+
+        参数：无。返回：排空阶段以及仍在设备侧执行的作业列表。异常：不主动
+        抛出异常；快照在调度锁内构造，不会把同一作业同时报告为空闲和在途。
+        """
+
+        with self._lock:
+            return self._drain_status_locked()
+
+    def resume_from_drain(self) -> dict[str, Any]:
+        """退出排空状态并立即继续派发此前被门禁拦住的作业。
+
+        参数：无。返回：恢复后的运行阶段和本轮实际派发摘要。异常：调度、库存
+        或执行适配器错误原样传播；失败时排空标记已经清除，调用方可再次排空。
+        """
+
+        with self._lock:
+            self._draining = False
+            dispatched = self._reschedule_locked()
+            return {
+                **self._drain_status_locked(),
+                "dispatched": dispatched,
+            }
+
+    def _drain_status_locked(self) -> dict[str, Any]:
+        """在持有调度锁时构造排空状态，不创建第二份作业事实。"""
+
+        active_device_job_ids = sorted(
+            {
+                job_id
+                for job_id, job in self._inflight.items()
+                if self._is_device_job_active_locked(job)
+            }
+            | (
+                set(self._drain_blocker_provider())
+                if self._drain_blocker_provider is not None
+                else set()
+            )
+        )
+        if not self._draining:
+            phase = "running"
+        elif active_device_job_ids:
+            phase = "draining"
+        else:
+            phase = "drained"
+        return {
+            "phase": phase,
+            "accepting_new_dispatches": not self._draining,
+            "active_device_job_count": len(active_device_job_ids),
+            "active_device_job_ids": active_device_job_ids,
+        }
+
+    def _is_device_job_active_locked(self, job: DispatchedJob) -> bool:
+        """判断在途作业是否已经越过设备派发边界。
+
+        参数：``job`` 是调度器在途作业。返回：普通作业恒为真；人工确认作业只在
+        已批准并派发真实设备动作后为真。异常：不主动抛出；调用方须持有调度锁。
+        """
+
+        run = self._workflows.get(job.workflow_id)
+        node = run.node(job.node_id) if run is not None else None
+        return not (
+            node is not None
+            and node.is_manual_confirm()
+            and not job.manual_action_dispatched
+        )
+
     def workflow_snapshot(self, workflow_id: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             run = self._workflows.get(workflow_id)
@@ -2155,6 +2262,7 @@ class EdgeScheduler:
                     for job_id, j in self._inflight.items()
                 },
                 "reschedule_count": self._reschedule_count,
+                "drain": self._drain_status_locked(),
             }
 
     def cancel_workflow(self, workflow_id: str) -> bool:

@@ -50,6 +50,9 @@ Python 进程，也不经过 Node RPC；它通过同一受管会话执行 Backen
 PLC-Sim 的启停，并保留 PID、动态端口、generation、操作记录和日志：
 
 ```bash
+# 一条命令启动两个相互独立的业务进程：调度进程 + Edge/驱动进程
+unilab workspace start --workspace /path/to/workspace --runtime-mode normal --json
+unilab workspace stop --workspace /path/to/workspace --json
 unilab workspace status --workspace /path/to/workspace --json
 unilab workspace restart --workspace /path/to/workspace --component os \
   --runtime-mode normal --operation-id agent-restart-001 --json
@@ -66,8 +69,17 @@ unilab workspace reset-local --workspace /path/to/workspace --yes --json
 
 `reset-local` / MCP `reset_local_workspace_state(confirm=true)` 只用于调试时
 显式清空可重建的 Local Domain 与 Edge 协议状态。它会停止 Backend/Edge 并启动
-干净的 Local Backend，但不会隐式重新启动 Edge；Agent 必须另行调用 `workspace
-start --component os`，避免维护命令自动下发设备动作。
+干净的 Local Backend，但不会隐式重新启动 Edge；需要恢复完整双进程时，再调用
+`workspace start`。显式 `--component backend/os/plc` 只用于单组件诊断或维护。
+
+本地双进程模式下，`workspace stop` 不是立即杀进程。Host 会先要求调度器进入
+排空（DRAIN）：停止派发新的设备作业，等待已经派发的作业通过原结果通道收敛，
+然后依次停止 Edge 和 Backend。若仍有运行中或 `execution_unknown` 作业，停止
+操作会失败并保留两个进程，避免把“进程已停”误当成“设备已安全停止”。显式的
+单组件 stop 是诊断入口，不提供上述整体安全保证。
+
+当前排空由本地调度权威提供。`domainMode=backend` 时，远程 Backend 的任务应先
+在远程控制面停止；Workspace Host 不会越权把远程调度状态解释为本地已排空。
 
 ## 启动流程详解
 

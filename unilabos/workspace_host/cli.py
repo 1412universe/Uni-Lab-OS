@@ -11,6 +11,13 @@ from .model import COMPONENT_NAMES, WorkspaceHostError
 
 
 def register_workspace_subcommands(subparsers: Any) -> None:
+    """注册 ``unilab workspace`` 的公开生命周期命令。
+
+    参数：``subparsers`` 是顶层 CLI 提供的 argparse 子命令容器。返回：无；
+    原地注册 status/start/stop/restart/reset-local。异常：argparse 配置错误由
+    标准库原样抛出；默认 ``all`` 只用于统一双进程生命周期，显式组件仍保留。
+    """
+
     parser = subparsers.add_parser(
         "workspace",
         help="Control the per-workspace Local Backend, OS, PLC-Sim, and renderer",
@@ -23,8 +30,12 @@ def register_workspace_subcommands(subparsers: Any) -> None:
         if action not in {"status", "reset-local"}:
             leaf.add_argument(
                 "--component",
-                choices=["backend", "os", "plc"],
-                default="backend" if action == "start" else "os",
+                choices=["all", "backend", "os", "plc"],
+                default=("all" if action in {"start", "stop", "restart"} else "os"),
+                help=(
+                    "all 表示由一个 Host 操作编排调度进程和 Edge/驱动进程；"
+                    "backend、os、plc 仅操作单个组件。"
+                ),
             )
         if action != "status":
             leaf.add_argument("--operation-id", default=None)
@@ -151,8 +162,17 @@ def dispatch_workspace_command(args: dict[str, Any]) -> bool:
 
 
 def _command(action: str, component: str) -> str:
+    """把用户动作与组件名转换为 Workspace Host 命令。
+
+    参数：``action`` 是 start/stop/restart，``component`` 是 all/backend/os/plc。
+    返回：统一生命周期使用 ``workspace.*``，单组件使用对应命令。异常：组合
+    不受支持时抛 ``WorkspaceHostError``，不猜测或降级到其他组件。
+    """
+
     names = {"backend": "backend", "os": "os", "plc": "plc"}
     if action not in {"start", "stop", "restart"} or component not in names:
+        if component == "all" and action in {"start", "stop", "restart"}:
+            return f"workspace.{action}"
         raise WorkspaceHostError("invalid_request", "无效 workspace 操作")
     return f"{names[component]}.{action}"
 

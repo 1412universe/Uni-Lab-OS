@@ -9,6 +9,9 @@
     POST /api/v1/workflows/{workflow_id}/cancel
     POST /api/v1/jobs/{job_id}/finish       子 action 完成回调（触发点 2：立即重排）
     POST /api/v1/reschedule                 手动重排（调试用）
+    GET  /api/v1/scheduler/drain             查询调度器排空状态
+    POST /api/v1/scheduler/drain             停止新的设备作业派发
+    POST /api/v1/scheduler/drain/resume      恢复设备作业派发
     GET  /api/v1/error-decisions            等待人工决策的 action 异常
     POST /api/v1/error-decisions/{decision_id}  提交决策（retry/skip/abort/干预）
     GET  /api/v1/monitor/events             SSE 实时事件流（四通道监控面板）
@@ -228,6 +231,24 @@ def create_scheduler_router(
     @router.post("/reschedule")
     def manual_reschedule() -> Dict[str, Any]:
         return {"dispatched": _sched().reschedule()}
+
+    @router.get("/scheduler/drain")
+    def scheduler_drain_status() -> dict[str, Any]:
+        """返回排空阶段和仍在设备侧执行的作业，不改变调度状态。"""
+
+        return _sched().drain_status()
+
+    @router.post("/scheduler/drain")
+    def begin_scheduler_drain() -> dict[str, Any]:
+        """停止派发新设备作业；重复调用保持幂等。"""
+
+        return _sched().begin_drain()
+
+    @router.post("/scheduler/drain/resume")
+    def resume_scheduler_from_drain() -> dict[str, Any]:
+        """退出排空状态，并重新调度此前被门禁拦住的作业。"""
+
+        return _sched().resume_from_drain()
 
     @router.get("/timeline")
     def timeline(window_s: float = 3600.0) -> Dict[str, Any]:
