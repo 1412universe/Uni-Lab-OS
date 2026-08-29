@@ -578,6 +578,26 @@ class PublishedWorkflowContractStore:
             raise KeyError(contract_uuid)
         return self._row(row)
 
+    def latest_for_workflow(self, workflow_uuid: str) -> dict[str, Any] | None:
+        """读取一个工作流当前最新的已发布合同；没有合同则返回 ``None``。
+
+        参数：``workflow_uuid`` 是工作流稳定身份。返回：按发布版本倒序选出的
+        完整合同；调用方只应使用其发布修订和合同摘要判断工作流状态。异常：
+        数据库读取错误原样传播，不把缺少合同误报为数据库故障。
+        """
+
+        with self._store._lock:
+            row = self._store._conn.execute(
+                """
+                SELECT * FROM published_workflow_contract
+                WHERE workflow_uuid = ? AND deleted_at IS NULL
+                ORDER BY version DESC, create_time DESC, uuid DESC
+                LIMIT 1
+                """,
+                (workflow_uuid,),
+            ).fetchone()
+        return None if row is None else self._row(row)
+
     def list_latest(
         self,
         *,

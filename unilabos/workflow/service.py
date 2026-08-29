@@ -121,6 +121,9 @@ from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridgeError
 
 logger = logging.getLogger(__name__)
 
+_WORKFLOW_STATUS_SOURCE = "source"
+_WORKFLOW_STATUS_PUBLISHED = "published"
+
 _ERRORS = {
     "invalid_input": (400, "提交内容格式不正确"),
     "not_found": (404, "请求的资源不存在"),
@@ -494,6 +497,35 @@ class WorkflowService:
                 )
         return self._published_contracts
 
+    def _public_workflow_with_status(
+        self,
+        workflow: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """给工作流公共读模型补充稳定的源码/已发布状态。
+
+        参数：``workflow`` 是定义仓储返回的工作流行投影。返回：不修改输入的
+        工作流副本，并增加 ``status``；只有最新发布合同的
+        ``workflow_revision`` 与当前工作流 ``revision`` 相同时才返回
+        ``published``，其余情况统一返回 ``source``。异常：合同仓储的数据库
+        读取错误原样传播；没有发布合同不视为异常。
+        """
+
+        projected = dict(workflow)
+        latest_contract = self._published_contract_store().latest_for_workflow(
+            str(projected["uuid"])
+        )
+        is_currently_published = (
+            latest_contract is not None
+            and int(latest_contract["workflow_revision"])
+            == int(projected["revision"])
+        )
+        projected["status"] = (
+            _WORKFLOW_STATUS_PUBLISHED
+            if is_currently_published
+            else _WORKFLOW_STATUS_SOURCE
+        )
+        return projected
+
     def _job_evidence_store(self) -> JobEvidenceStore:
         with self._capability_store_lock:
             if self._job_evidence is None:
@@ -555,13 +587,14 @@ class WorkflowService:
             meta_data = normalize_json_object(meta_data)
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
-            return self._definition_store.create_workflow(
+            workflow = self._definition_store.create_workflow(
                 workflow_uuid=identity,
                 name=name,
                 tags=tags,
                 description=self._optional_text(description),
                 meta_data=public_meta_data,
             )
+            return self._public_workflow_with_status(workflow)
         except (ValueError, ValidationError):
             raise WorkflowError("invalid_input") from None
         except StoreConflict:
@@ -573,7 +606,9 @@ class WorkflowService:
         except ValueError:
             raise WorkflowError("invalid_input") from None
         try:
-            return self._definition_store.get_workflow(identity)
+            return self._public_workflow_with_status(
+                self._definition_store.get_workflow(identity)
+            )
         except StoreNotFound:
             raise WorkflowError("not_found") from None
 
@@ -585,11 +620,15 @@ class WorkflowService:
         name: str = "",
     ) -> Dict[str, Any]:
         page, page_size = self._normalize_page(page, page_size)
-        return self._definition_store.list_workflows(
+        result = self._definition_store.list_workflows(
             page=page,
             page_size=page_size,
             name=name,
         )
+        result["items"] = [
+            self._public_workflow_with_status(item) for item in result["items"]
+        ]
+        return result
 
     def update_workflow(
         self,
@@ -629,17 +668,21 @@ class WorkflowService:
                     "description": self._optional_text(description),
                     "meta_data": public_meta_data,
                 }
-                return self._commit_domain_graph_candidate(
+                return self._public_workflow_with_status(
+                    self._commit_domain_graph_candidate(
+                        identity,
+                        revision=int(current["revision"]),
+                        graph=graph,
+                    )["workflow"]
+                )
+            return self._public_workflow_with_status(
+                self._definition_store.update_workflow(
                     identity,
-                    revision=int(current["revision"]),
-                    graph=graph,
-                )["workflow"]
-            return self._definition_store.update_workflow(
-                identity,
-                name=name,
-                tags=tags,
-                description=self._optional_text(description),
-                meta_data=public_meta_data,
+                    name=name,
+                    tags=tags,
+                    description=self._optional_text(description),
+                    meta_data=public_meta_data,
+                )
             )
 
     def delete_workflow(self, workflow_uuid: str) -> None:
@@ -5166,6 +5209,9 @@ class WorkflowService:
         return {
             "workflow_uuid": workflow["uuid"],
             "workflow_revision": workflow["revision"],
+            # ``state`` 是创作诊断状态；前端正常展示发布徽标应使用这个稳定的
+            # 两值业务状态，避免把 candidate_stale 等内部中间态暴露成产品状态。
+            "status": self._public_workflow_with_status(workflow)["status"],
             "state": state,
             "applied_graph": graph,
             "draft": draft,

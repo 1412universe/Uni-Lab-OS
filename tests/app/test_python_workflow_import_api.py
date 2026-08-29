@@ -91,6 +91,7 @@ def test_python_file_import_compiles_and_creates_complete_graph_atomically(
         graph = payload["data"]
         assert graph["workflow"]["uuid"] == WORKFLOW_UUID
         assert graph["workflow"]["name"] == "Sample preparation"
+        assert graph["workflow"]["status"] == "source"
         assert [node["uuid"] for node in graph["nodes"]] == [
             PREPARE_NODE_UUID,
             ANALYZE_NODE_UUID,
@@ -106,6 +107,7 @@ def test_python_file_import_compiles_and_creates_complete_graph_atomically(
         )
         authoring = service.get_authoring(WORKFLOW_UUID)
         assert authoring["state"] == "applied"
+        assert authoring["status"] == "source"
         assert authoring["workflow_revision"] == 1
 
         readback = client.get(f"/api/v1/workflows/{WORKFLOW_UUID}/graph")

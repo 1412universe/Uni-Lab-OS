@@ -149,6 +149,87 @@ def test_publication_list_returns_latest_contract_per_workflow(tmp_path) -> None
     store.close()
 
 
+def test_workflow_read_models_expose_source_and_published_status(tmp_path) -> None:
+    """工作流列表与详情按当前修订返回源码或已发布状态。"""
+
+    client, store = _client(tmp_path)
+    created = client.post(
+        "/api/v1/workflows",
+        json={"name": "状态展示", "tags": [], "meta_data": {}},
+    )
+    assert created.status_code == 201
+    workflow_uuid = created.json()["data"]["uuid"]
+    assert created.json()["data"]["status"] == "source"
+
+    listed_source = client.get("/api/v1/workflows").json()["data"]["items"]
+    assert listed_source[0]["status"] == "source"
+    assert client.get(f"/api/v1/workflows/{workflow_uuid}").json()["data"]["status"] == (
+        "source"
+    )
+
+    graph = client.put(
+        f"/api/v1/workflows/{workflow_uuid}/graph",
+        json={
+            "revision": 1,
+            "nodes": [
+                {
+                    "uuid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                    "name": "人工确认",
+                    "type": "manual_confirm",
+                    "pose": {"x": 80, "y": 60},
+                    "param": {},
+                    "execution_policy": {},
+                    "disabled": False,
+                    "minimized": False,
+                    "meta_data": {},
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert graph.status_code == 200
+    assert graph.json()["data"]["workflow"]["status"] == "source"
+    revision = graph.json()["data"]["workflow"]["revision"]
+    published = client.post(
+        f"/api/v1/workflows/{workflow_uuid}/publications",
+        json={"revision": revision},
+    )
+    assert published.status_code == 201
+    assert client.get(f"/api/v1/workflows/{workflow_uuid}").json()["data"]["status"] == (
+        "published"
+    )
+    assert client.get(f"/api/v1/workflows/{workflow_uuid}/graph").json()["data"][
+        "workflow"
+    ]["status"] == "published"
+
+    changed = client.put(
+        f"/api/v1/workflows/{workflow_uuid}/graph",
+        json={
+            "revision": revision,
+            "nodes": [
+                {
+                    "uuid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                    "name": "人工确认（修改）",
+                    "type": "manual_confirm",
+                    "pose": {"x": 100, "y": 60},
+                    "param": {},
+                    "execution_policy": {},
+                    "disabled": False,
+                    "minimized": False,
+                    "meta_data": {},
+                }
+            ],
+            "edges": [],
+        },
+    )
+    assert changed.status_code == 200
+    assert changed.json()["data"]["workflow"]["status"] == "source"
+    assert client.get(f"/api/v1/workflows/{workflow_uuid}").json()["data"]["status"] == (
+        "source"
+    )
+    store.close()
+
+
 def test_publication_rejects_stale_revision_and_empty_graph(tmp_path) -> None:
     """发布必须命中当前修订，并拒绝没有节点的空工作流。"""
 

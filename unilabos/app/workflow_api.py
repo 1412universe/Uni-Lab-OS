@@ -542,6 +542,27 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         route_class=_BackendJSONRoute,
     )
 
+    def _with_workflow_status(payload: Any) -> Any:
+        """给包含工作流图的公共响应补充当前源码/已发布状态。
+
+        参数：``payload`` 是服务层返回的工作流或完整图投影。返回：输入不是
+        完整图时原样返回；包含 ``workflow.uuid`` 的图则复制顶层对象，并在其中
+        增加派生的 ``workflow.status``。异常：状态读取错误原样传播；不修改服务
+        层图快照，避免派生字段进入 AST、发布合同或任务快照。
+        """
+
+        if not isinstance(payload, dict):
+            return payload
+        workflow = payload.get("workflow")
+        if not isinstance(workflow, dict) or not isinstance(workflow.get("uuid"), str):
+            return payload
+        projected = dict(payload)
+        projected["workflow"] = {
+            **workflow,
+            "status": service.get_workflow(workflow["uuid"])["status"],
+        }
+        return projected
+
     @router.post("/workflows")
     def create_workflow(body: WorkflowCreateRequest) -> JSONResponse:
         return _success(
@@ -556,7 +577,9 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """校验并在一个事务中导入旧版工作流图。"""
 
         return _success(
-            service.import_legacy_workflow(payload=body.model_dump()),
+            _with_workflow_status(
+                service.import_legacy_workflow(payload=body.model_dump())
+            ),
             status=201,
         )
 
@@ -577,9 +600,11 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         except UnicodeDecodeError:
             raise WorkflowError("invalid_input") from None
         return _success(
-            service.import_python_workflow(
-                file_name=file_name,
-                python_source=python_source,
+            _with_workflow_status(
+                service.import_python_workflow(
+                    file_name=file_name,
+                    python_source=python_source,
+                )
             ),
             status=201,
         )
@@ -639,7 +664,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.get("/workflows/{workflow_uuid}/graph")
     def get_graph(workflow_uuid: str) -> JSONResponse:
-        return _success(service.get_graph(workflow_uuid))
+        return _success(_with_workflow_status(service.get_graph(workflow_uuid)))
 
     @router.put("/workflows/{workflow_uuid}/graph")
     def save_graph(
@@ -647,11 +672,13 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         body: GraphWriteRequest,
     ) -> JSONResponse:
         return _success(
-            service.save_graph(
-                workflow_uuid,
-                revision=body.revision,
-                nodes=body.nodes,
-                edges=body.edges,
+            _with_workflow_status(
+                service.save_graph(
+                    workflow_uuid,
+                    revision=body.revision,
+                    nodes=body.nodes,
+                    edges=body.edges,
+                )
             )
         )
 
@@ -663,9 +690,11 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """增加节点，并由完整图校验器原子推进修订。"""
 
         return _success(
-            service.create_workflow_node(
-                workflow_uuid,
-                payload=body.model_dump(),
+            _with_workflow_status(
+                service.create_workflow_node(
+                    workflow_uuid,
+                    payload=body.model_dump(),
+                )
             ),
             status=201,
         )
@@ -698,9 +727,11 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """增加连线，并复用完整图引用与环路校验。"""
 
         return _success(
-            service.create_workflow_edge(
-                workflow_uuid,
-                payload=body.model_dump(),
+            _with_workflow_status(
+                service.create_workflow_edge(
+                    workflow_uuid,
+                    payload=body.model_dump(),
+                )
             ),
             status=201,
         )
@@ -713,10 +744,12 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """一次删除多个节点与连线，失败时整图不变。"""
 
         return _success(
-            service.batch_delete_workflow_graph(
-                workflow_uuid,
-                node_uuids=body.node_uuids,
-                edge_uuids=body.edge_uuids,
+            _with_workflow_status(
+                service.batch_delete_workflow_graph(
+                    workflow_uuid,
+                    node_uuids=body.node_uuids,
+                    edge_uuids=body.edge_uuids,
+                )
             )
         )
 
@@ -728,7 +761,9 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """在单个 SQLite 事务中复制工作流和完整图。"""
 
         return _success(
-            service.duplicate_workflow(workflow_uuid, name=body.name),
+            _with_workflow_status(
+                service.duplicate_workflow(workflow_uuid, name=body.name)
+            ),
             status=201,
         )
 
@@ -755,14 +790,16 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """原子插入并确定性展开一个不可变组合工作流调用。"""
 
         return _success(
-            service.insert_composite_workflow(
-                workflow_uuid,
-                revision=body.revision,
-                contract_uuid=body.contract_uuid,
-                invocation_uuid=body.invocation_uuid,
-                device_bindings=body.device_bindings,
-                pose=body.pose,
-                param=body.param,
+            _with_workflow_status(
+                service.insert_composite_workflow(
+                    workflow_uuid,
+                    revision=body.revision,
+                    contract_uuid=body.contract_uuid,
+                    invocation_uuid=body.invocation_uuid,
+                    device_bindings=body.device_bindings,
+                    pose=body.pose,
+                    param=body.param,
+                )
             )
         )
 
