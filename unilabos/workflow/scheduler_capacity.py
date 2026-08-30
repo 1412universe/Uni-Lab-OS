@@ -15,7 +15,6 @@ _IN_FLIGHT_JOB_STATUSES = (
     "running",
     "intervention_required",
     "cancel_requested",
-    "execution_unknown",
 )
 
 
@@ -137,7 +136,7 @@ def admit_job_dispatch(
     in_flight = _count(
         connection,
         "SELECT COUNT(*) FROM workflow_node_job "
-        "WHERE deleted_at IS NULL AND status IN (?, ?, ?, ?, ?)",
+        "WHERE deleted_at IS NULL AND status IN (?, ?, ?, ?)",
         _IN_FLIGHT_JOB_STATUSES,
     )
     if in_flight < max_in_flight_jobs:

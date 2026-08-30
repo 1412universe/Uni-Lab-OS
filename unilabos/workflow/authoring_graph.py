@@ -285,12 +285,9 @@ def build_candidate_graph(
 
     # ``order_dependencies`` 只在相邻执行片段没有真实数据边时补 ready 控制边。
     data_pairs = {
-        (edge["source_node_uuid"], edge["target_node_uuid"])
-        for edge in edges
+        (edge["source_node_uuid"], edge["target_node_uuid"]) for edge in edges
     }
-    for source_node_uuid, target_node_uuid in dict.fromkeys(
-        program.order_dependencies
-    ):
+    for source_node_uuid, target_node_uuid in dict.fromkeys(program.order_dependencies):
         if (source_node_uuid, target_node_uuid) in data_pairs:
             continue
         source_handle = _require_handle(
@@ -432,7 +429,10 @@ def build_candidate_graph(
     for projected_node in projection.nodes:
         projected_uuid = str(projected_node.get("uuid"))
         if projected_uuid in source_order:
-            projected_node["disabled"] = projected_uuid in disabled_node_uuids
+            if projected_uuid in disabled_node_uuids:
+                projected_node["disabled"] = True
+            elif "disabled" in projected_node:
+                projected_node["disabled"] = False
 
     graph = {
         "workflow": workflow,
@@ -480,9 +480,7 @@ def _composite_keyword_arguments(
                 "parameter": str(binding.value),
             }
         elif binding.kind == "node_output":
-            source_declaration, source_action = result_nodes[
-                binding.result_name or ""
-            ]
+            source_declaration, source_action = result_nodes[binding.result_name or ""]
             source_handle = _require_handle(
                 source_action,
                 key=str(binding.value),
@@ -582,9 +580,7 @@ def _record_composite_output_schemas(
         if binding.kind == "workflow_input":
             schema = input_schemas.get(str(binding.value))
         elif binding.kind == "node_output":
-            source_declaration, source_action = result_nodes[
-                binding.result_name or ""
-            ]
+            source_declaration, source_action = result_nodes[binding.result_name or ""]
             if isinstance(source_declaration, MaterialSourceDeclaration):
                 schema = {
                     "$slot": "ResourceSlot",
@@ -623,12 +619,10 @@ def _record_composite_output_schemas(
                 "composite_boundary_mapping_invalid",
                 "组合工作流隐式输出来源类型无法证明",
             )
-        result_output_schemas[
-            (declaration.result_name, str(handle["handle_key"]))
-        ] = deepcopy(dict(schema))
-        unilab = invocation_node.setdefault("meta_data", {}).setdefault(
-            "unilab", {}
+        result_output_schemas[(declaration.result_name, str(handle["handle_key"]))] = (
+            deepcopy(dict(schema))
         )
+        unilab = invocation_node.setdefault("meta_data", {}).setdefault("unilab", {})
         overrides = unilab.setdefault("output_schema_overrides", {})
         if not isinstance(overrides, dict):
             raise AuthoringGraphError(
@@ -690,9 +684,7 @@ def _record_action_material_passthrough_schemas(
         if binding.kind == "workflow_input":
             schema = input_schemas.get(str(binding.value))
         elif binding.kind == "node_output":
-            source_declaration, source_action = result_nodes[
-                binding.result_name or ""
-            ]
+            source_declaration, source_action = result_nodes[binding.result_name or ""]
             if isinstance(source_declaration, MaterialSourceDeclaration):
                 schema = {
                     "$slot": "ResourceSlot",
@@ -731,9 +723,8 @@ def _record_action_material_passthrough_schemas(
                 schema["allowed_resource_template_uuids"] = [template_uuid]
         else:
             schema = None
-        if (
-            not isinstance(schema, Mapping)
-            or not schema_is_assignable(schema, _handle_schema(source_handle))
+        if not isinstance(schema, Mapping) or not schema_is_assignable(
+            schema, _handle_schema(source_handle)
         ):
             continue
         source_uuid = str(source_handle["uuid"])
@@ -885,9 +876,7 @@ def _generated_composite_node(
     action = catalog.require_template(str(result["workflow_node_template_uuid"]))
     template = action.template
     if result.get("action_name"):
-        result["action_type"] = str(
-            template.get("type") or "UniLabJsonCommand"
-        )
+        result["action_type"] = str(template.get("type") or "UniLabJsonCommand")
     if result.get("description") is None:
         result["description"] = template.get("description")
     return result
@@ -1122,9 +1111,10 @@ def _validate_action_resource_reference(
     # ``allowed_templates`` 是该动作输入明确接受的资源模板 UUID 集合；省略表示
     # 不在创作期缩窄模板，但实际物料 UUID 仍已由库存权威验证。
     allowed_templates = value_schema.get("allowed_resource_template_uuids")
-    if allowed_templates not in (None, [], ()) and reference.get(
-        "resource_template_uuid"
-    ) not in allowed_templates:
+    if (
+        allowed_templates not in (None, [], ())
+        and reference.get("resource_template_uuid") not in allowed_templates
+    ):
         raise AuthoringGraphError(
             "resource_reference_resolution_error",
             f"动作参数 {argument_name} 不接受该物料资源模板",
@@ -1214,12 +1204,9 @@ def _output_contract(
     异常：上述输出引用或 Schema 合同不成立时抛出 ``AuthoringGraphError``。
     """
 
-    inputs = {
-        item["name"]: item["schema"] for item in input_contract["parameters"]
-    }
+    inputs = {item["name"]: item["schema"] for item in input_contract["parameters"]}
     declared = {
-        name: deepcopy(schema)
-        for name, schema in declared_output_schemas.items()
+        name: deepcopy(schema) for name, schema in declared_output_schemas.items()
     }
     outputs: list[dict[str, Any]] = []
     for name, binding in program.outputs:
@@ -1307,8 +1294,7 @@ def _resolved_declared_output_schemas(
     """把显式结果记录的资源模板源码身份冻结为本代 UUID。"""
 
     schemas = {
-        name: deepcopy(schema)
-        for name, schema in program.declared_output_schemas
+        name: deepcopy(schema) for name, schema in program.declared_output_schemas
     }
     _resolve_resource_template_symbols(
         schemas,
@@ -1335,8 +1321,7 @@ def _resolve_resource_template_symbols(
             )
         try:
             template_uuids = [
-                catalog.require_resource_template_uuid(symbol)
-                for symbol in symbols
+                catalog.require_resource_template_uuid(symbol) for symbol in symbols
             ]
         except AuthoringCatalogError as error:
             raise AuthoringGraphError(
@@ -1363,9 +1348,7 @@ def _resource_slot_schemas(schema: dict[str, Any]) -> list[dict[str, Any]]:
             result.append(item)
         members = item.get("anyOf")
         if isinstance(members, list):
-            pending.extend(
-                member for member in members if isinstance(member, dict)
-            )
+            pending.extend(member for member in members if isinstance(member, dict))
         child = item.get("items")
         if isinstance(child, dict):
             pending.append(child)
@@ -1403,9 +1386,8 @@ def _output_bindings(
     explicit_names = set(bindings)
     for parameter in program.input_contract["parameters"]:
         parameter_name = str(parameter["name"])
-        if (
-            parameter_name not in explicit_names
-            and schema_contains_resource_slot(parameter["schema"])
+        if parameter_name not in explicit_names and schema_contains_resource_slot(
+            parameter["schema"]
         ):
             bindings[parameter_name] = {
                 "kind": "workflow_input",

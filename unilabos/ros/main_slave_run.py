@@ -26,6 +26,11 @@ from rclpy.node import Node
 from rclpy.timer import Timer
 
 from unilabos.registry.registry import lab_registry
+from unilabos.ros.hostlink_runtime import (
+    attach_hostlink_runtime as _attach_hostlink_runtime,
+    setup_host_network_before_ros as _setup_host_network_before_ros,
+    start_hostlink_server as _start_hostlink_server,
+)
 from unilabos.ros.initialize_device import initialize_device_from_dict
 from unilabos.ros.nodes.presets.host_node import HostNode
 from unilabos.utils import logger
@@ -146,40 +151,6 @@ def main(
 
     while True:
         time.sleep(1)
-
-
-def _attach_hostlink_runtime(host_node) -> None:
-    """Attach HostNode's live resource tree to the microbackend-owned service."""
-
-    if (
-        BasicConfig.control_plane != "local"
-        or BasicConfig.process_role != "combined"
-    ):
-        return
-    from unilabos.app.scheduler.host_network import setup_host_network_service
-
-    setup_host_network_service(lambda: host_node.resources_config)
-
-
-def _setup_host_network_before_ros() -> None:
-    """仅本地调试模式在 ROS 初始化前启动 HostLink 微后端。"""
-
-    if (
-        BasicConfig.control_plane != "local"
-        or BasicConfig.process_role != "combined"
-    ):
-        return
-    # HostLink 必须在 rclpy.init 前启动定向 DDS 端点；直接嵌入本地 ROS
-    # 运行时的调用方不会经过 app.main 的组合根，因此在这里兜底装配。
-    from unilabos.app.scheduler.host_network import setup_host_network_service
-
-    setup_host_network_service()
-
-
-def _start_hostlink_server(host_node) -> None:
-    """Compatibility alias; networking ownership now remains in the microbackend."""
-
-    _attach_hostlink_runtime(host_node)
 
 
 def slave(

@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import sys
 import threading
+import types
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any
 
 import pytest
 
@@ -27,16 +30,29 @@ from unilabos.config.config import BasicConfig, EdgeControlConfig, HTTPConfig
 
 class FakeDataPlane:
     def __init__(self) -> None:
-        self.fetched_jobs: List[StoredJob] = []
-        self.outcomes: List[Dict[str, Any]] = []
+        """创建记录 HTTP 作业载荷和终态的测试数据面；参数与返回均为空。"""
 
-    def fetch_job(self, job: StoredJob) -> Dict[str, Any]:
+        self.fetched_jobs: list[StoredJob] = []
+        self.outcomes: list[dict[str, Any]] = []
+
+    def fetch_job(self, job: StoredJob) -> dict[str, Any]:
+        """按持久 Edge 作业返回含 Claim/Fence 的动作载荷。
+
+        参数：``job`` 是动作执行镜像。返回可执行 HTTP 载荷；测试实现不抛异常。
+        """
+
         self.fetched_jobs.append(job)
         return {
             "job_uuid": job.job_uuid,
             "task_uuid": job.task_uuid,
             "node_uuid": job.node_uuid,
             "command_uuid": job.command_uuid,
+            "claim_uuid": job.claim_uuid,
+            "attempt": job.attempt,
+            "fences": [
+                {"lock_key": lock_key, "fencing_token": token}
+                for lock_key, token in job.fences
+            ],
             "local_device_id": "heater-01",
             "action_name": "heat",
             "action_type": "UniLabJsonCommand",
@@ -52,10 +68,10 @@ class FakeDataPlane:
         self,
         job: StoredJob,
         outcome: str,
-        return_info: Dict[str, Any],
-        error_info: List[Dict[str, Any]],
-        unknown_command_ids: List[str] | None = None,
-    ) -> Dict[str, Any]:
+        return_info: dict[str, Any],
+        error_info: list[dict[str, Any]],
+        unknown_command_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         self.outcomes.append(
             {
                 "job": job,
@@ -66,6 +82,22 @@ class FakeDataPlane:
             }
         )
         return {"uuid": str(uuid.uuid4())}
+
+
+def _claim_fields(
+    *,
+    lock_key: str = "/devices/heater-01",
+    fencing_token: int = 1,
+) -> dict[str, Any]:
+    """构造经过 Scheduler 签发的 Job Claim 与单资源 Fence 测试载荷。"""
+
+    return {
+        "claim_uuid": str(uuid.uuid4()),
+        "attempt": 1,
+        "fences": [
+            {"lock_key": lock_key, "fencing_token": fencing_token},
+        ],
+    }
 
 
 def test_edge_control_settings_derives_split_scheduler_address(
@@ -93,19 +125,19 @@ class FakeHostNode:
         退役身份，``dispatch_block_reasons`` 保存设备当前阻断投影。
         """
 
-        self.started: List[Dict[str, Any]] = []
-        self.cancel_requests: List[str] = []
+        self.started: list[dict[str, Any]] = []
+        self.cancel_requests: list[str] = []
         self.cancelable_jobs: set[str] = set()
-        self.unknown_resolutions: List[Dict[str, str]] = []
-        self.retired_commands: List[str] = []
-        self.dispatch_block_reasons: Dict[str, str] = {}
+        self.unknown_resolutions: list[dict[str, str]] = []
+        self.retired_commands: list[str] = []
+        self.dispatch_block_reasons: dict[str, str] = {}
 
     def send_goal(
         self,
         item: Any,
         action_type: str,
-        action_kwargs: Dict[str, Any],
-        sample_material: Dict[str, str],
+        action_kwargs: dict[str, Any],
+        sample_material: dict[str, str],
         server_info: Any,
     ) -> None:
         self.started.append(
@@ -134,7 +166,7 @@ class FakeHostNode:
         device_command_id: str,
         resolution_command_uuid: str,
         reason: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         self.unknown_resolutions.append(
             {
                 "device_id": device_id,
@@ -155,7 +187,7 @@ class FakeHostNode:
     def device_dispatch_block_reason(self, device_id: str) -> str:
         return self.dispatch_block_reasons.get(device_id, "")
 
-    def device_unknown_command_ids(self, device_id: str) -> List[str]:
+    def device_unknown_command_ids(self, device_id: str) -> list[str]:
         """从展示阻断投影还原测试设备的结构化 UNKNOWN 命令集合。
 
         ``device_id`` 是本地设备身份；返回尚未完成物理结算的命令列表。
@@ -176,7 +208,7 @@ class FakeHostNode:
 
 
 class FakeRegistrationResources:
-    def dump(self) -> List[List[Dict[str, Any]]]:
+    def dump(self) -> list[list[dict[str, Any]]]:
         return [
             [
                 {
@@ -189,12 +221,12 @@ class FakeRegistrationResources:
 
 
 class FakeRegistrationResourcesWithoutBarcode:
-    def dump(self) -> List[List[Dict[str, Any]]]:
+    def dump(self) -> list[list[dict[str, Any]]]:
         return [[{"id": "robot-01", "name": "Robot 01"}]]
 
 
 class FakeRegistrationResourcesWithClass:
-    def dump(self) -> List[List[Dict[str, Any]]]:
+    def dump(self) -> list[list[dict[str, Any]]]:
         return [[{
             "id": "robot-01",
             "name": "Robot 01",
@@ -220,7 +252,7 @@ class FakeRegistrationHostNode:
             return "unresolved_unknown_command:workflow-node-job:old-job"
         return ""
 
-    def device_unknown_command_ids(self, device_id: str) -> List[str]:
+    def device_unknown_command_ids(self, device_id: str) -> list[str]:
         """返回注册竞态测试中指定设备的结构化 UNKNOWN 命令集合。
 
         ``device_id`` 是注册资源身份；已知机器人返回一条稳定命令，其余返回空列表。
@@ -253,23 +285,23 @@ class FakeRegistrationHostNodeWithSystemDevice(FakeRegistrationHostNode):
 class FakeRegistrationDataPlane:
     def material_uuids_by_barcode(
         self, barcodes: Iterable[str]
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         return {barcode: str(uuid.uuid4()) for barcode in barcodes}
 
 
 class FakeResponse:
     status_code = 200
 
-    def __init__(self, payload: Dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
 
-    def json(self) -> Dict[str, Any]:
+    def json(self) -> dict[str, Any]:
         return self._payload
 
 
 class RecordingWebSocket:
     def __init__(self) -> None:
-        self.messages: List[Dict[str, Any]] = []
+        self.messages: list[dict[str, Any]] = []
 
     async def send(self, encoded: str) -> None:
         self.messages.append(__import__("json").loads(encoded))
@@ -277,8 +309,8 @@ class RecordingWebSocket:
 
 class RecordingSession:
     def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
-        self.headers: Dict[str, str] = {}
+        self.calls: list[dict[str, Any]] = []
+        self.headers: dict[str, str] = {}
 
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
@@ -358,22 +390,26 @@ def test_registration_falls_back_to_registry_actions_during_discovery_race(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
-    from unilabos.registry.registry import lab_registry
-
     host_node = FakeRegistrationHostNode()
     host_node.resources_config = FakeRegistrationResourcesWithClass()
     host_node._action_value_mappings["robot-01"] = {}
-    monkeypatch.setitem(
-        lab_registry.device_type_registry,
-        "community.test.robot",
-        {
+    fake_registry_module = types.ModuleType("unilabos.registry.registry")
+    fake_registry_module.lab_registry = types.SimpleNamespace(
+        device_type_registry={
+            "community.test.robot": {
             "class": {
                 "action_value_mappings": {
                     "_execute_driver_command": {"type": "StrSingleInput"},
                     "submit_pick_from_s06": {"type": "UniLabJsonCommand"},
                 }
             }
-        },
+            }
+        }
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "unilabos.registry.registry",
+        fake_registry_module,
     )
     client = EdgeControlClient(
         _settings(tmp_path / "runtime.db"),
@@ -409,6 +445,11 @@ def test_registration_includes_host_node_as_default_system_device(
 
 
 def test_store_persists_command_job_and_event_ack(tmp_path: Path) -> None:
+    """验证命令、作业身份和事件 ACK 可跨 Edge 账本重启恢复。
+
+    参数：``tmp_path`` 是隔离 SQLite 目录。返回无；身份、追踪或 ACK 丢失时失败。
+    """
+
     path = tmp_path / "edge-control.db"
     command_uuid = str(uuid.uuid4())
     job_uuid = str(uuid.uuid4())
@@ -442,6 +483,7 @@ def test_store_persists_command_job_and_event_ack(tmp_path: Path) -> None:
             "task_uuid": task_uuid,
             "node_uuid": node_uuid,
             "job_access_token": "short-token",
+            **_claim_fields(),
         },
         command_uuid,
     )
@@ -488,6 +530,53 @@ def test_store_persists_command_job_and_event_ack(tmp_path: Path) -> None:
     reopened.close()
 
 
+def test_edge_store_rejects_stale_resource_fence_before_job_mirror(tmp_path: Path) -> None:
+    """执行进程必须在创建 Job 镜像前拒绝被新 Claim 淘汰的旧 Fence。
+
+    参数：``tmp_path`` 提供隔离 Edge SQLite。返回无；断言相同命令重放幂等、
+    低 Fence 关闭式拒绝、更高 Fence 可推进。异常：陈旧命令留下作业镜像会失败。
+    """
+
+    store = EdgeControlStore(str(tmp_path / "edge-fence.db"))
+    lock_key = "/devices/heater-01"
+    first_job_uuid = str(uuid.uuid4())
+    first_payload = {
+        "job_uuid": first_job_uuid,
+        "task_uuid": str(uuid.uuid4()),
+        "node_uuid": str(uuid.uuid4()),
+        "job_access_token": "first-token",
+        **_claim_fields(lock_key=lock_key, fencing_token=2),
+    }
+    first_command_uuid = str(uuid.uuid4())
+    try:
+        assert store.save_job_start(first_payload, first_command_uuid) is True
+        assert store.save_job_start(first_payload, first_command_uuid) is False
+
+        stale_job_uuid = str(uuid.uuid4())
+        stale_payload = {
+            "job_uuid": stale_job_uuid,
+            "task_uuid": str(uuid.uuid4()),
+            "node_uuid": str(uuid.uuid4()),
+            "job_access_token": "stale-token",
+            **_claim_fields(lock_key=lock_key, fencing_token=1),
+        }
+        with pytest.raises(ValueError, match="stale resource Fence"):
+            store.save_job_start(stale_payload, str(uuid.uuid4()))
+        assert store.get_job(stale_job_uuid) is None
+
+        next_job_uuid = str(uuid.uuid4())
+        next_payload = {
+            "job_uuid": next_job_uuid,
+            "task_uuid": str(uuid.uuid4()),
+            "node_uuid": str(uuid.uuid4()),
+            "job_access_token": "next-token",
+            **_claim_fields(lock_key=lock_key, fencing_token=3),
+        }
+        assert store.save_job_start(next_payload, str(uuid.uuid4())) is True
+        assert store.get_job(next_job_uuid) is not None
+    finally:
+        store.close()
+
 def test_explicit_local_reset_preserves_identity_and_clears_protocol_work(
     tmp_path: Path,
 ) -> None:
@@ -512,6 +601,7 @@ def test_explicit_local_reset_preserves_identity_and_clears_protocol_work(
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "reset-token",
+            **_claim_fields(),
         },
         command_uuid,
     )
@@ -529,6 +619,11 @@ def test_explicit_local_reset_preserves_identity_and_clears_protocol_work(
 def test_store_resets_protocol_state_when_backend_edge_identity_changes(
     tmp_path: Path,
 ) -> None:
+    """验证上游 Edge 身份变化时只重置协议运行态并保留本机实例身份。
+
+    参数：``tmp_path`` 是隔离账本目录。返回无；旧命令或作业泄漏到新身份时失败。
+    """
+
     store = EdgeControlStore(str(tmp_path / "runtime.db"))
     instance_uuid = store.get_or_create_instance_uuid()
     first_edge_uuid = str(uuid.uuid4())
@@ -552,6 +647,7 @@ def test_store_resets_protocol_state_when_backend_edge_identity_changes(
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "test-token",
+            **_claim_fields(),
         },
         command_uuid,
     )
@@ -731,6 +827,7 @@ def test_unknown_resolution_is_committed_locally_before_edge_ack(
                 "task_uuid": str(uuid.uuid4()),
                 "node_uuid": str(uuid.uuid4()),
                 "job_access_token": "temporary-secret",
+                **_claim_fields(),
             },
             str(uuid.uuid4()),
         )
@@ -826,8 +923,8 @@ def test_running_job_cancel_without_memory_goal_stays_unsettled(
     """重启后找不到内存 goal 不得误报作业已物理取消。
 
     ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。已进入设备边界的
-    作业在 HostNode 无 goal 映射时仅记录取消请求，等待 Backend 将其
-    收敛为执行未知（execution_unknown）。
+    作业在 HostNode 无 goal 映射时仅记录取消请求，主状态继续保持
+    ``running``，并由独立清理状态表达需要物理对账。
     """
 
     async def scenario() -> None:
@@ -851,6 +948,7 @@ def test_running_job_cancel_without_memory_goal_stays_unsettled(
                 "task_uuid": str(uuid.uuid4()),
                 "node_uuid": str(uuid.uuid4()),
                 "job_access_token": "temporary-secret",
+                **_claim_fields(),
             },
             str(uuid.uuid4()),
         )
@@ -999,6 +1097,7 @@ def test_not_dispatched_job_cancel_commits_canceled_outcome(tmp_path: Path) -> N
                 "task_uuid": str(uuid.uuid4()),
                 "node_uuid": str(uuid.uuid4()),
                 "job_access_token": "temporary-secret",
+                **_claim_fields(),
             },
             str(uuid.uuid4()),
         )
@@ -1044,7 +1143,7 @@ def test_fetch_failure_cannot_revive_job_canceled_concurrently(tmp_path: Path) -
             self.fetch_started = threading.Event()
             self.release_fetch = threading.Event()
 
-        def fetch_job(self, job: StoredJob) -> Dict[str, Any]:
+        def fetch_job(self, job: StoredJob) -> dict[str, Any]:
             """等待测试完成取消后抛出取参错误。
 
             ``job`` 是当前工作流节点作业；方法无正常返回，未在一秒内
@@ -1079,6 +1178,7 @@ def test_fetch_failure_cannot_revive_job_canceled_concurrently(tmp_path: Path) -
                 "task_uuid": str(uuid.uuid4()),
                 "node_uuid": str(uuid.uuid4()),
                 "job_access_token": "temporary-secret",
+                **_claim_fields(),
             },
             str(uuid.uuid4()),
         )
@@ -1108,8 +1208,8 @@ def test_fetch_failure_cannot_revive_job_canceled_concurrently(tmp_path: Path) -
     asyncio.run(scenario())
 
 
-def test_http_data_plane_uses_three_uuid_identity() -> None:
-    """验证生产结果请求同时携带三重身份和执行未知命令集合。
+def test_http_data_plane_uses_complete_job_attempt_identity() -> None:
+    """验证生产反馈和结果请求携带完整执行尝试身份及未知命令集合。
 
     参数：无。返回：无；断言边缘执行镜像（EdgeExecutionMirror）不会在
     HTTP 适配器边界丢失对账恢复（Reconciliation）所需的物理命令身份。
@@ -1122,6 +1222,9 @@ def test_http_data_plane_uses_three_uuid_identity() -> None:
         task_uuid=str(uuid.uuid4()),
         node_uuid=str(uuid.uuid4()),
         command_uuid=str(uuid.uuid4()),
+        claim_uuid=str(uuid.uuid4()),
+        attempt=2,
+        fences=(("/devices/robot-01", 7),),
         job_access_token="short-token",
         status="received",
         feedback_sequence=0,
@@ -1135,6 +1238,13 @@ def test_http_data_plane_uses_three_uuid_identity() -> None:
     plane._session = session  # type: ignore[assignment]
 
     plane.fetch_job(job)
+    plane.commit_feedback(
+        job,
+        1,
+        "progress",
+        {"percent": 50},
+        "2026-08-30T00:00:00.000000Z",
+    )
     plane.commit_outcome(
         job,
         "failed",
@@ -1151,10 +1261,34 @@ def test_http_data_plane_uses_three_uuid_identity() -> None:
     assert fetch["headers"] == {
         "X-Command-UUID": job.command_uuid,
         "X-Job-Token": job.job_access_token,
+        "Authorization": "Bearer edge-secret",
     }
-    outcome = session.calls[1]
-    assert outcome["json"]["task_uuid"] == job.task_uuid
-    assert outcome["json"]["node_uuid"] == job.node_uuid
+    assert fetch["url"].startswith("http://scheduler:8081/api/v1/edge/jobs/")
+    expected_identity = {
+        "job_uuid": job.job_uuid,
+        "task_uuid": job.task_uuid,
+        "node_uuid": job.node_uuid,
+        "command_uuid": job.command_uuid,
+        "claim_uuid": job.claim_uuid,
+        "attempt": 2,
+        "fences": [
+            {"lock_key": "/devices/robot-01", "fencing_token": 7},
+        ],
+    }
+    feedback = session.calls[1]
+    assert feedback["url"].startswith(
+        "http://scheduler:8081/api/v1/edge/jobs/"
+    )
+    assert {
+        field: feedback["json"][field] for field in expected_identity
+    } == expected_identity
+    outcome = session.calls[2]
+    assert outcome["url"].startswith(
+        "http://scheduler:8081/api/v1/edge/jobs/"
+    )
+    assert {
+        field: outcome["json"][field] for field in expected_identity
+    } == expected_identity
     assert outcome["json"]["unknown_command_ids"] == [unknown_command_id]
     assert outcome["headers"]["Idempotency-Key"] == f"{job.job_uuid}:outcome:v1"
 
@@ -1167,8 +1301,8 @@ def test_material_identity_lookup_includes_child_resources() -> None:
 
     class MaterialSession:
         def __init__(self) -> None:
-            self.headers: Dict[str, str] = {}
-            self.params: Dict[str, Any] = {}
+            self.headers: dict[str, str] = {}
+            self.params: dict[str, Any] = {}
 
         def request(self, _method: str, _url: str, **kwargs: Any) -> FakeResponse:
             self.params = kwargs["params"]
@@ -1199,7 +1333,7 @@ def test_material_identity_lookup_includes_child_resources() -> None:
 def test_http_data_plane_injects_w3c_trace_headers(monkeypatch) -> None:
     traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
-    def inject(carrier: Dict[str, Any]) -> Dict[str, Any]:
+    def inject(carrier: dict[str, Any]) -> dict[str, Any]:
         carrier["traceparent"] = traceparent
         carrier["tracestate"] = "vendor=value"
         return carrier
@@ -1275,6 +1409,7 @@ def test_job_start_fetches_http_payload_and_outcome_precedes_notification(
                     "node_uuid": node_uuid,
                     "executor_kind": "device_action",
                     "job_access_token": "short-token",
+                    **_claim_fields(),
                 },
             }
         )
@@ -1365,6 +1500,7 @@ def test_acknowledged_settled_outcome_retires_device_journal_and_runtime(
                 "task_uuid": str(uuid.uuid4()),
                 "node_uuid": str(uuid.uuid4()),
                 "job_access_token": "temporary-secret",
+                **_claim_fields(),
             },
             str(uuid.uuid4()),
         )
@@ -1416,6 +1552,7 @@ def test_outcome_ack_waits_when_device_retirement_adapter_is_unavailable(
                 "task_uuid": str(uuid.uuid4()),
                 "node_uuid": str(uuid.uuid4()),
                 "job_access_token": "temporary-secret",
+                **_claim_fields(),
             },
             str(uuid.uuid4()),
         )
@@ -1455,10 +1592,10 @@ def test_terminal_job_token_rejection_retires_pending_outcome(
             self,
             job: StoredJob,
             outcome: str,
-            return_info: Dict[str, Any],
-            error_info: List[Dict[str, Any]],
-            unknown_command_ids: List[str] | None = None,
-        ) -> Dict[str, Any]:
+            return_info: dict[str, Any],
+            error_info: list[dict[str, Any]],
+            unknown_command_ids: list[str] | None = None,
+        ) -> dict[str, Any]:
             """拒绝结果提交；参数与生产接口一致且总是抛出未授权异常。"""
 
             self.outcomes.append({"job": job, "outcome": outcome})
@@ -1483,6 +1620,7 @@ def test_terminal_job_token_rejection_retires_pending_outcome(
                 "task_uuid": task_uuid,
                 "node_uuid": node_uuid,
                 "job_access_token": "revoked-token",
+                **_claim_fields(),
             },
             command_uuid,
         )

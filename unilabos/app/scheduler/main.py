@@ -23,6 +23,8 @@
                              全局运行任务容量，默认 500
     ULAB_SCHEDULER_MAX_TASKS_PER_WORKFLOW
                              同一工作流定义的运行任务容量，默认 100
+    ULAB_SCHEDULER_AGING_INTERVAL_SECONDS
+                             待派发候选每增加一级有效优先级的等待秒数，默认 30
 """
 
 from __future__ import annotations
@@ -115,8 +117,15 @@ def build_scheduler(inventory=None, history=None) -> EdgeScheduler:
     # ``estimator`` 由排序展示与调度器共享，历史样本只积累一份。
     estimator = build_estimator()
     return EdgeScheduler(
-        orderer=StableLocalOrderer(),
+        orderer=StableLocalOrderer(
+            aging_interval_seconds=float(
+                os.environ.get("ULAB_SCHEDULER_AGING_INTERVAL_SECONDS", "30")
+            )
+        ),
         inventory=inventory,
+        station_resources=(
+            inventory.station_resources if inventory is not None else None
+        ),
         estimator=estimator,
         monitor=monitor_bus,
         history=history,

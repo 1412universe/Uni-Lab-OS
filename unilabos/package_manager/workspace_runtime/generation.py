@@ -16,7 +16,7 @@ from .activation import WorkspaceRegistryRuntime
 RuntimeState = Literal["created", "running", "closed"]
 RefreshOutcome = Literal["noop", "hot_published", "pending_restart", "failed"]
 _RESTART_BLOCKING_EXECUTION_STATES = frozenset(
-    ("dispatched", "running", "cancel_requested", "execution_unknown")
+    ("dispatched", "running", "cancel_requested")
 )
 
 

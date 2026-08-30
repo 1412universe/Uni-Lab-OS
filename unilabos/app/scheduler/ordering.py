@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import math
+import time
+from collections.abc import Callable
 from typing import List, Protocol, Set
 
 from unilabos.app.scheduler.models import ReadyTask
@@ -27,17 +30,60 @@ class TaskOrderer(Protocol):
 
 
 class StableLocalOrderer:
-    """稳定排序 stub：权重降序 → 提交时间升序 → workflow_id/node id 字典序。"""
+    """带优先级老化的稳定本地排序器。"""
+
+    def __init__(
+        self,
+        *,
+        aging_interval_seconds: float = 30.0,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        """配置等待任务的优先级老化周期。
+
+        参数：``aging_interval_seconds`` 每经过一个周期把有效优先级增加 1；
+        ``clock`` 提供可测试的当前秒数。返回无。异常：周期不是正有限数时抛
+        ``ValueError``。排序只影响尚未越过派发门禁的候选，不抢占物理动作。
+        """
+
+        interval = float(aging_interval_seconds)
+        if not math.isfinite(interval) or interval <= 0:
+            raise ValueError("调度优先级老化周期必须是正有限秒数")
+        self._aging_interval_seconds = interval
+        self._clock = clock
 
     def order(self, ready: List[ReadyTask], ctx: OrderingContext) -> List[ReadyTask]:
+        """按有效优先级、提交时间和稳定身份排列本轮候选。
+
+        参数：``ready`` 是依赖已满足的节点候选；``ctx`` 保留本轮资源视图。返回：
+        新的有序列表，不修改输入。异常：时钟返回非有限值时抛 ``ValueError``，
+        防止不确定排序越过门禁。有效优先级等于基础权重加完整等待周期数。
+        """
+
+        del ctx
+        now = float(self._clock())
+        if not math.isfinite(now):
+            raise ValueError("调度排序时钟必须返回有限秒数")
+
+        def ordering_key(task: ReadyTask) -> tuple[float, float, str, str]:
+            """计算一个候选的稳定老化排序键。
+
+            参数：``task`` 是待排序候选。返回：有效优先级降序及稳定兜底字段。
+            异常：无；未来提交时间按零等待处理。
+            """
+
+            waited_seconds = max(0.0, now - float(task.submitted_at))
+            aging_bonus = math.floor(waited_seconds / self._aging_interval_seconds)
+            effective_priority = float(task.priority_weight) + aging_bonus
+            return (
+                -effective_priority,
+                task.submitted_at,
+                task.workflow_id,
+                task.node.id,
+            )
+
         return sorted(
             ready,
-            key=lambda t: (
-                -t.priority_weight,
-                t.submitted_at,
-                t.workflow_id,
-                t.node.id,
-            ),
+            key=ordering_key,
         )
 
 

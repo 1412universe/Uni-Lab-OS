@@ -37,6 +37,9 @@ class StoredJob:
     job_access_token: str
     status: str
     feedback_sequence: int
+    claim_uuid: str = ""
+    attempt: int = 1
+    fences: tuple[tuple[str, int], ...] = ()
     traceparent: str = ""
     tracestate: str = ""
 
@@ -53,7 +56,7 @@ class StoredOutcome:
 class EdgeControlStore:
     """线程安全的 SQLite Command/Outbox 存储。"""
 
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path: str) -> None:
         """打开并迁移边缘控制投递存储（Edge Control Delivery Store）。
@@ -123,6 +126,9 @@ class EdgeControlStore:
                     task_uuid TEXT NOT NULL,
                     node_uuid TEXT NOT NULL,
                     command_uuid TEXT NOT NULL,
+                    claim_uuid TEXT NOT NULL,
+                    attempt INTEGER NOT NULL CHECK (attempt > 0),
+                    fences_json TEXT NOT NULL,
                     job_access_token TEXT NOT NULL,
                     status TEXT NOT NULL,
                     feedback_sequence INTEGER NOT NULL DEFAULT 0,
@@ -142,6 +148,13 @@ class EdgeControlStore:
                     ON edge_job_runtime(status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_edge_outcome_updated
                     ON edge_job_outcome_pending(updated_at);
+                CREATE TABLE IF NOT EXISTS edge_resource_fence (
+                    lock_key TEXT PRIMARY KEY,
+                    last_fencing_token INTEGER NOT NULL,
+                    claim_uuid TEXT NOT NULL,
+                    job_uuid TEXT NOT NULL,
+                    updated_at REAL NOT NULL
+                );
                 """
             )
             if schema_version == 0:
@@ -163,6 +176,16 @@ class EdgeControlStore:
                     "edge_job_outcome_pending",
                     "unknown_command_ids_json",
                     "TEXT NOT NULL DEFAULT '[]'",
+                )
+            if schema_version < 2:
+                self._migrate_legacy_column(
+                    "edge_job_runtime", "claim_uuid", "TEXT NOT NULL DEFAULT ''"
+                )
+                self._migrate_legacy_column(
+                    "edge_job_runtime", "attempt", "INTEGER NOT NULL DEFAULT 1"
+                )
+                self._migrate_legacy_column(
+                    "edge_job_runtime", "fences_json", "TEXT NOT NULL DEFAULT '[]'"
                 )
             # Pong only answers a ping from the current WebSocket session. Older
             # versions persisted it as a durable business event, which allowed a
@@ -280,6 +303,7 @@ class EdgeControlStore:
         self._connection.execute("DELETE FROM edge_job_runtime")
         self._connection.execute("DELETE FROM edge_event_outbox")
         self._connection.execute("DELETE FROM edge_command")
+        self._connection.execute("DELETE FROM edge_resource_fence")
         self._connection.execute(
             """
             INSERT INTO edge_control_meta(key, value)
@@ -380,7 +404,7 @@ class EdgeControlStore:
         ``command_uuid`` 是对账恢复（Reconciliation）命令身份，
         ``resolution_payload`` 是设备已审计落账后的物理证据摘要，
         ``trace_context`` 是可选 W3C 追踪上下文；
-        ``remaining_unknown_command_ids`` 是处置后驱动仍报告的结构化执行未知
+        ``remaining_unknown_command_ids`` 是处置后驱动仍报告的结构化物理不确定
         身份，``None`` 表示旧调用方无法证明集合。返回为空。任意序列化或
         SQLite 异常都会回滚，禁止只完成部分回执或凭展示文案推断结算。
         """
@@ -674,9 +698,27 @@ class EdgeControlStore:
         command_uuid: str,
         trace_context: Optional[Dict[str, str]] = None,
     ) -> bool:
-        required = ("job_uuid", "task_uuid", "node_uuid", "job_access_token")
+        """原子保存 Job 镜像并拒绝任何过期资源 Fence。
+
+        参数：``payload`` 必须含 Task/Job/Node、Claim、attempt、fences 和访问令牌；
+        ``command_uuid`` 是 WebSocket 命令身份；``trace_context`` 是可选追踪上下文。
+        返回首次插入时为真，完全相同重放为假。异常：身份变化、Fence 回退或非法
+        载荷抛 ``ValueError``，不会留下部分资源栅栏或作业镜像。
+        """
+
+        required = (
+            "job_uuid",
+            "task_uuid",
+            "node_uuid",
+            "claim_uuid",
+            "job_access_token",
+        )
         if any(not str(payload.get(field) or "").strip() for field in required):
-            raise ValueError("job.start identity and token are required")
+            raise ValueError("job.start identity, Claim and token are required")
+        attempt = payload.get("attempt")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ValueError("job.start attempt must be a positive integer")
+        fences = _normalize_fences(payload.get("fences"))
         trace_context = trace_context or {}
         traceparent = str(trace_context.get("traceparent") or "")
         tracestate = str(trace_context.get("tracestate") or "")
@@ -685,12 +727,15 @@ class EdgeControlStore:
             str(uuid.UUID(str(payload["task_uuid"]))),
             str(uuid.UUID(str(payload["node_uuid"]))),
             str(uuid.UUID(command_uuid)),
+            str(uuid.UUID(str(payload["claim_uuid"]))),
+            attempt,
+            json.dumps(fences, separators=(",", ":")),
             str(payload["job_access_token"]),
             traceparent,
             tracestate,
             time.time(),
         )
-        with self._lock:
+        with self._lock, self._immediate_transaction():
             if not traceparent and not tracestate:
                 command = self._connection.execute(
                     """
@@ -703,12 +748,71 @@ class EdgeControlStore:
                     traceparent = str(command["traceparent"])
                     tracestate = str(command["tracestate"])
                     values = values[:-3] + (traceparent, tracestate, values[-1])
+            existing = self._connection.execute(
+                "SELECT * FROM edge_job_runtime WHERE job_uuid = ?",
+                (values[0],),
+            ).fetchone()
+            if existing is not None:
+                actual = (
+                    existing["task_uuid"],
+                    existing["node_uuid"],
+                    existing["command_uuid"],
+                    existing["claim_uuid"],
+                    int(existing["attempt"]),
+                    existing["fences_json"],
+                    existing["job_access_token"],
+                )
+                expected = (
+                    values[1],
+                    values[2],
+                    values[3],
+                    values[4],
+                    values[5],
+                    values[6],
+                    values[7],
+                )
+                if actual != expected:
+                    raise ValueError("duplicate job.start identity or Claim changed")
+                return False
+            for fence in fences:
+                current = self._connection.execute(
+                    "SELECT * FROM edge_resource_fence WHERE lock_key = ?",
+                    (fence["lock_key"],),
+                ).fetchone()
+                token = int(fence["fencing_token"])
+                if current is not None and token <= int(
+                    current["last_fencing_token"]
+                ):
+                    raise ValueError(
+                        "stale resource Fence: "
+                        f"{fence['lock_key']}/{token}"
+                    )
+                self._connection.execute(
+                    """
+                    INSERT INTO edge_resource_fence(
+                        lock_key, last_fencing_token, claim_uuid, job_uuid, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(lock_key) DO UPDATE SET
+                        last_fencing_token = excluded.last_fencing_token,
+                        claim_uuid = excluded.claim_uuid,
+                        job_uuid = excluded.job_uuid,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        fence["lock_key"],
+                        token,
+                        values[4],
+                        values[0],
+                        time.time(),
+                    ),
+                )
             cursor = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO edge_job_runtime(
                     job_uuid, task_uuid, node_uuid, command_uuid,
-                    job_access_token, status, traceparent, tracestate, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'received', ?, ?, ?)
+                    claim_uuid, attempt, fences_json, job_access_token,
+                    status, traceparent, tracestate, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?)
                 """,
                 values,
             )
@@ -724,14 +828,20 @@ class EdgeControlStore:
                     """,
                     (traceparent, tracestate, values[0]),
                 )
-            self._connection.commit()
             return cursor.rowcount == 1
 
     def get_job(self, job_uuid: str) -> Optional[StoredJob]:
+        """读取一个动作执行镜像作业。
+
+        参数：``job_uuid`` 是工站节点作业身份。返回对应 ``StoredJob``，不存在时
+        返回 ``None``；SQLite 查询异常原样传播，不修改任何协议事实。
+        """
+
         with self._lock:
             row = self._connection.execute(
                 """
                 SELECT job_uuid, task_uuid, node_uuid, command_uuid,
+                       claim_uuid, attempt, fences_json,
                        job_access_token, status, feedback_sequence,
                        traceparent, tracestate
                 FROM edge_job_runtime WHERE job_uuid = ?
@@ -741,6 +851,12 @@ class EdgeControlStore:
         return _stored_job(row) if row is not None else None
 
     def list_jobs(self, statuses: Iterable[str]) -> List[StoredJob]:
+        """按动作镜像状态读取作业。
+
+        参数：``statuses`` 是允许状态集合。返回按更新时间排序的作业；空集合返回
+        空列表。异常：SQLite 查询错误原样传播，不推断工作流业务状态。
+        """
+
         status_list = list(statuses)
         if not status_list:
             return []
@@ -749,6 +865,7 @@ class EdgeControlStore:
             rows = self._connection.execute(
                 f"""
                 SELECT job_uuid, task_uuid, node_uuid, command_uuid,
+                       claim_uuid, attempt, fences_json,
                        job_access_token, status, feedback_sequence,
                        traceparent, tracestate
                 FROM edge_job_runtime WHERE status IN ({placeholders})
@@ -887,7 +1004,7 @@ class EdgeControlStore:
         ``job_uuid`` 定位已被 Backend 持久化的结果，``event_payload`` 是严格
         ``job.outcome_committed`` 线协议（wire）载荷，
         ``trace_context`` 是可选追踪上下文。
-        返回新事件 UUID；待办不存在时返回空字符串。携带执行未知命令的作业
+        返回新事件 UUID；待办不存在时返回空字符串。携带物理不确定命令的作业
         保留独立本地状态，直到对账恢复（Reconciliation）完成物理结算。
         UNKNOWN JSON 不是列表时抛出 ``ValueError``；序列化或 SQLite
         异常原样抛出且整个状态转换回滚。
@@ -1015,17 +1132,51 @@ class EdgeControlStore:
 
 
 def _stored_job(row: sqlite3.Row) -> StoredJob:
+    """把 Edge 作业镜像行恢复为含 Claim/Fence 的不可变对象。"""
+
     return StoredJob(
         job_uuid=str(row["job_uuid"]),
         task_uuid=str(row["task_uuid"]),
         node_uuid=str(row["node_uuid"]),
         command_uuid=str(row["command_uuid"]),
+        claim_uuid=str(row["claim_uuid"]),
+        attempt=int(row["attempt"]),
+        fences=tuple(
+            (str(item["lock_key"]), int(item["fencing_token"]))
+            for item in json.loads(str(row["fences_json"]))
+        ),
         job_access_token=str(row["job_access_token"]),
         status=str(row["status"]),
         feedback_sequence=int(row["feedback_sequence"]),
         traceparent=str(row["traceparent"]),
         tracestate=str(row["tracestate"]),
     )
+
+
+def _normalize_fences(value: Any) -> list[dict[str, Any]]:
+    """规范 Edge ``job.start`` 的资源栅栏列表并拒绝重复锁键。"""
+
+    if not isinstance(value, list):
+        raise ValueError("job.start fences must be a list")
+    normalized: dict[str, int] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("job.start fence must be an object")
+        lock_key = str(item.get("lock_key") or "").strip()
+        token = item.get("fencing_token")
+        if (
+            not lock_key
+            or isinstance(token, bool)
+            or not isinstance(token, int)
+            or token < 1
+            or lock_key in normalized
+        ):
+            raise ValueError("job.start fence identity or token is invalid")
+        normalized[lock_key] = token
+    return [
+        {"lock_key": lock_key, "fencing_token": normalized[lock_key]}
+        for lock_key in sorted(normalized)
+    ]
 
 
 def _stored_outcome(row: sqlite3.Row) -> StoredOutcome:

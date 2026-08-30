@@ -40,10 +40,14 @@ import threading
 import time
 import uuid as uuid_mod
 from collections import deque
-from collections.abc import Mapping
-from typing import Any, Callable, Deque, Dict, List, Optional, Set
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from unilabos.app.scheduler.dag_state import WorkflowRun
+from unilabos.app.scheduler.device_target import (
+    DeviceTargetUnavailable,
+    ResolvedDeviceTarget,
+)
 from unilabos.app.scheduler.dispatch import (
     CancelDispatchState,
     CommittedJobOutcome,
@@ -53,6 +57,9 @@ from unilabos.app.scheduler.dispatch import (
 )
 from unilabos.app.scheduler.estimation import DurationEstimator
 from unilabos.app.scheduler.inventory.domain import InsufficientStock
+from unilabos.app.scheduler.inventory.station_resource import (
+    StationResourceInventory,
+)
 from unilabos.app.scheduler.models import (
     DispatchedJob,
     ReadyTask,
@@ -77,6 +84,10 @@ from unilabos.app.scheduler.site_target import (
     SiteTargetResolutionError,
     resolve_site_target,
 )
+from unilabos.app.scheduler.transfer_resource_set import (
+    TransferResourceSetError,
+    resolve_transfer_resource_set,
+)
 from unilabos.registry.material_lock_schema import (
     MaterialLockSchemaError,
     compile_material_lock_schema,
@@ -86,6 +97,10 @@ from unilabos.utils.tracing import (
     add_event,
     span,
     start_detached_span,
+)
+from unilabos.workflow.execution_resource_policy import (
+    ExecutionResourcePolicyError,
+    resolve_execution_resource_policy,
 )
 
 logger = logging.getLogger(__name__)
@@ -154,16 +169,16 @@ def _device_key_from_strict_action_key(action_key: Any) -> str | None:
 class EdgeScheduler:
     def __init__(
         self,
-        orderer: Optional[TaskOrderer] = None,
-        dispatcher: Optional[Dispatcher] = None,
-        external_busy_keys: Optional[Set[str]] = None,
-        busy_key_provider: Optional["Callable[[], Set[str]]"] = None,
-        workflow_state_listener: Optional["Callable[[str, str], None]"] = None,
+        orderer: TaskOrderer | None = None,
+        dispatcher: Dispatcher | None = None,
+        external_busy_keys: set[str] | None = None,
+        busy_key_provider: Callable[[], set[str]] | None = None,
+        workflow_state_listener: Callable[[str, str], None] | None = None,
         inventory: Any = None,
-        material_lock_resolver: Optional[
-            "Callable[[str, str, Dict[str, Any]], tuple[str, ...]]"
-        ] = None,
-        estimator: Optional[DurationEstimator] = None,
+        station_resources: StationResourceInventory | None = None,
+        material_lock_resolver: Callable[[str, str, dict[str, Any]], tuple[str, ...]] | None = None,
+        device_target_resolver: Callable[[Mapping[str, Any], str, set[str]], ResolvedDeviceTarget] | None = None,
+        estimator: DurationEstimator | None = None,
         timeline_capacity: int = 400,
         monitor: Any = None,
         history: Any = None,
@@ -180,8 +195,11 @@ class EdgeScheduler:
             busy_key_provider: 实时读取设备占用键的函数。
             workflow_state_listener: 工作流（Workflow）终态通知函数。
             inventory: 本地库存（Inventory）预留、消费和释放服务。
+            station_resources: 设备、库位（Site）与转运事实的窄库存接口；生产
+                组合根显式注入，隔离测试可从 ``InventoryService`` 读取同一接口。
             material_lock_resolver: 遗留直接调用根据实时注册表
                 （Registry）Schema 与最终参数解析物料 UUID 的兼容函数。
+            device_target_resolver: 按冻结设备类型从当前 Edge 注册选择实例的函数。
             estimator: 动作预计时长计算器。
             timeline_capacity: 内存时间线最多保留的作业数量。
             monitor: 实时监控事件输出适配器。
@@ -207,11 +225,11 @@ class EdgeScheduler:
         self._dispatcher = dispatcher or RecordingDispatcher()
         self._lock = threading.RLock()
 
-        self._workflows: Dict[str, WorkflowRun] = {}
+        self._workflows: dict[str, WorkflowRun] = {}
         # workflow_id -> 本次单步命令唯一允许派发的节点。只在一次重排期间存在。
-        self._step_targets: Dict[str, str] = {}
+        self._step_targets: dict[str, str] = {}
         # job_id -> DispatchedJob（完成回调路由 + 资源锁）
-        self._inflight: Dict[str, DispatchedJob] = {}
+        self._inflight: dict[str, DispatchedJob] = {}
         # 外部注入的锁（例如 DeviceActionManager 已占用的设备），可选
         self._external_busy_keys = (
             external_busy_keys if external_busy_keys is not None else set()
@@ -220,21 +238,28 @@ class EdgeScheduler:
         self._busy_key_provider = busy_key_provider
         # 工作流终态通知（success/failed/canceled 各通知一次；锁外触发）
         self._workflow_state_listener = workflow_state_listener
-        self._notified_workflows: Set[str] = set()
+        self._notified_workflows: set[str] = set()
         self._reschedule_count = 0
         # 可选 InventoryService（duck-typed：reserve_workflow / consume_reservation /
         # quarantine_reservation / release_workflow）；None = 物料衔接整体关闭
         self._inventory = inventory
+        # 工站资源读取只依赖公开窄接口，调度器不得再穿透 InventoryService.store。
+        self._station_resources = station_resources
+        if self._station_resources is None and inventory is not None:
+            candidate_station_resources = getattr(inventory, "station_resources", None)
+            if candidate_station_resources is not None:
+                self._station_resources = candidate_station_resources
         # 有物料需求的 workflow（其余 workflow 不产生任何 inventory 调用）
-        self._material_workflows: Set[str] = set()
+        self._material_workflows: set[str] = set()
         # 动作物料锁解析器消费规范动作 Schema；None 仅用于无注册表的隔离测试。
         self._material_lock_resolver = material_lock_resolver
+        self._device_target_resolver = device_target_resolver
         # job_id -> 该作业（Job）持有的物料与库位锁键；完成或取消时释放。
-        self._job_resource_locks: Dict[str, Set[str]] = {}
+        self._job_resource_locks: dict[str, set[str]] = {}
         # 时长预估器（declared / historical / auto 三种 mode，内含两种计算模式）
         self._estimator = estimator or DurationEstimator()
         # 泳道图时间线：已完结 job 的起止记录（环形缓冲）
-        self._timeline: Deque[Dict[str, Any]] = deque(maxlen=timeline_capacity)
+        self._timeline: deque[dict[str, Any]] = deque(maxlen=timeline_capacity)
         # 实时监控总线（duck-typed emit(channel, type, data)）；None = 关闭
         self._monitor = monitor
         # 工作流执行历史（WorkflowHistoryStore，独立 SQLite）；None = 不落盘
@@ -247,37 +272,40 @@ class EdgeScheduler:
         # 排空（DRAIN）只停止新的设备作业派发；已经派发的作业仍可回传结果并
         # 完成结算。状态只属于调度器权威，Workspace Host 通过 HTTP 查询。
         self._draining = False
-        # 标准 Task/Job 持久层可能保留重启后不允许重放的执行未知作业；提供者
+        # 标准 Task/Job 持久层可能保留重启后不允许重放的物理不确定作业；提供者
         # 只返回身份，排空状态在读取时合并，不复制或改写持久权威。
         self._drain_blocker_provider: Callable[[], set[str]] | None = None
         # 长生命周期根 span：workflow → action/job。只保存上下文/句柄，不保存 payload。
-        self._workflow_spans: Dict[str, DetachedSpan] = {}
-        self._job_spans: Dict[str, DetachedSpan] = {}
+        self._workflow_spans: dict[str, DetachedSpan] = {}
+        self._job_spans: dict[str, DetachedSpan] = {}
         # 生命周期监听器仅承载标准 Task/Job 兼容回写，不成为第二个状态权威。
-        self._job_pre_dispatch_listeners: List[
-            Callable[[Dict[str, Any]], bool | None]
+        self._job_pre_dispatch_listeners: list[
+            Callable[[dict[str, Any]], bool | None]
         ] = []
-        self._job_execution_wait_listeners: List[Callable[[Dict[str, Any]], None]] = []
-        self._job_dispatch_accepted_listeners: List[Callable[[str], None]] = []
-        self._job_dispatch_uncertain_listeners: List[
+        self._job_execution_wait_listeners: list[Callable[[dict[str, Any]], None]] = []
+        self._job_dispatch_accepted_listeners: list[Callable[[str], None]] = []
+        self._job_dispatch_uncertain_listeners: list[
             Callable[[str, str], None]
         ] = []
-        self._job_cancel_accepted_listeners: List[Callable[[str], None]] = []
-        self._job_cancel_uncertain_listeners: List[
+        self._job_cancel_accepted_listeners: list[Callable[[str], None]] = []
+        self._job_cancel_uncertain_listeners: list[
             Callable[[str, str], None]
         ] = []
-        self._job_cancel_no_send_listeners: List[Callable[[str], None]] = []
-        self._job_feedback_listeners: List[
-            Callable[[str, Dict[str, Any]], None]
+        self._job_cancel_no_send_listeners: list[Callable[[str], None]] = []
+        self._job_feedback_listeners: list[
+            Callable[[str, dict[str, Any]], None]
         ] = []
-        self._job_finished_listeners: List[Callable[[str, bool, Any, str], None]] = []
-        self._job_outcome_listeners: List[
+        self._job_finished_listeners: list[Callable[[str, bool, Any, str], None]] = []
+        self._job_outcome_listeners: list[
             Callable[[str, CommittedJobOutcome], None]
         ] = []
-        self._job_settled_listeners: List[Callable[[str, bool, Any, str], None]] = []
+        self._job_settled_listeners: list[Callable[[str, bool, Any, str], None]] = []
+        self._execution_process_restarted_listeners: list[
+            Callable[[tuple[str, ...]], None]
+        ] = []
         # 准入重试监听器把尚未注册为旧调度运行的来源受阻任务接到同一个公开
         # 重排触发点；监听器本身仍由工作流任务桥拥有。
-        self._admission_retry_listeners: List[Callable[[], None]] = []
+        self._admission_retry_listeners: list[Callable[[], None]] = []
 
     @property
     def inventory_service(self) -> Any:
@@ -288,6 +316,16 @@ class EdgeScheduler:
         """
 
         return self._inventory
+
+    @property
+    def station_resource_inventory(self) -> StationResourceInventory | None:
+        """返回调度器使用的工站资源库存窄接口。
+
+        参数：无。返回：设备、库位（Site）与转运事实的唯一读取/结算接口；未
+        装配库存时为 ``None``。异常：不访问外部状态，不主动抛出异常。
+        """
+
+        return self._station_resources
 
     @property
     def max_in_flight_jobs(self) -> int:
@@ -308,7 +346,7 @@ class EdgeScheduler:
         return self._max_tasks_per_workflow
 
     def _emit_monitor(
-        self, channel: str, event_type: str, data: Dict[str, Any]
+        self, channel: str, event_type: str, data: dict[str, Any]
     ) -> None:
         if self._monitor is None:
             return
@@ -323,11 +361,11 @@ class EdgeScheduler:
             return
         try:
             getattr(self._history, method)(*args, **kwargs)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("[EdgeScheduler] history.%s failed", method)
 
     def set_workflow_state_listener(
-        self, listener: "Callable[[str, str], None]"
+        self, listener: Callable[[str, str], None]
     ) -> None:
         """替换工作流终态监听器；参数 ``listener`` 接收工作流身份和旧状态值。"""
 
@@ -356,7 +394,7 @@ class EdgeScheduler:
 
     def add_job_pre_dispatch_listener(
         self,
-        listener: Callable[[Dict[str, Any]], bool | None],
+        listener: Callable[[dict[str, Any]], bool | None],
     ) -> None:
         """注册作业派发前监听器。
 
@@ -369,7 +407,7 @@ class EdgeScheduler:
 
     def remove_job_pre_dispatch_listener(
         self,
-        listener: Callable[[Dict[str, Any]], bool | None],
+        listener: Callable[[dict[str, Any]], bool | None],
     ) -> None:
         """移除派发前监听器；参数 ``listener`` 必须是此前注册的同一回调。"""
 
@@ -381,7 +419,7 @@ class EdgeScheduler:
 
     def add_job_execution_wait_listener(
         self,
-        listener: Callable[[Dict[str, Any]], None],
+        listener: Callable[[dict[str, Any]], None],
     ) -> None:
         """注册执行资源忙等待监听器，使内存阻塞也留下持久等待事实。"""
 
@@ -389,7 +427,7 @@ class EdgeScheduler:
 
     def remove_job_execution_wait_listener(
         self,
-        listener: Callable[[Dict[str, Any]], None],
+        listener: Callable[[dict[str, Any]], None],
     ) -> None:
         """幂等移除执行资源忙等待监听器。"""
 
@@ -423,7 +461,7 @@ class EdgeScheduler:
         self,
         listener: Callable[[str, str], None],
     ) -> None:
-        """注册派发边界异常后的执行未知监听器。"""
+        """注册派发边界异常后的物理不确定监听器。"""
 
         self._job_dispatch_uncertain_listeners.append(listener)
 
@@ -431,7 +469,7 @@ class EdgeScheduler:
         self,
         listener: Callable[[str, str], None],
     ) -> None:
-        """幂等移除执行未知监听器。"""
+        """幂等移除物理不确定监听器。"""
 
         self._job_dispatch_uncertain_listeners = [
             current
@@ -463,7 +501,7 @@ class EdgeScheduler:
         self,
         listener: Callable[[str, str], None],
     ) -> None:
-        """注册取消不能确认时的执行未知监听器。"""
+        """注册取消不能确认时的物理不确定监听器。"""
 
         self._job_cancel_uncertain_listeners.append(listener)
 
@@ -471,7 +509,7 @@ class EdgeScheduler:
         self,
         listener: Callable[[str, str], None],
     ) -> None:
-        """幂等移除取消执行未知监听器。"""
+        """幂等移除取消物理不确定监听器。"""
 
         self._job_cancel_uncertain_listeners = [
             current
@@ -525,7 +563,7 @@ class EdgeScheduler:
 
     def add_job_feedback_listener(
         self,
-        listener: Callable[[str, Dict[str, Any]], None],
+        listener: Callable[[str, dict[str, Any]], None],
     ) -> None:
         """注册 Edge 已持久反馈的标准工作流投影监听器。"""
 
@@ -533,7 +571,7 @@ class EdgeScheduler:
 
     def remove_job_feedback_listener(
         self,
-        listener: Callable[[str, Dict[str, Any]], None],
+        listener: Callable[[str, dict[str, Any]], None],
     ) -> None:
         """幂等移除作业反馈监听器。"""
 
@@ -565,13 +603,60 @@ class EdgeScheduler:
             current for current in self._job_outcome_listeners if current != listener
         ]
 
+    def add_execution_process_restarted_listener(
+        self,
+        listener: Callable[[tuple[str, ...]], None],
+    ) -> None:
+        """注册动作执行进程重启后的工作流投影监听器。"""
+
+        self._execution_process_restarted_listeners.append(listener)
+
+    def remove_execution_process_restarted_listener(
+        self,
+        listener: Callable[[tuple[str, ...]], None],
+    ) -> None:
+        """幂等移除动作执行进程重启监听器。"""
+
+        self._execution_process_restarted_listeners = [
+            current
+            for current in self._execution_process_restarted_listeners
+            if current != listener
+        ]
+
+    def on_execution_process_restarted(
+        self,
+        job_uuids: tuple[str, ...],
+    ) -> None:
+        """冻结受动作进程重启影响的本地 DAG，并保留现场占用。
+
+        参数：``job_uuids`` 是动作账本判定已越过派发边界、但无法确认终态的
+        作业。返回无。异常：持久投影监听器异常原样传播。处理不会移除在途作业
+        或资源锁；每个受影响工作流先进入失败态，确保任何后继节点不再派发。
+        """
+
+        affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
+        if not affected:
+            return
+        with self._lock:
+            for job_uuid in affected:
+                job = self._inflight.get(job_uuid)
+                if job is None:
+                    continue
+                run = self._workflows.get(job.workflow_id)
+                if run is not None:
+                    run.mark_failed(job.node_id)
+            for listener in tuple(
+                self._execution_process_restarted_listeners
+            ):
+                listener(affected)
+
     def replay_persisted_edge_projections(
         self,
         *,
-        feedback_listener: Callable[[str, Dict[str, Any]], None],
+        feedback_listener: Callable[[str, dict[str, Any]], None],
         outcome_listener: Callable[[str, CommittedJobOutcome], None] | None = None,
         finished_listener: Callable[[str, bool, Any, str], None] | None = None,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """把 Edge 本地已提交证据直接重放给持久工作流投影。
 
         进程重启后内存 DAG 尚未恢复，因此不绕经
@@ -612,19 +697,20 @@ class EdgeScheduler:
             current for current in self._job_settled_listeners if current != listener
         ]
 
-    def _notify_job_pre_dispatch(self, dispatching: Dict[str, Any]) -> bool:
+    def _notify_job_pre_dispatch(self, dispatching: dict[str, Any]) -> bool:
         """同步通知派发意图；参数 ``dispatching`` 是即将越过执行边界的摘要。
 
         返回：全部监听器允许派发时为真；任一标准持久准入返回 ``False`` 时为假。
-        任何监听器异常都会阻止执行适配器调用。
+        监听器可在同一 ``dispatching`` 对象补入已持久化的 Command、Claim 和
+        Fence；任何监听器异常都会阻止执行适配器调用。
         """
 
         for listener in tuple(self._job_pre_dispatch_listeners):
-            if listener(dict(dispatching)) is False:
+            if listener(dispatching) is False:
                 return False
         return True
 
-    def _notify_job_execution_wait(self, waiting: Dict[str, Any]) -> None:
+    def _notify_job_execution_wait(self, waiting: dict[str, Any]) -> None:
         """在内存设备锁或动作物料锁先命中时同步持久化等待顺序。"""
 
         for listener in tuple(self._job_execution_wait_listeners):
@@ -637,7 +723,7 @@ class EdgeScheduler:
             listener(job_id)
 
     def _notify_job_dispatch_uncertain(self, job_id: str, reason: str) -> None:
-        """在派发意图已提交但适配器未明确返回时保守记录执行未知。"""
+        """在派发意图已提交但适配器未明确返回时记录物理不确定事实。"""
 
         for listener in tuple(self._job_dispatch_uncertain_listeners):
             listener(job_id, reason)
@@ -649,7 +735,7 @@ class EdgeScheduler:
             listener(job_id)
 
     def _notify_job_cancel_uncertain(self, job_id: str, reason: str) -> None:
-        """把取消拒绝、能力缺失或边界异常保守通知为执行未知。"""
+        """把取消拒绝、能力缺失或边界异常通知为物理不确定事实。"""
 
         for listener in tuple(self._job_cancel_uncertain_listeners):
             listener(job_id, reason)
@@ -691,7 +777,7 @@ class EdgeScheduler:
         for listener in tuple(self._job_outcome_listeners):
             listener(job_id, outcome)
 
-    def on_job_feedback(self, job_id: str, sample: Dict[str, Any]) -> None:
+    def on_job_feedback(self, job_id: str, sample: dict[str, Any]) -> None:
         """把 Edge 已提交反馈同步投递给工作流持久投影。"""
 
         for listener in tuple(self._job_feedback_listeners):
@@ -711,7 +797,7 @@ class EdgeScheduler:
 
     # ── 触发点 1：任务进来 ────────────────────────────────────
 
-    def submit_workflow(self, spec: WorkflowSpec) -> Dict[str, Any]:
+    def submit_workflow(self, spec: WorkflowSpec) -> dict[str, Any]:
         with self._lock:
             if (
                 spec.workflow_id in self._workflows
@@ -731,22 +817,21 @@ class EdgeScheduler:
             # 先登记 span 也充当 submit 占位，避免并发同 ID 覆盖对方的追踪句柄。
             self._workflow_spans[spec.workflow_id] = workflow_trace
         try:
-            with workflow_trace.activate():
-                with span(
-                    "workflow.task.submit",
-                    attributes={
-                        "workflow.uuid": spec.workflow_id,
-                        "workflow.task.uuid": spec.task_id,
-                    },
-                ):
-                    return self._submit_workflow(spec)
+            with workflow_trace.activate(), span(
+                "workflow.task.submit",
+                attributes={
+                    "workflow.uuid": spec.workflow_id,
+                    "workflow.task.uuid": spec.task_id,
+                },
+            ):
+                return self._submit_workflow(spec)
         except BaseException as exc:
             workflow_trace.fail(exc)
             workflow_trace.end()
             self._workflow_spans.pop(spec.workflow_id, None)
             raise
 
-    def _submit_workflow(self, spec: WorkflowSpec) -> Dict[str, Any]:
+    def _submit_workflow(self, spec: WorkflowSpec) -> dict[str, Any]:
         """提交工作流并立即重排。返回本次下发结果。
 
         带物料需求时：入队前整 DAG all-or-nothing 预留；不足则置
@@ -800,8 +885,8 @@ class EdgeScheduler:
     def step_workflow(
         self,
         workflow_id: str,
-        target_node_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        target_node_id: str | None = None,
+    ) -> dict[str, Any]:
         """让暂停的单步工作流只派发一个就绪节点，随后立即恢复暂停。
 
         参数：``workflow_id`` 是已提交运行身份；``target_node_id`` 可指定本次
@@ -848,7 +933,7 @@ class EdgeScheduler:
         self._fire_notifications(notifications)
         return result
 
-    def pause_workflow(self, workflow_id: str) -> Dict[str, Any]:
+    def pause_workflow(self, workflow_id: str) -> dict[str, Any]:
         """Pause future dispatch for a normal workflow without stopping in-flight work."""
 
         with self._lock:
@@ -869,7 +954,7 @@ class EdgeScheduler:
                 self._safe_history("record_state", workflow_id, "paused")
             return {"workflow_id": workflow_id, "state": run.state.value}
 
-    def resume_workflow(self, workflow_id: str) -> Dict[str, Any]:
+    def resume_workflow(self, workflow_id: str) -> dict[str, Any]:
         """Resume a command-paused normal workflow and run one scheduling round."""
 
         with self._lock:
@@ -894,8 +979,8 @@ class EdgeScheduler:
     def restore_workflow(
         self,
         spec: WorkflowSpec,
-        completed_results: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        completed_results: dict[str, Any],
+    ) -> dict[str, Any]:
         """从持久成功事实恢复一个未终态工作流（Workflow）。
 
         参数：``spec`` 是原任务冻结规格；``completed_results`` 按节点
@@ -991,7 +1076,7 @@ class EdgeScheduler:
         self,
         job_id: str,
         outcome: CommittedJobOutcome,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """按 Backend-shaped 结果结算本地作业（Job）。
 
         参数：``job_id`` 是稳定作业身份；``outcome`` 保留 Edge 已提交的成功、
@@ -1000,15 +1085,15 @@ class EdgeScheduler:
         """
 
         if outcome.unknown_command_ids:
-            # 结果不明不是失败终态。先把证据投影为 ExecutionUnknown，同时保留
-            # scheduler 的在途作业和动作资源占用，等待设备或人工完成物理对账。
+            # 结果不明不是失败终态。作业继续保持 running，同时保留 Scheduler
+            # 的在途身份和动作资源占用，等待设备或人工完成物理对账。
             with self._lock:
                 if job_id not in self._inflight:
                     logger.warning("[EdgeScheduler] unknown Job outcome: %s", job_id)
                     return {"dispatched": []}
                 self._notify_job_outcome(job_id, outcome)
                 return {
-                    "state": "execution_unknown",
+                    "state": "running",
                     "dispatched": [],
                 }
 
@@ -1031,7 +1116,7 @@ class EdgeScheduler:
         success: bool,
         ret_value: Any = None,
         suc_type: str = "normal",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """结算旧执行适配器的四参数完成回调。
 
         参数：作业身份、成功标记、返回值与旧异常分类。返回：工作流状态和后续派发
@@ -1049,7 +1134,7 @@ class EdgeScheduler:
         suc_type: str,
         *,
         committed_outcome: CommittedJobOutcome | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """在同一追踪边界内完成保真或旧式结果结算。
 
         参数：前四项是旧调度结果；``committed_outcome`` 存在时是优先投影的完整
@@ -1097,7 +1182,7 @@ class EdgeScheduler:
         suc_type: str = "normal",
         *,
         committed_outcome: CommittedJobOutcome | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """作业（Job）完成回调：写回结果、清理依赖并强制重排。
 
         ``suc_type`` 来自设备侧异常决策（registry.action_policy）：
@@ -1190,7 +1275,7 @@ class EdgeScheduler:
         *,
         approved: bool,
         param: Mapping[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """批准后以同一作业身份下发真实设备动作，拒绝则明确失败。"""
 
         if not approved:
@@ -1277,7 +1362,7 @@ class EdgeScheduler:
             )
         return dispatched_result
 
-    def expire_manual_confirmation(self, job_id: str) -> Dict[str, Any]:
+    def expire_manual_confirmation(self, job_id: str) -> dict[str, Any]:
         """按持久截止时间关闭仍在等待的人工确认，不触发物理动作。"""
 
         with self._lock:
@@ -1302,7 +1387,7 @@ class EdgeScheduler:
         job_id: str,
         *,
         reason: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """请求 Edge 证明未知设备命令已取消；这里只创建命令，不释放占用。"""
 
         store = getattr(self._dispatcher, "store", None)
@@ -1316,7 +1401,7 @@ class EdgeScheduler:
 
     # ── 重排核心 ─────────────────────────────────────────────
 
-    def reschedule(self) -> List[Dict[str, Any]]:
+    def reschedule(self) -> list[dict[str, Any]]:
         """手动触发重排并先通知来源准入重试监听器。
 
         参数：无。返回：本轮旧调度器实际派发摘要。异常：准入监听器或调度
@@ -1330,7 +1415,7 @@ class EdgeScheduler:
         with self._lock:
             return self._reschedule_locked()
 
-    def _reschedule_locked(self) -> List[Dict[str, Any]]:
+    def _reschedule_locked(self) -> list[dict[str, Any]]:
         with span(
             "workflow.task.reconcile",
             attributes={"scheduler.round": self._reschedule_count + 1},
@@ -1343,7 +1428,7 @@ class EdgeScheduler:
             )
             return dispatched
 
-    def _reschedule_impl(self) -> List[Dict[str, Any]]:
+    def _reschedule_impl(self) -> list[dict[str, Any]]:
         """执行一轮完整重排，并下发当前能够安全执行的作业（Job）。
 
         参数：无；读取当前调度器（Scheduler）的工作流、库存、动作物料锁和
@@ -1393,7 +1478,7 @@ class EdgeScheduler:
                     )
                     self._safe_history("record_state", run.spec.workflow_id, "running")
 
-        ready: List[ReadyTask] = []
+        ready: list[ReadyTask] = []
         for run in self._workflows.values():
             if run.state is not WorkflowState.RUNNING:
                 continue
@@ -1418,12 +1503,8 @@ class EdgeScheduler:
         held_resource_locks = self._held_resource_locks()
         ordered = self._orderer.order(ready, OrderingContext(set(busy)))
 
-        dispatched: List[Dict[str, Any]] = []
+        dispatched: list[dict[str, Any]] = []
         for task in ordered:
-            # 动作键继续服务时长估算、遥测与既有执行协议；设备键独立负责保证
-            # 同一设备上的不同动作不会在本轮或跨重排并行派发。
-            action_key = task.node.device_action_key
-            device_key = task.node.device_lock_key
             # 人工确认和动作合同声明的 always_free 均不占设备锁；后者仍需通过
             # 下方物料/库位执行资源键准入，不能借免排队语义绕过资源安全。
             manual_confirm = task.node.is_manual_confirm()
@@ -1431,6 +1512,34 @@ class EdgeScheduler:
             # ``job_id`` 优先复用标准工作流节点作业（WorkflowNodeJob）身份；旧整图
             # 没有提供时才维持历史随机身份行为。等待与派发必须使用同一身份。
             job_id = task.node.job_id or uuid_mod.uuid4().hex
+
+            try:
+                selected_device = self._resolve_device_target(task.node, busy)
+            except DeviceTargetUnavailable as error:
+                self._notify_job_execution_wait(
+                    {
+                        "job_id": job_id,
+                        "workflow_id": task.workflow_id,
+                        "node_id": task.node.id,
+                        "resolved_args": {},
+                        "execution_locks": [],
+                        "blocking_job_id": None,
+                        "blocking_workflow_id": None,
+                        "wait_code": error.code,
+                        "wait_message": error.message,
+                    }
+                )
+                continue
+            selected_device_id = selected_device.local_device_id
+            selected_device_material_uuid = selected_device.material_uuid
+            # 动作键继续服务执行会话；设备资源键使用库存 Material UUID，确保
+            # 不同动作、动态选择和长期托管引用同一个物理设备身份。
+            action_key = f"/devices/{selected_device_id}/{task.node.action_name}"
+            device_key = (
+                f"/devices/{selected_device_material_uuid}"
+                if selected_device_material_uuid
+                else f"/devices/{selected_device_id}"
+            )
 
             run = self._workflows[task.workflow_id]
             try:
@@ -1447,23 +1556,82 @@ class EdgeScheduler:
 
             # Schema 或库位解析失败必须关闭执行，不能退化为“没有资源锁”。
             try:
+                resource_policy = resolve_execution_resource_policy(
+                    task.node.execution_policy,
+                    resolved_args,
+                )
+                transfer_contract = self._transfer_resource_contract(task.node)
                 resolved_args, resolved_site = self._resolve_transfer_site_target(
                     task.node,
                     resolved_args,
+                    transfer_contract=transfer_contract,
+                    site_uuids=resource_policy.target_site_uuids,
+                    unavailable_site_uuids=_claimed_site_uuids(
+                        held_resource_locks
+                    ),
                 )
                 lock_keys = self._resource_lock_keys(
                     task.node,
                     resolved_args,
                     resolved_site=resolved_site,
                 )
-                access_region_locks = self._access_region_execution_locks(
-                    run,
-                    task.node,
+                lock_keys.update(resource_policy.device_lock_keys)
+                if not bypass_device_lock:
+                    lock_keys.add(device_key)
+                if transfer_contract is not None and resolved_site is not None:
+                    moved_material_uuid = _resource_argument_uuid(
+                        resolved_args.get(transfer_contract["material_param"]),
+                        argument_name=transfer_contract["material_param"],
+                    )
+                    transfer_resources = resolve_transfer_resource_set(
+                        self._required_station_resources(),
+                        resource_material_uuid=moved_material_uuid,
+                        target=resolved_site,
+                        executor_material_uuid=selected_device_material_uuid,
+                        gripper_site_role=transfer_contract[
+                            "gripper_site_role"
+                        ],
+                        require_device_owners=bool(
+                            transfer_contract["gripper_site_role"]
+                        ),
+                    )
+                    lock_keys.update(transfer_resources.lock_keys)
+            except SiteTargetResolutionError as error:
+                if error.code in {
+                    "site_claimed",
+                    "site_occupied",
+                    "site_group_unavailable",
+                }:
+                    selector_uuids = resource_policy.target_site_uuids
+                    self._notify_job_execution_wait(
+                        {
+                            "job_id": job_id,
+                            "workflow_id": task.workflow_id,
+                            "node_id": task.node.id,
+                            "resolved_args": resolved_args,
+                            "execution_locks": [],
+                            "blocking_job_id": None,
+                            "blocking_workflow_id": None,
+                            "wait_code": error.code,
+                            "wait_message": error.message,
+                            "candidate_site_uuids": list(selector_uuids),
+                        }
+                    )
+                    continue
+                logger.error(
+                    "[EdgeScheduler] 目标库位解析失败 wf=%s node=%s code=%s: %s",
+                    task.workflow_id,
+                    task.node.id,
+                    error.code,
+                    error.message,
                 )
+                run.mark_failed(task.node.id)
+                continue
             except (
                 ExecutionPolicyError,
+                ExecutionResourcePolicyError,
                 MaterialLockSchemaError,
-                SiteTargetResolutionError,
+                TransferResourceSetError,
             ) as error:
                 logger.error(
                     "[EdgeScheduler] 动作资源锁解析失败 "
@@ -1484,11 +1652,13 @@ class EdgeScheduler:
                 action_key in busy or device_key in busy
             )
             execution_locks: list[dict[str, Any]] = []
-            if not bypass_device_lock:
-                execution_locks.append({"lock_key": device_key, "scope": "device"})
             for lock_key in sorted(lock_keys):
                 parts = lock_key.split("/")
-                if len(parts) == 3:
+                if lock_key.startswith("/devices/"):
+                    execution_locks.append(
+                        {"lock_key": lock_key, "scope": "device"}
+                    )
+                elif len(parts) == 3:
                     execution_locks.append(
                         {
                             "lock_key": lock_key,
@@ -1505,7 +1675,6 @@ class EdgeScheduler:
                             "site_uuid": parts[3],
                         }
                     )
-            execution_locks.extend(access_region_locks)
             if device_conflict or conflicting_lock_keys:
                 blocking_job = next(
                     (
@@ -1517,7 +1686,7 @@ class EdgeScheduler:
                             device_conflict
                             and (
                                 candidate.device_action_key == action_key
-                                or candidate.device_id == task.node.device_id
+                                or candidate.device_id == selected_device_id
                             )
                         )
                         or conflicting_resource_lock_keys(
@@ -1534,6 +1703,7 @@ class EdgeScheduler:
                         "node_id": task.node.id,
                         "resolved_args": resolved_args,
                         "execution_locks": execution_locks,
+                        "device_tenancy": resource_policy.device_tenancy,
                         "blocking_job_id": (
                             blocking_job.job_id if blocking_job is not None else None
                         ),
@@ -1559,7 +1729,7 @@ class EdgeScheduler:
                 task_id=run.spec.task_id,
                 workflow_id=task.workflow_id,
                 node_id=task.node.id,
-                device_id=task.node.device_id,
+                device_id=selected_device_id,
                 action_name=task.node.action_name,
                 action_type=task.node.action_type,
                 action_args=resolved_args,
@@ -1580,7 +1750,7 @@ class EdgeScheduler:
                     "workflow.job.uuid": job_id,
                     "workflow.uuid": task.workflow_id,
                     "workflow.node.uuid": task.node.id,
-                    "device.name": task.node.device_id,
+                    "device.name": selected_device_id,
                     "action.name": task.node.action_name,
                     "action.type": task.node.action_type,
                     "action.manual_confirm": manual_confirm,
@@ -1589,59 +1759,83 @@ class EdgeScheduler:
             self._job_spans[job_id] = action_trace
             dispatch_intent_committed = False
             try:
-                with action_trace.activate():
-                    with span(
-                        "workflow.job.dispatch",
-                        attributes={
-                            "workflow.job.uuid": job_id,
-                            "workflow.uuid": task.workflow_id,
-                            "workflow.node.uuid": task.node.id,
-                            "device.name": task.node.device_id,
-                            "action.name": task.node.action_name,
+                with action_trace.activate(), span(
+                    "workflow.job.dispatch",
+                    attributes={
+                        "workflow.job.uuid": job_id,
+                        "workflow.uuid": task.workflow_id,
+                        "workflow.node.uuid": task.node.id,
+                        "device.name": selected_device_id,
+                        "action.name": task.node.action_name,
+                    },
+                ):
+                    # 标准任务/作业必须先提交派发意图，才能越过物理执行边界。
+                    dispatching = {
+                        "job_id": job_id,
+                        "workflow_id": task.workflow_id,
+                        "node_id": task.node.id,
+                        "device_action_key": action_key,
+                        "estimated_s": round(estimated_s, 3),
+                        "estimate_source": estimate_source,
+                        "resolved_args": resolved_args,
+                        "actual_executor": {
+                            "local_device_id": selected_device_id,
+                            "material_uuid": selected_device_material_uuid,
                         },
+                        "execution_locks": execution_locks,
+                        "device_tenancy": resource_policy.device_tenancy,
+                    }
+                    admitted = self._notify_job_pre_dispatch(dispatching)
+                    if not admitted:
+                        action_trace.event(
+                            "action.waiting_for_execution_lock",
+                            {"workflow.job.uuid": job_id},
+                        )
+                        action_trace.end()
+                        self._job_spans.pop(job_id, None)
+                        continue
+                    required_dispatch_fields = (
+                        "attempt",
+                        "command_uuid",
+                        "claim_uuid",
+                        "fences",
+                    )
+                    present_credentials = [
+                        field
+                        for field in required_dispatch_fields
+                        if field in dispatching
+                    ]
+                    if present_credentials and len(present_credentials) != len(
+                        required_dispatch_fields
                     ):
-                        # 标准任务/作业必须先提交派发意图，才能越过物理执行边界。
-                        admitted = self._notify_job_pre_dispatch(
-                            {
-                                "job_id": job_id,
-                                "workflow_id": task.workflow_id,
-                                "node_id": task.node.id,
-                                "device_action_key": action_key,
-                                "estimated_s": round(estimated_s, 3),
-                                "estimate_source": estimate_source,
-                                "resolved_args": resolved_args,
-                                "execution_locks": execution_locks,
-                            }
+                        raise ExecutionPolicyError(
+                            "持久派发凭据不完整："
+                            + ",".join(sorted(present_credentials))
                         )
-                        if not admitted:
-                            action_trace.event(
-                                "action.waiting_for_execution_lock",
-                                {"workflow.job.uuid": job_id},
-                            )
-                            action_trace.end()
-                            self._job_spans.pop(job_id, None)
-                            continue
-                        dispatch_intent_committed = True
-                        # 派发意图持久化后，先保守登记本地在途作业和动作物料锁，再
-                        # 调用不可原子确认的执行适配器。适配器异常不得回滚这些事实。
-                        run.mark_dispatched(task.node.id)
-                        self._inflight[job_id] = DispatchedJob(
-                            job_id=job_id,
-                            workflow_id=task.workflow_id,
-                            node_id=task.node.id,
-                            device_action_key=action_key,
-                            device_id=task.node.device_id,
-                            action_name=task.node.action_name,
-                            resolved_args=dict(resolved_args),
-                            estimated_s=estimated_s,
-                            estimate_source=estimate_source,
-                        )
-                        if lock_keys:
-                            self._job_resource_locks[job_id] = lock_keys
-                            held_resource_locks |= lock_keys
-                        if not manual_confirm:
-                            self._dispatcher.dispatch(payload)
-                        self._notify_job_dispatch_accepted(job_id)
+                    for field in required_dispatch_fields:
+                        if field in dispatching:
+                            payload[field] = dispatching[field]
+                    dispatch_intent_committed = True
+                    # 派发意图持久化后，先保守登记本地在途作业和动作物料锁，再
+                    # 调用不可原子确认的执行适配器。适配器异常不得回滚这些事实。
+                    run.mark_dispatched(task.node.id)
+                    self._inflight[job_id] = DispatchedJob(
+                        job_id=job_id,
+                        workflow_id=task.workflow_id,
+                        node_id=task.node.id,
+                        device_action_key=action_key,
+                        device_id=selected_device_id,
+                        action_name=task.node.action_name,
+                        resolved_args=dict(resolved_args),
+                        estimated_s=estimated_s,
+                        estimate_source=estimate_source,
+                    )
+                    if lock_keys:
+                        self._job_resource_locks[job_id] = lock_keys
+                        held_resource_locks |= lock_keys
+                    if not manual_confirm:
+                        self._dispatcher.dispatch(payload)
+                    self._notify_job_dispatch_accepted(job_id)
             except BaseException as exc:
                 action_trace.fail(exc)
                 action_trace.end()
@@ -1685,7 +1879,7 @@ class EdgeScheduler:
                     "job_id": job_id,
                     "workflow_id": task.workflow_id,
                     "node_id": task.node.id,
-                    "device_id": task.node.device_id,
+                    "device_id": selected_device_id,
                     "action_name": task.node.action_name,
                     "device_action_key": action_key,
                     "estimated_s": round(estimated_s, 3),
@@ -1698,7 +1892,7 @@ class EdgeScheduler:
                     "device",
                     "device_busy",
                     {
-                        "device_id": task.node.device_id,
+                        "device_id": selected_device_id,
                         "action_name": task.node.action_name,
                         "device_action_key": action_key,
                         "job_id": job_id,
@@ -1727,7 +1921,7 @@ class EdgeScheduler:
         WorkflowState.TIMEOUT,
     )
 
-    def _collect_terminal_notifications(self) -> List["tuple[str, str]"]:
+    def _collect_terminal_notifications(self) -> list[tuple[str, str]]:
         """收集已经物理结算的终态工作流。
 
         参数：无；调用方必须持有调度器锁。返回：尚未通知且已经没有在途作业的
@@ -1735,7 +1929,7 @@ class EdgeScheduler:
         释放，避免业务失败先于物理停止时让同一物料被再次使用。
         """
 
-        pending: List["tuple[str, str]"] = []
+        pending: list[tuple[str, str]] = []
         for wid, run in self._workflows.items():
             if (
                 run.state not in self._TERMINAL_STATES
@@ -1753,7 +1947,7 @@ class EdgeScheduler:
             self._safe_history("record_state", wid, run.state.value)
         return pending
 
-    def _fire_notifications(self, notifications: List["tuple[str, str]"]) -> None:
+    def _fire_notifications(self, notifications: list[tuple[str, str]]) -> None:
         for wid, state in notifications:
             workflow_trace = self._workflow_spans.get(wid)
             activation = (
@@ -1779,7 +1973,7 @@ class EdgeScheduler:
                 if self._workflow_state_listener is not None:
                     try:
                         self._workflow_state_listener(wid, state)
-                    except Exception:  # noqa: BLE001 - 通知失败不影响调度
+                    except Exception:
                         logger.exception(
                             "[EdgeScheduler] workflow state listener failed"
                         )
@@ -1793,13 +1987,45 @@ class EdgeScheduler:
             return
         try:
             getattr(self._inventory, method)(*args, **kwargs)
-        except Exception:  # noqa: BLE001 - 善后失败可由人工经 inventory API 补救
+        except Exception:
             logger.exception("[EdgeScheduler] inventory.%s failed", method)
 
     # ── 执行资源锁 ───────────────────────────────────────────
 
-    def _held_resource_locks(self) -> Set[str]:
-        held: Set[str] = set()
+    def _resolve_device_target(
+        self,
+        node: Any,
+        busy_keys: set[str],
+    ) -> ResolvedDeviceTarget:
+        """返回固定设备，或按冻结类型从当前注册选择首个可用实例。"""
+
+        device_id = str(getattr(node, "device_id", "") or "").strip()
+        if device_id:
+            return ResolvedDeviceTarget(
+                local_device_id=device_id,
+                material_uuid=str(
+                    getattr(node, "device_material_uuid", "") or ""
+                ).strip(),
+            )
+        selector = getattr(node, "device_selector", None)
+        if not isinstance(selector, Mapping) or not selector:
+            raise DeviceTargetUnavailable(
+                "invalid_device_selector",
+                "设备动作没有固定设备或动态设备选择器",
+            )
+        if self._device_target_resolver is None:
+            raise DeviceTargetUnavailable(
+                "device_authority_unavailable",
+                "调度器尚未装配动态设备注册解析器",
+            )
+        return self._device_target_resolver(
+            selector,
+            str(getattr(node, "action_name", "") or ""),
+            set(busy_keys) | self._held_resource_locks(),
+        )
+
+    def _held_resource_locks(self) -> set[str]:
+        held: set[str] = set()
         for keys in self._job_resource_locks.values():
             held |= keys
         return held
@@ -1807,48 +2033,78 @@ class EdgeScheduler:
     def _resolve_transfer_site_target(
         self,
         node: Any,
-        resolved_args: Dict[str, Any],
-    ) -> tuple[Dict[str, Any], ResolvedSiteTarget | None]:
+        resolved_args: dict[str, Any],
+        *,
+        transfer_contract: Mapping[str, str] | None = None,
+        site_uuids: tuple[str, ...] = (),
+        unavailable_site_uuids: tuple[str, ...] = (),
+    ) -> tuple[dict[str, Any], ResolvedSiteTarget | None]:
         """解析转运动作的目标库位并规范化设备执行名称。
 
         参数：``node`` 是候选工作流节点；``resolved_args`` 是合并上游输出后的
-        最终参数。返回：规范化参数副本与可选库位目标；非 ``transfer_resource``
-        动作或没有指定库位时原样返回。异常：显式 ``site_uuid`` 无法验证时抛
-        ``SiteTargetResolutionError``；旧任务只有 ``site`` 且未装配库存权威时
-        保留原有整父物料锁行为，不破坏历史本地工作流。
+        最终参数；``transfer_contract`` 是 AST 冻结的转运参数与夹爪角色映射；
+        ``site_uuids`` 是冻结等价组，``unavailable_site_uuids`` 是本轮已有作业
+        执行占用选中的库位。返回：规范参数和具体目标；非转运动作原样返回。
+        异常：合同字段缺失、显式库位无法验证或库存权威不可用时抛
+        ``SiteTargetResolutionError``；仅遗留 ``transfer_resource`` 名称允许
+        在未提供稳定库位 UUID 时维持名称兼容路径。
         """
 
-        if getattr(node, "action_name", "") != "transfer_resource":
+        if transfer_contract is None:
             return resolved_args, None
-        site_uuid = str(resolved_args.get("site_uuid") or "").strip()
-        site_name = str(resolved_args.get("site") or "").strip()
-        if not site_uuid and not site_name:
+        site_uuid_param = transfer_contract["target_site_uuid_param"]
+        site_name_param = transfer_contract["target_site_name_param"]
+        material_param = transfer_contract["material_param"]
+        owner_param = transfer_contract["target_owner_param"]
+        site_uuid = str(
+            (
+                resolved_args.get(site_uuid_param)
+                if site_uuid_param
+                else ""
+            )
+            or ""
+        ).strip()
+        site_name = str(
+            (
+                resolved_args.get(site_name_param)
+                if site_name_param
+                else ""
+            )
+            or ""
+        ).strip()
+        if not site_uuid and not site_name and not site_uuids:
+            if transfer_contract["gripper_site_role"]:
+                raise SiteTargetResolutionError(
+                    "site_selector_missing",
+                    "机械臂转运动作必须提供目标库位或显式等价库位组",
+                )
             return resolved_args, None
 
-        store = getattr(self._inventory, "store", None)
-        if not callable(getattr(store, "query_one", None)):
-            if site_uuid:
+        if self._station_resources is None:
+            if site_uuid or transfer_contract["gripper_site_role"]:
                 raise SiteTargetResolutionError(
                     "site_authority_unavailable",
-                    "提供 site_uuid 时必须先初始化本地库存权威",
+                    "机械臂转运或稳定库位解析必须先初始化本地库存权威",
                 )
             return resolved_args, None
 
         mount_uuid = _resource_argument_uuid(
-            resolved_args.get("mount_resource"),
-            argument_name="mount_resource",
+            resolved_args.get(owner_param),
+            argument_name=owner_param,
         )
         resource_uuid = _resource_argument_uuid(
-            resolved_args.get("resource"),
-            argument_name="resource",
+            resolved_args.get(material_param),
+            argument_name=material_param,
         )
         try:
             target = resolve_site_target(
-                self._inventory,
+                self._station_resources,
                 owner_material_uuid=mount_uuid,
                 site_uuid=site_uuid,
                 site_name=site_name,
+                site_uuids=site_uuids,
                 occupant_material_uuid=resource_uuid,
+                unavailable_site_uuids=unavailable_site_uuids,
             )
         except SiteTargetResolutionError as error:
             if site_uuid or error.code != "site_not_found":
@@ -1864,61 +2120,73 @@ class EdgeScheduler:
             return resolved_args, None
         canonical_args = dict(resolved_args)
         # 设备驱动沿用库位名称；稳定 UUID 只用于身份解析和本地互斥。
-        canonical_args["site"] = target.name
+        if site_name_param:
+            canonical_args[site_name_param] = target.name
+        if site_uuid_param:
+            canonical_args[site_uuid_param] = target.uuid
         return canonical_args, target
 
-    @staticmethod
-    def _access_region_execution_locks(run: Any, node: Any) -> list[dict[str, Any]]:
-        """把冻结访问区域策略转换为由后续作业持有的持久占用声明。
+    def _required_station_resources(self) -> StationResourceInventory:
+        """返回已装配的工站资源接口并对缺失配置失败关闭。
 
-        参数：``run`` 是当前工作流运行，``node`` 是准备派发的入口节点。返回：
-        零或一个 ``access_region`` 请求；释放作业身份直接来自同一冻结规格。
-        异常：策略损坏、释放节点缺失或释放作业没有稳定身份时抛
-        ``ExecutionPolicyError``，禁止退化为普通短锁继续执行。
+        参数：无。返回：设备、库位（Site）与转运库存接口。异常：未装配时抛
+        ``TransferResourceSetError``，禁止把缺失库存事实降级成空资源集合。
         """
 
-        policy = getattr(node, "execution_policy", {})
-        access = policy.get("access_region") if isinstance(policy, Mapping) else None
-        if access is None:
-            return []
-        if not isinstance(access, Mapping):
-            raise ExecutionPolicyError("access_region 必须是对象")
-        region_key = str(access.get("key") or "").strip()
-        material_uuid = str(access.get("lock_material_uuid") or "").strip()
-        release_node_uuid = str(access.get("release_node_uuid") or "").strip()
-        release_node = next(
-            (
-                candidate
-                for candidate in run.spec.nodes
-                if candidate.id == release_node_uuid
-            ),
-            None,
+        if self._station_resources is None:
+            raise TransferResourceSetError(
+                "本地库存权威未初始化，无法解析转运完整资源集"
+            )
+        return self._station_resources
+
+    @staticmethod
+    def _transfer_resource_contract(node: Any) -> dict[str, str] | None:
+        """读取节点冻结的机械臂转运资源映射。
+
+        参数：``node`` 是调度候选节点。返回：AST 资源合同中的 ``transfer`` 映射；
+        对既有 Host ``transfer_resource`` 生成不含夹爪角色的兼容映射，其他动作
+        返回 ``None``。异常：冻结合同 ``transfer`` 不是对象或字段值不是字符串时
+        抛 ``TransferResourceSetError``，禁止根据动作实现猜测资源。
+        """
+
+        resource_contract = getattr(node, "action_resource_contract", None)
+        transfer = (
+            resource_contract.get("transfer")
+            if isinstance(resource_contract, Mapping)
+            else None
         )
-        if (
-            not region_key
-            or not material_uuid
-            or release_node is None
-            or release_node.executor_kind != "material_transfer"
-            or not release_node.job_id
-        ):
-            raise ExecutionPolicyError("访问区域缺少有效的物料转移释放作业")
-        return [
-            {
-                "lock_key": f"access_region/{material_uuid}/{region_key}",
-                "scope": "access_region",
-                "material_uuid": material_uuid,
-                "access_region_key": region_key,
-                "lease_owner_job_uuid": release_node.job_id,
+        if transfer is None and getattr(node, "action_name", "") == "transfer_resource":
+            transfer = {
+                "material_param": "resource",
+                "target_owner_param": "mount_resource",
+                "target_site_uuid_param": "site_uuid",
+                "target_site_name_param": "site",
+                "gripper_site_role": "",
             }
-        ]
+        if transfer is None:
+            return None
+        if not isinstance(transfer, Mapping):
+            raise TransferResourceSetError("冻结动作的 transfer 资源合同不是对象")
+        required = {
+            "material_param",
+            "target_owner_param",
+            "target_site_uuid_param",
+            "target_site_name_param",
+            "gripper_site_role",
+        }
+        if set(transfer) != required or any(
+            not isinstance(transfer[field], str) for field in required
+        ):
+            raise TransferResourceSetError("冻结动作的 transfer 资源合同字段非法")
+        return {field: str(transfer[field]) for field in required}
 
     def _resource_lock_keys(
         self,
         node: Any,
-        resolved_args: Dict[str, Any],
+        resolved_args: dict[str, Any],
         *,
         resolved_site: ResolvedSiteTarget | None = None,
-    ) -> Set[str]:
+    ) -> set[str]:
         """生成节点本次执行需要持有的物料锁和库位锁键。
 
         参数：``node`` 是当前准备派发的工作流节点（WorkflowNode），
@@ -1929,7 +2197,7 @@ class EdgeScheduler:
         解析时抛 ``MaterialLockSchemaError``。
         """
 
-        keys: Set[str] = set()
+        keys: set[str] = set()
         frozen_schema = getattr(node, "param_schema", None)
         if frozen_schema is not None:
             material_uuids = compile_material_lock_schema(
@@ -1964,7 +2232,7 @@ class EdgeScheduler:
         # 占用覆盖子库位，归一化后避免同一作业保存冗余键。
         return normalize_resource_lock_keys(keys)
 
-    def _busy_keys(self) -> Set[str]:
+    def _busy_keys(self) -> set[str]:
         """合并外部与本地在途作业的动作级、设备级内存忙碌键。
 
         参数：无；外部键来自构造注入集合和可选实时提供者。
@@ -1979,7 +2247,7 @@ class EdgeScheduler:
         if self._busy_key_provider is not None:
             try:
                 busy |= set(self._busy_key_provider())
-            except Exception:  # noqa: BLE001 - 锁视图失败时退化为 inflight 视图
+            except Exception:
                 logger.exception("[EdgeScheduler] busy_key_provider failed")
         # 外部执行层仍使用动作级忙碌键；保留原键用于既有协议，同时把严格
         # 形状稳定提升为设备键，使取消后的物理在途作业继续阻塞同设备其他动作。
@@ -2061,7 +2329,7 @@ class EdgeScheduler:
             },
         )
 
-    def timeline(self, window_s: float = 3600.0) -> Dict[str, Any]:
+    def timeline(self, window_s: float = 3600.0) -> dict[str, Any]:
         """泳道图数据：执行中 job + 窗口内已完结 job + 预估器状态。
 
         泳道由前端按 device_id（或 device_action_key）分组；running 条目
@@ -2098,11 +2366,11 @@ class EdgeScheduler:
                 },
             }
 
-    def device_status(self) -> List[Dict[str, Any]]:
+    def device_status(self) -> list[dict[str, Any]]:
         """设备占用视图（监控面板）：busy 来自 inflight，idle 来自时间线痕迹。"""
         now = time.time()
         with self._lock:
-            devices: Dict[str, Dict[str, Any]] = {}
+            devices: dict[str, dict[str, Any]] = {}
             # 时间线里出现过的设备默认 idle（带最近一次动作）
             for entry in self._timeline:
                 dev = entry["device_id"] or entry["device_action_key"]
@@ -2228,7 +2496,7 @@ class EdgeScheduler:
             and not job.manual_action_dispatched
         )
 
-    def workflow_snapshot(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+    def workflow_snapshot(self, workflow_id: str) -> dict[str, Any] | None:
         with self._lock:
             run = self._workflows.get(workflow_id)
             if run is None:
@@ -2241,7 +2509,7 @@ class EdgeScheduler:
                     nodes[job.node_id]["job_id"] = job_id
             return snap
 
-    def snapshot(self) -> Dict[str, Any]:
+    def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
                 "workflows": {
@@ -2273,8 +2541,8 @@ class EdgeScheduler:
         不会释放在途作业；调用方可重放命令。
 
         未发送作业可立即结算；已发送作业始终保留在 ``_inflight`` 与资源锁中，
-        直到设备明确返回终态。执行器拒绝、缺少取消能力或调用异常只产生执行未知
-        （ExecutionUnknown），绝不伪造设备已经停止。
+        直到设备明确返回终态。执行器拒绝、缺少取消能力或调用异常只会让作业
+        保持 ``running`` 并等待物理对账，绝不伪造设备已经停止。
         """
 
         with self._lock:
@@ -2346,6 +2614,27 @@ class EdgeScheduler:
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
         return True
+
+
+def _claimed_site_uuids(lock_keys: set[str]) -> tuple[str, ...]:
+    """从当前调度轮的规范库位执行占用键中提取具体库位身份。
+
+    参数：``lock_keys`` 是所有在途作业的设备、物料和库位忙碌键。返回：稳定
+    排序且去重的库位 UUID；无法识别的键被忽略。异常：无。该快照只用于门禁 6
+    选择等价库位备选，最终互斥仍由门禁 7 的持久作业执行占用保证。
+    """
+
+    site_uuids: set[str] = set()
+    for lock_key in lock_keys:
+        parts = lock_key.split("/")
+        if (
+            len(parts) == 5
+            and parts[0] == "material"
+            and parts[2] == "site"
+            and parts[4] == "exclusive"
+        ):
+            site_uuids.add(parts[3])
+    return tuple(sorted(site_uuids))
 
 
 __all__ = ["EdgeScheduler"]

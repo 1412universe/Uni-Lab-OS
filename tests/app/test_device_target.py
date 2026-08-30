@@ -1,0 +1,111 @@
+"""动态设备类型选择器的注册表与库存双权威行为合同。"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from unilabos.app.scheduler.device_target import (
+    DeviceTargetUnavailable,
+    resolve_registered_device_target,
+)
+from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
+from unilabos.app.scheduler.inventory.service import InventoryService
+from unilabos.app.scheduler.inventory.store import InventoryStore
+
+
+def test_registered_device_target_selects_first_available_matching_instance(
+    tmp_path: Path,
+) -> None:
+    """运行时应在同类在线实例中跳过忙设备并选择稳定排序首个可用项。
+
+    参数：``tmp_path`` 隔离库存数据库。返回：无；断言注册动作能力和库存模板必须
+    同时匹配，且设备物料 UUID 的持久占用能让调度器选择第二实例。异常：数据库与
+    注册表错误原样传播。
+    """
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        backend = BackendResourceService(store)
+        template = backend.sync_resource_templates(
+            [
+                {
+                    "id": "test.reactor",
+                    "display_name": "反应器",
+                    "registry_type": "device",
+                    "class": {},
+                }
+            ]
+        )["templates"][0]
+        first = backend.create_material(
+            {
+                "resource_template_uuid": template["uuid"],
+                "barcode": "REACTOR-A",
+                "name": "反应器 A",
+            }
+        )
+        second = backend.create_material(
+            {
+                "resource_template_uuid": template["uuid"],
+                "barcode": "REACTOR-B",
+                "name": "反应器 B",
+            }
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE material SET type='device' WHERE uuid IN (?,?)",
+                (first["uuid"], second["uuid"]),
+            )
+        registration = {
+            "connected": True,
+            "devices": [
+                {
+                    "local_id": "reactor-b",
+                    "material_uuid": second["uuid"],
+                    "actions": [{"name": "heat"}],
+                },
+                {
+                    "local_id": "reactor-a",
+                    "material_uuid": first["uuid"],
+                    "actions": [{"name": "heat"}],
+                },
+            ],
+        }
+
+        selected = resolve_registered_device_target(
+            InventoryService(store).station_resources,
+            registration,
+            resource_template_uuid=template["uuid"],
+            action_name="heat",
+            busy_keys={f"/devices/{first['uuid']}"},
+        )
+
+        assert selected.local_device_id == "reactor-b"
+        assert selected.material_uuid == second["uuid"]
+    finally:
+        store.close()
+
+
+def test_registered_device_target_fails_closed_when_edge_is_offline(
+    tmp_path: Path,
+) -> None:
+    """设备执行进程离线时不得从陈旧注册快照选择设备。
+
+    参数：``tmp_path`` 隔离空库存数据库。返回：无；断言稳定 ``edge_offline``
+    等待码。异常：该 ``DeviceTargetUnavailable`` 是预期结果。
+    """
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        with pytest.raises(DeviceTargetUnavailable) as caught:
+            resolve_registered_device_target(
+                InventoryService(store).station_resources,
+                {"connected": False, "devices": []},
+                resource_template_uuid=("90000000-0000-4000-8000-000000000001"),
+                action_name="heat",
+                busy_keys=set(),
+            )
+        assert caught.value.code == "edge_offline"
+    finally:
+        store.close()

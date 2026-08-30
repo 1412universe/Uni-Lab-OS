@@ -1010,10 +1010,39 @@ def _extract_class_body(
             action_args.setdefault("estimate_duration_fixed", 60.0)
             action_args.setdefault("estimate_duration_express", "")
             action_args.setdefault("error_policy", None)
+            action_args.setdefault("resource_contract", None)
             if action_args["error_policy"]:
                 from unilabos.registry.action_policy import normalize_error_policy
 
                 action_args["error_policy"] = normalize_error_policy(action_args["error_policy"])
+            if typed_action and canonical_schema is not None:
+                from unilabos.registry.action_resource_contract import (
+                    ActionResourceContractError,
+                    normalize_action_resource_contract,
+                    validate_action_resource_contract_schema,
+                )
+
+                try:
+                    resource_contract = normalize_action_resource_contract(
+                        action_args["resource_contract"]
+                    )
+                    if resource_contract:
+                        validate_action_resource_contract_schema(
+                            resource_contract,
+                            canonical_schema,
+                        )
+                        extension = canonical_schema[
+                            "x-unilabos-action-contract"
+                        ]
+                        extension["resource_contract"] = resource_contract
+                        action_args["resource_contract"] = resource_contract
+                except ActionResourceContractError as error:
+                    contract_diagnostic = {
+                        "code": error.code,
+                        "path": error.path,
+                        "message": error.message,
+                    }
+                    canonical_schema = None
             method_params = _extract_method_params(item, import_map)
             return_type = _get_annotation_str(item.returns, import_map)
             is_async = isinstance(item, ast.AsyncFunctionDef)

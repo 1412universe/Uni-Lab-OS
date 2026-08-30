@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
+from unilabos.workflow.event_writer import append_frontend_event
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
 
@@ -169,8 +170,8 @@ class ManualConfirmationStore:
             ensure_manual_confirmation_schema(connection)
 
     def get(self, confirmation_uuid: str) -> dict[str, Any]:
-        with self._store._lock:
-            row = self._store._conn.execute(
+        with self._store.read() as connection:
+            row = connection.execute(
                 """
                 SELECT * FROM workflow_manual_confirmation
                 WHERE uuid = ? AND deleted_at IS NULL
@@ -184,8 +185,8 @@ class ManualConfirmationStore:
     def get_by_job(self, job_uuid: str) -> dict[str, Any]:
         """按稳定 Job 身份读取唯一人工确认。"""
 
-        with self._store._lock:
-            row = self._store._conn.execute(
+        with self._store.read() as connection:
+            row = connection.execute(
                 """
                 SELECT * FROM workflow_manual_confirmation
                 WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
@@ -197,14 +198,14 @@ class ManualConfirmationStore:
         return _row(row)
 
     def list_by_task(self, task_uuid: str) -> list[dict[str, Any]]:
-        with self._store._lock:
-            task = self._store._conn.execute(
+        with self._store.read() as connection:
+            task = connection.execute(
                 "SELECT 1 FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
                 (task_uuid,),
             ).fetchone()
             if task is None:
                 raise StoreNotFound(f"workflow task {task_uuid} not found")
-            rows = self._store._conn.execute(
+            rows = connection.execute(
                 """
                 SELECT * FROM workflow_manual_confirmation
                 WHERE workflow_task_uuid = ? AND deleted_at IS NULL
@@ -290,7 +291,7 @@ class ManualConfirmationStore:
                 (confirmation_uuid,),
             ).fetchone()
             assert decided is not None
-            WorkflowStore._append_event(
+            append_frontend_event(
                 connection,
                 event="workflow.runtime.changed",
                 data={"workflow_task_uuid": str(row["workflow_task_uuid"])},

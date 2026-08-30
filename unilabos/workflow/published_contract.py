@@ -10,8 +10,8 @@ from uuid import UUID, uuid4, uuid5
 
 import rfc8785
 
-from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.handle_projection import workflow_handle_type
+from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.store import WorkflowStore, utc_now
 from unilabos.workflow.workflow_io import (
     WorkflowIOValidationError,
@@ -566,8 +566,8 @@ class PublishedWorkflowContractStore:
     def get(self, contract_uuid: str) -> dict[str, Any]:
         """读取含冻结图的单个合同；合同不存在时抛 ``KeyError``。"""
 
-        with self._store._lock:
-            row = self._store._conn.execute(
+        with self._store.read() as connection:
+            row = connection.execute(
                 """
                 SELECT * FROM published_workflow_contract
                 WHERE uuid = ? AND deleted_at IS NULL
@@ -586,8 +586,8 @@ class PublishedWorkflowContractStore:
         数据库读取错误原样传播，不把缺少合同误报为数据库故障。
         """
 
-        with self._store._lock:
-            row = self._store._conn.execute(
+        with self._store.read() as connection:
+            row = connection.execute(
                 """
                 SELECT * FROM published_workflow_contract
                 WHERE workflow_uuid = ? AND deleted_at IS NULL
@@ -622,14 +622,14 @@ class PublishedWorkflowContractStore:
             where += " AND LOWER(published.name) LIKE ?"
             values.append(f"%{normalized_keyword}%")
         offset = (page - 1) * page_size
-        with self._store._lock:
+        with self._store.read() as connection:
             total = int(
-                self._store._conn.execute(
+                connection.execute(
                     f"SELECT COUNT(*) FROM published_workflow_contract AS published WHERE {where}",
                     values,
                 ).fetchone()[0]
             )
-            rows = self._store._conn.execute(
+            rows = connection.execute(
                 f"""
                 SELECT published.*
                 FROM published_workflow_contract AS published

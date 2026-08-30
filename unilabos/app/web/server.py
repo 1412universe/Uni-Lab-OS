@@ -15,8 +15,6 @@ from starlette.responses import JSONResponse, Response
 from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
 from unilabos.utils.log import info, error
 from unilabos.utils.tracing import install_http_tracing
-from unilabos.app.web.api import setup_api_routes
-from unilabos.app.web.pages import setup_web_pages
 from unilabos.config.config import BasicConfig
 
 # 创建FastAPI应用
@@ -115,6 +113,28 @@ def _publish_workflow_runtime(
         template_projection is None or authoring_transform is None
     ):
         raise RuntimeError("本地工作流模板目录未完整装配")
+    if (
+        BasicConfig.process_role == "workspace_backend"
+        and BasicConfig.control_plane == "backend"
+    ):
+        from unilabos.config.config import EdgeControlConfig
+        from unilabos.workflow.station_event_http import (
+            start_station_event_projection,
+        )
+
+        start_station_event_projection(
+            service.runtime_store,
+            backend_address=str(EdgeControlConfig.backend_addr or ""),
+            api_key=str(
+                EdgeControlConfig.backend_api_key
+                or EdgeControlConfig.api_key
+                or ""
+            ),
+            station_key=str(
+                EdgeControlConfig.edge_key or BasicConfig.machine_name or ""
+            ),
+            timeout=float(EdgeControlConfig.request_timeout),
+        )
     with _workflow_runtime_lock:
         _workflow_runtime_values.update(
             {
@@ -377,8 +397,23 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
     if pages is None:
         pages = app.router
 
-    # 设置API路由
-    setup_api_routes(app)
+    # 正式 Backend 进程不导入依赖 ROS 消息和设备注册表的遗留本机 API；它只
+    # 暴露轻量存活接口以及下方按控制面条件装配的工作区接口。
+    if BasicConfig.control_plane == "backend":
+        if not any(
+            getattr(route, "path", "") == "/api/v1/health"
+            for route in app.routes
+        ):
+            app.add_api_route(
+                "/api/v1/health",
+                _backend_process_health,
+                methods=["GET"],
+                tags=["api"],
+            )
+    else:
+        from unilabos.app.web.api import setup_api_routes
+
+        setup_api_routes(app)
 
     if (
         workspace_authoring_enabled
@@ -401,6 +436,7 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
         workspace_authoring_enabled
         and not embedded_scheduler_enabled
         and not workspace_material_asset_routes_mounted
+        and BasicConfig.workspace_package_mount_projection is not None
     ):
         from unilabos.app.scheduler.inventory.backend_api import (
             create_material_asset_router,
@@ -526,16 +562,25 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
         except Exception as e:  # noqa: BLE001 - 调度器路由失败不影响设备诊断
             error(f"[Web] 挂载本地调试 Scheduler 路由失败: {str(e)}")
 
-    # 设置页面路由
-    try:
-        setup_web_pages(pages)
-        # info("[Web] 已加载Web UI模块")
-    except ImportError as e:
-        info(f"[Web] 未找到Web页面模块: {str(e)}")
-    except Exception as e:
-        error(f"[Web] 加载Web页面模块时出错: {str(e)}")
+    # 设备本机页面只属于本地控制面；正式 Backend 不为展示层导入设备注册表。
+    if BasicConfig.control_plane != "backend":
+        try:
+            from unilabos.app.web.pages import setup_web_pages
+
+            setup_web_pages(pages)
+            # info("[Web] 已加载Web UI模块")
+        except ImportError as e:
+            info(f"[Web] 未找到Web页面模块: {str(e)}")
+        except Exception as e:
+            error(f"[Web] 加载Web页面模块时出错: {str(e)}")
 
     return app
+
+
+def _backend_process_health() -> dict[str, str]:
+    """返回正式 Backend 进程存活状态，不触碰本地工站调度或设备注册表。"""
+
+    return {"status": "ok", "scheduler": "disabled"}
 
 
 def start_server(host: str = "0.0.0.0", port: int = 8002, open_browser: bool = True) -> bool:

@@ -738,6 +738,12 @@ class WorkspaceHost:
             self._publish_locked("local.domain-state.reset", {"removed": removed})
 
     def _start_backend(self, parameters: dict[str, object]) -> dict[str, object]:
+        """启动拥有工站调度权威的工作区后端进程。
+
+        参数：``parameters`` 可覆盖图和运行模式。返回工作区状态快照。异常：启动
+        或就绪探测失败时原样转为 ``WorkspaceHostError``，不启动动作执行进程。
+        """
+
         with self._lock:
             if self._components["backend"]["phase"] == "ready":
                 return self._snapshot_locked()
@@ -757,12 +763,12 @@ class WorkspaceHost:
             metadata = self._components["backend"].setdefault("metadata", {})
             assert isinstance(metadata, dict)
             metadata["packageMounts"] = package_mounts
-            domain_mode = str(plan.metadata.get("domainMode") or "local")
-            self._components["backend"]["capabilities"] = (
-                ["authoring"]
-                if domain_mode == "backend"
-                else ["authoring", "inventory", "workflow-run"]
-            )
+            self._components["backend"]["capabilities"] = [
+                "authoring",
+                "inventory",
+                "workflow-run",
+                "station-scheduler",
+            ]
             self._publish_locked("backend.ready", {"generation": plan.generation})
             return self._snapshot_locked()
 
@@ -811,9 +817,9 @@ class WorkspaceHost:
         """通过 Backend 的公开接口等待本地调度器安全排空。
 
         参数：无。返回：调度器报告的已排空状态；Backend 已停止时返回本地
-        的零作业快照。异常：调度器地址缺失、远程权威或排空未收敛时抛出
+        的零作业快照。异常：本地调度器地址缺失或排空未收敛时抛出
         ``WorkspaceHostError``；即使 Edge 已单独停止，只要 Backend 仍在运行也
-        必须先排空，避免遗漏持久层中的执行未知作业。
+        必须先排空，避免遗漏持久层中等待物理对账的 running 作业。
         """
 
         with self._lock:
@@ -839,7 +845,7 @@ class WorkspaceHost:
         return status
 
     def _resume_local_scheduler(self) -> dict[str, object] | None:
-        """在 Edge 就绪后恢复本地调度器派发，远程权威模式保持无操作。"""
+        """在动作执行进程就绪后恢复本地工站调度器派发。"""
 
         address = self._local_scheduler_address(required_for="start")
         if address is None:
@@ -860,34 +866,17 @@ class WorkspaceHost:
         return status
 
     def _local_scheduler_address(self, *, required_for: str) -> str | None:
-        """返回本地调度器地址，并拒绝把远程 Backend 当成本地进程控制。
+        """返回当前工作区本地工站调度器地址。
 
         参数：``required_for`` 仅用于错误诊断，取 ``start`` 或 ``stop``。返回：
-        本地 Backend 就绪时返回地址；Backend 已停止时返回 ``None``；启动远程
-        权威时也返回 ``None``（不需要本地恢复请求）。异常：停止远程权威或就绪
-        组件缺少地址时关闭式失败，避免误杀设备进程。
+        本地调度进程就绪时返回地址，已停止时返回 ``None``。异常：就绪组件缺少
+        地址时关闭式失败，避免在未排空工站作业时停止动作执行进程。
         """
 
         with self._lock:
             backend = dict(self._components["backend"])
         if backend.get("phase") == "idle":
             return None
-        metadata = backend.get("metadata")
-        domain_mode = (
-            str(metadata.get("domainMode") or "local")
-            if isinstance(metadata, dict)
-            else "local"
-        )
-        if domain_mode != "local":
-            if required_for == "start":
-                # 远程 Backend 的 Scheduler 不在本机，启动本地 Edge 时不应
-                # 伪造一个本地恢复请求；远程任务仍由远端控制面管理。
-                return None
-            raise WorkspaceHostError(
-                "workspace_drain_unsupported",
-                "远程 Backend 权威不由本地 Workspace Host 排空；请先在远程停止任务",
-                details={"domainMode": domain_mode, "operation": required_for},
-            )
         address = _optional_text(backend.get("address"))
         if address is None:
             raise WorkspaceHostError(
@@ -1064,6 +1053,12 @@ class WorkspaceHost:
             )
 
     def _wait_backend_ready(self, plan: LaunchPlan) -> dict[str, object]:
+        """等待工站调度、库存与工作流接口共同就绪。
+
+        参数：``plan`` 是本轮后端启动计划。返回领域包挂载投影。异常：地址缺失、
+        超时或任一权威探针失败时抛 ``WorkspaceHostError``。
+        """
+
         if not plan.address:
             raise WorkspaceHostError("backend_start_failed", "Backend 地址缺失")
         deadline = time.monotonic() + self.readiness_timeout
@@ -1081,18 +1076,17 @@ class WorkspaceHost:
             if readiness_payload is None
             else []
         )
-        if plan.metadata.get("domainMode") != "backend":
-            probes.extend(
-                [
-                    ("/api/v1/devices", _successful_envelope),
-                    ("/api/v1/workflow-node-templates", _successful_envelope),
-                    (
-                        "/api/v1/workflow-node-templates"
-                        "?page=1&page_size=100&node_type=material_source",
-                        _material_source_catalog_ready,
-                    ),
-                ]
-            )
+        probes.extend(
+            [
+                ("/api/v1/devices", _successful_envelope),
+                ("/api/v1/workflow-node-templates", _successful_envelope),
+                (
+                    "/api/v1/workflow-node-templates"
+                    "?page=1&page_size=100&node_type=material_source",
+                    _material_source_catalog_ready,
+                ),
+            ]
+        )
         for path, accepts in probes:
             self._wait_backend_payload(plan, path, accepts, deadline=deadline)
         payload = self._wait_backend_payload(

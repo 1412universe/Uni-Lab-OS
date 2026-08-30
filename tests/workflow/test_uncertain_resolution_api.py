@@ -1,4 +1,4 @@
-"""执行未知（execution_unknown）人工处置的安全合同测试。"""
+"""running 作业等待物理对账时的人工处置安全合同。"""
 
 from __future__ import annotations
 
@@ -51,6 +51,12 @@ class _ResolutionDispatcher:
 
 
 def _seed_uncertain_job(store: WorkflowStore) -> TaskRuntimeProjection:
+    """创建一个主状态 running、等待物理对账的工作流节点作业。
+
+    参数：``store`` 是隔离工作流写权威。返回绑定同一存储的运行投影；数据库写入
+    异常原样传播，用于验证人工处置不会重新派发原动作。
+    """
+
     store.create_workflow(
         workflow_uuid=WORKFLOW_UUID,
         name="执行未知处置测试",
@@ -95,7 +101,7 @@ def _seed_uncertain_job(store: WorkflowStore) -> TaskRuntimeProjection:
         ],
     )
     projection.project_dispatch_accepted(JOB_UUID)
-    projection.project_execution_unknown(JOB_UUID, reason="edge_disconnected")
+    projection.project_execution_attention(JOB_UUID, reason="edge_disconnected")
     return projection
 
 
@@ -131,7 +137,8 @@ def test_uncertain_resolution_waits_for_edge_proof_before_releasing_lock(tmp_pat
         assert first.json()["data"]["created"] is True
         assert replay.status_code == 202
         assert replay.json()["data"]["created"] is False
-        assert store.get_job(JOB_UUID)["status"] == "execution_unknown"
+        assert store.get_job(JOB_UUID)["status"] == "running"
+        assert store.get_job(JOB_UUID)["uncertainty_reason"] == "edge_disconnected"
         assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
             "uncertain"
         }
@@ -176,7 +183,7 @@ def test_uncertain_resolution_rejects_unprovable_success(tmp_path) -> None:
             json={"resolution": "succeeded", "reason": "我认为已经成功"},
         ).json()
         assert response["code"] != 0
-        assert store.get_job(JOB_UUID)["status"] == "execution_unknown"
+        assert store.get_job(JOB_UUID)["status"] == "running"
     finally:
         if bridge is not None:
             bridge.close()

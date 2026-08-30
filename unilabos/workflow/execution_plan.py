@@ -15,6 +15,11 @@ from unilabos.workflow._execution_plan_graph import (
     final_target_data_key,
 )
 from unilabos.workflow.store import StoreConflict
+from unilabos.workflow.execution_resource_policy import (
+    ExecutionResourcePolicyError,
+    merge_action_resource_policy,
+    validate_static_device_tenancy_order,
+)
 
 PLAN_VERSION = 1
 
@@ -45,9 +50,7 @@ class ExecutionPlanBuilder:
         kinds = {
             node_uuid: self._planned_executor_kind(
                 node,
-                template=(
-                    templates.get(node.get("workflow_node_template_uuid")) or {}
-                ),
+                template=(templates.get(node.get("workflow_node_template_uuid")) or {}),
             )
             for node_uuid, node in nodes.items()
         }
@@ -92,15 +95,6 @@ class ExecutionPlanBuilder:
             planned_graph_nodes,
             planned_edges,
         )
-        requirements, material_params, material_binding_targets = (
-            self._material_source_inputs(
-                nodes=nodes,
-                active=active,
-                kinds=kinds,
-                edges=planned_edges,
-                topological_order=graph_order,
-            )
-        )
         # 来源与普通节点都先遵守冻结图拓扑，再由计划作业序列保证全部协调责任先于
         # 任何物理动作；这样不会让无边来源受创建时间影响而落到动作之后。
         ordered_sources = [
@@ -127,6 +121,17 @@ class ExecutionPlanBuilder:
                 if handle["node_uuid"] == target_node_uuid
             ]
 
+        requirements, material_params, material_binding_targets = (
+            self._material_source_inputs(
+                nodes=nodes,
+                active=active,
+                kinds=kinds,
+                edges=planned_edges,
+                topological_order=graph_order,
+                included_source_uuids=set(ordered_sources),
+            )
+        )
+
         planned_nodes: list[dict[str, Any]] = []
         jobs: list[dict[str, Any]] = []
         handles_by_node: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -138,7 +143,32 @@ class ExecutionPlanBuilder:
             node = nodes[node_uuid]
             kind = kinds[node_uuid]
             template = templates.get(node.get("workflow_node_template_uuid")) or {}
-            policy = dict(node.get("execution_policy") or {})
+            raw_policy = node.get("execution_policy") or {}
+            if isinstance(raw_policy, Mapping) and "access_region" in raw_policy:
+                raise ExecutionPlanBuildError(
+                    "invalid_execution_policy",
+                    "access_region 由 PLC 保证，工作流不得声明软件锁",
+                )
+            try:
+                resource_contract = (
+                    self._frozen_action_resource_contract(template)
+                    if kind
+                    in {
+                        "device_action",
+                        "material_transfer",
+                        "manual_confirm",
+                    }
+                    else {}
+                )
+                policy = merge_action_resource_policy(
+                    resource_contract,
+                    raw_policy,
+                )
+            except ExecutionResourcePolicyError as error:
+                raise ExecutionPlanBuildError(
+                    "invalid_execution_policy",
+                    str(error),
+                ) from error
             # ``planned_param`` 是任务提交时冻结的动作输入，不是运行时回退视图。
             planned_param = dict(node.get("param") or {})
             if kind == "material_source" and "custody_policy" not in planned_param:
@@ -156,6 +186,7 @@ class ExecutionPlanBuilder:
                 "kind": kind,
                 "param": planned_param,
                 "execution_policy": policy,
+                "action_resource_contract": resource_contract,
                 "inputs": [
                     {
                         "handle_uuid": handle["uuid"],
@@ -198,20 +229,22 @@ class ExecutionPlanBuilder:
                 planned_node["material_uuid"] = node["material_uuid"]
             if node.get("script") is not None:
                 planned_node["script"] = node["script"]
-            if kind not in {
-                "device_action",
-                "material_transfer",
-                "manual_confirm",
-            } and template.get(
-                "schema"
-            ) is not None:
+            if (
+                kind
+                not in {
+                    "device_action",
+                    "material_transfer",
+                    "manual_confirm",
+                }
+                and template.get("schema") is not None
+            ):
                 planned_node["param_schema"] = template["schema"]
             if requirements.get(node_uuid):
                 planned_node["material_requirements"] = requirements[node_uuid]
             if material_binding_targets.get(node_uuid):
-                planned_node["material_binding_targets"] = (
-                    material_binding_targets[node_uuid]
-                )
+                planned_node["material_binding_targets"] = material_binding_targets[
+                    node_uuid
+                ]
             planned_nodes.append(planned_node)
             jobs.append(
                 {
@@ -224,7 +257,13 @@ class ExecutionPlanBuilder:
                     "param": planned_param,
                 }
             )
-        self._validate_access_region_policies(planned_nodes)
+        try:
+            validate_static_device_tenancy_order(planned_nodes)
+        except ExecutionResourcePolicyError as error:
+            raise ExecutionPlanBuildError(
+                "static_resource_deadlock",
+                str(error),
+            ) from error
         plan: dict[str, Any] = {
             "version": PLAN_VERSION,
             "run_mode": run_mode,
@@ -267,46 +306,7 @@ class ExecutionPlanBuilder:
         ).strip()
         if explicit_kind == "material_transfer":
             return explicit_kind
-        return executor_kind(
-            str(template.get("node_type") or node.get("type") or "")
-        )
-
-    @staticmethod
-    def _validate_access_region_policies(
-        planned_nodes: Sequence[Mapping[str, Any]],
-    ) -> None:
-        """校验访问区域由同一计划中更晚的物料转移节点显式结束。
-
-        参数：已按拓扑稳定排序的冻结计划节点。返回无。异常：释放节点缺失、
-        执行责任错误或顺序不晚于入口时抛 ``ExecutionPlanBuildError``。该关系
-        直接冻结在执行策略中，无需新增关系表。
-        """
-
-        by_uuid = {str(node.get("uuid") or ""): node for node in planned_nodes}
-        for source in planned_nodes:
-            policy = source.get("execution_policy")
-            access = (
-                policy.get("access_region") if isinstance(policy, Mapping) else None
-            )
-            if access is None:
-                continue
-            if not isinstance(access, Mapping):
-                raise ExecutionPlanBuildError(
-                    "invalid_execution_policy",
-                    "access_region 必须是对象",
-                )
-            release_uuid = str(access.get("release_node_uuid") or "").strip()
-            release = by_uuid.get(release_uuid)
-            if (
-                release is None
-                or release.get("kind") != "material_transfer"
-                or int(release.get("topological_index", -1))
-                <= int(source.get("topological_index", -1))
-            ):
-                raise ExecutionPlanBuildError(
-                    "invalid_execution_policy",
-                    "access_region 必须由同一计划中更晚的物料转移节点释放",
-                )
+        return executor_kind(str(template.get("node_type") or node.get("type") or ""))
 
     @staticmethod
     def _has_fixed_executor_binding(node: Mapping[str, Any]) -> bool:
@@ -331,6 +331,7 @@ class ExecutionPlanBuilder:
         kinds: Mapping[str, str],
         edges: Sequence[Mapping[str, Any]],
         topological_order: Sequence[str],
+        included_source_uuids: set[str],
     ) -> tuple[
         dict[str, list[dict[str, Any]]],
         dict[str, dict[str, dict[str, str]]],
@@ -339,10 +340,10 @@ class ExecutionPlanBuilder:
         """投影 ``existing`` 物料来源（MaterialSource）的静态准入输入。
 
         参数：完整节点、活动节点、执行种类、平面计划边与拓扑顺序来自同一应用
-        图。返回：遗留库存预留（inventory_reservation）需求、仅固定来源可提前
-        写入的最终物料引用参数，以及自动来源成功准入后的作业参数目标；它不是
-        任务物料预留（TaskMaterialReservation）。异常：create_new、选择器 UUID
-        非法或物料流分叉/循环时抛稳定计划错误。
+        图；``included_source_uuids`` 限定本次运行范围真正包含的来源。返回：遗留
+        库存预留需求、仅固定来源可提前写入的最终物料引用参数，以及自动来源成功
+        准入后的作业参数目标；它不是任务物料预留。异常：create_new、选择器 UUID
+        非法或物料流分叉/循环时抛稳定计划错误；范围外来源不参与校验。
         """
 
         # ``outgoing`` 保留每条物料边的目标节点与最终参数键。
@@ -367,7 +368,11 @@ class ExecutionPlanBuilder:
         binding_targets: dict[str, list[dict[str, str]]] = defaultdict(list)
         target_owners: dict[tuple[str, str], str] = {}
         for source_uuid, node in nodes.items():
-            if kinds[source_uuid] != "material_source" or node.get("disabled") is True:
+            if (
+                source_uuid not in included_source_uuids
+                or kinds[source_uuid] != "material_source"
+                or node.get("disabled") is True
+            ):
                 continue
             selector = node.get("param")
             if not isinstance(selector, Mapping):
@@ -572,6 +577,47 @@ class ExecutionPlanBuilder:
         return deepcopy(dict(contract))
 
     @staticmethod
+    def _frozen_action_resource_contract(
+        template: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """读取节点模板内由 AST 编译的动作资源合同。
+
+        参数：``template`` 是任务创建时引用的动作节点模板。返回：与模板隔离的
+        ``ActionResourceContract`` 字典；动作未声明资源语义时返回空字典。异常：
+        完整动作 Schema 的扩展形状损坏时抛 ``ExecutionPlanBuildError``，禁止运行期
+        回查可变注册表猜测资源。
+        """
+
+        metadata = template.get("meta_data")
+        unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+        schema = (
+            unilab.get("action_contract_schema")
+            if isinstance(unilab, Mapping)
+            else None
+        )
+        extension = (
+            schema.get("x-unilabos-action-contract")
+            if isinstance(schema, Mapping)
+            else None
+        )
+        if extension is None:
+            return {}
+        if not isinstance(extension, Mapping):
+            raise ExecutionPlanBuildError(
+                "invalid_action_resource_contract",
+                "动作合同扩展必须是对象",
+            )
+        resource_contract = extension.get("resource_contract")
+        if resource_contract is None:
+            return {}
+        if not isinstance(resource_contract, Mapping):
+            raise ExecutionPlanBuildError(
+                "invalid_action_resource_contract",
+                "动作资源合同必须是对象",
+            )
+        return deepcopy(dict(resource_contract))
+
+    @staticmethod
     def _device_action_contract(
         node: Mapping[str, Any],
         *,
@@ -579,10 +625,9 @@ class ExecutionPlanBuilder:
     ) -> dict[str, Any]:
         """冻结设备动作执行器和动作合同。
 
-        参数：``node`` 是应用图设备动作节点。返回：显式固定执行器
-        （Executor）身份、动作名与规范动作类型。异常：执行器绑定
-        （ExecutorBinding）缺失、非 fixed 或设备身份为空时失败关闭；
-        ``material_uuid`` 是物料身份，不得作为执行器回退。
+        参数：``node`` 是应用图设备动作节点。返回：固定执行器身份，或只含资源
+        模板的动态设备选择器，以及动作名与规范动作类型。异常：固定绑定非法、
+        动态模板身份缺失或动作合同不完整时失败关闭。
         """
 
         metadata = node.get("meta_data")
@@ -593,11 +638,27 @@ class ExecutionPlanBuilder:
         device_id = ""
         if isinstance(binding, Mapping) and binding.get("mode") == "fixed":
             device_id = str(binding.get("device_id") or "").strip()
-        if not device_id:
+        if binding is not None and not device_id:
             raise ExecutionPlanBuildError(
                 "invalid_executor_binding",
-                "设备动作缺少显式固定执行器绑定",
+                "设备动作固定执行器绑定非法",
             )
+        device_selector: dict[str, str] = {}
+        if not device_id:
+            resource_template_uuid = str(
+                template.get("resource_template_uuid") or ""
+            ).strip()
+            try:
+                resource_template_uuid = str(UUID(resource_template_uuid))
+            except ValueError as error:
+                raise ExecutionPlanBuildError(
+                    "invalid_device_selector",
+                    "动态设备选择器缺少合法资源模板 UUID",
+                ) from error
+            device_selector = {
+                "mode": "resource_template",
+                "resource_template_uuid": resource_template_uuid,
+            }
         action_type = str(node.get("action_type") or "").strip()
         frozen_template_type = str(template.get("type") or "").strip()
         if not action_type and frozen_template_type.startswith("UniLabJsonCommand"):
@@ -610,6 +671,7 @@ class ExecutionPlanBuilder:
         )
         return {
             "device_id": device_id,
+            "device_selector": device_selector,
             "action_name": node.get("action_name"),
             "action_type": action_type or "UniLabJsonCommand",
             "always_free": bool(

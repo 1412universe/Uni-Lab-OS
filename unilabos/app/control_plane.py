@@ -45,9 +45,9 @@ def validate_control_plane_arguments(
 
 
 def should_mount_embedded_scheduler_routes() -> bool:
-    """仅本地调试控制面向 FastAPI 挂载嵌入式微后端路由。"""
+    """判断当前 Web 进程是否拥有工站调度接口。"""
 
-    return (
+    return BasicConfig.process_role == RuntimeProcessRole.WORKSPACE_BACKEND.value or (
         BasicConfig.control_plane == ControlPlaneMode.LOCAL.value
         and BasicConfig.process_role != RuntimeProcessRole.EDGE_RUNTIME.value
     )
@@ -65,9 +65,14 @@ def should_mount_workspace_authoring_routes() -> bool:
 def start_control_plane_runtime(
     context: ControlPlaneRuntimeContext,
 ) -> ControlPlaneRuntimeHandle:
-    """在唯一 seam 后按模式惰性加载并启动一个控制面 adapter。"""
+    """按进程职责启动工站调度权威或动作执行协议客户端。"""
 
-    mode = validate_control_plane_arguments(context.arguments)
+    plan = resolve_runtime_process_plan(context.arguments)
+    if plan.role is RuntimeProcessRole.WORKSPACE_BACKEND:
+        from unilabos.app.scheduler.runtime import start_embedded_scheduler_runtime
+
+        return start_embedded_scheduler_runtime(context)
+    mode = plan.control_plane
     if mode is ControlPlaneMode.BACKEND:
         from unilabos.app.edge_control.runtime import start_backend_control_runtime
 

@@ -100,15 +100,15 @@ def test_drain_is_idempotent_when_no_device_job_is_active() -> None:
     assert second.json()["active_device_job_count"] == 0
 
 
-def test_drain_includes_persisted_execution_unknown_job() -> None:
-    """持久层中的执行未知作业必须阻止调度器报告已排空。
+def test_drain_includes_persisted_running_reconciliation_job() -> None:
+    """持久层中等待物理对账的 running 作业必须阻止报告已排空。
 
     参数：无。返回：无；通过公开 HTTP 接口验证持久安全事实被合并进状态。
     异常：若排空只查看进程内作业并错误报告 drained，则测试失败。
     """
 
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
-    scheduler.set_drain_blocker_provider(lambda: {"job-execution-unknown"})
+    scheduler.set_drain_blocker_provider(lambda: {"job-running-reconciliation"})
     client = TestClient(create_app(scheduler))
 
     response = client.post("/api/v1/scheduler/drain")
@@ -116,5 +116,5 @@ def test_drain_includes_persisted_execution_unknown_job() -> None:
     assert response.status_code == 200
     assert response.json()["phase"] == "draining"
     assert response.json()["active_device_job_ids"] == [
-        "job-execution-unknown"
+        "job-running-reconciliation"
     ]

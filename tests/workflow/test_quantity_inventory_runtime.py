@@ -90,6 +90,21 @@ class _InventoryCreationBridge(_InventoryReadBridge):
 
         self._coordinator.discard_uncommitted_task(task_uuid)
 
+    def preflight_inventory_allocations(
+        self,
+        *,
+        graph: dict[str, Any],
+        prepared: PreparedTaskInput,
+        bindings: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """代理只读数量预检；参数与生产桥一致，返回分配预览。"""
+
+        return self._coordinator.preflight_task_allocations(
+            graph=graph,
+            prepared=prepared,
+            bindings=bindings,
+        )
+
 
 def _inventory(tmp_path: Path) -> tuple[InventoryStore, str, str, str]:
     """创建一个余量为 10 mL 的活动试剂库存。
@@ -273,6 +288,149 @@ def _create_task(
             )
         ),
     )
+
+
+def test_quantity_preflight_is_all_or_nothing_and_read_only(tmp_path: Path) -> None:
+    """共享试剂预检校验整任务数量且不得产生任何持久写入。
+
+    参数：``tmp_path`` 隔离工作流和库存库。返回无；断言成功预检返回完整分配，
+    试剂余量、活动预留、台账、Outbox、Task 与 allocation 行数均保持不变；把
+    余量降到需求以下后整组失败且仍然零写入。
+    """
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    bindings = [
+        {
+            "requirement_key": "ethanol",
+            "inventory_type": "reagent",
+            "inventory_uuid": reagent_uuid,
+            "reserved_quantity": 2,
+            "quantity_unit": "mL",
+        }
+    ]
+
+    def facts() -> tuple[Any, ...]:
+        """读取两库可观察写事实；返回稳定快照元组。"""
+
+        return (
+            inventory_store.query_one(
+                "SELECT quantity,revision FROM reagent WHERE uuid=?",
+                (reagent_uuid,),
+            ),
+            inventory_store.query_one(
+                "SELECT COUNT(*) AS count FROM inventory_reservation"
+            ),
+            inventory_store.query_one("SELECT COUNT(*) AS count FROM inventory_ledger"),
+            inventory_store.query_one("SELECT COUNT(*) AS count FROM sync_outbox"),
+            workflow_store.count_rows("workflow_task"),
+            workflow_store.count_rows("workflow_inventory_allocation"),
+        )
+
+    try:
+        before = facts()
+        allocations = coordinator.preflight_task_allocations(
+            graph=graph,
+            prepared=prepared,
+            bindings=bindings,
+        )
+        assert len(allocations) == 1
+        assert allocations[0]["reserved_quantity"] == 2
+        assert facts() == before
+
+        with inventory_store.transaction() as connection:
+            connection.execute(
+                "UPDATE reagent SET quantity=1 WHERE uuid=?",
+                (reagent_uuid,),
+            )
+        insufficient_before = facts()
+        with pytest.raises(StoreConflict, match="可用数量不足"):
+            coordinator.preflight_task_allocations(
+                graph=graph,
+                prepared=prepared,
+                bindings=bindings,
+            )
+        assert facts() == insufficient_before
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_quantity_preflight_http_reports_candidate_without_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST 运行预检应使用候选绑定返回可运行提示且保持两库零写入。"""
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    service = WorkflowService(
+        workflow_store,
+        task_scheduler_bridge=_InventoryCreationBridge(coordinator),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        service, "_prepare_task_input", lambda *args, **kwargs: prepared
+    )
+    monkeypatch.setattr(service, "get_graph", lambda _workflow_uuid: graph)
+    service._material_resolver = lambda material_uuid: {"uuid": material_uuid}
+    client = TestClient(create_workflow_app(service))
+    before = (
+        workflow_store.count_rows("workflow_task"),
+        inventory_store.query_one(
+            "SELECT COUNT(*) AS count FROM inventory_reservation"
+        ),
+        inventory_store.query_one("SELECT COUNT(*) AS count FROM sync_outbox"),
+    )
+    try:
+        response = client.post(
+            f"/api/v1/workflows/{graph['workflow']['uuid']}/run-preflight",
+            json={
+                "run_mode": "normal",
+                "input": {},
+                "inventory_bindings": [
+                    {
+                        "requirement_key": "ethanol",
+                        "inventory_type": "reagent",
+                        "inventory_uuid": reagent_uuid,
+                        "reserved_quantity": 2,
+                        "quantity_unit": "mL",
+                    }
+                ],
+            },
+        )
+        assert response.status_code == 200
+        report = response.json()["data"]
+        inventory_check = next(
+            check for check in report["checks"] if check["type"] == "quantity_inventory"
+        )
+        assert inventory_check["status"] == "passed", inventory_check
+        assert inventory_check["details"]["allocation_count"] == 1
+        assert (
+            workflow_store.count_rows("workflow_task"),
+            inventory_store.query_one(
+                "SELECT COUNT(*) AS count FROM inventory_reservation"
+            ),
+            inventory_store.query_one("SELECT COUNT(*) AS count FROM sync_outbox"),
+        ) == before
+    finally:
+        service.close()
+        inventory_store.close()
 
 
 def test_task_binding_and_successful_consumption_reuse_existing_tables(

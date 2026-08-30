@@ -16,11 +16,16 @@ from unilabos.app.scheduler.inventory.domain import (
 )
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.site_target import resolve_site_target
+from unilabos.app.scheduler.transfer_resource_set import (
+    resolve_transfer_resource_set,
+)
 
 SITE_A = "10000000-0000-4000-8000-000000000001"
 SITE_B = "10000000-0000-4000-8000-000000000002"
 SITE_EMPTY = "10000000-0000-4000-8000-000000000003"
 TARGET_SITE = "10000000-0000-4000-8000-000000000004"
+GRIPPER_SITE = "10000000-0000-4000-8000-000000000005"
 
 
 @pytest.fixture()
@@ -196,6 +201,187 @@ def test_slot_range_selects_lowest_site_order_deterministically(
     )
     assert replay["allocations"] == result["allocations"]
     assert store.get_instance(identities["second"])["status"] == "reserved"
+
+
+def test_target_site_group_skips_claimed_first_member_by_sort_order(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """等价库位组应跳过已申领首项并选择排序后的下一个可用位置。
+
+    参数：``inventory`` 提供同一父物料下两个兼容空库位及待放入物料。返回：无。
+    断言调用方数组顺序不影响选择，且门禁 6 收到当前活动作业执行占用（Claim）
+    的库位 UUID 后会原子回退到下一备选。异常：库存写入错误原样传播。
+    """
+
+    store, service, identities = inventory
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO site(
+                uuid,create_time,update_time,meta_data,material_uuid,name,
+                sort_order,allowed_resource_template_uuids,
+                occupied_material_uuid,position_x,position_y,position_z,
+                depth,length,width
+            ) VALUES (?,?,?,'{}',?,?,?,?,NULL,0,0,0,0,0,0)
+            """,
+            (
+                TARGET_SITE,
+                "2026-08-06T00:00:01Z",
+                "2026-08-06T00:00:01Z",
+                identities["mount"],
+                "D1",
+                1,
+                json.dumps([identities["template"]]),
+            ),
+        )
+
+    first = resolve_site_target(
+        service.station_resources,
+        owner_material_uuid=identities["mount"],
+        site_uuids=(TARGET_SITE, SITE_EMPTY),
+        occupant_material_uuid=identities["first"],
+    )
+    fallback = resolve_site_target(
+        service.station_resources,
+        owner_material_uuid=identities["mount"],
+        site_uuids=(TARGET_SITE, SITE_EMPTY),
+        occupant_material_uuid=identities["first"],
+        unavailable_site_uuids=(SITE_EMPTY,),
+    )
+
+    assert first.uuid == SITE_EMPTY
+    assert fallback.uuid == TARGET_SITE
+
+
+def test_transfer_resource_set_contains_source_target_and_owner_device(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """机械臂转运应从库位事实解析来源并占用两端库位和所属设备。
+
+    参数：``inventory`` 提供来源物料、来源库位与空目标库位。返回：无。断言完整
+    资源集合包含物料当前来源库位、选定目标库位以及拥有两者的设备物料身份；
+    工作流不得自行猜测来源位置。异常：库存事实缺失时生产解析器错误原样传播。
+    """
+
+    store, service, identities = inventory
+    with store.transaction() as connection:
+        # ``mount`` 在该用例中代表带库位的实际设备，而非普通仓库。
+        connection.execute(
+            "UPDATE material SET type = 'device' WHERE uuid = ?",
+            (identities["mount"],),
+        )
+    target = resolve_site_target(
+        service.station_resources,
+        owner_material_uuid=identities["mount"],
+        site_uuid=SITE_EMPTY,
+        occupant_material_uuid=identities["first"],
+    )
+
+    resources = resolve_transfer_resource_set(
+        service.station_resources,
+        resource_material_uuid=identities["first"],
+        target=target,
+    )
+
+    assert resources.source_site_uuid == SITE_A
+    assert set(resources.lock_keys) == {
+        f"/devices/{identities['mount']}",
+        f"material/{identities['first']}/exclusive",
+        f"material/{identities['mount']}/site/{SITE_A}/exclusive",
+        f"material/{identities['mount']}/site/{SITE_EMPTY}/exclusive",
+    }
+
+
+def test_transfer_resource_set_requires_empty_gripper_and_both_devices(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """AST 转运合同必须一次取得物料、两端设备/位置、机械臂和空夹爪位置。
+
+    参数：``inventory`` 提供真实库存库位与待搬物料。返回：无；断言来源设备、
+    目标设备、机械臂执行器、来源/目标/夹爪库位和主物料全部进入一个资源集合。
+    异常：任何设备或夹爪位置无法证明时生产解析器失败，测试不得降级为部分集合。
+    """
+
+    store, service, identities = inventory
+    backend = BackendResourceService(store)
+    owner_template_uuid = backend.get_material(identities["mount"])[
+        "resource_template_uuid"
+    ]
+    target_device = backend.create_material(
+        {
+            "resource_template_uuid": owner_template_uuid,
+            "barcode": "TARGET-DEVICE",
+            "name": "目标设备",
+        }
+    )
+    robot = backend.create_material(
+        {
+            "resource_template_uuid": owner_template_uuid,
+            "barcode": "ROBOT-DEVICE",
+            "name": "机械臂",
+        }
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE material SET type='device' WHERE uuid IN (?,?,?)",
+            (identities["mount"], target_device["uuid"], robot["uuid"]),
+        )
+        for site_uuid, owner_uuid, name, metadata in (
+            (TARGET_SITE, target_device["uuid"], "IN", {}),
+            (
+                GRIPPER_SITE,
+                robot["uuid"],
+                "GRIPPER",
+                {"unilab": {"resource_role": "robot.gripper"}},
+            ),
+        ):
+            connection.execute(
+                """
+                INSERT INTO site(
+                    uuid,create_time,update_time,meta_data,material_uuid,name,
+                    sort_order,allowed_resource_template_uuids,
+                    occupied_material_uuid,position_x,position_y,position_z,
+                    depth,length,width
+                ) VALUES (?,?,?,?,?,?,0,?,NULL,0,0,0,0,0,0)
+                """,
+                (
+                    site_uuid,
+                    "2026-08-06T00:00:02Z",
+                    "2026-08-06T00:00:02Z",
+                    json.dumps(metadata),
+                    owner_uuid,
+                    name,
+                    json.dumps([identities["template"]]),
+                ),
+            )
+    target = resolve_site_target(
+        service.station_resources,
+        owner_material_uuid=target_device["uuid"],
+        site_uuid=TARGET_SITE,
+        occupant_material_uuid=identities["first"],
+    )
+
+    resources = resolve_transfer_resource_set(
+        service.station_resources,
+        resource_material_uuid=identities["first"],
+        target=target,
+        executor_material_uuid=robot["uuid"],
+        gripper_site_role="robot.gripper",
+        require_device_owners=True,
+    )
+
+    assert resources.source_device_material_uuid == identities["mount"]
+    assert resources.target_device_material_uuid == target_device["uuid"]
+    assert resources.gripper_site_uuid == GRIPPER_SITE
+    assert set(resources.lock_keys) == {
+        f"/devices/{identities['mount']}",
+        f"/devices/{target_device['uuid']}",
+        f"/devices/{robot['uuid']}",
+        f"material/{identities['first']}/exclusive",
+        f"material/{identities['mount']}/site/{SITE_A}/exclusive",
+        f"material/{target_device['uuid']}/site/{TARGET_SITE}/exclusive",
+        f"material/{robot['uuid']}/site/{GRIPPER_SITE}/exclusive",
+    }
 
 
 def test_shared_source_admits_two_tasks_without_task_reservation(
@@ -514,8 +700,16 @@ def test_move_instance_commits_parent_and_site_occupancy_atomically(
         slot_id="A1",
         actor="host_node.transfer_resource",
     )
+    replayed = service.move_instance(
+        identities["first"],
+        parent_uuid=target["uuid"],
+        slot_id="A1",
+        actor="station_scheduler.material_transfer",
+        causation_id="workflow-node-job:job-1:material-transfer",
+    )
 
     assert moved["parent_uuid"] == target["uuid"]
+    assert replayed == moved
     assert store.query_one(
         "SELECT occupied_material_uuid FROM site WHERE uuid=?", (SITE_A,)
     )["occupied_material_uuid"] is None
@@ -530,3 +724,8 @@ def test_move_instance_commits_parent_and_site_occupancy_atomically(
     assert ledger["op_type"] == "instance.moved"
     assert ledger["actor"] == "host_node.transfer_resource"
     assert json.loads(ledger["delta_json"])["to_slot"] == "A1"
+    assert store.query_one(
+        "SELECT COUNT(*) AS count FROM inventory_ledger "
+        "WHERE aggregate_id=? AND op_type='instance.moved'",
+        (identities["first"],),
+    )["count"] == 1

@@ -30,16 +30,27 @@ class EdgeProtocolHTTPError(RuntimeError):
 
 
 class EdgeDataPlane:
+    """分离工站调度事实与上游物料查询的 HTTP 数据面。"""
+
     def __init__(
         self,
         backend_address: str,
         scheduler_address: str,
         api_key: str,
+        backend_api_key: str | None = None,
         timeout: float = 10.0,
     ) -> None:
+        """冻结两个 HTTP 权威地址及其独立凭据。
+
+        参数：Backend 地址只用于全局物料查询；调度地址承载作业、反馈和结果；
+        两个凭据分别鉴权，``timeout`` 是请求预算。返回无；非法 URL 在请求前由
+        ``_api_base`` 拒绝，网络异常由具体调用原样传播。
+        """
+
         self.backend_api = _api_base(backend_address)
         self.scheduler_api = _api_base(scheduler_address)
         self.api_key = api_key
+        self.backend_api_key = str(backend_api_key or api_key)
         self.timeout = timeout
         self._session = requests.Session()
         self._session.headers.update({"Authorization": f"Bearer {api_key}"})
@@ -73,6 +84,7 @@ class EdgeDataPlane:
                     "page_size": 100,
                     "with_children": "true",
                 },
+                api_key=self.backend_api_key,
             )
             items = result.get("items")
             if not isinstance(items, list):
@@ -91,9 +103,15 @@ class EdgeDataPlane:
         return resolved
 
     def fetch_job(self, job: StoredJob) -> Dict[str, Any]:
+        """从本地工站调度权威读取一个作业的实际执行载荷。
+
+        参数：``job`` 是 WebSocket 已持久化的作业镜像。返回 HTTP 事实对象；
+        身份或鉴权冲突由统一请求边界抛 ``EdgeProtocolHTTPError``。
+        """
+
         return self._request(
             "GET",
-            f"{self.backend_api}/edge/jobs/{job.job_uuid}",
+            f"{self.scheduler_api}/edge/jobs/{job.job_uuid}",
             span_name="edge.http.job.fetch",
             http_route="/api/v1/edge/jobs/:job_uuid",
             params={"task_uuid": job.task_uuid, "node_uuid": job.node_uuid},
@@ -108,13 +126,16 @@ class EdgeDataPlane:
         feedback: Dict[str, Any],
         observed_at: str,
     ) -> Dict[str, Any]:
+        """提交带完整执行尝试身份的作业反馈。"""
+
         return self._request(
             "POST",
-            f"{self.backend_api}/edge/jobs/{job.job_uuid}/feedback",
+            f"{self.scheduler_api}/edge/jobs/{job.job_uuid}/feedback",
             span_name="edge.http.job.feedback.commit",
             http_route="/api/v1/edge/jobs/:job_uuid/feedback",
             headers=_job_headers(job),
             json={
+                **_job_attempt_identity(job),
                 "sequence": sequence,
                 "feedback_type": feedback_type,
                 "data": feedback,
@@ -146,13 +167,12 @@ class EdgeDataPlane:
         headers["Idempotency-Key"] = f"{job.job_uuid}:outcome:v1"
         return self._request(
             "PUT",
-            f"{self.backend_api}/edge/jobs/{job.job_uuid}/outcome",
+            f"{self.scheduler_api}/edge/jobs/{job.job_uuid}/outcome",
             span_name="edge.http.job.outcome.commit",
             http_route="/api/v1/edge/jobs/:job_uuid/outcome",
             headers=headers,
             json={
-                "task_uuid": job.task_uuid,
-                "node_uuid": job.node_uuid,
+                **_job_attempt_identity(job),
                 "outcome": outcome,
                 "return_info": return_info,
                 "error_info": error_info,
@@ -167,10 +187,19 @@ class EdgeDataPlane:
         *,
         span_name: str,
         http_route: str,
+        api_key: str | None = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
+        """执行一次带追踪和指定权威凭据的 JSON HTTP 请求。
+
+        参数：方法、URL、追踪名和路由标识描述请求；``api_key`` 可切换上游凭据；
+        其余参数传给 requests。返回业务 ``data`` 对象。异常：非 JSON、非成功 HTTP
+        或业务错误转为 ``EdgeProtocolHTTPError``，网络异常原样传播。
+        """
+
         kwargs.setdefault("timeout", self.timeout)
         headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("Authorization", f"Bearer {api_key or self.api_key}")
         with span(
             span_name,
             kind="client",
@@ -215,6 +244,23 @@ class EdgeDataPlane:
             if not isinstance(result, dict):
                 raise EdgeProtocolHTTPError(f"{method} {url} returned invalid data")
             return result
+
+
+def _job_attempt_identity(job: StoredJob) -> Dict[str, Any]:
+    """把 Edge 镜像中的执行尝试身份投影到 HTTP 事实载荷。"""
+
+    return {
+        "job_uuid": job.job_uuid,
+        "task_uuid": job.task_uuid,
+        "node_uuid": job.node_uuid,
+        "command_uuid": job.command_uuid,
+        "claim_uuid": job.claim_uuid,
+        "attempt": job.attempt,
+        "fences": [
+            {"lock_key": lock_key, "fencing_token": fencing_token}
+            for lock_key, fencing_token in job.fences
+        ],
+    }
 
 
 def _job_headers(job: StoredJob) -> Dict[str, str]:

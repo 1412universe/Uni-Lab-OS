@@ -32,15 +32,15 @@ _PRODUCT_LIFECYCLE_LOCK = threading.RLock()
 _product_lifecycle: WorkspaceProductLifecycle | None = None
 
 
-def _unknown_execution_state() -> tuple[str, ...]:
+def _unavailable_execution_state() -> tuple[str, ...]:
     """在没有持久执行投影 Adapter 时关闭自动监督重启。
 
     参数：无。
-    返回：固定 ``execution_unknown``，表示不能证明物理执行已经停止。
+    返回：固定 ``running``，保守表示不能证明物理执行已经停止。
     异常：无。
     """
 
-    return ("execution_unknown",)
+    return ("running",)
 
 
 def _ignore_restart_request(_reasons: tuple[str, ...]) -> None:
@@ -268,7 +268,7 @@ def compose_workspace_product_lifecycle(
     monitor: StableWorkspaceGenerationMonitor | None = None,
     prepare_generation: Callable[[WorkspaceInputGeneration], Any] | None = None,
     restart_mode: bool = False,
-    execution_states: Callable[[], Iterable[str]] = _unknown_execution_state,
+    execution_states: Callable[[], Iterable[str]] = _unavailable_execution_state,
     request_restart: Callable[[tuple[str, ...]], None] = _ignore_restart_request,
 ) -> WorkspaceProductLifecycle:
     """组合复用预编译首代的产品工作区生命周期。
@@ -345,7 +345,7 @@ def install_workspace_product_lifecycle(
     *,
     registry: Any,
     restart_mode: bool = False,
-    execution_states: Callable[[], Iterable[str]] = _unknown_execution_state,
+    execution_states: Callable[[], Iterable[str]] = _unavailable_execution_state,
     request_restart: Callable[[tuple[str, ...]], None] = _ignore_restart_request,
 ) -> WorkspaceProductLifecycle:
     """安装并启动进程唯一的工作区产品生命周期。

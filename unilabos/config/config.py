@@ -11,7 +11,7 @@ class BasicConfig:
     ak = ""
     sk = ""
     working_dir = ""
-    # local：启动调试用嵌入式 Scheduler；backend：仅运行生产 Edge 协议。
+    # local/backend 选择上游模式；workspace_backend 在两种模式下都拥有工站调度。
     control_plane: Literal["local", "backend"] = "local"
     # combined 保持历史单进程；Workbench 使用 workspace_backend + edge_runtime。
     process_role: Literal["combined", "workspace_backend", "edge_runtime"] = (
@@ -72,6 +72,8 @@ class WSConfig:
 # 正式 Backend 控制面的 Edge 协议配置；仅 ``control_plane=backend`` 使用。
 class EdgeControlConfig:
     api_key = ""
+    # 动作进程访问远端 Backend 物料接口时使用；本地调度协议只用 api_key。
+    backend_api_key = ""
     edge_key = ""
     instance_uuid = ""
     capability_revision = "unilabos-edge-v1"

@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from unilabos.app.workflow_api import create_workflow_app
+from unilabos.config.config import EdgeControlConfig
 from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.json_codec import encode_json
 from unilabos.workflow.service import WorkflowService
@@ -234,6 +235,175 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     assert graph == original_graph
     assert plan == original_plan
     assert jobs == original_jobs
+
+
+def test_station_invocation_is_idempotent_and_allows_same_workflow_twice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一 Backend Task 用不同调用键可重复调用工作流，同键只创建一次。
+
+    参数：``tmp_path`` 提供隔离运行库，``monkeypatch`` 安装工站协议密钥。返回无；
+    断言任务/作业身份、优先级、入口参数和事务发件箱均由工站生成并持久化。
+    """
+
+    client, store = _client(tmp_path / "station-invocation.db")
+    try:
+        _create_workflow(client, store)
+        monkeypatch.setattr(EdgeControlConfig, "api_key", "station-secret")
+        backend_task_uuid = "71000000-0000-4000-8000-000000000001"
+        headers = {"Authorization": "Bearer station-secret"}
+        first_body = {
+            "backend_task_uuid": backend_task_uuid,
+            "invocation_key": "global-node-a",
+            "workflow_name": "task input",
+            "input": {"count": 2},
+            "priority": 8,
+        }
+
+        first = client.post(
+            "/api/v1/station/workflow-invocations",
+            json=first_body,
+            headers=headers,
+        )
+        replay = client.post(
+            "/api/v1/station/workflow-invocations",
+            json=first_body,
+            headers=headers,
+        )
+        second = client.post(
+            "/api/v1/station/workflow-invocations",
+            json={**first_body, "invocation_key": "global-node-b"},
+            headers=headers,
+        )
+
+        assert first.status_code == 201
+        assert replay.status_code == 201
+        assert second.status_code == 201
+        first_task = first.json()["data"]
+        assert replay.json()["data"]["uuid"] == first_task["uuid"]
+        assert second.json()["data"]["uuid"] != first_task["uuid"]
+        assert first_task["backend_task_uuid"] == backend_task_uuid
+        assert first_task["invocation_key"] == "global-node-a"
+        assert first_task["priority"] == 8.0
+        assert first_task["input"] == {"count": 2, "label": "automatic"}
+        assert _row_counts(store) == (2, 2)
+        event_count = store._conn.execute(
+            "SELECT COUNT(*) FROM workflow_station_event_outbox"
+        ).fetchone()[0]
+        assert event_count == 4
+    finally:
+        store.close()
+
+
+def test_station_invocation_rejects_changed_replay_and_internal_node_params(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一调用键不能改入口参数，协议也不接受 DAG 中间节点参数。"""
+
+    client, store = _client(tmp_path / "station-conflict.db")
+    try:
+        _create_workflow(client, store)
+        monkeypatch.setattr(EdgeControlConfig, "api_key", "station-secret")
+        headers = {"Authorization": "Bearer station-secret"}
+        body = {
+            "backend_task_uuid": "71000000-0000-4000-8000-000000000002",
+            "invocation_key": "global-node-a",
+            "workflow_name": "task input",
+            "input": {"count": 2},
+        }
+        assert client.post(
+            "/api/v1/station/workflow-invocations",
+            json=body,
+            headers=headers,
+        ).status_code == 201
+
+        conflict = client.post(
+            "/api/v1/station/workflow-invocations",
+            json={**body, "input": {"count": 3}},
+            headers=headers,
+        )
+        forbidden = client.post(
+            "/api/v1/station/workflow-invocations",
+            json={**body, "node_params": {NODE_UUID: {"count": 3}}},
+            headers=headers,
+        )
+
+        assert conflict.status_code == 200
+        assert conflict.json()["code"] == 3003
+        assert forbidden.status_code == 422
+        assert _row_counts(store) == (1, 1)
+    finally:
+        store.close()
+
+
+def test_station_invocation_replay_keeps_first_revision_after_definition_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工作流修订变化后，同一工站调用仍返回首次冻结的 Task。
+
+    参数：``tmp_path`` 隔离运行库，``monkeypatch`` 安装工站协议密钥。返回无；
+    若网络重放改绑新修订、创建第二组 Job 或错误冲突，则由断言失败。
+    """
+
+    client, store = _client(tmp_path / "station-revision-replay.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        monkeypatch.setattr(EdgeControlConfig, "api_key", "station-secret")
+        headers = {"Authorization": "Bearer station-secret"}
+        body = {
+            "backend_task_uuid": "71000000-0000-4000-8000-000000000003",
+            "invocation_key": "global-node-a",
+            "workflow_name": "task input",
+            "input": {"count": 2},
+        }
+        first = client.post(
+            "/api/v1/station/workflow-invocations",
+            json=body,
+            headers=headers,
+        )
+        assert first.status_code == 201
+        first_task = first.json()["data"]
+
+        evolved = client.put(
+            f"/api/v1/workflows/{workflow_uuid}/graph",
+            json={
+                "revision": 2,
+                "nodes": [
+                    {
+                        "uuid": NODE_UUID,
+                        "name": "approval revision 2",
+                        "type": "manual_confirm",
+                        "pose": {},
+                        "param": {},
+                        "execution_policy": {},
+                        "disabled": False,
+                        "minimized": False,
+                        "meta_data": {},
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        assert evolved.status_code == 200
+        assert evolved.json()["code"] == 0
+
+        replay = client.post(
+            "/api/v1/station/workflow-invocations",
+            json=body,
+            headers=headers,
+        )
+
+        assert replay.status_code == 201
+        assert replay.json()["data"]["uuid"] == first_task["uuid"]
+        assert replay.json()["data"]["workflow_snapshot"] == (
+            first_task["workflow_snapshot"]
+        )
+        assert _row_counts(store) == (1, 1)
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize(

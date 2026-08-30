@@ -132,6 +132,55 @@ class WorkflowQuantityInventory:
         时抛 ``StoreConflict``，调用方回滚任务与全部作业。
         """
 
+        allocations = self._build_task_allocations(
+            graph=graph,
+            prepared=prepared,
+            task_uuid=task_uuid,
+            bindings=bindings,
+        )
+        try:
+            self._authority.reserve_task(task_uuid, allocations)
+        except WorkflowQuantityReservationError as error:
+            raise StoreConflict(str(error)) from error
+        return allocations
+
+    def preflight_task_allocations(
+        self,
+        *,
+        graph: Mapping[str, Any],
+        prepared: PreparedTaskInput,
+        bindings: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """只读检查数量型库存绑定能否完成整任务准入。
+
+        参数：图快照、候选执行计划和运行时绑定与正式创建路径完全相同。返回：
+        经过身份、单位、需求总量和当前可用量验证的分配预览。异常：任一条件不满足
+        时抛 ``StoreConflict``。本方法不写 WorkflowTask、预留、台账或 Outbox；
+        正式提交仍须在写事务内重新检查。
+        """
+
+        allocations = self._build_task_allocations(
+            graph=graph,
+            prepared=prepared,
+            task_uuid="00000000-0000-4000-8000-000000000001",
+            bindings=bindings,
+        )
+        try:
+            self._authority.preflight_task(allocations)
+        except WorkflowQuantityReservationError as error:
+            raise StoreConflict(str(error)) from error
+        return allocations
+
+    def _build_task_allocations(
+        self,
+        *,
+        graph: Mapping[str, Any],
+        prepared: PreparedTaskInput,
+        task_uuid: str,
+        bindings: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """规范绑定并构造任务分配，不产生任何持久写入。"""
+
         job_by_node = {
             str(job.get("workflow_node_uuid")): str(job.get("uuid"))
             for job in prepared.jobs
@@ -260,10 +309,6 @@ class WorkflowQuantityInventory:
                         "quantity_unit": binding["quantity_unit"],
                     }
                 )
-        try:
-            self._authority.reserve_task(task_uuid, allocations)
-        except WorkflowQuantityReservationError as error:
-            raise StoreConflict(str(error)) from error
         return allocations
 
     def consume_successful_job(

@@ -93,6 +93,10 @@ class WorkflowNode:
     # 已存在的工作流节点作业（WorkflowNodeJob）UUID；空值保持旧路径随机生成。
     job_id: str = ""
     device_id: str = ""  # 目标设备
+    # 设备作为工站资源图 Material 的稳定身份；缺省时兼容旧本地业务 ID。
+    device_material_uuid: str = ""
+    # 动态设备选择器只冻结类型身份，运行时由调度器选择在线实例。
+    device_selector: Dict[str, Any] = field(default_factory=dict)
     action_name: str = ""  # 设备动作名
     action_type: str = ""  # goal / goal_sequence 等
     param: Dict[str, Any] = field(
@@ -100,11 +104,13 @@ class WorkflowNode:
     )  # action 参数（会被父节点传参覆写）
     # 任务创建时冻结的动作合同（Action Contract）；None 仅表示遗留直接调用。
     param_schema: dict[str, Any] | None = None
-    # 冻结计划中的执行责任；物料转移仍由设备动作通道执行，但用于证明
-    # access_region 的显式释放边界，不能在编译时退化成普通 device_action。
+    # 冻结计划中的执行责任；物料转移仍由设备动作通道执行，用于物料事实结算，
+    # 不创建由 PLC 负责的机械碰撞区域软件锁。
     executor_kind: str = "device_action"
     # 冻结的节点执行策略；调度阶段禁止回读可变工作流图补齐。
     execution_policy: Dict[str, Any] = field(default_factory=dict)
+    # AST 从动作声明编译出的资源语义；工作流实例不得覆盖设备托管或转运角色。
+    action_resource_contract: Dict[str, Any] = field(default_factory=dict)
     # 与云端 workflow_node 类型枚举一致：Group / ILab / py_script / tool_call /
     # manual_confirm / Transfer（Edge 目前只执行 ILab；Transfer 仅规范化/透传，
     # 比较请用 is_ilab()，容忍大小写差异）
@@ -135,7 +141,7 @@ class WorkflowNode:
         不是持久作业执行占用（JobExecutionClaim），也不提供栅栏（Fence）。
         """
 
-        return f"/devices/{self.device_id}"
+        return f"/devices/{self.device_material_uuid or self.device_id}"
 
     def is_ilab(self) -> bool:
         return normalize_node_type(self.node_type) == "ILab"
@@ -265,16 +271,25 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
     raw_execution_policy = data.get("execution_policy") or {}
     if not isinstance(raw_execution_policy, Mapping):
         raise TypeError("execution_policy 必须是对象")
+    raw_device_selector = data.get("device_selector") or {}
+    if not isinstance(raw_device_selector, Mapping):
+        raise TypeError("device_selector 必须是对象")
+    raw_resource_contract = data.get("action_resource_contract") or {}
+    if not isinstance(raw_resource_contract, Mapping):
+        raise TypeError("action_resource_contract 必须是对象")
     return WorkflowNode(
         id=str(data["id"]),
         job_id=str(data.get("job_id", "") or ""),
         device_id=data.get("device_id", "") or "",
+        device_material_uuid=str(data.get("device_material_uuid") or ""),
+        device_selector=dict(raw_device_selector),
         action_name=data.get("action_name", "") or "",
         action_type=data.get("action_type", "") or "",
         param=dict(data.get("param") or {}),
         param_schema=param_schema,
         executor_kind=str(data.get("executor_kind") or "device_action").strip(),
         execution_policy=dict(raw_execution_policy),
+        action_resource_contract=dict(raw_resource_contract),
         node_type=normalize_node_type(data.get("node_type") or data.get("type")),
         manual_continues_device_action=bool(
             data.get("manual_continues_device_action", False)

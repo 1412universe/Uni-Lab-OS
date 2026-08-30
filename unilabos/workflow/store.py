@@ -33,6 +33,10 @@ from unilabos.workflow.authoring_kernel import (
     AuthoringCatalogError,
     AuthoringCatalogSnapshot,
 )
+from unilabos.workflow.event_writer import (
+    append_frontend_event,
+    append_runtime_event,
+)
 from unilabos.workflow.graph_validation import (
     CodedGraphValidationError,
     GraphValidationError,
@@ -50,6 +54,7 @@ from unilabos.workflow.store_migrations import (
     ensure_ephemeral_workflow_reference_schema,
     ensure_execution_lock_schema,
     ensure_local_cancellation_schema,
+    ensure_station_task_submission_schema,
     ensure_task_material_admission_schema,
     ensure_workflow_inventory_schema,
 )
@@ -500,6 +505,12 @@ class WorkflowStore:
                 )
                 try:
                     ensure_device_action_run_schema(self._conn)
+                    ensure_station_task_submission_schema(self._conn)
+                    from unilabos.workflow.station_event_outbox import (
+                        ensure_station_event_outbox_schema,
+                    )
+
+                    ensure_station_event_outbox_schema(self._conn)
                     if not self._persist_workflow_definitions:
                         ensure_ephemeral_workflow_reference_schema(self._conn)
                     ensure_task_material_admission_schema(self._conn)
@@ -597,6 +608,21 @@ class WorkflowStore:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    @contextmanager
+    def read(self) -> Iterator[sqlite3.Connection]:
+        """在存储锁保护下提供只读连接视图。
+
+        参数：无。返回：一个仅供当前 ``with`` 作用域查询的 SQLite 连接；调用方
+        不得提交、回滚或保留该连接。异常：查询产生的 SQLite 异常原样传播。
+
+        该入口供与工作流库同部署的持久化扩展读取自己的表，避免扩展依赖
+        ``WorkflowStore`` 的锁和连接私有字段；需要写入时必须改用
+        :meth:`transaction`。
+        """
+
+        with self._lock:
+            yield self._conn
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
@@ -1661,11 +1687,17 @@ class WorkflowStore:
             ]
         ] = None,
         applied_graph: Dict[str, Any] | None = None,
+        backend_task_uuid: str | None = None,
+        invocation_key: str | None = None,
+        priority: float = 1.0,
+        request_fingerprint: str = "",
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
         参数：工作流、任务、运行模式与目标标识创建意图；说明和元数据是公开
-        请求事实；``applied_graph`` 是进程内定义目录一次读取的不可变应用图，
+        请求事实；``backend_task_uuid`` 与 ``invocation_key`` 可标识上游同一次
+        工站调用，``priority`` 是冻结调度优先级，``request_fingerprint`` 防止同一
+        调用键重放不同载荷；``applied_graph`` 是进程内定义目录一次读取的不可变应用图，
         省略时仅为兼容持久定义 Store 从当前事务读取；``plan_builder`` 必须从该
         同一应用图返回已解析输入、冻结快照、执行计划（ExecutionPlan）及作业；可选
         ``inventory_allocation_builder`` 在首次写入前用同一工作流事务锁校验
@@ -1675,6 +1707,27 @@ class WorkflowStore:
 
         now = utc_now()
         with self.transaction() as conn:
+            if backend_task_uuid is not None or invocation_key is not None:
+                if (
+                    not backend_task_uuid
+                    or not invocation_key
+                    or not request_fingerprint
+                ):
+                    raise StoreConflict("Backend 工站调用身份或请求指纹不完整")
+                existing = conn.execute(
+                    """
+                    SELECT * FROM workflow_task
+                    WHERE backend_task_uuid = ? AND invocation_key = ?
+                      AND deleted_at IS NULL
+                    """,
+                    (backend_task_uuid, invocation_key),
+                ).fetchone()
+                if existing is not None:
+                    if str(existing["request_fingerprint"] or "") != request_fingerprint:
+                        raise StoreConflict("同一工站调用键对应的请求内容已变化")
+                    result = self._task_row(existing)
+                    result["_station_submission_created"] = False
+                    return result
             if applied_graph is None:
                 if not self._persist_workflow_definitions:
                     raise StoreConflict("运行事实库创建任务时缺少工作流图快照")
@@ -1698,9 +1751,11 @@ class WorkflowStore:
                     uuid, create_time, update_time, deleted_at, description,
                     meta_data, workflow_uuid, status, workflow_snapshot,
                     execution_plan, run_mode, target_node_uuid, control_status,
-                    cleanup_status, trace_context, input, output, error_info
+                    cleanup_status, trace_context, input, output, error_info,
+                    backend_task_uuid, invocation_key, priority,
+                    request_fingerprint
                 ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?,
-                          'none', '{}', ?, '{}', '[]')
+                          'none', '{}', ?, '{}', '[]', ?, ?, ?, ?)
                 """,
                 (
                     task_uuid,
@@ -1715,7 +1770,27 @@ class WorkflowStore:
                     effective_target,
                     control_status,
                     _json(prepared.resolved_input),
+                    backend_task_uuid,
+                    invocation_key,
+                    float(priority),
+                    request_fingerprint,
                 ),
+            )
+            from unilabos.workflow.station_status_projection import (
+                append_job_state_event,
+                append_task_state_event,
+            )
+
+            append_task_state_event(
+                conn,
+                task_uuid=task_uuid,
+                status="pending",
+                details={
+                    "backend_task_uuid": backend_task_uuid,
+                    "invocation_key": invocation_key,
+                    "workflow_uuid": workflow_uuid,
+                    "priority": float(priority),
+                },
             )
             self._append_runtime_event(
                 conn,
@@ -1760,6 +1835,17 @@ class WorkflowStore:
                     from_status=None,
                     to_status="pending",
                     now=now,
+                )
+                job_row = conn.execute(
+                    "SELECT * FROM workflow_node_job WHERE uuid = ?",
+                    (job["uuid"],),
+                ).fetchone()
+                assert job_row is not None
+                append_job_state_event(
+                    conn,
+                    job_row=job_row,
+                    status="pending",
+                    details={"param": job.get("param") or {}},
                 )
             for allocation in inventory_allocations:
                 conn.execute(
@@ -1812,7 +1898,10 @@ class WorkflowStore:
                 data={"workflow_task_uuid": task_uuid},
                 now=now,
             )
-        return self.get_task(task_uuid)
+        result = self.get_task(task_uuid)
+        if backend_task_uuid is not None:
+            result["_station_submission_created"] = True
+        return result
 
     def get_task(self, task_uuid: str) -> Dict[str, Any]:
         with self._lock:
@@ -1822,6 +1911,36 @@ class WorkflowStore:
             ).fetchone()
         if row is None:
             raise StoreNotFound(f"workflow task {task_uuid} not found")
+        return self._task_row(row)
+
+    def get_station_task_by_invocation(
+        self,
+        *,
+        backend_task_uuid: str,
+        invocation_key: str,
+        request_fingerprint: str,
+    ) -> Dict[str, Any] | None:
+        """按上游调用身份幂等读取首次冻结的工站任务。
+
+        参数：``backend_task_uuid`` 与 ``invocation_key`` 唯一标识一次工站调用；
+        ``request_fingerprint`` 证明重放入口请求未变化。返回既有任务，首次调用返回
+        ``None``。异常：同一调用身份对应不同请求时抛 ``StoreConflict``；只读过程
+        不解析当前工作流修订，因此定义演进不会破坏已冻结调用的网络重放。
+        """
+
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT * FROM workflow_task
+                WHERE backend_task_uuid = ? AND invocation_key = ?
+                  AND deleted_at IS NULL
+                """,
+                (backend_task_uuid, invocation_key),
+            ).fetchone()
+        if row is None:
+            return None
+        if str(row["request_fingerprint"] or "") != request_fingerprint:
+            raise StoreConflict("同一工站调用键对应的请求内容已变化")
         return self._task_row(row)
 
     def list_tasks(
@@ -3357,11 +3476,12 @@ class WorkflowStore:
         data: Dict[str, Any],
         now: str,
     ) -> int:
-        cursor = conn.execute(
-            "INSERT INTO frontend_event(event, data, create_time) VALUES (?, ?, ?)",
-            (event, _json(data), now),
+        return append_frontend_event(
+            conn,
+            event=event,
+            data=data,
+            now=now,
         )
-        return int(cursor.lastrowid)
 
     @staticmethod
     def _append_runtime_event(
@@ -3378,26 +3498,17 @@ class WorkflowStore:
     ) -> int:
         """在调用方事务内追加一个可重放的任务运行事实。"""
 
-        cursor = conn.execute(
-            """
-            INSERT INTO workflow_runtime_journal(
-                workflow_task_uuid, workflow_node_job_uuid,
-                workflow_task_command_uuid, kind, from_status, to_status,
-                data, create_time
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                task_uuid,
-                job_uuid,
-                command_uuid,
-                kind,
-                from_status,
-                to_status,
-                _json(data or {}),
-                now,
-            ),
+        return append_runtime_event(
+            conn,
+            task_uuid=task_uuid,
+            kind=kind,
+            now=now,
+            job_uuid=job_uuid,
+            command_uuid=command_uuid,
+            from_status=from_status,
+            to_status=to_status,
+            data=data,
         )
-        return int(cursor.lastrowid)
 
     def count_rows(self, table: str, *, include_deleted: bool = False) -> int:
         allowed = {
@@ -3563,6 +3674,7 @@ class WorkflowStore:
             **cls._base(row),
             "workflow_uuid": row["workflow_uuid"],
             "execution_kind": row["execution_kind"],
+            "priority": float(row["priority"]),
             "status": row["status"],
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),
@@ -3585,6 +3697,8 @@ class WorkflowStore:
             "reconciliation_resume_control_status",
             "started_at",
             "finished_at",
+            "backend_task_uuid",
+            "invocation_key",
         )
         return result
 

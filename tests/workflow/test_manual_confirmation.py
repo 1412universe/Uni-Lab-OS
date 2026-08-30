@@ -290,10 +290,16 @@ def test_terminal_job_closes_pending_manual_confirmation(
         store.close()
 
 
-def test_restart_restores_pending_manual_confirmation_without_unknown(
+def test_scheduler_restart_fails_pending_manual_confirmation_task(
     tmp_path,
 ) -> None:
-    """尚未人工决策的节点没有物理发送，重启后应继续等待。"""
+    """调度进程重启后运行中任务整体失败且不再恢复人工等待。
+
+    参数：``tmp_path`` 提供隔离工作流库。返回：无；断言运行中的工作流任务
+    （WorkflowTask）进入 ``failed``，未越过物理边界的人工确认作业进入
+    ``skipped``，对应确认进入 ``canceled``。异常：任何恢复后继续推进都会使
+    断言失败。
+    """
 
     store = WorkflowStore(tmp_path / "manual-restart.db")
     plan = {
@@ -333,12 +339,15 @@ def test_restart_restores_pending_manual_confirmation_without_unknown(
         try:
             recovered = bridge.recover_active_tasks()
             assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
-            assert store.get_job(JOB_UUID)["status"] in {"dispatched", "running"}
+            assert store.get_job(JOB_UUID)["status"] == "skipped"
             confirmation = WorkflowService(store).list_task_manual_confirmations(
                 TASK_UUID
             )[0]
-            assert confirmation["status"] == "pending"
-            assert store.get_task(TASK_UUID)["control_status"] != "waiting_reconciliation"
+            assert confirmation["status"] == "canceled"
+            task = store.get_task(TASK_UUID)
+            assert task["status"] == "failed"
+            assert task["cleanup_status"] == "settled"
+            assert task["control_status"] == "active"
         finally:
             bridge.close()
     finally:

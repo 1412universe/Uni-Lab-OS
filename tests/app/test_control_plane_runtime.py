@@ -98,6 +98,39 @@ def test_split_runtime_accepts_backend_workspace_authoring_without_edge() -> Non
     assert not plan.initializes_host_devices
 
 
+def test_backend_upstream_workspace_starts_local_station_scheduler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backend 上游模式的工作区进程仍启动本地工站调度权威。"""
+
+    from unilabos.app.scheduler import runtime as scheduler_runtime
+
+    expected = object()
+    monkeypatch.setattr(
+        scheduler_runtime,
+        "start_embedded_scheduler_runtime",
+        lambda _context: expected,
+    )
+    context = ControlPlaneRuntimeContext(
+        arguments={
+            "control_plane": "backend",
+            "process_role": "workspace_backend",
+            "app_bridges": ["fastapi"],
+            "is_slave": False,
+            "preserve_runtime_databases": True,
+        },
+        working_dir=str(tmp_path),
+        resource_tree_set=object(),
+        registry=object(),
+        graph_source_id="graph.json",
+        material_shapes=(),
+        material_model_catalog=None,
+    )
+
+    assert start_control_plane_runtime(context) is expected
+
+
 def test_edge_runtime_ready_signal_is_atomic(tmp_path) -> None:
     ready_path = tmp_path / "edge" / "ready.json"
 
@@ -234,15 +267,28 @@ def test_backend_runtime_does_not_start_scheduler_or_local_databases(
 
 
 @pytest.mark.parametrize(
-    ("control_plane", "expected"),
-    [("local", True), ("backend", False)],
+    ("control_plane", "process_role", "expected"),
+    [
+        ("local", "combined", True),
+        ("backend", "combined", False),
+        ("backend", "workspace_backend", True),
+        ("backend", "edge_runtime", False),
+    ],
 )
-def test_fastapi_mounts_embedded_routes_only_for_local_control_plane(
+def test_fastapi_mounts_scheduler_routes_for_station_authority(
     control_plane: str,
+    process_role: str,
     expected: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证只有工站调度权威进程挂载本地调度接口。
+
+    参数：控制面模式、进程角色和预期值覆盖双进程组合；``monkeypatch`` 隔离
+    全局配置。返回无；路由所有权偏离工站调度进程时断言失败。
+    """
+
     monkeypatch.setattr(BasicConfig, "control_plane", control_plane)
+    monkeypatch.setattr(BasicConfig, "process_role", process_role)
 
     assert should_mount_embedded_scheduler_routes() is expected
 
@@ -266,7 +312,14 @@ def test_backend_fastapi_does_not_import_or_mount_embedded_scheduler(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证非工作区的 Backend 进程不会装配工站调度实现。
+
+    参数：``tmp_path`` 隔离运行目录，``monkeypatch`` 注入 Backend 组合模式。
+    返回无；导入调度模块、挂载调度路由或创建本地数据库时断言失败。
+    """
+
     monkeypatch.setattr(BasicConfig, "control_plane", "backend")
+    monkeypatch.setattr(BasicConfig, "process_role", "combined")
     monkeypatch.setattr(BasicConfig, "working_dir", str(tmp_path))
     monkeypatch.setattr(BasicConfig, "workspace_package_mount_projection", None)
     scheduler_modules_before = {
@@ -298,7 +351,7 @@ def test_backend_fastapi_does_not_import_or_mount_embedded_scheduler(
 def test_backend_ros_runtime_does_not_start_hostlink_microbackend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unilabos.ros import main_slave_run
+    from unilabos.ros import hostlink_runtime
 
     calls: list[object] = []
     fake_host_network = types.ModuleType("unilabos.app.scheduler.host_network")
@@ -310,7 +363,7 @@ def test_backend_ros_runtime_does_not_start_hostlink_microbackend(
     )
     monkeypatch.setattr(BasicConfig, "control_plane", "backend")
 
-    main_slave_run._setup_host_network_before_ros()
-    main_slave_run._attach_hostlink_runtime(object())
+    hostlink_runtime.setup_host_network_before_ros()
+    hostlink_runtime.attach_hostlink_runtime(object())
 
     assert calls == []

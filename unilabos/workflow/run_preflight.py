@@ -43,9 +43,7 @@ def _finalize(report: dict[str, Any]) -> dict[str, Any]:
 
     checks = report["checks"]
     summary = report["summary"]
-    summary["passed_check_count"] = sum(
-        item["status"] == "passed" for item in checks
-    )
+    summary["passed_check_count"] = sum(item["status"] == "passed" for item in checks)
     summary["blocking_check_count"] = sum(
         item["status"] == "blocked" for item in checks
     )
@@ -67,18 +65,56 @@ def _finalize(report: dict[str, Any]) -> dict[str, Any]:
     return report
 
 
+def _append_quantity_inventory_check(
+    report: dict[str, Any],
+    quantity_inventory_check: Mapping[str, Any] | None,
+) -> None:
+    """把可选共享数量库存预检追加到报告且不改变其他检查。"""
+
+    if quantity_inventory_check is None:
+        return
+    blocked = quantity_inventory_check.get("status") == "blocked"
+    report["checks"].append(
+        _check(
+            check_type="quantity_inventory",
+            status="blocked" if blocked else "passed",
+            code=(
+                "quantity_inventory_unavailable"
+                if blocked
+                else "quantity_inventory_ready"
+            ),
+            message=str(
+                quantity_inventory_check.get("message")
+                or (
+                    "共享数量库存当前不足"
+                    if blocked
+                    else "共享数量库存当前可完成整任务准入"
+                )
+            ),
+            blocking=blocked,
+            details={
+                "allocation_count": int(
+                    quantity_inventory_check.get("allocation_count") or 0
+                )
+            },
+        )
+    )
+
+
 def build_run_preflight_report(
     *,
     graph: Mapping[str, Any],
     run_mode: str,
     target_node_uuid: str | None,
     material_resolver: Callable[[str], Mapping[str, Any] | None] | None,
+    quantity_inventory_check: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """只读检查当前图能否形成执行计划及其明显运行前条件。
 
     参数：``graph`` 是同一修订快照；运行模式和可选目标固定候选范围；
-    ``material_resolver`` 只读确认设备物料身份。返回可展示报告；本函数不创建
-    Task/Job、不预留库存、不取得执行锁，动态条件明确标成 ``deferred``。
+    ``material_resolver`` 只读确认设备物料身份；可选数量库存检查来自同一候选
+    输入的只读库存快照。返回可展示报告；本函数不创建 Task/Job、不预留库存、
+    不取得执行锁，动态条件明确标成 ``deferred``。
     """
 
     workflow = graph["workflow"]
@@ -106,7 +142,13 @@ def build_run_preflight_report(
             run_mode=run_mode,
             target_node_uuid=target_node_uuid,
         )
-    except (ExecutionPlanBuildError, KeyError, StoreConflict, TypeError, ValueError) as error:
+    except (
+        ExecutionPlanBuildError,
+        KeyError,
+        StoreConflict,
+        TypeError,
+        ValueError,
+    ) as error:
         report["checks"].append(
             _check(
                 check_type="execution_plan",
@@ -116,10 +158,12 @@ def build_run_preflight_report(
                 blocking=True,
             )
         )
+        _append_quantity_inventory_check(report, quantity_inventory_check)
         return _finalize(report)
 
     planned_nodes = plan["nodes"]
     report["summary"]["execution_node_count"] = len(planned_nodes)
+    _append_quantity_inventory_check(report, quantity_inventory_check)
     report["checks"].append(
         _check(
             check_type="execution_plan",

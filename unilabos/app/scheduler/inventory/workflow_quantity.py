@@ -265,49 +265,20 @@ class WorkflowQuantityInventoryAuthority:
                     raise WorkflowQuantityReservationError("任务数量预留身份发生变化")
                 for job_uuid, expected in expected_payloads.items():
                     row = existing_quantity[job_uuid]
-                    if row["status"] != "active" or _load(
-                        row["amounts_json"], {}
-                    ) != expected:
+                    if (
+                        row["status"] != "active"
+                        or _load(row["amounts_json"], {}) != expected
+                    ):
                         raise WorkflowQuantityReservationError(
                             "任务数量预留与首次提交内容冲突"
                         )
                 return
 
-            requested: dict[tuple[str, str], float] = {}
-            for allocation in allocations:
-                inventory_type = str(allocation["inventory_type"])
-                inventory_uuid = str(allocation["inventory_uuid"])
-                current = self._tx_content(
-                    connection,
-                    inventory_type=inventory_type,
-                    inventory_uuid=inventory_uuid,
-                )
-                if str(current["quantity_unit"]).casefold() != str(
-                    allocation["quantity_unit"]
-                ).casefold():
-                    raise WorkflowQuantityReservationError(
-                        "库存实例单位与工作流绑定单位不一致"
-                    )
-                identity = (inventory_type, inventory_uuid)
-                requested[identity] = requested.get(identity, 0.0) + float(
-                    allocation["reserved_quantity"]
-                )
-            for (inventory_type, inventory_uuid), quantity in requested.items():
-                current = self._tx_content(
-                    connection,
-                    inventory_type=inventory_type,
-                    inventory_uuid=inventory_uuid,
-                )
-                reserved = active_workflow_reserved_quantity(
-                    connection,
-                    inventory_type=inventory_type,
-                    inventory_uuid=inventory_uuid,
-                    excluding_task_uuid=task_uuid,
-                )
-                if float(current["quantity"]) - reserved + 1e-9 < quantity:
-                    raise WorkflowQuantityReservationError(
-                        "库存实例可用数量不足，无法完成整任务预留"
-                    )
+            self._check_available(
+                connection,
+                allocations,
+                excluding_task_uuid=task_uuid,
+            )
 
             now_ms = int(time.time() * 1000)
             for job_uuid, payload in expected_payloads.items():
@@ -342,6 +313,64 @@ class WorkflowQuantityInventoryAuthority:
                     causation_id=f"reserve:{task_uuid}",
                     workflow_task_uuid=task_uuid,
                     workflow_node_job_uuid=job_uuid,
+                )
+
+    def preflight_task(self, allocations: Sequence[Mapping[str, Any]]) -> None:
+        """只读验证整任务数量绑定当前是否可全量预留。
+
+        参数：已完成身份与需求匹配的分配集合。返回无。异常：库存实例缺失、单位
+        变化或扣除其他活动任务预留后的可用量不足时抛
+        ``WorkflowQuantityReservationError``。检查在一个库存事务快照内完成，不
+        创建预留、台账或 Outbox 事件，因此结果只是提示而不是执行承诺。
+        """
+
+        with self._store.transaction() as connection:
+            self._check_available(connection, allocations)
+
+    def _check_available(
+        self,
+        connection: sqlite3.Connection,
+        allocations: Sequence[Mapping[str, Any]],
+        *,
+        excluding_task_uuid: str = "",
+    ) -> None:
+        """在同一库存快照内按实例聚合并验证整组可用数量。"""
+
+        requested: dict[tuple[str, str], float] = {}
+        for allocation in allocations:
+            inventory_type = str(allocation["inventory_type"])
+            inventory_uuid = str(allocation["inventory_uuid"])
+            current = self._tx_content(
+                connection,
+                inventory_type=inventory_type,
+                inventory_uuid=inventory_uuid,
+            )
+            if (
+                str(current["quantity_unit"]).casefold()
+                != str(allocation["quantity_unit"]).casefold()
+            ):
+                raise WorkflowQuantityReservationError(
+                    "库存实例单位与工作流绑定单位不一致"
+                )
+            identity = (inventory_type, inventory_uuid)
+            requested[identity] = requested.get(identity, 0.0) + float(
+                allocation["reserved_quantity"]
+            )
+        for (inventory_type, inventory_uuid), quantity in requested.items():
+            current = self._tx_content(
+                connection,
+                inventory_type=inventory_type,
+                inventory_uuid=inventory_uuid,
+            )
+            reserved = active_workflow_reserved_quantity(
+                connection,
+                inventory_type=inventory_type,
+                inventory_uuid=inventory_uuid,
+                excluding_task_uuid=excluding_task_uuid,
+            )
+            if float(current["quantity"]) - reserved + 1e-9 < quantity:
+                raise WorkflowQuantityReservationError(
+                    "库存实例可用数量不足，无法完成整任务预留"
                 )
 
     def release_task(self, task_uuid: str, *, reason: str) -> None:
@@ -454,10 +483,13 @@ class WorkflowQuantityInventoryAuthority:
                 raise WorkflowQuantityReservationError("作业数量预留已被释放")
             for record in records:
                 event_uuid = str(record["event_uuid"])
-                if connection.execute(
-                    "SELECT 1 FROM inventory_ledger WHERE entry_uuid=?",
-                    (event_uuid,),
-                ).fetchone() is not None:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM inventory_ledger WHERE entry_uuid=?",
+                        (event_uuid,),
+                    ).fetchone()
+                    is not None
+                ):
                     continue
                 self._tx_consume_record(
                     connection,
@@ -478,9 +510,7 @@ class WorkflowQuantityInventoryAuthority:
     def list_task_consumptions(self, task_uuid: str) -> list[dict[str, Any]]:
         """按任务返回本模块写入的实际消费事实。"""
 
-        return self._consumptions(
-            "workflow_task_uuid=?", (task_uuid,), reverse=False
-        )
+        return self._consumptions("workflow_task_uuid=?", (task_uuid,), reverse=False)
 
     def list_job_consumptions(self, job_uuid: str) -> list[dict[str, Any]]:
         """按作业返回本模块写入的实际消费事实。"""
@@ -695,11 +725,7 @@ class WorkflowQuantityInventoryAuthority:
             + f"ORDER BY occurred_at {order},entry_uuid {order}",
             params,
         )
-        return [
-            self._consumption_row(row)
-            for row in rows
-            if self._is_consumption(row)
-        ]
+        return [self._consumption_row(row) for row in rows if self._is_consumption(row)]
 
     @staticmethod
     def _is_consumption(row: Mapping[str, Any]) -> bool:
@@ -733,7 +759,9 @@ class WorkflowQuantityInventoryAuthority:
             "consumed_at": datetime.fromtimestamp(
                 int(row["occurred_at"]) / 1000,
                 timezone.utc,
-            ).isoformat().replace("+00:00", "Z"),
+            )
+            .isoformat()
+            .replace("+00:00", "Z"),
             "meta_data": {
                 "planned_quantity_unit": payload.get("planned_quantity_unit"),
                 "reported_quantity_unit": payload.get("reported_quantity_unit"),

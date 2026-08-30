@@ -241,17 +241,17 @@ class _StaleRegistryResolver:
         return (SECOND_MATERIAL_UUID,)
 
 
-def test_execution_plan_rejects_material_uuid_as_executor_fallback() -> None:
-    """设备物料身份不得替代显式执行器绑定。
+def test_execution_plan_rejects_material_uuid_as_dynamic_device_selector() -> None:
+    """设备物料身份不得替代动态设备类型选择器。
 
-    参数：无。返回：无；断言缺少执行器绑定（ExecutorBinding）的
-    真实创作图以稳定错误码失败关闭。异常：预期计划构建错误。
+    参数：无。返回：无；断言既无固定执行器绑定（ExecutorBinding）、模板又无
+    资源类型 UUID 的真实创作图以稳定错误码失败关闭。异常：预期计划构建错误。
     """
 
     with pytest.raises(ExecutionPlanBuildError) as caught:
         _build_real_plan(explicit_executor=False)
 
-    assert caught.value.code == "invalid_executor_binding"
+    assert caught.value.code == "invalid_device_selector"
 
 
 def test_empty_job_list_cannot_erase_frozen_resource_slot_materials() -> None:
@@ -288,9 +288,7 @@ def test_fixed_material_source_populates_first_consumer_final_param() -> None:
 
     plan, jobs = _build_real_plan()
 
-    assert _action_plan_node(plan)["param"] == {
-        "plate": {"uuid": MATERIAL_UUID}
-    }
+    assert _action_plan_node(plan)["param"] == {"plate": {"uuid": MATERIAL_UUID}}
     spec = _compile_real_plan(plan, jobs)
     assert spec.nodes[0].param == {"plate": {"uuid": MATERIAL_UUID}}
 
@@ -331,7 +329,10 @@ def test_frozen_action_contract_wins_over_changed_registry() -> None:
     resource_locks = next(iter(inflight_jobs.values()))["resource_locks"]
 
     assert len(result["dispatched"]) == 1
-    assert resource_locks == [f"material/{MATERIAL_UUID}/exclusive"]
+    assert resource_locks == [
+        f"/devices/{DEVICE_MATERIAL_UUID}",
+        f"material/{MATERIAL_UUID}/exclusive",
+    ]
     assert stale_registry.calls == 0
 
 

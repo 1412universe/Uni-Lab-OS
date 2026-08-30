@@ -106,6 +106,41 @@ def ensure_device_action_run_schema(connection: sqlite3.Connection) -> None:
     )
 
 
+def ensure_station_task_submission_schema(connection: sqlite3.Connection) -> None:
+    """补齐 Backend 工站调用的关联、幂等与优先级字段。
+
+    参数：``connection`` 是工作流运行库初始化事务的唯一写连接。返回无；幂等
+    增加全局任务身份、调用键和优先级，并为同一 Backend 调用建立活动唯一索引。
+    异常由初始化事务回滚，禁止在无法证明调用幂等时开放工站任务接口。
+    """
+
+    task_columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(workflow_task)").fetchall()
+    }
+    if "backend_task_uuid" not in task_columns:
+        connection.execute(
+            "ALTER TABLE workflow_task ADD COLUMN backend_task_uuid TEXT"
+        )
+    if "invocation_key" not in task_columns:
+        connection.execute(
+            "ALTER TABLE workflow_task ADD COLUMN invocation_key TEXT"
+        )
+    if "priority" not in task_columns:
+        connection.execute(
+            "ALTER TABLE workflow_task ADD COLUMN priority REAL NOT NULL DEFAULT 1"
+        )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_task_station_invocation
+        ON workflow_task(backend_task_uuid, invocation_key)
+        WHERE deleted_at IS NULL
+          AND backend_task_uuid IS NOT NULL
+          AND invocation_key IS NOT NULL
+        """
+    )
+
+
 def ensure_ephemeral_workflow_reference_schema(
     connection: sqlite3.Connection,
 ) -> None:
@@ -410,6 +445,82 @@ def ensure_execution_lock_schema(connection: sqlite3.Connection) -> None:
                                      workflow_node_job_uuid, lock_key)
             WHERE deleted_at IS NULL AND state = 'waiting';
 
+        CREATE TABLE IF NOT EXISTS execution_claim (
+            claim_uuid TEXT PRIMARY KEY,
+            create_time TEXT NOT NULL,
+            update_time TEXT NOT NULL,
+            workflow_task_uuid TEXT NOT NULL,
+            workflow_node_job_uuid TEXT NOT NULL,
+            attempt INTEGER NOT NULL CHECK (attempt > 0),
+            resource_keys TEXT NOT NULL,
+            state TEXT NOT NULL
+                CHECK (state IN ('reserved', 'running', 'released', 'uncertain')),
+            acquired_at TEXT NOT NULL,
+            released_at TEXT,
+            UNIQUE(workflow_node_job_uuid, attempt),
+            FOREIGN KEY(workflow_task_uuid) REFERENCES workflow_task(uuid),
+            FOREIGN KEY(workflow_node_job_uuid) REFERENCES workflow_node_job(uuid)
+        );
+        CREATE INDEX IF NOT EXISTS ix_execution_claim_job_state
+            ON execution_claim(workflow_node_job_uuid, state);
+
+        CREATE TABLE IF NOT EXISTS execution_fence_counter (
+            lock_key TEXT PRIMARY KEY,
+            last_fencing_token INTEGER NOT NULL
+                CHECK (last_fencing_token > 0),
+            update_time TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS task_device_tenancy (
+            uuid TEXT PRIMARY KEY,
+            create_time TEXT NOT NULL,
+            update_time TEXT NOT NULL,
+            workflow_task_uuid TEXT NOT NULL,
+            material_uuid TEXT NOT NULL,
+            device_lock_key TEXT NOT NULL,
+            acquired_by_job_uuid TEXT NOT NULL,
+            released_by_job_uuid TEXT,
+            state TEXT NOT NULL CHECK (state IN ('active', 'released')),
+            acquired_at TEXT NOT NULL,
+            released_at TEXT,
+            CHECK (
+                (state = 'active' AND released_at IS NULL
+                    AND released_by_job_uuid IS NULL)
+                OR (state = 'released' AND released_at IS NOT NULL
+                    AND released_by_job_uuid IS NOT NULL)
+            ),
+            FOREIGN KEY(workflow_task_uuid) REFERENCES workflow_task(uuid),
+            FOREIGN KEY(acquired_by_job_uuid) REFERENCES workflow_node_job(uuid),
+            FOREIGN KEY(released_by_job_uuid) REFERENCES workflow_node_job(uuid)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_task_device_tenancy_active_device
+            ON task_device_tenancy(device_lock_key)
+            WHERE state = 'active';
+        DROP INDEX IF EXISTS ux_task_device_tenancy_active_material;
+        CREATE INDEX IF NOT EXISTS ix_task_device_tenancy_task_state
+            ON task_device_tenancy(workflow_task_uuid, state, device_lock_key);
+
+        CREATE TABLE IF NOT EXISTS job_device_tenancy_transition (
+            workflow_node_job_uuid TEXT PRIMARY KEY,
+            workflow_task_uuid TEXT NOT NULL,
+            material_uuid TEXT NOT NULL,
+            acquire_device_lock_key TEXT,
+            release_device_lock_key TEXT,
+            status TEXT NOT NULL
+                CHECK (status IN ('prepared', 'settled', 'retained', 'reverted')),
+            create_time TEXT NOT NULL,
+            update_time TEXT NOT NULL,
+            settled_at TEXT,
+            CHECK (
+                acquire_device_lock_key IS NOT NULL
+                OR release_device_lock_key IS NOT NULL
+            ),
+            FOREIGN KEY(workflow_node_job_uuid) REFERENCES workflow_node_job(uuid),
+            FOREIGN KEY(workflow_task_uuid) REFERENCES workflow_task(uuid)
+        );
+        CREATE INDEX IF NOT EXISTS ix_job_device_tenancy_transition_task_status
+            ON job_device_tenancy_transition(workflow_task_uuid, status);
+
         CREATE TRIGGER IF NOT EXISTS trg_release_inactive_execution_lock_waiters
         AFTER UPDATE OF status ON workflow_node_job
         FOR EACH ROW
@@ -424,6 +535,26 @@ def ensure_execution_lock_schema(connection: sqlite3.Connection) -> None:
               AND deleted_at IS NULL;
         END;
         """,
+    )
+    lease_columns = {
+        str(row["name"])
+        for row in connection.execute(
+            "PRAGMA table_info(execution_lock_lease)"
+        ).fetchall()
+    }
+    if "claim_uuid" not in lease_columns:
+        connection.execute(
+            "ALTER TABLE execution_lock_lease ADD COLUMN claim_uuid TEXT"
+        )
+    if "fencing_token" not in lease_columns:
+        connection.execute(
+            "ALTER TABLE execution_lock_lease ADD COLUMN fencing_token INTEGER"
+        )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_execution_lock_lease_claim
+        ON execution_lock_lease(claim_uuid, fencing_token)
+        """
     )
 
 

@@ -307,8 +307,8 @@ def parse_args():
         choices=["local", "backend"],
         default="local",
         help=(
-            "控制面权威：local 启动调试用嵌入式 Scheduler；backend 仅连接正式 "
-            "Backend/Scheduler，不创建本地调度数据库。"
+            "上游模式：local 使用本站服务；backend 连接正式 Backend。"
+            "workspace_backend 在两种模式下都拥有本地工站调度与运行数据库。"
         ),
     )
     parser.add_argument(
@@ -317,7 +317,7 @@ def parse_args():
         default="combined",
         help=(
             "进程职责：combined 保持历史单进程；workspace_backend 常驻提供 "
-            "Authoring/Local Domain API；edge_runtime 只承载设备运行时。"
+            "工作流创作、库存和工站调度；edge_runtime 只承载动作执行运行时。"
         ),
     )
     parser.add_argument(
@@ -332,8 +332,8 @@ def parse_args():
         choices=["websocket", "edge_control", "fastapi"],
         default=["websocket", "fastapi"],
         help=(
-            "Bridges to connect to: websocket (legacy cloud), edge_control "
-            "(production Backend/Scheduler), and fastapi."
+            "连接桥：websocket 是遗留云端通知，edge_control 是动作进程与本地"
+            "工站调度器的生产协议，fastapi 提供入站 HTTP 服务。"
         ),
     )
     parser.add_argument(
@@ -1099,14 +1099,20 @@ def main():
     BasicConfig.process_role = runtime_process_plan.role.value
     BasicConfig.is_host_mode = not args_dict.get("is_slave", False)
     if BasicConfig.is_host_mode:
-        if control_plane_mode.value == "local":
+        if runtime_process_plan.role.value == "workspace_backend":
+            print_status(
+                "Workspace Backend 拥有本地工站调度；上游模式为 "
+                f"{control_plane_mode.value}",
+                "info",
+            )
+        elif control_plane_mode.value == "local":
             print_status(
                 "OS 主机使用调试用 app/scheduler 与嵌入式库存",
                 "info",
             )
         else:
             print_status(
-                "生产 Edge 使用 Backend/Scheduler 远端控制面",
+                "动作执行运行时通过协议连接调度控制面",
                 "info",
             )
     else:
@@ -1470,24 +1476,12 @@ def main():
             "Edge Runtime 使用生产形态 HTTP/WebSocket 协议连接控制面",
             "info",
         )
-    elif (
-        runtime_process_plan.role.value == "workspace_backend"
-        and runtime_process_plan.control_plane.value == "backend"
-    ):
-        # Local Backend remains the stable Workspace Authoring service while
-        # Canvas/Runtime facts live in the Go Backend.  It must not create a
-        # second Scheduler/Inventory authority or connect as a device Edge.
-        print_status(
-            "Workspace Backend 使用 Backend Authority；仅保留 Authoring Projection",
-            "info",
-        )
     elif BasicConfig.is_host_mode or (
         runtime_process_plan.role.value == "workspace_backend"
-        and runtime_process_plan.control_plane.value == "local"
     ):
-        # Workspace Backend 的 Inventory/Scheduler 是本地 Authoring 发布源，
-        # 与是否加载实体设备无关；external_devices_only 只能跳过设备驱动，不能
-        # 让资源模板和物料图路由随 HostNode 一起消失。
+        # Workspace Backend 的库存（Inventory）与调度器（Scheduler）始终是本站
+        # 运行权威；Backend 上游模式只改变全局任务来源和结果投影目标。是否加载
+        # 实体设备与此无关，external_devices_only 不能让本地权威随驱动一起消失。
         from unilabos.app.control_plane import (
             ControlPlaneRuntimeContext,
             start_control_plane_runtime,

@@ -2751,8 +2751,8 @@ class HostNode(BaseROS2DeviceNode):
 
         inventory = get_inventory_service()
         if site_uuid or site:
-            store = getattr(inventory, "store", None)
-            if callable(getattr(store, "query_one", None)):
+            station_resources = getattr(inventory, "station_resources", None)
+            if station_resources is not None:
                 from unilabos.app.scheduler.site_target import (
                     SiteTargetResolutionError,
                     resolve_site_target,
@@ -2760,7 +2760,7 @@ class HostNode(BaseROS2DeviceNode):
 
                 try:
                     target_site = resolve_site_target(
-                        inventory,
+                        station_resources,
                         owner_material_uuid=_stable_resource_uuid(mount_resource),
                         site_uuid=site_uuid,
                         site_name=site,

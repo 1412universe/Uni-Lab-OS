@@ -17,16 +17,18 @@ from typing import Any, Dict, Iterator, List, Optional
 from unilabos.app.scheduler.inventory.content_store import (
     migrate_container_content_schema,
 )
+from unilabos.app.scheduler.inventory.ingress_schema import migrate_ingress_schema
 from unilabos.app.scheduler.inventory.reagent_store import migrate_reagent_schema
 from unilabos.registry.runtime_device_catalog import RuntimeDeviceTemplateCatalog
 
 # v8 已由生产分支用于物料来源绑定；试剂和容器内容依次占用后续版本。
 # v11 把物料模板引用改为由 SQLite 物料模板与内存设备目录共同校验。
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class InvalidCursorAdvance(ValueError):
     """ACK cursor 试图回退、跳批或基于过期发送窗口推进."""
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS resource_template (
@@ -148,8 +150,12 @@ CREATE TABLE IF NOT EXISTS sync_cursor (
 # 「父 + 具名位」时存在（slot_id = PLR site 名 ↔ 云端 sites.label，uuid 仅后端索引），
 # 且 relation.parent_uuid 恒等于本列（_tx_upsert_relation 同步维护）。
 # 空串表示顶层物料；单父由列语义天然保证（树形父）。
-_SCHEMA_V3_ADD_PARENT = "ALTER TABLE material_instance ADD COLUMN parent_uuid TEXT NOT NULL DEFAULT ''"
-_SCHEMA_V3_INDEX = "CREATE INDEX IF NOT EXISTS idx_instance_parent ON material_instance(parent_uuid)"
+_SCHEMA_V3_ADD_PARENT = (
+    "ALTER TABLE material_instance ADD COLUMN parent_uuid TEXT NOT NULL DEFAULT ''"
+)
+_SCHEMA_V3_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_instance_parent ON material_instance(parent_uuid)"
+)
 
 # v4：W3C Trace Context 与只读关联 ID。全部为 additive、空串兼容旧数据；
 # 不把 action/material payload 写入追踪列。
@@ -893,7 +899,9 @@ COMMIT;
 
 # v6：补齐 Go Backend 物料图的实例类型字段。修订号继续以
 # material_inventory.aggregate_version 为唯一权威，不复制第二份版本列。
-_SCHEMA_V6_MATERIAL_TYPE = "ALTER TABLE material ADD COLUMN type TEXT NOT NULL DEFAULT ''"
+_SCHEMA_V6_MATERIAL_TYPE = (
+    "ALTER TABLE material ADD COLUMN type TEXT NOT NULL DEFAULT ''"
+)
 
 # v7：资源模板（ResourceTemplate）直接保存 Edge Registry 上报的库位（Site）
 # 固定定义；运行时库位实例与库位占用仍由 site 表承载，不写入本列。
@@ -1022,7 +1030,9 @@ class InventoryStore:
 
         self.path = path
         self._lock = threading.RLock()
-        self._runtime_device_template_catalog: RuntimeDeviceTemplateCatalog | None = None
+        self._runtime_device_template_catalog: RuntimeDeviceTemplateCatalog | None = (
+            None
+        )
         self._runtime_device_template_catalog_required = False
         self._runtime_device_template_names: frozenset[str] = frozenset()
         self._conn = sqlite3.connect(path, check_same_thread=False)
@@ -1063,7 +1073,8 @@ class InventoryStore:
             if current < 3:
                 # ALTER 前先查列（半途中断的迁移可安全重放）
                 cols = {
-                    r[1] for r in self._conn.execute(
+                    r[1]
+                    for r in self._conn.execute(
                         "PRAGMA table_info(material_instance)"
                     ).fetchall()
                 }
@@ -1117,9 +1128,7 @@ class InventoryStore:
                     ).fetchall()
                 }
                 if "available_sites" not in template_columns:
-                    self._conn.execute(
-                        _SCHEMA_V7_RESOURCE_TEMPLATE_AVAILABLE_SITES
-                    )
+                    self._conn.execute(_SCHEMA_V7_RESOURCE_TEMPLATE_AVAILABLE_SITES)
             # 生产 v8 增加任务物料绑定。这里始终幂等执行，同时兼容开发分支中
             # 曾把 user_version 写到 9、但尚未创建本表的数据库。
             self._conn.executescript(_SCHEMA_V8_MATERIAL_SOURCE_BINDING)
@@ -1132,6 +1141,9 @@ class InventoryStore:
             migrate_container_content_schema(self._conn)
             if current < 11:
                 self._migrate_hybrid_template_reference()
+            # v12 增加 Backend AGV 调用的目标 Edge 入口预留状态机。结构迁移保持
+            # 幂等，修复开发数据库被手工提高版本但缺少业务表的情况。
+            migrate_ingress_schema(self._conn)
             if current >= 5:
                 # A development build may have added the v6 column before the
                 # deterministic backfill was introduced; keep this idempotent.
@@ -1298,9 +1310,13 @@ class InventoryStore:
         )
 
     def get_instance(self, edge_uuid: str) -> Optional[Dict[str, Any]]:
-        return self.query_one("SELECT * FROM material_instance WHERE edge_uuid = ?", (edge_uuid,))
+        return self.query_one(
+            "SELECT * FROM material_instance WHERE edge_uuid = ?", (edge_uuid,)
+        )
 
-    def list_instances(self, status: str = "", limit: int = 500) -> List[Dict[str, Any]]:
+    def list_instances(
+        self, status: str = "", limit: int = 500
+    ) -> List[Dict[str, Any]]:
         if status:
             return self.query_all(
                 "SELECT * FROM material_instance WHERE status = ? AND edge_uuid NOT IN ("
@@ -1317,15 +1333,21 @@ class InventoryStore:
             (limit,),
         )
 
-    def find_instance_by_barcode_active(self, barcode: str, active_states: tuple) -> Optional[Dict[str, Any]]:
+    def find_instance_by_barcode_active(
+        self, barcode: str, active_states: tuple
+    ) -> Optional[Dict[str, Any]]:
         placeholders = ",".join("?" for _ in active_states)
         return self.query_one(
             f"SELECT * FROM material_instance WHERE barcode = ? AND status IN ({placeholders})",
             (barcode, *active_states),
         )
 
-    def find_instance_by_legacy_cloud_id(self, cloud_id: str) -> Optional[Dict[str, Any]]:
-        return self.query_one("SELECT * FROM material_instance WHERE legacy_cloud_id = ?", (cloud_id,))
+    def find_instance_by_legacy_cloud_id(
+        self, cloud_id: str
+    ) -> Optional[Dict[str, Any]]:
+        return self.query_one(
+            "SELECT * FROM material_instance WHERE legacy_cloud_id = ?", (cloud_id,)
+        )
 
     def lots_by_template_fifo(self, template_id: str) -> List[Dict[str, Any]]:
         """FIFO：按 created_at 升序（同毫秒按 rowid 插入序）返回可用批次."""
@@ -1335,7 +1357,9 @@ class InventoryStore:
             (template_id,),
         )
 
-    def get_reservation(self, workflow_id: str, node_id: str, attempt: int) -> Optional[Dict[str, Any]]:
+    def get_reservation(
+        self, workflow_id: str, node_id: str, attempt: int
+    ) -> Optional[Dict[str, Any]]:
         return self.query_one(
             "SELECT * FROM inventory_reservation WHERE workflow_id = ? AND node_id = ? AND attempt = ?",
             (workflow_id, node_id, attempt),
@@ -1353,7 +1377,9 @@ class InventoryStore:
             (reservation_id,),
         )
 
-    def list_reservations(self, status: str = "", limit: int = 500) -> List[Dict[str, Any]]:
+    def list_reservations(
+        self, status: str = "", limit: int = 500
+    ) -> List[Dict[str, Any]]:
         if status:
             return self.query_all(
                 "SELECT * FROM inventory_reservation WHERE status = ? "
@@ -1367,21 +1393,28 @@ class InventoryStore:
         )
 
     def get_relation(self, child_uuid: str) -> Optional[Dict[str, Any]]:
-        return self.query_one("SELECT * FROM resource_relation WHERE child_uuid = ?", (child_uuid,))
+        return self.query_one(
+            "SELECT * FROM resource_relation WHERE child_uuid = ?", (child_uuid,)
+        )
 
     def list_relations(self) -> List[Dict[str, Any]]:
         return self.query_all("SELECT * FROM resource_relation ORDER BY child_uuid ASC")
 
     def children_of(self, parent_uuid: str) -> List[Dict[str, Any]]:
         return self.query_all(
-            "SELECT * FROM resource_relation WHERE parent_uuid = ? ORDER BY slot_id ASC", (parent_uuid,)
+            "SELECT * FROM resource_relation WHERE parent_uuid = ? ORDER BY slot_id ASC",
+            (parent_uuid,),
         )
 
     def get_content(self, instance_uuid: str) -> Optional[Dict[str, Any]]:
-        return self.query_one("SELECT * FROM substance_content WHERE instance_uuid = ?", (instance_uuid,))
+        return self.query_one(
+            "SELECT * FROM substance_content WHERE instance_uuid = ?", (instance_uuid,)
+        )
 
     def list_contents(self) -> List[Dict[str, Any]]:
-        return self.query_all("SELECT * FROM substance_content ORDER BY instance_uuid ASC")
+        return self.query_all(
+            "SELECT * FROM substance_content ORDER BY instance_uuid ASC"
+        )
 
     def component_children_of(self, parent_uuid: str) -> List[Dict[str, Any]]:
         """组成父子（material_instance.parent_uuid）下的直接子物料；与 site 放置无关."""
@@ -1391,7 +1424,9 @@ class InventoryStore:
         )
 
     def get_processed_command(self, command_id: str) -> Optional[Dict[str, Any]]:
-        return self.query_one("SELECT * FROM processed_command WHERE command_id = ?", (command_id,))
+        return self.query_one(
+            "SELECT * FROM processed_command WHERE command_id = ?", (command_id,)
+        )
 
     def list_processed_commands(self, limit: int = 200) -> List[Dict[str, Any]]:
         """最近的幂等命令结果（只读诊断面，不暴露任意表查询）。"""
@@ -1449,9 +1484,7 @@ class InventoryStore:
             "templates": self.query_all(
                 "SELECT * FROM inventory_resource_template ORDER BY template_id ASC"
             ),
-            "lots": self.query_all(
-                "SELECT * FROM inventory_lot ORDER BY lot_id ASC"
-            ),
+            "lots": self.query_all("SELECT * FROM inventory_lot ORDER BY lot_id ASC"),
             "instances": self.query_all(
                 "SELECT * FROM material_instance WHERE edge_uuid NOT IN ("
                 "SELECT uuid FROM material WHERE "
@@ -1468,7 +1501,9 @@ class InventoryStore:
     # -- 实验室布局（lab_meta / lab_zone / lab_placement） --------------------
 
     def get_meta(self, key: str, default: str = "") -> str:
-        row = self.query_one("SELECT meta_value FROM lab_meta WHERE meta_key = ?", (key,))
+        row = self.query_one(
+            "SELECT meta_value FROM lab_meta WHERE meta_key = ?", (key,)
+        )
         return str(row["meta_value"]) if row else default
 
     def set_meta(self, key: str, value: str) -> None:
@@ -1485,16 +1520,21 @@ class InventoryStore:
     def list_placements(self, zone_id: str = "") -> List[Dict[str, Any]]:
         if zone_id:
             return self.query_all(
-                "SELECT * FROM lab_placement WHERE zone_id = ? ORDER BY subject_id ASC", (zone_id,)
+                "SELECT * FROM lab_placement WHERE zone_id = ? ORDER BY subject_id ASC",
+                (zone_id,),
             )
         return self.query_all("SELECT * FROM lab_placement ORDER BY subject_id ASC")
 
     def get_placement(self, subject_id: str) -> Optional[Dict[str, Any]]:
-        return self.query_one("SELECT * FROM lab_placement WHERE subject_id = ?", (subject_id,))
+        return self.query_one(
+            "SELECT * FROM lab_placement WHERE subject_id = ?", (subject_id,)
+        )
 
     # -- outbox / cursor -----------------------------------------------------
 
-    def pending_outbox(self, after_sequence: int, limit: int = 100) -> List[Dict[str, Any]]:
+    def pending_outbox(
+        self, after_sequence: int, limit: int = 100
+    ) -> List[Dict[str, Any]]:
         return self.query_all(
             "SELECT * FROM sync_outbox WHERE sequence > ? ORDER BY sequence ASC LIMIT ?",
             (after_sequence, limit),
@@ -1502,12 +1542,12 @@ class InventoryStore:
 
     def list_cursors(self) -> List[Dict[str, Any]]:
         """列出同步游标；ACK 推进仍只能由同步协议写入。"""
-        return self.query_all(
-            "SELECT * FROM sync_cursor ORDER BY cursor_name ASC"
-        )
+        return self.query_all("SELECT * FROM sync_cursor ORDER BY cursor_name ASC")
 
     def get_cursor(self, name: str = "cloud") -> int:
-        row = self.query_one("SELECT acked_sequence FROM sync_cursor WHERE cursor_name = ?", (name,))
+        row = self.query_one(
+            "SELECT acked_sequence FROM sync_cursor WHERE cursor_name = ?", (name,)
+        )
         return int(row["acked_sequence"]) if row else 0
 
     def set_cursor(self, name: str, acked_sequence: int, now_ms: int) -> None:
@@ -1631,11 +1671,26 @@ class InventoryStore:
             "material_uuid, subject_type, quantity_delta, quantity_unit, revision, "
             "workflow_task_uuid, workflow_node_job_uuid) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (occurred_at, op_type, aggregate_type, aggregate_id,
-             json.dumps(delta, ensure_ascii=False), actor, reason, causation_id,
-             trace_id, span_id, entry_uuid, material_uuid, subject_type,
-             quantity_delta, quantity_unit, revision, workflow_task_uuid,
-             workflow_node_job_uuid),
+            (
+                occurred_at,
+                op_type,
+                aggregate_type,
+                aggregate_id,
+                json.dumps(delta, ensure_ascii=False),
+                actor,
+                reason,
+                causation_id,
+                trace_id,
+                span_id,
+                entry_uuid,
+                material_uuid,
+                subject_type,
+                quantity_delta,
+                quantity_unit,
+                revision,
+                workflow_task_uuid,
+                workflow_node_job_uuid,
+            ),
         )
 
     @staticmethod
@@ -1735,8 +1790,21 @@ class InventoryStore:
             "aggregate_version, event_type, occurred_at, causation_id, payload_json, "
             "traceparent, tracestate, trace_id, span_id) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (event_id, edge_id, lab_id, aggregate_type, aggregate_id, aggregate_version,
-             event_type, occurred_at, causation_id, json.dumps(payload, ensure_ascii=False),
-             traceparent, tracestate, trace_id, span_id),
+            (
+                event_id,
+                edge_id,
+                lab_id,
+                aggregate_type,
+                aggregate_id,
+                aggregate_version,
+                event_type,
+                occurred_at,
+                causation_id,
+                json.dumps(payload, ensure_ascii=False),
+                traceparent,
+                tracestate,
+                trace_id,
+                span_id,
+            ),
         )
         return int(cur.lastrowid or 0)

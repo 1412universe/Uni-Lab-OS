@@ -404,6 +404,7 @@ def action(
     action_name: Optional[str] = None,
     displayname: str = "",
     error_policy: Optional[Dict[str, Any]] = None,
+    resource_contract: Optional[Dict[str, Any]] = None,
     estimate_duration_fixed: Optional[float] = 60.0,
     estimate_duration_express: str = "",
 ):
@@ -444,6 +445,8 @@ def action(
                        不填写时由节点类型决定执行器。
         error_policy: 按异常类名匹配审批选项的策略。结构见
                       unilabos.registry.action_policy.ErrorPolicy。
+        resource_contract: 只含参数名、资源角色和托管转换的声明式动作资源合同；
+                           AST 会把它编译成 JSON，运行时不得自行取得或释放锁。
         estimate_duration_fixed: 预计时长兜底值（秒），默认 60 秒；None 表示不提供兜底
         estimate_duration_express: 根据动作入参计算预计时长的中缀表达式
 
@@ -520,6 +523,14 @@ def action(
 
             normalized_error_policy = normalize_error_policy(error_policy)
             meta["error_policy"] = normalized_error_policy
+        if resource_contract is not None:
+            from unilabos.registry.action_resource_contract import (
+                normalize_action_resource_contract,
+            )
+
+            meta["resource_contract"] = normalize_action_resource_contract(
+                resource_contract
+            )
         wrapper._action_registry_meta = meta  # type: ignore[attr-defined]
         wrapper._action_error_policy = normalized_error_policy  # type: ignore[attr-defined]
         wrapper._action_contract_kind = "typed"  # type: ignore[attr-defined]

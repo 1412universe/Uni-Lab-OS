@@ -40,6 +40,12 @@ class LocalEdgeAuthorityStore:
     """SQLite facts for one Local Backend's Edge sessions and jobs."""
 
     def __init__(self, path: str | Path) -> None:
+        """打开工站调度进程独占的动作协议权威账本。
+
+        参数：``path`` 是本地 SQLite 路径。返回无。异常：目录、连接或迁移失败
+        原样传播；初始化启用 WAL 与同步提交，确保命令先落盘再通知动作进程。
+        """
+
         target = Path(path).expanduser().resolve()
         target.parent.mkdir(parents=True, exist_ok=True)
         self.path = str(target)
@@ -80,6 +86,9 @@ class LocalEdgeAuthorityStore:
                     task_uuid TEXT NOT NULL,
                     node_uuid TEXT NOT NULL,
                     command_uuid TEXT NOT NULL UNIQUE,
+                    claim_uuid TEXT,
+                    attempt INTEGER,
+                    fences_json TEXT NOT NULL DEFAULT '[]',
                     local_device_id TEXT NOT NULL,
                     action_name TEXT NOT NULL,
                     action_type TEXT NOT NULL,
@@ -107,6 +116,21 @@ class LocalEdgeAuthorityStore:
                     ON local_edge_job_feedback(projected_at, job_uuid, sequence);
                 """
             )
+            job_columns = {
+                str(row["name"])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(local_edge_job)"
+                ).fetchall()
+            }
+            for name, declaration in (
+                ("claim_uuid", "TEXT"),
+                ("attempt", "INTEGER"),
+                ("fences_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ):
+                if name not in job_columns:
+                    self._connection.execute(
+                        f"ALTER TABLE local_edge_job ADD COLUMN {name} {declaration}"
+                    )
             self._connection.commit()
 
     def close(self) -> None:
@@ -158,9 +182,16 @@ class LocalEdgeAuthorityStore:
         if changed != 1:
             raise ValueError("unknown Edge session")
 
-    def reconcile_hello(self, payload: dict[str, Any]) -> None:
-        """Apply the Edge's durable resume cursor before sending commands."""
+    def reconcile_hello(self, payload: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
+        """对账动作进程身份与持久游标，并识别真实进程重启。
 
+        参数：``payload`` 是动作进程 hello，必须包含该进程生命周期内稳定、重启
+        后变化的 ``process_uuid``。返回：是否发生进程重启及受影响作业 UUID。
+        异常：身份、游标或运行作业引用非法时事务回滚。短暂 WebSocket 断线不会
+        被解释成进程重启；只有持久进程身份发生变化才失败相关任务。
+        """
+
+        process_uuid = str(uuid.UUID(_required_text(payload, "process_uuid")))
         last_ack = payload.get("last_ack_command_sequence", 0)
         if isinstance(last_ack, bool) or not isinstance(last_ack, int) or last_ack < 0:
             raise ValueError("last_ack_command_sequence is invalid")
@@ -172,6 +203,22 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
             try:
+                previous = self._connection.execute(
+                    "SELECT value FROM local_edge_meta WHERE key='execution_process_uuid'"
+                ).fetchone()
+                previous_process_uuid = (
+                    str(previous["value"]) if previous is not None else ""
+                )
+                process_restarted = bool(
+                    previous_process_uuid
+                    and previous_process_uuid != process_uuid
+                )
+                self._connection.execute(
+                    "INSERT INTO local_edge_meta(key,value) VALUES "
+                    "('execution_process_uuid',?) ON CONFLICT(key) DO UPDATE "
+                    "SET value=excluded.value",
+                    (process_uuid,),
+                )
                 self._connection.execute(
                     """
                     UPDATE local_edge_command
@@ -191,24 +238,53 @@ class LocalEdgeAuthorityStore:
                     """,
                     (time.time(), last_ack),
                 )
-                for reported in running_jobs:
-                    job_uuid = str(uuid.UUID(_required_text(reported, "job_uuid")))
-                    command_uuid = str(
-                        uuid.UUID(_required_text(reported, "command_uuid"))
-                    )
-                    changed = self._connection.execute(
+                affected: tuple[str, ...] = ()
+                if process_restarted:
+                    rows = self._connection.execute(
                         """
-                        UPDATE local_edge_job
-                        SET status = 'running', unknown_command_ids_json = '[]',
-                            updated_at = ?
-                        WHERE job_uuid = ? AND command_uuid = ?
+                        SELECT job_uuid FROM local_edge_job
+                        WHERE status IN ('dispatched', 'running', 'unknown')
                           AND outcome_json IS NULL
-                        """,
-                        (time.time(), job_uuid, command_uuid),
-                    ).rowcount
-                    if changed != 1:
-                        raise ValueError("running Edge job identity is unknown")
+                        ORDER BY created_at, job_uuid
+                        """
+                    ).fetchall()
+                    affected = tuple(str(row["job_uuid"]) for row in rows)
+                    for job_uuid in affected:
+                        self._connection.execute(
+                            """
+                            UPDATE local_edge_job
+                            SET status = 'unknown', unknown_command_ids_json = ?,
+                                updated_at = ?
+                            WHERE job_uuid = ?
+                            """,
+                            (
+                                json.dumps([f"workflow-node-job:{job_uuid}"]),
+                                time.time(),
+                                job_uuid,
+                            ),
+                        )
+                else:
+                    for reported in running_jobs:
+                        job_uuid = str(
+                            uuid.UUID(_required_text(reported, "job_uuid"))
+                        )
+                        command_uuid = str(
+                            uuid.UUID(_required_text(reported, "command_uuid"))
+                        )
+                        changed = self._connection.execute(
+                            """
+                            UPDATE local_edge_job
+                            SET status = 'running', unknown_command_ids_json = '[]',
+                                updated_at = ?
+                            WHERE job_uuid = ? AND command_uuid = ?
+                              AND outcome_json IS NULL
+                            """,
+                            (time.time(), job_uuid, command_uuid),
+                        ).rowcount
+                        if changed != 1:
+                            raise ValueError("running Edge job identity is unknown")
                 self._connection.commit()
+                return process_restarted, affected
             except BaseException:
                 self._connection.rollback()
                 raise
@@ -241,6 +317,13 @@ class LocalEdgeAuthorityStore:
         return job_uuids
 
     def dispatch(self, payload: DispatchPayload) -> dict[str, Any]:
+        """持久化 Scheduler 已提交的 Command、Claim、Fence 与节点实参。
+
+        参数：``payload`` 是物理派发前已通过九道门禁的工作流节点作业载荷。
+        返回：本地 Edge 作业投影。异常：身份、资源栅栏或重复载荷冲突时抛
+        ``ValueError``，事务完整回滚且不会发送 WebSocket 通知。
+        """
+
         job_uuid = str(uuid.UUID(_required_text(payload, "job_id")))
         task_uuid = str(uuid.UUID(_required_text(payload, "task_id")))
         node_uuid = str(uuid.UUID(_required_text(payload, "node_id")))
@@ -251,6 +334,12 @@ class LocalEdgeAuthorityStore:
         if not isinstance(param, dict):
             raise ValueError("action_args must be an object")
         device_action_key = f"/devices/{local_device_id}/{action_name}"
+        command_uuid = str(uuid.UUID(_required_text(payload, "command_uuid")))
+        claim_uuid = str(uuid.UUID(_required_text(payload, "claim_uuid")))
+        attempt = payload.get("attempt")
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            raise ValueError("attempt must be a positive integer")
+        fences = _validate_fences(payload.get("fences"))
         now = time.time()
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -264,6 +353,10 @@ class LocalEdgeAuthorityStore:
                     or existing["node_uuid"] != node_uuid
                     or existing["local_device_id"] != local_device_id
                     or existing["action_name"] != action_name
+                    or existing["command_uuid"] != command_uuid
+                    or existing["claim_uuid"] != claim_uuid
+                    or int(existing["attempt"] or 0) != attempt
+                    or json.loads(str(existing["fences_json"])) != fences
                 ):
                     raise ValueError("duplicate local Edge job identity changed")
                 return _job_projection(existing)
@@ -282,7 +375,6 @@ class LocalEdgeAuthorityStore:
                     f"{blocked['job_uuid']}"
                 )
             sequence = self._next_sequence_locked()
-            command_uuid = str(uuid.uuid4())
             job_token = secrets.token_urlsafe(32)
             command_payload = {
                 "job_uuid": job_uuid,
@@ -290,21 +382,28 @@ class LocalEdgeAuthorityStore:
                 "node_uuid": node_uuid,
                 "job_access_token": job_token,
                 "executor_kind": "device_action",
+                "claim_uuid": claim_uuid,
+                "attempt": attempt,
+                "fences": fences,
             }
             try:
                 self._connection.execute(
                     """
                     INSERT INTO local_edge_job(
                         job_uuid, task_uuid, node_uuid, command_uuid,
+                        claim_uuid, attempt, fences_json,
                         local_device_id, action_name, action_type, param_json,
                         token_hash, device_action_key, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
                     """,
                     (
                         job_uuid,
                         task_uuid,
                         node_uuid,
                         command_uuid,
+                        claim_uuid,
+                        attempt,
+                        json.dumps(fences, separators=(",", ":")),
                         local_device_id,
                         action_name,
                         action_type,
@@ -410,6 +509,12 @@ class LocalEdgeAuthorityStore:
         command_uuid: str,
         job_token: str,
     ) -> dict[str, Any]:
+        """按命令 UUID 和一次性作业令牌读取实际派发载荷。
+
+        参数：三个身份共同定位同一 Job 尝试。返回含 Claim/Fence 和实际参数的
+        载荷。异常：作业不存在抛 ``KeyError``，凭据不匹配抛 ``PermissionError``。
+        """
+
         normalized_job = str(uuid.UUID(job_uuid))
         normalized_command = str(uuid.UUID(command_uuid))
         with self._lock:
@@ -427,6 +532,9 @@ class LocalEdgeAuthorityStore:
             "task_uuid": str(row["task_uuid"]),
             "node_uuid": str(row["node_uuid"]),
             "command_uuid": normalized_command,
+            "claim_uuid": str(row["claim_uuid"]),
+            "attempt": int(row["attempt"]),
+            "fences": json.loads(str(row["fences_json"])),
             "local_device_id": str(row["local_device_id"]),
             "action_name": str(row["action_name"]),
             "action_type": str(row["action_type"]),
@@ -453,7 +561,10 @@ class LocalEdgeAuthorityStore:
         job_token: str,
         payload: dict[str, Any],
     ) -> dict[str, Any]:
+        """校验执行尝试身份并幂等保存一条 Edge 反馈事实。"""
+
         row = self._authorized_job(job_uuid, command_uuid, job_token)
+        _validate_job_attempt_identity(row, job_uuid, command_uuid, payload)
         sequence = payload.get("sequence")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise ValueError("feedback sequence is invalid")
@@ -565,6 +676,10 @@ class LocalEdgeAuthorityStore:
         """
 
         row = self._authorized_job(job_uuid, command_uuid, job_token)
+        try:
+            _validate_job_attempt_identity(row, job_uuid, command_uuid, payload)
+        except ValueError as error:
+            raise LocalEdgeOutcomeConflict(str(error)) from error
         normalized_idempotency_key = str(idempotency_key or "").strip()
         if not normalized_idempotency_key:
             raise ValueError("Idempotency-Key is required")
@@ -1034,6 +1149,9 @@ class LocalEdgeControlAuthority:
             Callable[[str, CommittedJobOutcome], None]
         ] = []
         self._feedback_listeners: list[Callable[[str, dict[str, Any]], None]] = []
+        self._execution_process_restarted_listeners: list[
+            Callable[[tuple[str, ...]], None]
+        ] = []
 
     def start(self) -> None:
         return
@@ -1068,6 +1186,48 @@ class LocalEdgeControlAuthority:
         """注册已持久提交反馈的投影监听器。"""
 
         self._feedback_listeners.append(listener)
+
+    def add_execution_process_restarted_listener(
+        self,
+        listener: Callable[[tuple[str, ...]], None],
+    ) -> None:
+        """注册动作执行进程重启监听器。
+
+        参数：``listener`` 接收已经越过派发边界且终态未知的作业 UUID。返回无。
+        异常：监听器异常向上传播，使同进程的工站调度权威显式暴露投影失败；
+        本地动作账本已在通知前保留不确定事实与资源占用。
+        """
+
+        self._execution_process_restarted_listeners.append(listener)
+
+    def remove_execution_process_restarted_listener(
+        self,
+        listener: Callable[[tuple[str, ...]], None],
+    ) -> None:
+        """幂等移除动作执行进程重启监听器。"""
+
+        self._execution_process_restarted_listeners = [
+            current
+            for current in self._execution_process_restarted_listeners
+            if current != listener
+        ]
+
+    def notify_execution_process_restarted(
+        self,
+        job_uuids: list[str] | tuple[str, ...],
+    ) -> None:
+        """把动作进程重启事实同步送入工站调度生命周期。
+
+        参数：``job_uuids`` 是本地账本刚标为不确定的在途作业。返回无；空集合
+        不触发回调。异常：监听器异常原样传播，禁止静默遗失整条 DAG 的失败事实。
+        普通网络断线不会调用本方法。
+        """
+
+        affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
+        if not affected:
+            return
+        for listener in tuple(self._execution_process_restarted_listeners):
+            listener(affected)
 
     def commit_feedback(
         self,
@@ -1386,6 +1546,13 @@ def create_local_edge_control_router(
 
     @router.websocket("/ws")
     async def edge_websocket(websocket: WebSocket) -> None:
+        """维护动作执行进程会话并投递持久命令通知。
+
+        参数：``websocket`` 是同工站动作进程连接。返回无；鉴权或握手错误关闭
+        会话。普通断线只固化不确定事实并等待同一进程重连；只有 hello 中进程
+        身份变化才通知工站调度器失败相关 DAG。
+        """
+
         authorization = websocket.headers.get("Authorization")
         if authorization is None or not hmac.compare_digest(
             authorization, f"Bearer {authority.api_key}"
@@ -1402,8 +1569,12 @@ def create_local_edge_control_router(
                 await websocket.close(code=4400)
                 return
             session_uuid = _required_text(hello["payload"], "session_uuid")
-            authority.store.reconcile_hello(hello["payload"])
+            process_restarted, affected_job_uuids = authority.store.reconcile_hello(
+                hello["payload"]
+            )
             authority.store.set_session_connected(session_uuid, True)
+            if process_restarted:
+                authority.notify_execution_process_restarted(affected_job_uuids)
             while True:
                 for command in authority.store.pending_commands():
                     await websocket.send_text(json.dumps(command, ensure_ascii=False))
@@ -1477,7 +1648,7 @@ def _normalize_unknown_command_ids(job_uuid: str, values: Any) -> list[str]:
 
     参数：``job_uuid`` 是当前工作流节点作业；``values`` 是 Edge 上报的命令身份
     数组。返回：去重排序后的规范命令身份。异常：数组形状、命令格式、长度或归属
-    不合法时抛 ``ValueError``；空数组表示结果明确，不产生物理执行未知状态。
+    不合法时抛 ``ValueError``；空数组表示结果明确，不产生物理不确定事实。
     """
 
     if not isinstance(values, list):
@@ -1568,16 +1739,85 @@ def _token_hash(value: str) -> str:
 
 
 def _job_projection(row: sqlite3.Row) -> dict[str, Any]:
+    """把本地双进程作业行投影为不含访问令牌的稳定摘要。"""
+
     return {
         "job_uuid": str(row["job_uuid"]),
         "task_uuid": str(row["task_uuid"]),
         "node_uuid": str(row["node_uuid"]),
         "command_uuid": str(row["command_uuid"]),
+        "claim_uuid": str(row["claim_uuid"]),
+        "attempt": int(row["attempt"]),
+        "fences": json.loads(str(row["fences_json"])),
         "local_device_id": str(row["local_device_id"]),
         "action_name": str(row["action_name"]),
         "device_action_key": str(row["device_action_key"]),
         "status": str(row["status"]),
     }
+
+
+def _validate_fences(value: Any) -> list[dict[str, Any]]:
+    """规范并校验一个 Claim 携带的资源 Fence 列表。
+
+    参数：``value`` 必须是锁键唯一的对象列表。返回按锁键排序的副本。异常：
+    锁键为空、令牌非正整数或重复键内容冲突时抛 ``ValueError``。
+    """
+
+    if not isinstance(value, list):
+        raise ValueError("fences must be a list")
+    normalized: dict[str, int] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("fence must be an object")
+        lock_key = str(item.get("lock_key") or "").strip()
+        token = item.get("fencing_token")
+        if (
+            not lock_key
+            or isinstance(token, bool)
+            or not isinstance(token, int)
+            or token < 1
+        ):
+            raise ValueError("fence lock_key or fencing_token is invalid")
+        if lock_key in normalized and normalized[lock_key] != token:
+            raise ValueError("duplicate fence lock_key changed token")
+        normalized[lock_key] = token
+    return [
+        {"lock_key": lock_key, "fencing_token": normalized[lock_key]}
+        for lock_key in sorted(normalized)
+    ]
+
+
+def _validate_job_attempt_identity(
+    row: sqlite3.Row,
+    job_uuid: str,
+    command_uuid: str,
+    payload: dict[str, Any],
+) -> None:
+    """证明 HTTP 事实与本地持久化的 Job/Claim/Fence 尝试完全一致。"""
+
+    expected = {
+        "job_uuid": str(uuid.UUID(job_uuid)),
+        "task_uuid": str(row["task_uuid"]),
+        "node_uuid": str(row["node_uuid"]),
+        "command_uuid": str(uuid.UUID(command_uuid)),
+        "claim_uuid": str(row["claim_uuid"]),
+    }
+    for field, value in expected.items():
+        try:
+            actual = str(uuid.UUID(_required_text(payload, field)))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{field} is invalid") from error
+        if actual != value:
+            raise ValueError(f"{field} does not match the persisted job attempt")
+    attempt = payload.get("attempt")
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+        raise ValueError("attempt must be a positive integer")
+    if attempt != int(row["attempt"]):
+        raise ValueError("attempt does not match the persisted job attempt")
+    if _validate_fences(payload.get("fences")) != json.loads(
+        str(row["fences_json"])
+    ):
+        raise ValueError("fences do not match the persisted job attempt")
 
 
 def _envelope(data: dict[str, Any]) -> dict[str, Any]:

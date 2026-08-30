@@ -435,20 +435,14 @@ def test_unsupported_executor_contracts_fail_closed() -> None:
 
 
 def test_material_transfer_and_execution_policy_survive_runtime_compilation() -> None:
-    """物料转移释放作业与访问区域策略必须进入同一冻结调度规格。
+    """物料转移执行责任与设备超时策略必须进入同一冻结调度规格。
 
-    参数：无。返回无。异常：编译器丢失执行器种类、释放节点身份或访问区域
-    参数时由断言暴露；运行时不得回读可变工作流图补齐这些静态事实。
+    参数：无。返回无。异常：编译器丢失执行器种类或超时参数时由断言暴露；
+    运行时不得回读可变工作流图补齐这些静态事实。
     """
 
     planned = _planned_action(kind="material_transfer")
-    planned["execution_policy"] = {
-        "access_region": {
-            "key": "s08-s09-reagent-corridor",
-            "lock_material_uuid": MATERIAL_UUID,
-            "release_node_uuid": NODE_A_UUID,
-        }
-    }
+    planned["execution_policy"] = {"execution_timeout_seconds": 120}
     job = _job(JOB_A_UUID, NODE_A_UUID)
     job["executor_kind"] = "material_transfer"
     spec = WorkflowSpecCompiler().compile(
@@ -460,11 +454,11 @@ def test_material_transfer_and_execution_policy_survive_runtime_compilation() ->
     assert spec.nodes[0].execution_policy == planned["execution_policy"]
 
 
-def test_plan_freezes_trusted_material_transfer_as_access_region_release() -> None:
+def test_plan_freezes_trusted_material_transfer_executor_kind() -> None:
     """计划构建器必须识别 ILab 外观下受信物料转移执行责任。
 
-    参数：无。返回无。异常：模板执行责任未冻结、释放节点不晚于入口或最终
-    调度规格丢失策略时由断言暴露；无需新增访问区域关系表。
+    参数：无。返回无。异常：模板执行责任未冻结或在最终计划中退化成普通设备
+    动作时由断言暴露；该身份用于物料结算，不承担 PLC 碰撞区域释放。
     """
 
     graph = _single_action_graph()
@@ -474,14 +468,6 @@ def test_plan_freezes_trusted_material_transfer_as_access_region_release() -> No
     release_template["meta_data"]["unilab"]["executor_kind"] = "material_transfer"
     graph["nodes"].append(release_node)
     graph["node_templates"].append(release_template)
-    graph["nodes"][0]["execution_policy"] = {
-        "access_region": {
-            "key": "s08-s09-reagent-corridor",
-            "lock_material_uuid": MATERIAL_UUID,
-            "release_node_uuid": NODE_B_UUID,
-        }
-    }
-
     plan, jobs = _build_plan(graph)
     assert [node["kind"] for node in plan["nodes"]] == [
         "device_action",
@@ -493,11 +479,11 @@ def test_plan_freezes_trusted_material_transfer_as_access_region_release() -> No
     ]
 
 
-def test_plan_rejects_access_region_without_later_material_transfer() -> None:
-    """普通动作不能冒充访问区域释放边界。
+def test_plan_rejects_plc_access_region_software_lock() -> None:
+    """工作流发布不得把 PLC 碰撞区域重新声明为 Scheduler 软件锁。
 
-    参数：无。返回无。异常：构建器必须以稳定计划错误失败关闭；否则长锁会在
-    一个没有物理转移责任的节点完成时被提前释放。
+    参数：无。返回无。异常：构建器必须失败关闭；否则会形成与 PLC 双权威的
+    访问区域生命周期。
     """
 
     graph = _single_action_graph()
@@ -509,7 +495,7 @@ def test_plan_rejects_access_region_without_later_material_transfer() -> None:
         }
     }
 
-    with pytest.raises(ExecutionPlanBuildError, match="更晚的物料转移节点"):
+    with pytest.raises(ExecutionPlanBuildError, match="PLC"):
         _build_plan(graph)
 
 

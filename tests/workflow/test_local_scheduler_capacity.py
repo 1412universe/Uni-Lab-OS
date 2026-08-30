@@ -316,10 +316,15 @@ def test_job_dispatch_capacity_is_durable_and_released_by_terminal_result(
         store.close()
 
 
-def test_restart_keeps_unknown_job_capacity_until_persisted_result_is_replayed(
+def test_restart_failed_job_releases_scheduler_capacity_for_waiting_task(
     tmp_path: Path,
 ) -> None:
-    """重启后的执行未知 Job 继续占容量，明确结果提交后自动补位。"""
+    """重启失败 Job 不再占用活动调度容量，等待任务可以立即补位。
+
+    参数：``tmp_path`` 提供跨实例工作流库。返回无；断言旧任务明确失败后，等待任务
+    可被派发；物理资源是否可复用仍由独立 Claim 决定。异常：恢复或容量推进错误
+    会使测试失败。
+    """
 
     first_store = _open_store(tmp_path)
     first_task = _uuid(501)
@@ -362,22 +367,9 @@ def test_restart_keeps_unknown_job_capacity_until_persisted_result_is_replayed(
     try:
         recovered_bridge.recover_active_tasks()
 
-        assert recovered_store.get_job(first_job)["status"] == "execution_unknown"
-        assert recovered_store.get_job(waiting_job)["status"] == "pending"
-        assert recovered_dispatcher.dispatched == []
-
-        # 模拟 Edge 发件箱在重启后重放同一已提交结果。结果落盘会释放持久容量，
-        # 已恢复的等待 Task 必须无需人工触发便继续派发。
-        recovered_bridge._replay_persisted_job_finished(
-            first_job,
-            True,
-            {"ok": True},
-            "normal",
-        )
-
-        assert [item["job_id"] for item in recovered_dispatcher.dispatched] == [
-            waiting_job
-        ]
+        assert recovered_store.get_job(first_job)["status"] == "failed"
+        assert recovered_store.get_task(first_task)["status"] == "failed"
+        assert [item["job_id"] for item in recovered_dispatcher.dispatched] == [waiting_job]
     finally:
         recovered_bridge.close()
         recovered_store.close()

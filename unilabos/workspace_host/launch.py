@@ -13,8 +13,6 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from unilabos.app.edge_control.addressing import resolve_scheduler_address
-
 from .model import WorkspaceHostError, WorkspacePaths, atomic_write_json
 
 
@@ -106,9 +104,8 @@ def resolve_backend_launch(
     generation = str(uuid.uuid4())
     runtime_directory = paths.runtime / "backend" / generation
     runtime_directory.mkdir(parents=True, exist_ok=False)
-    state_directory = paths.runtime / "backend" / (
-        "local-domain" if domain_mode == "local" else "authoring"
-    )
+    # 工站调度状态不随上游 Backend 连接模式变化；切换上游后仍由本站继续拥有。
+    state_directory = paths.runtime / "backend" / "local-domain"
     state_directory.mkdir(parents=True, exist_ok=True)
     legacy_state = (
         _migrate_legacy_backend_state(paths, state_directory)
@@ -126,10 +123,23 @@ def resolve_backend_launch(
     edge_token = _workspace_host_token(paths)
     edge_key = _workspace_edge_key(paths)
     backend_address = f"http://127.0.0.1:{backend_port}"
+    upstream_backend_address = (
+        str(config.get("backendUrl") or "").rstrip("/")
+        if domain_mode == "backend"
+        else backend_address
+    )
+    if not upstream_backend_address:
+        raise WorkspaceHostError(
+            "backend_url_missing", "Backend 上游模式未配置服务地址"
+        )
+    upstream_backend_token = (
+        os.environ.get("UNILAB_BACKEND_API_KEY") or edge_token
+    )
     environment.update(
         {
             "UNILABOS_EDGECONTROLCONFIG_API_KEY": edge_token,
-            "UNILABOS_EDGECONTROLCONFIG_BACKEND_ADDR": backend_address,
+            "UNILABOS_EDGECONTROLCONFIG_BACKEND_API_KEY": upstream_backend_token,
+            "UNILABOS_EDGECONTROLCONFIG_BACKEND_ADDR": upstream_backend_address,
             "UNILABOS_EDGECONTROLCONFIG_EDGE_KEY": edge_key,
             "UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR": backend_address,
             "UNILABOS_HOSTLINKCONFIG_PORT": str(hostlink_port),
@@ -150,11 +160,7 @@ def resolve_backend_launch(
         str(local_config),
         "--working_dir",
         str(state_directory),
-        *(
-            ("--preserve_runtime_databases",)
-            if domain_mode == "local"
-            else ()
-        ),
+        "--preserve_runtime_databases",
         "--process_role",
         "workspace_backend",
         "--control_plane",
@@ -249,17 +255,8 @@ def resolve_edge_launch(
         raise WorkspaceHostError(
             "backend_url_missing", "Backend Authority 未配置服务地址"
         )
-    try:
-        scheduler_address = (
-            resolve_scheduler_address(
-                authority_address,
-                _optional_text(metadata.get("schedulerUrl")),
-            )
-            if domain_mode == "backend"
-            else authority_address
-        )
-    except ValueError as error:
-        raise WorkspaceHostError("scheduler_url_invalid", str(error)) from error
+    # 动作执行进程永远连接同工作区的工站调度进程；远端 Backend 不再派发节点。
+    scheduler_address = local_backend_address
     authority_token = (
         os.environ.get("UNILAB_BACKEND_API_KEY") or _workspace_host_token(paths)
         if domain_mode == "backend"
@@ -267,26 +264,14 @@ def resolve_edge_launch(
     )
     edge_state_directory = paths.runtime / "edge"
     edge_state_directory.mkdir(parents=True, exist_ok=True)
-    # Command sequence numbers and pending outcomes are scoped to the
-    # scheduler authority that issued them.  Reusing Local Authority state
-    # against Backend Authority makes a legitimate local acknowledgement look
-    # like an impossible future acknowledgement to Backend.  Keep the existing
-    # local filename for upgrade/crash recovery and isolate every remote
-    # authority by a stable origin digest.
+    # 命令序列和待提交结果始终属于本地工站调度权威，因此跨上游切换复用同一账本。
     state_db = edge_state_directory / "edge_control.db"
-    if domain_mode == "backend":
-        scheduler_override = _optional_text(metadata.get("schedulerUrl"))
-        state_scope = (
-            f"{authority_address}\0{scheduler_address}"
-            if scheduler_override
-            else authority_address
-        )
-        authority_digest = hashlib.sha256(state_scope.encode("utf-8")).hexdigest()[:16]
-        state_db = edge_state_directory / f"edge_control-backend-{authority_digest}.db"
+    local_scheduler_token = _workspace_host_token(paths)
     environment = _runtime_environment(paths, generation)
     environment.update(
         {
-            "UNILABOS_EDGECONTROLCONFIG_API_KEY": authority_token,
+            "UNILABOS_EDGECONTROLCONFIG_API_KEY": local_scheduler_token,
+            "UNILABOS_EDGECONTROLCONFIG_BACKEND_API_KEY": authority_token,
             "UNILABOS_EDGECONTROLCONFIG_BACKEND_ADDR": authority_address,
             "UNILABOS_EDGECONTROLCONFIG_EDGE_KEY": _workspace_edge_key(paths),
             "UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR": scheduler_address,

@@ -11,47 +11,39 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from unilabos.app.scheduler.resource_lock import conflicting_resource_lock_keys
+from unilabos.workflow.execution_claim import (
+    ensure_execution_claim,
+    next_fencing_token,
+    required_active_claim,
+)
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.store import StoreConflict, utc_now
 
-_SCOPES = frozenset({"device", "material", "material_site", "access_region"})
-_ACCESS_REGION_SCOPE = "access_region"
-_MATERIAL_TRANSFER_KINDS = frozenset({"material_transfer", "Transfer"})
+_SCOPES = frozenset({"device", "material", "material_site"})
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionLockRequest:
-    """一个作业需要全有或全无取得的执行锁。
-
-    ``lease_owner_job_uuid`` 仅用于跨节点访问区域：入口作业负责取得，后续物料
-    转移作业负责释放。SQLite 仍复用既有租约表，业务范围保存在 ``meta_data``，
-    不为该能力复制 Backend 表结构。
-    """
+    """一个作业需要全有或全无取得的设备、物料或库位执行占用。"""
 
     lock_key: str
     scope: str
     material_uuid: str | None = None
     site_uuid: str | None = None
-    access_region_key: str | None = None
-    lease_owner_job_uuid: str | None = None
-
-    @property
-    def storage_scope(self) -> str:
-        """返回既有 SQLite CHECK 可接受的内部存储范围。"""
-
-        return "material" if self.scope == _ACCESS_REGION_SCOPE else self.scope
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionLockDecision:
-    """持久锁准入结果及可展示的阻塞作业身份。"""
+    """持久占用准入结果、Claim 身份、栅栏与阻塞作业身份。"""
 
     acquired: bool
     blocking_task_uuid: str | None = None
     blocking_job_uuid: str | None = None
+    claim_uuid: str | None = None
+    fencing_tokens: tuple[tuple[str, int], ...] = ()
 
 
 def normalize_execution_lock_requests(
@@ -74,38 +66,11 @@ def normalize_execution_lock_requests(
             raise StoreConflict("执行锁请求缺少合法 lock_key 或 scope")
         material_uuid = str(value.get("material_uuid") or "").strip() or None
         site_uuid = str(value.get("site_uuid") or "").strip() or None
-        access_region_key = (
-            str(value.get("access_region_key") or "").strip() or None
-        )
-        lease_owner_job_uuid = (
-            str(value.get("lease_owner_job_uuid") or "").strip() or None
-        )
-        if scope == _ACCESS_REGION_SCOPE:
-            if material_uuid is None or lease_owner_job_uuid is None:
-                raise StoreConflict("访问区域占用缺少物料或释放作业身份")
-            _require_uuid(material_uuid, field="lock_material_uuid")
-            _require_uuid(lease_owner_job_uuid, field="release_job_uuid")
-            if (
-                access_region_key is None
-                or access_region_key != access_region_key.lower()
-                or len(access_region_key) > 128
-                or any(character.isspace() for character in access_region_key)
-            ):
-                raise StoreConflict("access_region.key 必须是非空规范小写 token")
-            expected_key = (
-                f"access_region/{material_uuid}/{access_region_key}"
-            )
-            if lock_key != expected_key or site_uuid is not None:
-                raise StoreConflict("访问区域占用的 lock_key 或 site_uuid 非法")
-        elif access_region_key is not None or lease_owner_job_uuid is not None:
-            raise StoreConflict("非访问区域占用不能声明释放作业或区域键")
         request = ExecutionLockRequest(
             lock_key=lock_key,
             scope=scope,
             material_uuid=material_uuid,
             site_uuid=site_uuid,
-            access_region_key=access_region_key,
-            lease_owner_job_uuid=lease_owner_job_uuid,
         )
         previous = normalized.get(lock_key)
         if previous is not None and previous != request:
@@ -125,15 +90,18 @@ def try_acquire_execution_locks(
 
     normalized = normalize_execution_lock_requests(requests)
     if not normalized:
+        claim = ensure_execution_claim(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            resource_keys=(),
+        )
         _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
-        return ExecutionLockDecision(acquired=True)
+        return ExecutionLockDecision(
+            acquired=True,
+            claim_uuid=str(claim["claim_uuid"]),
+        )
 
-    _validate_access_region_owners(
-        connection,
-        task_uuid=task_uuid,
-        acquiring_job_uuid=job_uuid,
-        requests=normalized,
-    )
     active_rows = connection.execute(
         """
         SELECT * FROM execution_lock_lease
@@ -151,9 +119,24 @@ def try_acquire_execution_locks(
     if own_keys:
         if own_keys != requested_keys:
             raise StoreConflict(f"作业持久执行锁集合发生变化：{job_uuid}")
+        claim = required_active_claim(connection, job_uuid=job_uuid)
+        fencing_tokens = tuple(
+            sorted(
+                (
+                    str(row["lock_key"]),
+                    int(row["fencing_token"]),
+                )
+                for row in active_rows
+                if _lease_acquired_by(row) == job_uuid
+            )
+        )
         _release_waiters(connection, job_uuid=job_uuid)
         _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
-        return ExecutionLockDecision(acquired=True)
+        return ExecutionLockDecision(
+            acquired=True,
+            claim_uuid=str(claim["claim_uuid"]),
+            fencing_tokens=fencing_tokens,
+        )
 
     enqueued_at = _ensure_waiters(
         connection,
@@ -171,6 +154,36 @@ def try_acquire_execution_locks(
             {str(row["lock_key"])},
         )
     ]
+    device_keys = tuple(
+        request.lock_key for request in normalized if request.scope == "device"
+    )
+    tenancy_blocker = None
+    owned_tenancy_keys: set[str] = set()
+    if device_keys:
+        placeholders = ",".join("?" for _ in device_keys)
+        owned_tenancy_keys = {
+            str(row["device_lock_key"])
+            for row in connection.execute(
+                f"""
+                SELECT device_lock_key FROM task_device_tenancy
+                WHERE state = 'active'
+                  AND device_lock_key IN ({placeholders})
+                  AND workflow_task_uuid = ?
+                """,
+                (*device_keys, task_uuid),
+            ).fetchall()
+        }
+        tenancy_blocker = connection.execute(
+            f"""
+            SELECT workflow_task_uuid, acquired_by_job_uuid
+            FROM task_device_tenancy
+            WHERE state = 'active'
+              AND device_lock_key IN ({placeholders})
+              AND workflow_task_uuid <> ?
+            ORDER BY acquired_at, uuid LIMIT 1
+            """,
+            (*device_keys, task_uuid),
+        ).fetchone()
     if blockers:
         blocker = blockers[0]
         return _record_wait(
@@ -180,6 +193,16 @@ def try_acquire_execution_locks(
             requests=normalized,
             blocking_task_uuid=str(blocker["workflow_task_uuid"]),
             blocking_job_uuid=str(blocker["workflow_node_job_uuid"]),
+            waiting_since=enqueued_at,
+        )
+    if tenancy_blocker is not None:
+        return _record_wait(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            requests=normalized,
+            blocking_task_uuid=str(tenancy_blocker["workflow_task_uuid"]),
+            blocking_job_uuid=str(tenancy_blocker["acquired_by_job_uuid"]),
             waiting_since=enqueued_at,
         )
 
@@ -194,7 +217,7 @@ def try_acquire_execution_locks(
         connection,
         job_uuid=job_uuid,
         current_order=current_order,
-        requested_keys=requested_keys,
+        requested_keys=requested_keys - owned_tenancy_keys,
     )
     if older is not None:
         return _record_wait(
@@ -208,24 +231,35 @@ def try_acquire_execution_locks(
         )
 
     acquired_at = utc_now()
+    claim = ensure_execution_claim(
+        connection,
+        task_uuid=task_uuid,
+        job_uuid=job_uuid,
+        resource_keys=tuple(sorted(requested_keys)),
+        acquired_at=acquired_at,
+    )
+    claim_uuid = str(claim["claim_uuid"])
+    fencing_tokens: list[tuple[str, int]] = []
     for request in normalized:
-        lease_owner_job_uuid = request.lease_owner_job_uuid or job_uuid
+        fencing_token = next_fencing_token(
+            connection,
+            lock_key=request.lock_key,
+            now=acquired_at,
+        )
+        fencing_tokens.append((request.lock_key, fencing_token))
         metadata = {
             "semantic_scope": request.scope,
             "acquired_by_job_uuid": job_uuid,
-            "lease_owner_job_uuid": lease_owner_job_uuid,
         }
-        if request.access_region_key is not None:
-            metadata["access_region_key"] = request.access_region_key
         connection.execute(
             """
             INSERT INTO execution_lock_lease(
                 uuid, create_time, update_time, deleted_at, description,
                 meta_data, workflow_task_uuid, workflow_node_job_uuid,
                 lock_key, scope, material_uuid, site_uuid, state,
-                acquired_at, released_at
+                acquired_at, released_at, claim_uuid, fencing_token
             ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?,
-                      'reserved', ?, NULL)
+                      'reserved', ?, NULL, ?, ?)
             """,
             (
                 str(uuid4()),
@@ -233,17 +267,23 @@ def try_acquire_execution_locks(
                 acquired_at,
                 encode_json(metadata, sort_keys=True).decode("utf-8"),
                 task_uuid,
-                lease_owner_job_uuid,
+                job_uuid,
                 request.lock_key,
-                request.storage_scope,
+                request.scope,
                 request.material_uuid,
                 request.site_uuid,
                 acquired_at,
+                claim_uuid,
+                fencing_token,
             ),
         )
     _release_waiters(connection, job_uuid=job_uuid, released_at=acquired_at)
     _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
-    return ExecutionLockDecision(acquired=True)
+    return ExecutionLockDecision(
+        acquired=True,
+        claim_uuid=claim_uuid,
+        fencing_tokens=tuple(fencing_tokens),
+    )
 
 
 def record_execution_lock_wait(
@@ -261,12 +301,6 @@ def record_execution_lock_wait(
     if not normalized:
         _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
         return ExecutionLockDecision(acquired=True)
-    _validate_access_region_owners(
-        connection,
-        task_uuid=task_uuid,
-        acquiring_job_uuid=job_uuid,
-        requests=normalized,
-    )
     waiting_since = _ensure_waiters(
         connection,
         task_uuid=task_uuid,
@@ -301,6 +335,14 @@ def mark_execution_locks_running(
         """,
         (now, job_uuid),
     )
+    connection.execute(
+        """
+        UPDATE execution_claim
+        SET state = 'running', update_time = ?
+        WHERE workflow_node_job_uuid = ? AND state = 'reserved'
+        """,
+        (now, job_uuid),
+    )
 
 
 def mark_execution_locks_uncertain(
@@ -321,6 +363,15 @@ def mark_execution_locks_uncertain(
         """,
         (now, job_uuid),
     )
+    connection.execute(
+        """
+        UPDATE execution_claim
+        SET state = 'uncertain', update_time = ?
+        WHERE workflow_node_job_uuid = ?
+          AND state IN ('reserved', 'running')
+        """,
+        (now, job_uuid),
+    )
 
 
 def release_execution_locks(
@@ -338,6 +389,15 @@ def release_execution_locks(
         WHERE workflow_node_job_uuid = ?
           AND state IN ('reserved', 'running', 'uncertain')
           AND deleted_at IS NULL
+        """,
+        (now, now, job_uuid),
+    )
+    connection.execute(
+        """
+        UPDATE execution_claim
+        SET state = 'released', released_at = ?, update_time = ?
+        WHERE workflow_node_job_uuid = ?
+          AND state IN ('reserved', 'running', 'uncertain')
         """,
         (now, now, job_uuid),
     )
@@ -363,6 +423,15 @@ def release_task_execution_locks(
         WHERE workflow_task_uuid = ?
           AND state IN ('reserved', 'running', 'uncertain')
           AND deleted_at IS NULL
+        """,
+        (now, now, task_uuid),
+    )
+    connection.execute(
+        """
+        UPDATE execution_claim
+        SET state = 'released', released_at = ?, update_time = ?
+        WHERE workflow_task_uuid = ?
+          AND state IN ('reserved', 'running', 'uncertain')
         """,
         (now, now, task_uuid),
     )
@@ -397,10 +466,6 @@ def list_execution_locks(
         semantic_scope = str(metadata.get("semantic_scope") or "").strip()
         if semantic_scope in _SCOPES:
             item["scope"] = semantic_scope
-        if item["scope"] == _ACCESS_REGION_SCOPE:
-            item["access_region_key"] = metadata.get("access_region_key")
-            item["lease_owner_job_uuid"] = row["workflow_node_job_uuid"]
-            item["acquired_by_job_uuid"] = metadata.get("acquired_by_job_uuid")
         result.append(item)
     return result
 
@@ -432,10 +497,7 @@ def _ensure_waiters(
     for request in requests:
         metadata = {
             "semantic_scope": request.scope,
-            "lease_owner_job_uuid": request.lease_owner_job_uuid,
         }
-        if request.access_region_key is not None:
-            metadata["access_region_key"] = request.access_region_key
         connection.execute(
             """
             INSERT OR IGNORE INTO execution_lock_waiter(
@@ -454,7 +516,7 @@ def _ensure_waiters(
                 task_uuid,
                 job_uuid,
                 request.lock_key,
-                request.storage_scope,
+                request.scope,
                 request.material_uuid,
                 request.site_uuid,
                 enqueued_at,
@@ -470,6 +532,15 @@ def _older_conflicting_waiter(
     current_order: tuple[str, str, str, str],
     requested_keys: set[str],
 ) -> tuple[str, str] | None:
+    """查找排序早于当前作业且与尚未托管资源冲突的等待作业。
+
+    参数：``connection`` 是工作流权威事务；``job_uuid`` 是当前作业身份；
+    ``current_order`` 是等待时间、任务创建时间和稳定身份组成的公平顺序；
+    ``requested_keys`` 已排除当前任务长期托管的设备键。返回：最早阻塞任务和作业
+    UUID，或无冲突时返回 ``None``。异常：数据库读取错误原样传播。长期托管设备
+    必须让所属任务优先完成操作或卸载，不能被外部等待者反向阻塞。
+    """
+
     rows = connection.execute(
         """
         SELECT waiter.workflow_task_uuid, waiter.workflow_node_job_uuid,
@@ -545,17 +616,6 @@ def _record_wait(
     )
 
 
-def _require_uuid(value: str, *, field: str) -> None:
-    """校验一个公开锁字段是规范 UUID 文本。"""
-
-    try:
-        parsed = UUID(value)
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise StoreConflict(f"{field} 必须是 UUID") from exc
-    if str(parsed) != value.lower():
-        raise StoreConflict(f"{field} 必须是规范 UUID")
-
-
 def _lease_metadata(row: sqlite3.Row) -> dict[str, Any]:
     """安全读取既有租约元数据；损坏事实按空对象保守处理。"""
 
@@ -574,51 +634,6 @@ def _lease_acquired_by(row: sqlite3.Row) -> str:
     return str(
         metadata.get("acquired_by_job_uuid") or row["workflow_node_job_uuid"]
     )
-
-
-def _validate_access_region_owners(
-    connection: sqlite3.Connection,
-    *,
-    task_uuid: str,
-    acquiring_job_uuid: str,
-    requests: tuple[ExecutionLockRequest, ...],
-) -> None:
-    """证明访问区域只由同任务中更晚的物料转移作业释放。
-
-    参数：连接、当前任务/入口作业及完整锁声明。返回无。异常：释放作业缺失、
-    跨任务、不是物料转移或拓扑位置不晚于入口时抛 ``StoreConflict``。这条校验
-    复用既有工作流节点作业表，不新增访问区域关系表。
-    """
-
-    access_requests = [
-        request for request in requests if request.scope == _ACCESS_REGION_SCOPE
-    ]
-    if not access_requests:
-        return
-    acquiring = connection.execute(
-        """
-        SELECT topological_index FROM workflow_node_job
-        WHERE uuid = ? AND workflow_task_uuid = ? AND deleted_at IS NULL
-        """,
-        (acquiring_job_uuid, task_uuid),
-    ).fetchone()
-    if acquiring is None:
-        raise StoreConflict(f"访问区域入口作业不存在：{acquiring_job_uuid}")
-    for request in access_requests:
-        release = connection.execute(
-            """
-            SELECT executor_kind, topological_index FROM workflow_node_job
-            WHERE uuid = ? AND workflow_task_uuid = ? AND deleted_at IS NULL
-            """,
-            (request.lease_owner_job_uuid, task_uuid),
-        ).fetchone()
-        if (
-            release is None
-            or str(release["executor_kind"]) not in _MATERIAL_TRANSFER_KINDS
-            or int(release["topological_index"])
-            <= int(acquiring["topological_index"])
-        ):
-            raise StoreConflict("访问区域必须由同任务中更晚的物料转移作业释放")
 
 
 def _release_waiters(

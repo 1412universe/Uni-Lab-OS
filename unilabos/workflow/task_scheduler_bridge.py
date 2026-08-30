@@ -16,7 +16,11 @@ from unilabos.app.scheduler.material_source_resolution import (
     MaterialSourceResolutionCoordinator,
 )
 from unilabos.app.scheduler.service import EdgeScheduler
+from unilabos.workflow.execution_lock_lease import list_execution_locks
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
+from unilabos.workflow.material_transfer_settlement import (
+    MaterialTransferSettlement,
+)
 from unilabos.workflow.quantity_inventory import WorkflowQuantityInventory
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
@@ -63,9 +67,7 @@ class TaskSchedulerBridge:
         self._scheduler = scheduler
         self._compiler = compiler or WorkflowSpecCompiler()
         self._projection = projection or TaskRuntimeProjection(store)
-        self._max_in_flight_jobs = int(
-            getattr(scheduler, "max_in_flight_jobs", 100)
-        )
+        self._max_in_flight_jobs = int(getattr(scheduler, "max_in_flight_jobs", 100))
         self._max_active_tasks = int(getattr(scheduler, "max_active_tasks", 500))
         self._max_tasks_per_workflow = int(
             getattr(scheduler, "max_tasks_per_workflow", 100)
@@ -98,6 +100,9 @@ class TaskSchedulerBridge:
             if inventory_store is not None
             else None
         )
+        self._material_transfer_settlement = MaterialTransferSettlement(
+            scheduler.station_resource_inventory
+        )
         # ``_task_by_job`` 只过滤本桥提交到共享调度器的作业，不承担持久恢复。
         self._task_by_job: dict[str, str] = {}
         # ``_submitted_tasks`` 标识仍可进行准入重试（AdmissionRetry）的本地运行。
@@ -111,12 +116,8 @@ class TaskSchedulerBridge:
         scheduler.add_admission_retry_listener(self._retry_pending_admissions)
         scheduler.add_job_pre_dispatch_listener(self._on_job_pre_dispatch)
         scheduler.add_job_execution_wait_listener(self._on_job_execution_wait)
-        scheduler.add_job_dispatch_accepted_listener(
-            self._on_job_dispatch_accepted
-        )
-        scheduler.add_job_dispatch_uncertain_listener(
-            self._on_job_dispatch_uncertain
-        )
+        scheduler.add_job_dispatch_accepted_listener(self._on_job_dispatch_accepted)
+        scheduler.add_job_dispatch_uncertain_listener(self._on_job_dispatch_uncertain)
         scheduler.add_job_cancel_accepted_listener(self._on_job_cancel_accepted)
         scheduler.add_job_cancel_uncertain_listener(self._on_job_cancel_uncertain)
         scheduler.add_job_cancel_no_send_listener(self._on_job_cancel_no_send)
@@ -124,6 +125,9 @@ class TaskSchedulerBridge:
         scheduler.add_job_outcome_listener(self._on_job_outcome)
         scheduler.add_job_finished_listener(self._on_job_finished)
         scheduler.add_job_settled_listener(self._on_job_settled)
+        scheduler.add_execution_process_restarted_listener(
+            self._on_execution_process_restarted
+        )
         scheduler.set_drain_blocker_provider(self.active_or_uncertain_job_ids)
 
     def prepare_inventory_allocations(
@@ -143,9 +147,7 @@ class TaskSchedulerBridge:
         有逻辑库存需求但未装配库存权威时关闭式失败；具体校验错误原样传播。
         """
 
-        active_nodes = {
-            str(job.get("workflow_node_uuid")) for job in prepared.jobs
-        }
+        active_nodes = {str(job.get("workflow_node_uuid")) for job in prepared.jobs}
         active_requirements = [
             requirement
             for requirement in graph.get("inventory_requirements", [])
@@ -164,6 +166,37 @@ class TaskSchedulerBridge:
             bindings=bindings,
         )
 
+    def preflight_inventory_allocations(
+        self,
+        *,
+        graph: Mapping[str, Any],
+        prepared: Any,
+        bindings: list[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """只读检查候选任务的共享数量库存准入。
+
+        参数：图、冻结候选输入和显式库存绑定与正式提交相同。返回：已验证分配
+        预览。异常：存在活动需求但本地库存权威未装配，或任一数量不足时失败关闭。
+        本方法不创建任务、预留、台账或 Outbox。
+        """
+
+        active_nodes = {str(job.get("workflow_node_uuid")) for job in prepared.jobs}
+        active_requirements = [
+            requirement
+            for requirement in graph.get("inventory_requirements", [])
+            if isinstance(requirement, Mapping)
+            and str(requirement.get("consume_node_uuid")) in active_nodes
+        ]
+        if self._quantity_inventory is None:
+            if active_requirements or bindings:
+                raise StoreConflict("工作流数量型库存未装配本地库存权威")
+            return []
+        return self._quantity_inventory.preflight_task_allocations(
+            graph=graph,
+            prepared=prepared,
+            bindings=bindings,
+        )
+
     def discard_uncommitted_inventory(self, task_uuid: str) -> None:
         """补偿未提交 Task 在库存权威中留下的数量预留。
 
@@ -175,18 +208,14 @@ class TaskSchedulerBridge:
             return
         self._quantity_inventory.discard_uncommitted_task(task_uuid)
 
-    def list_task_inventory_consumptions(
-        self, task_uuid: str
-    ) -> list[dict[str, Any]]:
+    def list_task_inventory_consumptions(self, task_uuid: str) -> list[dict[str, Any]]:
         """返回任务的数量型库存消费事实；未装配库存时返回空数组。"""
 
         if self._quantity_inventory is None:
             return []
         return self._quantity_inventory.list_task_consumptions(task_uuid)
 
-    def list_job_inventory_consumptions(
-        self, job_uuid: str
-    ) -> list[dict[str, Any]]:
+    def list_job_inventory_consumptions(self, job_uuid: str) -> list[dict[str, Any]]:
         """返回作业的数量型库存消费事实；未装配库存时返回空数组。"""
 
         if self._quantity_inventory is None:
@@ -475,13 +504,13 @@ class TaskSchedulerBridge:
             raise TaskSchedulerBridgeError(str(error)) from error
 
     def recover_active_tasks(self) -> list[dict[str, Any]]:
-        """恢复可安全重建的任务，并冻结存在执行未知作业的任务。
+        """恢复未派发任务，并失败执行进程重启时仍在途的任务。
 
         参数：无。返回：已恢复任务的标准聚合列表；包括运行中任务和尚未执行
         首步的 ``pending + paused`` 单步任务。已成功作业仅
         恢复 DAG 返回值，待处理作业才可派发；发现 ``dispatched`` 或
-        ``running`` 作业时转为 ``execution_unknown``、保留持久执行占用并禁止
-        物理重放，返回的聚合可直接用于告警和对账。
+        ``running`` 作业时将作业和父任务转为 ``failed``、跳过尚未开始的节点并
+        保留不确定执行占用，返回的聚合可直接用于告警和物理结算。
         异常：冻结计划或持久事实不一致时记录后跳过，不阻止其他
         可证明安全的任务恢复。
         """
@@ -529,7 +558,7 @@ class TaskSchedulerBridge:
         """补齐终态 Task 在进程退出前未完成的库存释放与清理提交。
 
         参数与返回均为空。扫描成功、失败、取消和超时任务；仍存在 dispatched、
-        running、cancel_requested 或 execution_unknown 作业时保留全部占用。安全
+        running 或 cancel_requested 作业时保留全部占用。安全
         任务先幂等释放数量与实例物料预留，异常终态最后才写 cleanup settled；
         任一释放失败原样传播，禁止把未完成清理伪装成已结算。
         """
@@ -538,7 +567,6 @@ class TaskSchedulerBridge:
             "dispatched",
             "running",
             "cancel_requested",
-            "execution_unknown",
         }
         for status in ("succeeded", "failed", "canceled", "timeout"):
             page = 1
@@ -597,7 +625,6 @@ class TaskSchedulerBridge:
                             "dispatched",
                             "running",
                             "cancel_requested",
-                            "execution_unknown",
                         }:
                             job_uuid = self._required_text(
                                 job.get("uuid"), field="job.uuid"
@@ -641,6 +668,41 @@ class TaskSchedulerBridge:
             "normal" if success else outcome.outcome,
         )
 
+    def _on_execution_process_restarted(
+        self,
+        job_uuids: tuple[str, ...],
+    ) -> None:
+        """把动作进程重启收敛成受影响任务的失败终态。
+
+        参数：``job_uuids`` 是动作账本保留下来的结果不确定作业。返回无。异常：
+        作业事实读取或重启失败投影异常原样传播。每个任务只投影一次；运行中作业
+        进入失败，尚未物理执行的节点进入跳过，Claim/Fence 保留待人工对账。
+        """
+
+        task_uuids: list[str] = []
+        for job_uuid in job_uuids:
+            task_uuid = self._task_by_job.get(job_uuid)
+            if task_uuid is None:
+                try:
+                    job = self._store.get_job(job_uuid)
+                except StoreNotFound:
+                    logger.warning("动作进程重启包含未知作业 %s", job_uuid)
+                    continue
+                task_uuid = self._required_text(
+                    job.get("workflow_task_uuid"),
+                    field="job.workflow_task_uuid",
+                )
+            if task_uuid not in task_uuids:
+                task_uuids.append(task_uuid)
+        for task_uuid in task_uuids:
+            aggregate = self._projection.project_execution_process_restarted(task_uuid)
+            if aggregate is None:
+                raise TaskSchedulerBridgeError("动作进程重启未能提交工作流任务失败事实")
+            logger.error(
+                "工作流任务 %s 因动作执行进程重启整体失败，未开始节点不再推进",
+                task_uuid,
+            )
+
     def _recover_running_task(
         self,
         task: Mapping[str, Any],
@@ -650,7 +712,7 @@ class TaskSchedulerBridge:
         task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
         jobs = self._store.list_jobs(task_uuid)
         # pending 人工确认尚未下发物理动作：重启后可以用同一
-        # Job 和同一截止时间安全恢复等待，不应误标 execution_unknown。
+        # Job 和同一截止时间安全恢复等待，不应误判为已越过设备动作边界。
         for job in jobs:
             if (
                 job.get("executor_kind") == "manual_confirm"
@@ -667,34 +729,35 @@ class TaskSchedulerBridge:
                         self._required_text(job.get("uuid"), field="job.uuid")
                     )
         jobs = self._store.list_jobs(task_uuid)
-        uncertain_jobs = [
+        if task.get("status") in {"running", "canceling"}:
+            aggregate = self._projection.project_execution_process_restarted(task_uuid)
+            if aggregate is None:
+                raise TaskSchedulerBridgeError("运行中任务未能提交进程重启失败事实")
+            logger.error(
+                "工作流任务 %s 因工站调度进程重启整体失败，未开始节点不再推进",
+                task_uuid,
+            )
+            return aggregate
+        interrupted_jobs = [
             job
             for job in jobs
-            if job.get("status") in {
+            if job.get("status")
+            in {
                 "dispatched",
                 "running",
                 "cancel_requested",
-                "execution_unknown",
             }
         ]
-        if uncertain_jobs:
-            for job in uncertain_jobs:
-                if job.get("status") == "execution_unknown":
-                    continue
-                self._projection.project_execution_unknown(
-                    self._required_text(job.get("uuid"), field="job.uuid"),
-                    reason=(
-                        "local_cancel_restart_missing_terminal"
-                        if job.get("status") == "cancel_requested"
-                        else "local_process_restart_missing_result"
-                    ),
-                )
+        if interrupted_jobs:
+            aggregate = self._projection.project_execution_process_restarted(task_uuid)
+            if aggregate is None:
+                raise TaskSchedulerBridgeError("在途作业未能提交进程重启失败事实")
             logger.error(
-                "工作流任务 %s 存在 %d 个执行未知作业，已保留占用并禁止自动恢复",
+                "工作流任务 %s 有 %d 个作业被动作进程重启中断，已失败并保留占用",
                 task_uuid,
-                len(uncertain_jobs),
+                len(interrupted_jobs),
             )
-            return self._aggregate(task_uuid)
+            return aggregate
         source_jobs = [
             job for job in jobs if job.get("executor_kind") == "material_source"
         ]
@@ -725,13 +788,10 @@ class TaskSchedulerBridge:
             self._projection.project_material_source_admission(task_uuid, bindings)
             jobs = self._store.list_jobs(task_uuid)
             ordinary_jobs = [
-                job
-                for job in jobs
-                if job.get("executor_kind") != "material_source"
+                job for job in jobs if job.get("executor_kind") != "material_source"
             ]
         if any(
-            job.get("status") not in {"pending", "succeeded"}
-            for job in ordinary_jobs
+            job.get("status") not in {"pending", "succeeded"} for job in ordinary_jobs
         ):
             raise TaskSchedulerBridgeError("运行中任务包含不可恢复的作业终态")
         pending_jobs = [job for job in ordinary_jobs if job.get("status") == "pending"]
@@ -749,8 +809,7 @@ class TaskSchedulerBridge:
             if isinstance(node, Mapping)
         }
         jobs_by_node = {
-            str(job.get("workflow_node_uuid") or ""): job
-            for job in ordinary_jobs
+            str(job.get("workflow_node_uuid") or ""): job for job in ordinary_jobs
         }
         completed_results: dict[str, Any] = {}
         recovery_run = WorkflowRun(spec)
@@ -829,13 +888,9 @@ class TaskSchedulerBridge:
         if self._closed:
             return
         self._closed = True
-        self._scheduler.remove_admission_retry_listener(
-            self._retry_pending_admissions
-        )
+        self._scheduler.remove_admission_retry_listener(self._retry_pending_admissions)
         self._scheduler.remove_job_pre_dispatch_listener(self._on_job_pre_dispatch)
-        self._scheduler.remove_job_execution_wait_listener(
-            self._on_job_execution_wait
-        )
+        self._scheduler.remove_job_execution_wait_listener(self._on_job_execution_wait)
         self._scheduler.remove_job_dispatch_accepted_listener(
             self._on_job_dispatch_accepted
         )
@@ -848,13 +903,14 @@ class TaskSchedulerBridge:
         self._scheduler.remove_job_cancel_uncertain_listener(
             self._on_job_cancel_uncertain
         )
-        self._scheduler.remove_job_cancel_no_send_listener(
-            self._on_job_cancel_no_send
-        )
+        self._scheduler.remove_job_cancel_no_send_listener(self._on_job_cancel_no_send)
         self._scheduler.remove_job_feedback_listener(self._on_job_feedback)
         self._scheduler.remove_job_outcome_listener(self._on_job_outcome)
         self._scheduler.remove_job_finished_listener(self._on_job_finished)
         self._scheduler.remove_job_settled_listener(self._on_job_settled)
+        self._scheduler.remove_execution_process_restarted_listener(
+            self._on_execution_process_restarted
+        )
         self._scheduler.set_drain_blocker_provider(None)
         self._task_by_job.clear()
         self._submitted_tasks.clear()
@@ -877,16 +933,16 @@ class TaskSchedulerBridge:
     def active_or_uncertain_job_ids(self) -> set[str]:
         """返回阻止调度器安全排空的持久作业身份。
 
-        参数：无。返回：已经派发、运行、请求取消或执行结果未知的 Job UUID 集合；
-        尚未批准的人工确认与内部物料来源解析不属于设备在途作业。异常：持久库
-        读取失败原样传播，使排空关闭式失败，禁止把读取失败解释为空闲。
+        参数：无。返回：已经派发、运行、请求取消，或业务已失败但仍持有不确定
+        执行占用的 Job UUID 集合；尚未批准的人工确认与内部物料来源解析不属于设备
+        在途作业。异常：持久库读取失败原样传播，使排空关闭式失败，禁止把读取失败
+        解释为空闲。
         """
 
         unsafe_statuses = {
             "dispatched",
             "running",
             "cancel_requested",
-            "execution_unknown",
         }
         result: set[str] = set()
         page = 1
@@ -896,11 +952,20 @@ class TaskSchedulerBridge:
             for task in task_page["items"]:
                 task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
                 for job in self._store.list_jobs(task_uuid):
-                    if job.get("status") not in unsafe_statuses:
-                        continue
                     if job.get("executor_kind") == "material_source":
                         continue
                     job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
+                    status_is_unsafe = job.get("status") in unsafe_statuses
+                    with self._store.transaction() as connection:
+                        claim_is_uncertain = any(
+                            lease.get("state") == "uncertain"
+                            for lease in list_execution_locks(
+                                connection,
+                                job_uuid=job_uuid,
+                            )
+                        )
+                    if not status_is_unsafe and not claim_is_uncertain:
+                        continue
                     if (
                         job.get("executor_kind") == "manual_confirm"
                         and job.get("status") == "dispatched"
@@ -937,7 +1002,7 @@ class TaskSchedulerBridge:
             self._admission_pending_tasks.discard(task_uuid)
             self.submit(task)
 
-    def _on_job_pre_dispatch(self, dispatching: Mapping[str, Any]) -> bool | None:
+    def _on_job_pre_dispatch(self, dispatching: dict[str, Any]) -> bool | None:
         """在物理派发前提交标准作业派发意图。
 
         参数：``dispatching`` 是既有调度器即将越过执行边界的作业摘要。返回：
@@ -960,11 +1025,19 @@ class TaskSchedulerBridge:
         execution_locks = dispatching.get("execution_locks")
         if not isinstance(execution_locks, list):
             raise StoreConflict(f"派发作业缺少执行锁集合：{job_uuid}")
+        device_tenancy = dispatching.get("device_tenancy")
+        if device_tenancy is not None and not isinstance(device_tenancy, Mapping):
+            raise StoreConflict(f"派发作业设备托管转换不是对象：{job_uuid}")
+        actual_executor = dispatching.get("actual_executor")
+        if actual_executor is not None and not isinstance(actual_executor, Mapping):
+            raise StoreConflict(f"派发作业实际执行器不是对象：{job_uuid}")
         aggregate = self._projection.project_pre_dispatch(
             task_uuid=task_uuid,
             job_uuid=job_uuid,
             resolved_param=resolved_args,
             execution_locks=execution_locks,
+            device_tenancy=device_tenancy,
+            actual_executor=actual_executor,
             max_active_tasks=self._max_active_tasks,
             max_tasks_per_workflow=self._max_tasks_per_workflow,
             max_in_flight_jobs=self._max_in_flight_jobs,
@@ -975,6 +1048,18 @@ class TaskSchedulerBridge:
         )
         if projected_job is None:
             raise StoreConflict(f"派发作业投影后消失：{job_uuid}")
+        if projected_job["status"] == "dispatched":
+            claim = self._projection.get_execution_claim(job_uuid)
+            if claim is None:
+                raise StoreConflict(f"派发作业缺少持久 Claim：{job_uuid}")
+            dispatching.update(
+                {
+                    "attempt": int(projected_job["attempt"]),
+                    "command_uuid": str(projected_job["edge_command_uuid"]),
+                    "claim_uuid": str(claim["claim_uuid"]),
+                    "fences": [dict(fence) for fence in claim["fences"]],
+                }
+            )
         if (
             projected_job.get("executor_kind") == "manual_confirm"
             and projected_job.get("status") == "dispatched"
@@ -1011,6 +1096,10 @@ class TaskSchedulerBridge:
                 if waiting.get("blocking_job_id")
                 else None
             ),
+            wait_code=(str(waiting["wait_code"]) if waiting.get("wait_code") else None),
+            wait_message=(
+                str(waiting["wait_message"]) if waiting.get("wait_message") else None
+            ),
             max_active_tasks=self._max_active_tasks,
             max_tasks_per_workflow=self._max_tasks_per_workflow,
         )
@@ -1023,11 +1112,11 @@ class TaskSchedulerBridge:
         self._projection.project_dispatch_accepted(job_uuid)
 
     def _on_job_dispatch_uncertain(self, job_uuid: str, reason: str) -> None:
-        """把派发边界异常保守投影为 execution_unknown。"""
+        """让派发边界异常作业保持运行，并冻结其物理资源等待对账。"""
 
         if job_uuid not in self._task_by_job:
             return
-        self._projection.project_execution_unknown(job_uuid, reason=reason)
+        self._projection.project_execution_attention(job_uuid, reason=reason)
 
     def _on_job_cancel_accepted(self, job_uuid: str) -> None:
         """记录本地执行器已受理取消并切换到设备终态截止时间。
@@ -1044,14 +1133,12 @@ class TaskSchedulerBridge:
             return
         aggregate = self._projection.project_cancel_accepted(job_uuid)
         accepted_job = next(
-            job
-            for job in aggregate["jobs"]
-            if str(job.get("uuid")) == job_uuid
+            job for job in aggregate["jobs"] if str(job.get("uuid")) == job_uuid
         )
         self._schedule_cancel_timeout(accepted_job)
 
     def _on_job_cancel_uncertain(self, job_uuid: str, reason: str) -> None:
-        """把取消拒绝或取消能力缺失保守投影为执行未知。"""
+        """让取消拒绝或能力缺失的作业保持运行并等待物理对账。"""
 
         if job_uuid not in self._task_by_job:
             return
@@ -1059,7 +1146,7 @@ class TaskSchedulerBridge:
         job = self._store.get_job(job_uuid)
         if job.get("status") in {"succeeded", "failed", "canceled", "timeout"}:
             return
-        self._projection.project_execution_unknown(job_uuid, reason=reason)
+        self._projection.project_execution_attention(job_uuid, reason=reason)
 
     def _on_job_cancel_no_send(self, job_uuid: str) -> None:
         """用 No-send Proof 立即结算一个尚未执行的取消作业。"""
@@ -1081,17 +1168,13 @@ class TaskSchedulerBridge:
         """按持久截止时间为一个取消中作业安排单次本地检查。
 
         参数：``job`` 是最新持久作业投影。返回无。异常：缺少或损坏截止时间时
-        立即转为执行未知，避免取消状态永久悬挂。受理前使用 ACK 截止时间，受理后
+        立即让主状态恢复为 running 并进入物理对账，避免取消状态永久悬挂。受理前使用 ACK 截止时间，受理后
         使用设备完成截止时间。
         """
 
         job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
         accepted = bool(job.get("cancel_accepted_at"))
-        field = (
-            "cancel_complete_deadline_at"
-            if accepted
-            else "cancel_ack_deadline_at"
-        )
+        field = "cancel_complete_deadline_at" if accepted else "cancel_ack_deadline_at"
         raw_deadline = job.get(field)
         try:
             deadline = self._parse_time(raw_deadline)
@@ -1127,7 +1210,7 @@ class TaskSchedulerBridge:
         job_uuid: str,
         expected_accepted: bool,
     ) -> None:
-        """把到期且仍未收敛的取消作业冻结为执行未知。
+        """把到期且仍未收敛的取消作业冻结为运行中物理不确定事实。
 
         参数：``job_uuid`` 是作业身份；``expected_accepted`` 标识本计时器观察的是
         受理阶段还是设备终态阶段。返回无。异常：存储关闭或并发终态只记录日志，
@@ -1150,8 +1233,8 @@ class TaskSchedulerBridge:
                 if accepted
                 else "local_cancel_acceptance_timeout"
             )
-            self._projection.project_execution_unknown(job_uuid, reason=reason)
-        except Exception:  # noqa: BLE001 - 后台检查不能终止调用线程
+            self._projection.project_execution_attention(job_uuid, reason=reason)
+        except Exception:
             logger.exception("本地取消超时检查失败：%s", job_uuid)
 
     def _cancel_cancel_timer(self, job_uuid: str) -> None:
@@ -1204,7 +1287,7 @@ class TaskSchedulerBridge:
                     self._schedule_manual_confirmation_timeout(job_uuid)
                     return
                 self._scheduler.expire_manual_confirmation(job_uuid)
-            except Exception:  # noqa: BLE001 - 后台截止检查不能终止调用线程
+            except Exception:
                 logger.exception("人工确认超时收敛失败：%s", job_uuid)
 
     def _cancel_manual_confirmation_timer(self, job_uuid: str) -> None:
@@ -1309,7 +1392,7 @@ class TaskSchedulerBridge:
         if task_uuid is None:
             return
         if outcome.unknown_command_ids:
-            self._projection.project_execution_unknown(
+            self._projection.project_execution_attention(
                 job_uuid,
                 reason=(
                     "edge_reported_unknown_commands:"
@@ -1325,6 +1408,16 @@ class TaskSchedulerBridge:
         }.get(outcome.outcome)
         if scheduler_state is None:
             raise StoreConflict(f"不支持的 Edge 作业终态：{outcome.outcome}")
+        if outcome.outcome == "succeeded":
+            task = self._store.get_task(task_uuid)
+            self._material_transfer_settlement.settle_success(
+                job=self._store.get_job(job_uuid),
+                execution_plan=(
+                    task.get("execution_plan")
+                    if isinstance(task.get("execution_plan"), Mapping)
+                    else None
+                ),
+            )
         if outcome.outcome == "succeeded" and self._quantity_inventory is not None:
             self._quantity_inventory.consume_successful_job(
                 task_uuid=task_uuid,
@@ -1368,8 +1461,7 @@ class TaskSchedulerBridge:
         self._cancel_manual_confirmation_timer(job_uuid)
         terminal_status = aggregate["task"]["status"]
         if terminal_status == "succeeded" and any(
-            job.get("executor_kind") == "material_source"
-            for job in aggregate["jobs"]
+            job.get("executor_kind") == "material_source" for job in aggregate["jobs"]
         ):
             # 成功表示最后一个动作已完成，可立即释放来源层短期预留。失败任务必须
             # 等所有在途设备动作结算，由 ``_on_job_settled`` 推进 cleanup_status。
@@ -1506,7 +1598,6 @@ class TaskSchedulerBridge:
                 "dispatched",
                 "running",
                 "cancel_requested",
-                "execution_unknown",
             }
         )
 

@@ -261,13 +261,13 @@ def test_workspace_stop_drains_backend_even_when_edge_was_stopped(
         _cleanup(host, processes, server)
 
 
-def test_workspace_start_remote_authority_skips_local_scheduler_resume(
+def test_workspace_start_backend_upstream_resumes_local_scheduler(
     tmp_path: Path,
 ) -> None:
-    """远程 Backend 模式启动 Edge 时，不应请求不存在的本地调度器恢复。
+    """Backend 上游模式启动动作进程后仍恢复本地工站调度器。
 
     参数：``tmp_path`` 提供隔离状态目录。返回：无；断言统一启动操作成功且不
-    调用本地排空服务。异常：若把远程权威误当成本地 Scheduler，测试失败。
+    调用本地恢复接口。异常：若绕过本地工站调度权威，测试失败。
     """
 
     _DrainHandler.phase = "running"
@@ -292,6 +292,8 @@ def test_workspace_start_remote_authority_skips_local_scheduler_resume(
         operation = _wait_operation(host, str(submitted["operationId"]))
 
         assert operation["phase"] == "succeeded"
-        assert _DrainHandler.requests == []
+        assert _DrainHandler.requests == [
+            ("POST", "/api/v1/scheduler/drain/resume")
+        ]
     finally:
         _cleanup(host, processes, server)

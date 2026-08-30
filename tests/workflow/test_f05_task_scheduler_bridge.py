@@ -376,6 +376,17 @@ def test_persisted_task_compiles_and_dispatches_with_stable_identities(
     assert observed_states == [("running", "dispatched")]
     assert dispatcher.dispatched[0]["task_id"] == TASK_UUID
     assert dispatcher.dispatched[0]["job_id"] == JOB_UUID
+    assert dispatcher.dispatched[0]["attempt"] == 1
+    assert dispatcher.dispatched[0]["command_uuid"] == store.get_job(JOB_UUID)[
+        "edge_command_uuid"
+    ]
+    assert dispatcher.dispatched[0]["claim_uuid"]
+    assert dispatcher.dispatched[0]["fences"] == [
+        {
+            "lock_key": "/devices/reactor-a",
+            "fencing_token": 1,
+        }
+    ]
     assert aggregate["task"]["status"] == "running"
 
 
@@ -996,10 +1007,114 @@ def test_edge_http_outcome_projects_exact_terminal_evidence(
     assert job["error_info"] == error_info
 
 
-def test_edge_http_unknown_outcome_preserves_inflight_job_for_reconciliation(
+def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
     store: WorkflowStore,
 ) -> None:
-    """结果不明证据只进入 ``execution_unknown``，不能伪装成失败终态。
+    """双进程成功转运先更新调度侧库位事实，再提交 Job 终态。
+
+    参数：``store`` 是隔离任务权威。返回无；断言 Edge HTTP 成功结果使用持久实参
+    调用工站库存，随后 Job/Task 才进入 succeeded。异常：库存结算丢失或身份漂移
+    会使测试失败。
+    """
+
+    class _TransferInventory:
+        """记录物料移动且不启用数量库存表。"""
+
+        store = None
+
+        def __init__(self) -> None:
+            """创建空调用列表；参数、返回和异常均为空。"""
+
+            self.moves: list[dict[str, Any]] = []
+
+        def move_instance(self, material_uuid: str, **kwargs: Any) -> dict[str, Any]:
+            """记录转移结算命令并返回同一事实。
+
+            参数：物料 UUID 与目标/审计字段。返回：完整记录。异常：无。
+            """
+
+            move = {"material_uuid": material_uuid, **kwargs}
+            self.moves.append(move)
+            return move
+
+        def settle_material_transfer(self, command: Any) -> dict[str, Any]:
+            """通过工站资源窄接口记录转运结算命令。
+
+            参数：``command`` 是生产代码冻结的物料转移命令。返回：兼容原断言的
+            移动事实。异常：无。
+            """
+
+            return self.move_instance(
+                command.material_uuid,
+                parent_uuid=command.target_owner_material_uuid,
+                slot_id=command.target_site_uuid or command.target_site_name,
+                actor=command.actor,
+                causation_id=command.causation_id,
+            )
+
+    _seed_task(store, with_material=False)
+    parent_uuid = "52000000-0000-4000-8000-000000000001"
+    with store.transaction() as connection:
+        row = connection.execute(
+            "SELECT execution_plan FROM workflow_task WHERE uuid=?",
+            (TASK_UUID,),
+        ).fetchone()
+        plan = json.loads(str(row["execution_plan"]))
+        plan["nodes"][0]["kind"] = "material_transfer"
+        plan["nodes"][0]["param"] = {
+            "resource": {"uuid": MATERIAL_UUID},
+            "mount_resource": {"uuid": parent_uuid},
+            "site": "A1",
+        }
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=? WHERE uuid=?",
+            (json.dumps(plan), TASK_UUID),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET executor_kind='material_transfer', param=? "
+            "WHERE uuid=?",
+            (json.dumps(plan["nodes"][0]["param"]), JOB_UUID),
+        )
+    inventory = _TransferInventory()
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+        station_resources=inventory,
+    )
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        scheduler.on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome="succeeded",
+                return_info={"result": "ok"},
+                error_info=[],
+                unknown_command_ids=[],
+            ),
+        )
+    finally:
+        bridge.close()
+
+    assert inventory.moves == [
+        {
+            "material_uuid": MATERIAL_UUID,
+            "parent_uuid": parent_uuid,
+            "slot_id": "A1",
+            "actor": "station_scheduler.material_transfer",
+            "causation_id": (
+                f"workflow-node-job:{JOB_UUID}:material-transfer"
+            ),
+        }
+    ]
+    assert store.get_job(JOB_UUID)["status"] == "succeeded"
+    assert store.get_task(TASK_UUID)["status"] == "succeeded"
+
+
+def test_edge_http_unknown_outcome_keeps_running_job_for_reconciliation(
+    store: WorkflowStore,
+) -> None:
+    """结果不明证据保持 ``running``，不能伪装成失败终态。
 
     参数：``store`` 是隔离任务权威。返回无。异常：UNKNOWN 结果释放在途作业、
     推进任务终态或丢失物理对账占用时由断言失败；该路径禁止自动执行重试。
@@ -1023,7 +1138,8 @@ def test_edge_http_unknown_outcome_preserves_inflight_job_for_reconciliation(
 
         job = store.get_job(JOB_UUID)
         aggregate = store.get_task(TASK_UUID)
-        assert job["status"] == "execution_unknown"
+        assert job["status"] == "running"
+        assert job["uncertainty_reason"].startswith("edge_reported_unknown_commands:")
         assert aggregate["status"] == "running"
         assert aggregate["control_status"] == "waiting_reconciliation"
         assert aggregate["cleanup_status"] == "requires_attention"
@@ -1032,13 +1148,13 @@ def test_edge_http_unknown_outcome_preserves_inflight_job_for_reconciliation(
         bridge.close()
 
 
-def test_recovered_execution_unknown_job_blocks_scheduler_drain(
+def test_restart_failed_job_with_uncertain_claim_blocks_scheduler_drain(
     store: WorkflowStore,
 ) -> None:
-    """重启后只存在于持久层的执行未知作业仍必须阻止安全停止。
+    """重启失败但仍持不确定占用的作业必须阻止安全停止。
 
     参数：``store`` 是隔离任务权威。返回：无；断言新调度器未重放物理动作，
-    但排空状态仍报告原 Job。异常：持久事实漏出排空边界时测试失败。
+    但排空状态仍按 Claim 报告原 Job。异常：持久事实漏出排空边界时测试失败。
     """
 
     task = _seed_task(store, with_material=False)
@@ -1093,15 +1209,58 @@ def test_close_is_idempotent_and_unregisters_scheduler_listeners(
     assert scheduler._job_pre_dispatch_listeners == []
     assert scheduler._job_finished_listeners == []
     assert scheduler._job_settled_listeners == []
+    assert scheduler._execution_process_restarted_listeners == []
 
 
-def test_restart_recovers_succeeded_test_mode_passthrough_without_replay(
+def test_execution_process_restart_fails_task_and_stops_dag_advance(
     store: WorkflowStore,
 ) -> None:
-    """重启恢复只派发待处理作业，且可重建旧测试模式物料透传。
+    """动作执行进程重启必须失败整条任务并保留现场资源占用。
 
-    参数：``store`` 是隔离任务权威。返回无；断言已成功的取料
-    作业不重放，放料作业取得同一物料 UUID。
+    参数：``store`` 是隔离工作流权威。返回无。异常：在途 Job 未失败、后继 Job
+    未跳过、内存 DAG 仍可推进，或 Claim/Fence 被提前释放时由断言失败。
+    """
+
+    _seed_two_node_debug_task(store)
+    task = store.get_task(TASK_UUID)
+    execution_plan = dict(task["execution_plan"])
+    execution_plan["run_mode"] = "normal"
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET execution_plan = ?, run_mode = 'normal', control_status = 'active'
+            WHERE uuid = ?
+            """,
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        assert list(scheduler.snapshot()["inflight_jobs"]) == [JOB_UUID]
+
+        scheduler.on_execution_process_restarted((JOB_UUID,))
+
+        jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
+        assert jobs[JOB_UUID]["status"] == "failed"
+        assert jobs[SECOND_JOB_UUID]["status"] == "skipped"
+        assert store.get_task(TASK_UUID)["status"] == "failed"
+        snapshot = scheduler.snapshot()
+        assert snapshot["workflows"][TASK_UUID]["state"] == "failed"
+        assert list(snapshot["inflight_jobs"]) == [JOB_UUID]
+        assert bridge.active_or_uncertain_job_ids() == {JOB_UUID}
+    finally:
+        bridge.close()
+
+
+def test_restart_fails_running_task_between_nodes_without_physical_replay(
+    store: WorkflowStore,
+) -> None:
+    """调度进程重启会失败处在两个节点之间的 running 任务。
+
+    参数：``store`` 是隔离任务权威。返回无；断言已成功节点保持事实，未开始
+    节点跳过，父任务失败且没有物理重放。异常：恢复继续推进 DAG 会使测试失败。
     """
 
     _seed_recoverable_test_mode_task(store)
@@ -1114,12 +1273,8 @@ def test_restart_recovers_succeeded_test_mode_passthrough_without_replay(
         bridge.close()
 
     assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
-    assert [item["job_id"] for item in dispatcher.dispatched] == [SECOND_JOB_UUID]
-    assert dispatcher.dispatched[0]["action_args"]["resource"] == {
-        "uuid": MATERIAL_UUID
-    }
+    assert dispatcher.dispatched == []
     assert store.get_job(JOB_UUID)["status"] == "succeeded"
-    assert store.get_job(SECOND_JOB_UUID)["status"] == "running"
-    assert store.get_job(SECOND_JOB_UUID)["param"]["resource"] == {
-        "uuid": MATERIAL_UUID
-    }
+    assert store.get_job(SECOND_JOB_UUID)["status"] == "skipped"
+    assert store.get_task(TASK_UUID)["status"] == "failed"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"

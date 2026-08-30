@@ -390,9 +390,15 @@ def test_backend_launch_migrates_the_last_generation_into_stable_local_domain(
     assert plan.metadata["legacyStateMigratedFrom"] == str(legacy)
 
 
-def test_backend_authority_keeps_authoring_backend_and_routes_edge_remotely(
+def test_backend_upstream_keeps_station_scheduler_and_routes_edge_locally(
     workspace: Path,
 ) -> None:
+    """验证远端 Backend 模式仍由本地调度进程连接动作执行进程。
+
+    参数：``workspace`` 是隔离工作区。返回无；动作进程绕过本地调度器或账本随
+    上游变化时断言失败。
+    """
+
     paths = WorkspacePaths.resolve(workspace)
     paths.prepare()
     ensure_local_token(paths)
@@ -427,17 +433,16 @@ def test_backend_authority_keeps_authoring_backend_and_routes_edge_remotely(
         "https://backend.example.test"
     )
     assert edge.environment["UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR"] == (
-        "https://backend.example.test"
+        backend.address
     )
-    assert edge.environment["UNILABOS_EDGECONTROLCONFIG_API_KEY"]
+    assert edge.environment["UNILABOS_EDGECONTROLCONFIG_API_KEY"] == (
+        ensure_local_token(paths)
+    )
+    assert edge.environment["UNILABOS_EDGECONTROLCONFIG_BACKEND_API_KEY"]
     assert 2 <= int(edge.environment["ROS_DOMAIN_ID"]) <= 99
     assert edge.metadata["authorityAddress"] == "https://backend.example.test"
     backend_state = edge.environment["UNILABOS_EDGECONTROLCONFIG_STATE_DB"]
-    assert backend_state.startswith(
-        str(paths.runtime / "edge" / "edge_control-backend-")
-    )
-    assert backend_state.endswith(".db")
-    assert backend_state != str(paths.runtime / "edge" / "edge_control.db")
+    assert backend_state == str(paths.runtime / "edge" / "edge_control.db")
 
     repeated = resolve_edge_launch(
         paths,
@@ -447,9 +452,14 @@ def test_backend_authority_keeps_authoring_backend_and_routes_edge_remotely(
     assert repeated.environment["ROS_DOMAIN_ID"] == edge.environment["ROS_DOMAIN_ID"]
 
 
-def test_backend_authority_with_explicit_port_routes_edge_to_scheduler(
+def test_backend_upstream_with_explicit_port_still_uses_local_scheduler(
     workspace: Path,
 ) -> None:
+    """验证带显式端口的上游地址不会替代本地工站调度地址。
+
+    参数：``workspace`` 是隔离工作区。返回无；Backend 与调度地址混用时失败。
+    """
+
     paths = WorkspacePaths.resolve(workspace)
     paths.prepare()
     ensure_local_token(paths)
@@ -479,14 +489,19 @@ def test_backend_authority_with_explicit_port_routes_edge_to_scheduler(
         "http://127.0.0.1:8080"
     )
     assert edge.environment["UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR"] == (
-        "http://127.0.0.1:8081"
+        backend.address
     )
-    assert edge.metadata["schedulerAddress"] == "http://127.0.0.1:8081"
+    assert edge.metadata["schedulerAddress"] == backend.address
 
 
-def test_backend_authority_prefers_explicit_scheduler_address(
+def test_upstream_scheduler_override_does_not_bypass_station_scheduler(
     workspace: Path,
 ) -> None:
+    """验证遗留上游 schedulerUrl 不能绕过本地工站调度权威。
+
+    参数：``workspace`` 是隔离工作区。返回无；动作进程连接外部调度器时失败。
+    """
+
     paths = WorkspacePaths.resolve(workspace)
     paths.prepare()
     ensure_local_token(paths)
@@ -517,11 +532,9 @@ def test_backend_authority_prefers_explicit_scheduler_address(
         "http://scheduler.example.test:9081"
     )
     assert edge.environment["UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR"] == (
-        "http://scheduler.example.test:9081"
+        backend.address
     )
-    assert edge.metadata["schedulerAddress"] == (
-        "http://scheduler.example.test:9081"
-    )
+    assert edge.metadata["schedulerAddress"] == backend.address
 
 
 def test_scheduler_configuration_override_can_return_to_automatic(
@@ -1053,6 +1066,12 @@ def test_local_reset_state_clears_edge_work_but_preserves_identity(
     workspace: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证本地重置清除动作账本但保留稳定 Edge 实例身份。
+
+    参数：``workspace`` 是隔离工作区，``monkeypatch`` 模拟文件操作边界。返回无；
+    身份被删除或旧作业残留时断言失败。
+    """
+
     paths = WorkspacePaths.resolve(workspace)
     paths.prepare()
     state_path = paths.runtime / "edge" / "edge_control.db"
@@ -1076,6 +1095,14 @@ def test_local_reset_state_clears_edge_work_but_preserves_identity(
             "job_uuid": job_uuid,
             "task_uuid": "50000000-0000-4000-8000-000000000203",
             "node_uuid": "50000000-0000-4000-8000-000000000204",
+            "claim_uuid": "50000000-0000-4000-8000-000000000205",
+            "attempt": 1,
+            "fences": [
+                {
+                    "lock_key": "/devices/robot-01",
+                    "fencing_token": 1,
+                }
+            ],
             "job_access_token": "workspace-reset-token",
         },
         command_uuid,

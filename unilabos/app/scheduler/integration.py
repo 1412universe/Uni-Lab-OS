@@ -386,7 +386,11 @@ def setup_edge_scheduler(
         default_s=float(os.environ.get("ULAB_ESTIMATE_DEFAULT_S", "60")),
     )
 
-    orderer = StableLocalOrderer()
+    orderer = StableLocalOrderer(
+        aging_interval_seconds=float(
+            os.environ.get("ULAB_SCHEDULER_AGING_INTERVAL_SECONDS", "30")
+        )
+    )
 
     inventory = _inventory
     if inventory_db_path:

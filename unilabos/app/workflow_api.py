@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import re
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, FastAPI, Header, Query, Request
+from fastapi import APIRouter, Body, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -339,6 +340,63 @@ class WorkflowTaskCreateRequest(_BackendModel):
         return normalize_json_object(value)
 
 
+class WorkflowRunPreflightRequest(_BackendModel):
+    """以候选任务入口载荷执行只读运行预检。"""
+
+    run_mode: str = "normal"
+    target_node_uuid: Optional[str] = None
+    input: Dict[str, Any] = Field(default_factory=dict)
+    inventory_bindings: List[WorkflowInventoryBindingRequest] = Field(
+        default_factory=list
+    )
+
+    @field_validator("input", mode="before")
+    @classmethod
+    def _input_object(cls, value: Any) -> Dict[str, Any]:
+        """规范候选入口参数；非 JSON 对象由 Pydantic 映射为 422。"""
+
+        return normalize_json_object(value)
+
+
+class StationWorkflowInvocationRequest(_StrictModel):
+    """Backend 只提交工作流名称和入口参数的工站调用 DTO。"""
+
+    backend_task_uuid: str
+    invocation_key: str
+    workflow_name: str
+    input: Dict[str, Any] = Field(default_factory=dict)
+    priority: float = Field(default=1.0, allow_inf_nan=False)
+    inventory_bindings: List[WorkflowInventoryBindingRequest] = Field(
+        default_factory=list
+    )
+    description: Optional[str] = None
+    meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("backend_task_uuid")
+    @classmethod
+    def _backend_task_identity(cls, value: str) -> str:
+        """规范 Backend Task UUID 并拒绝 nil 或非法身份。"""
+
+        return validate_uuid(value)
+
+    @field_validator("invocation_key", "workflow_name")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        """规范调用键和工作流名称，并限制持久索引文本长度。"""
+
+        normalized = value.strip()
+        if not normalized or len(normalized) > 256:
+            raise ValueError("value must be 1..256 characters")
+        return normalized
+
+    @field_validator("input", "meta_data", mode="before")
+    @classmethod
+    def _json_object(cls, value: Any) -> Dict[str, Any]:
+        """规范化唯一入口参数与审计元数据对象。"""
+
+        return normalize_json_object(value)
+
+
 class DebugWorkflowTaskCreateRequest(_BackendModel):
     workflow_uuid: str
     start_node_uuids: List[str]
@@ -421,7 +479,7 @@ class WorkflowInterventionDecisionRequest(_StrictModel):
 
 
 class UncertainJobResolutionRequest(_StrictModel):
-    """执行未知作业的安全人工处置请求。"""
+    """物理结果不确定但主状态仍为 running 的作业安全处置请求。"""
 
     resolution: str
     reason: str
@@ -623,8 +681,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         return _success(
             {
                 "items": result["items"],
-                "has_more": result["page"] * result["page_size"]
-                < result["total"],
+                "has_more": result["page"] * result["page_size"] < result["total"],
                 "page": result["page"],
                 "page_size": result["page_size"],
             }
@@ -821,6 +878,28 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    @router.post("/workflows/{workflow_uuid}/run-preflight")
+    def post_workflow_run_preflight(
+        workflow_uuid: str,
+        body: WorkflowRunPreflightRequest,
+    ) -> JSONResponse:
+        """按候选入口参数与共享数量绑定执行零写入预检。"""
+
+        response = _success(
+            service.get_workflow_run_preflight(
+                workflow_uuid,
+                run_mode=body.run_mode,
+                target_node_uuid=body.target_node_uuid,
+                input_value=body.input,
+                inventory_bindings=[
+                    binding.model_dump() for binding in body.inventory_bindings
+                ],
+                evaluate_inventory=True,
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @router.get("/workflow-nodes/{node_uuid}")
     def get_workflow_node(node_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_node(node_uuid))
@@ -879,6 +958,43 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 inventory_bindings=[
                     binding.model_dump() for binding in body.inventory_bindings
                 ],
+            ),
+            status=201,
+        )
+
+    @router.post("/station/workflow-invocations")
+    def submit_station_workflow(
+        body: StationWorkflowInvocationRequest,
+        authorization: str | None = Header(default=None),
+    ) -> JSONResponse:
+        """接收 Backend 工站调用，禁止提交 DAG 中间节点参数。
+
+        参数：``body`` 只含工作流名称、入口参数和调用关联字段；
+        ``authorization`` 必须匹配本工站协议密钥。返回首次或幂等重放得到的同一
+        WorkflowTask。异常：鉴权失败返回 401；业务错误由统一 Workflow 处理器映射。
+        """
+
+        from unilabos.config.config import EdgeControlConfig
+
+        station_api_key = str(EdgeControlConfig.api_key or "").strip()
+        expected = f"Bearer {station_api_key}"
+        if not station_api_key or not hmac.compare_digest(
+            str(authorization or ""),
+            expected,
+        ):
+            raise HTTPException(status_code=401, detail="工站调用凭据无效")
+        return _success(
+            service.submit_station_workflow(
+                backend_task_uuid=body.backend_task_uuid,
+                invocation_key=body.invocation_key,
+                workflow_name=body.workflow_name,
+                input_value=body.input,
+                priority=body.priority,
+                inventory_bindings=[
+                    binding.model_dump() for binding in body.inventory_bindings
+                ],
+                description=body.description,
+                meta_data=body.meta_data,
             ),
             status=201,
         )
@@ -1099,9 +1215,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """按状态查询等待处理或已经处理的工作流干预。"""
 
-        return _success(
-            service.list_workflow_interventions(status=status, limit=limit)
-        )
+        return _success(service.list_workflow_interventions(status=status, limit=limit))
 
     @router.get("/workflow-interventions/{intervention_uuid}")
     def get_workflow_intervention(intervention_uuid: str) -> JSONResponse:

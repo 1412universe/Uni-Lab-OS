@@ -34,6 +34,10 @@ from unilabos.app.scheduler.inventory.domain import (
     new_event_id,
 )
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.station_resource import (
+    SqliteStationResourceInventory,
+    StationResourceInventory,
+)
 from unilabos.utils.tracing import add_event, inject_trace_context, span
 
 _ACTIVE_STATES_TUPLE = tuple(s.value for s in ACTIVE_INSTANCE_STATES)
@@ -91,6 +95,14 @@ class InventoryService:
         time_fn: Callable[[], float] = time.time,
         monitor: Any = None,
     ):
+        """装配本地库存权威及其工站资源窄接口。
+
+        参数：``store`` 是本地库存 SQLite 适配器；``edge_id`` 与 ``lab_id``
+        标识事件来源；``time_fn`` 提供可替换毫秒时钟；``monitor`` 是可选遥测
+        发布器。返回：无。异常：构造不读写业务行；工站资源适配器仅保存同一
+        Store 与 ``move_instance`` 写入口，不创建第二库存权威。
+        """
+
         self.store = store
         self.edge_id = edge_id
         self.lab_id = lab_id
@@ -99,6 +111,24 @@ class InventoryService:
         self._monitor = monitor
         # 事务内暂存的监控事件（提交成功才发布，回滚即丢弃）
         self._tx_local = threading.local()
+        # ``_station_resources`` 是调度器唯一可见的设备/库位/转运库存接缝；
+        # SQL、父链遍历和物理结算全部留在 inventory 模块内部。
+        self._station_resources: StationResourceInventory = (
+            SqliteStationResourceInventory(
+                store,
+                move_material=self.move_instance,
+            )
+        )
+
+    @property
+    def station_resources(self) -> StationResourceInventory:
+        """返回工站设备、库位（Site）和转运事实的窄库存接口。
+
+        参数：无。返回：与本服务共享同一库存权威和写事务的稳定适配器。异常：
+        不访问数据库，不主动抛出异常；调用方不得替换该接口或直接读取 Store。
+        """
+
+        return self._station_resources
 
     def _now_ms(self) -> int:
         return int(self._time_fn() * 1000)
@@ -1462,7 +1492,14 @@ class InventoryService:
         self, edge_uuid: str, parent_uuid: str, slot_id: str = "",
         actor: str = "", causation_id: str = "", expected_version: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """move/transfer：只改物理层级关系，不改任何库存数量."""
+        """幂等移动物料并原子切换来源/目标库位占用。
+
+        参数：物料、目标父物料与库位名确定目标事实；actor/causation_id 用于审计，
+        ``expected_version`` 可选保护首次写入。返回：移动后的物料实例；目标关系
+        已经相同时零写返回。异常：物料、父级、库位或版本冲突原样传播。该幂等
+        规则允许工作流库与库存库之间的结算 Saga 在崩溃后按同一 Job 重放。
+        """
+
         now = self._now_ms()
         with self._tx() as conn:
             inst = self._tx_get_instance(conn, edge_uuid)
@@ -1470,6 +1507,13 @@ class InventoryService:
             old = conn.execute(
                 "SELECT * FROM resource_relation WHERE child_uuid = ?", (edge_uuid,)
             ).fetchone()
+            if (
+                old is not None
+                and str(old["parent_uuid"]) == str(parent_uuid)
+                and str(old["slot_id"]) == str(slot_id)
+                and str(inst.get("parent_uuid") or "") == str(parent_uuid)
+            ):
+                return inst
             self._tx_upsert_relation(conn, parent_uuid, slot_id, edge_uuid)
             new_version = inst["version"] + 1
             conn.execute(

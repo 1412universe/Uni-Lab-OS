@@ -10,10 +10,10 @@ import threading
 import time
 import traceback
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any
 
 import websockets
 
@@ -50,7 +50,7 @@ _CONTROL_ACTION_ARGUMENTS = frozenset(
 )
 
 
-def _device_dispatch_state(host_node: Any, device_id: str) -> tuple[str, List[str]]:
+def _device_dispatch_state(host_node: Any, device_id: str) -> tuple[str, list[str]]:
     """读取设备阻断展示文案和结构化 UNKNOWN 命令身份。"""
 
     if host_node is None or not device_id:
@@ -148,9 +148,16 @@ class EdgeControlSettings:
     reconnect_interval: float
     request_timeout: float
     event_retry_interval: float
+    backend_api_key: str = ""
 
     @classmethod
-    def from_config(cls) -> "EdgeControlSettings":
+    def from_config(cls) -> EdgeControlSettings:
+        """从进程配置冻结动作协议、本地调度与上游 Backend 参数。
+
+        参数：无。返回不可变客户端设置。异常：数值配置转换失败时原样传播；
+        地址与凭据的完整性在 HTTP/WS 建连边界继续关闭式校验。
+        """
+
         scheduler_address = str(
             EdgeControlConfig.scheduler_addr
             or HTTPConfig.schedule_addr
@@ -177,6 +184,9 @@ class EdgeControlSettings:
             reconnect_interval=float(EdgeControlConfig.reconnect_interval),
             request_timeout=float(EdgeControlConfig.request_timeout),
             event_retry_interval=float(EdgeControlConfig.event_retry_interval),
+            backend_api_key=str(
+                EdgeControlConfig.backend_api_key or EdgeControlConfig.api_key or ""
+            ).strip(),
         )
 
 
@@ -188,11 +198,14 @@ class EdgeJobContext:
     task_id: str
     node_id: str
     command_uuid: str
+    claim_uuid: str
+    attempt: int
+    fences: tuple[tuple[str, int], ...]
     device_id: str
     action_name: str
     action_type: str
-    action_args: Dict[str, Any]
-    trace_context: Dict[str, str]
+    action_args: dict[str, Any]
+    trace_context: dict[str, str]
     task_type: str = "job_call_back_status"
     notebook_id: str = ""
 
@@ -206,22 +219,33 @@ class EdgeControlClient(BaseCommunicationClient):
 
     def __init__(
         self,
-        settings: Optional[EdgeControlSettings] = None,
+        settings: EdgeControlSettings | None = None,
         *,
-        store: Optional[EdgeControlStore] = None,
-        data_plane: Optional[EdgeDataPlane] = None,
-        host_node_provider: Optional[Callable[[], Any]] = None,
+        store: EdgeControlStore | None = None,
+        data_plane: EdgeDataPlane | None = None,
+        host_node_provider: Callable[[], Any] | None = None,
     ) -> None:
+        """装配动作执行进程的协议镜像与设备执行适配器。
+
+        参数：``settings`` 是双进程地址和凭据；``store`` 是动作镜像唯一账本；
+        ``data_plane`` 负责 HTTP 事实；``host_node_provider`` 提供设备运行入口。
+        返回无。异常：账本、配置或客户端构造失败时原样传播，不启动后台线程。
+        """
+
         super().__init__()
         self.settings = settings or EdgeControlSettings.from_config()
         self.store = store or EdgeControlStore(self.settings.state_db)
         self.instance_uuid = self.store.get_or_create_instance_uuid(
             self.settings.instance_uuid
         )
+        # 该身份只在本次动作执行进程生命周期内稳定；WebSocket 重连保持不变，
+        # 进程重启后变化，使调度进程能够区分短暂断线和真实执行中断。
+        self._process_uuid = str(uuid.uuid4())
         self.data_plane = data_plane or EdgeDataPlane(
             self.settings.backend_address,
             self.settings.scheduler_address,
             self.settings.api_key,
+            backend_api_key=self.settings.backend_api_key,
             timeout=self.settings.request_timeout,
         )
         self._host_node_provider = host_node_provider or _host_node
@@ -230,16 +254,16 @@ class EdgeControlClient(BaseCommunicationClient):
         self._ready = threading.Event()
         self._stopping = threading.Event()
         self._connected = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._websocket: Any = None
         self._edge_uuid = ""
         self._session_uuid = ""
-        self._active_jobs: Set[str] = set()
-        self._scheduled_jobs: Set[str] = set()
+        self._active_jobs: set[str] = set()
+        self._scheduled_jobs: set[str] = set()
         self._active_jobs_lock = threading.RLock()
-        self._terminal_jobs: Set[str] = set()
-        self._tasks: Set[asyncio.Task[Any]] = set()
+        self._terminal_jobs: set[str] = set()
+        self._tasks: set[asyncio.Task[Any]] = set()
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -294,7 +318,7 @@ class EdgeControlClient(BaseCommunicationClient):
         feedback_data: dict,
         item: Any,
         status: str,
-        return_info: Optional[dict] = None,
+        return_info: dict | None = None,
     ) -> None:
         job_uuid = str(item.job_id)
         if status in {"success", "failed", "canceled", "timeout"}:
@@ -372,7 +396,7 @@ class EdgeControlClient(BaseCommunicationClient):
             if not self._stopping.is_set():
                 await asyncio.sleep(max(self.settings.reconnect_interval, 0.1))
 
-    def _register(self) -> Dict[str, Any]:
+    def _register(self) -> dict[str, Any]:
         devices = self._registration_devices()
         registration = self.data_plane.register_session(
             {
@@ -390,18 +414,18 @@ class EdgeControlClient(BaseCommunicationClient):
         )
         return registration
 
-    def _registration_devices(self) -> List[Dict[str, Any]]:
+    def _registration_devices(self) -> list[dict[str, Any]]:
         host_node = self._host_node_provider()
         if host_node is None:
             raise RuntimeError("HostNode is not ready")
         resource_trees = host_node.resources_config.dump()
-        nodes: Dict[str, Dict[str, Any]] = {}
+        nodes: dict[str, dict[str, Any]] = {}
         for tree in resource_trees:
             for resource in tree:
                 resource_id = str(resource.get("id") or "").strip()
                 if resource_id:
                     nodes[resource_id] = resource
-        candidates: List[Dict[str, Any]] = []
+        candidates: list[dict[str, Any]] = []
         system_device_id = str(getattr(host_node, "device_id", "host_node"))
         for local_id in sorted(host_node.devices_names):
             resource = nodes.get(str(local_id), {})
@@ -446,7 +470,7 @@ class EdgeControlClient(BaseCommunicationClient):
 
         install_production_resource_nodes(resource_trees, material_uuids)
 
-        devices: List[Dict[str, Any]] = []
+        devices: list[dict[str, Any]] = []
         for candidate in candidates:
             resource = nodes.get(candidate["local_id"], {})
             actions = project_device_action_capabilities(
@@ -497,16 +521,16 @@ class EdgeControlClient(BaseCommunicationClient):
                 sender.cancel()
                 await asyncio.gather(sender, return_exceptions=True)
 
-    def _hello_envelope(self) -> Dict[str, Any]:
+    def _hello_envelope(self) -> dict[str, Any]:
         running_job_uuids = {
             job.job_uuid
             for job in self.store.list_jobs({"running", "cancel_requested"})
         }
-        running_jobs: List[Dict[str, Any]] = []
+        running_jobs: list[dict[str, Any]] = []
         for job_uuid in sorted(running_job_uuids):
             job = self.store.get_job(job_uuid)
             if job is not None:
-                running_job: Dict[str, Any] = {
+                running_job: dict[str, Any] = {
                     "job_uuid": job.job_uuid,
                     "command_uuid": job.command_uuid,
                     "state": "running",
@@ -517,6 +541,7 @@ class EdgeControlClient(BaseCommunicationClient):
             {
                 "edge_uuid": self._edge_uuid,
                 "session_uuid": self._session_uuid,
+                "process_uuid": self._process_uuid,
                 "last_ack_command_sequence": self.store.last_ack_command_sequence(),
                 "running_jobs": running_jobs,
             },
@@ -549,7 +574,7 @@ class EdgeControlClient(BaseCommunicationClient):
                     self.store.mark_event_sent(event.event_uuid)
             await asyncio.sleep(0.2)
 
-    async def _handle_envelope(self, envelope: Dict[str, Any]) -> None:
+    async def _handle_envelope(self, envelope: dict[str, Any]) -> None:
         """处理一个已解码的 Backend 控制信封。
 
         ``envelope`` 包含事件 ACK、心跳或持久 Edge 命令及其稳定身份；返回
@@ -620,7 +645,7 @@ class EdgeControlClient(BaseCommunicationClient):
         """把 Backend ACK 转成设备执行账本的显式物理结算清理信号。
 
         ``event`` 是尚未从 Edge 发件箱退役的事件快照；返回为空。普通工作流
-        节点作业（WorkflowNodeJob）结果按稳定身份清理；携带执行未知
+        节点作业（WorkflowNodeJob）结果按稳定身份清理；携带物理不确定
         的结果必须保留到对账恢复（Reconciliation）完成。UNKNOWN 人工处置
         先清理精确设备命令，最后一条处置再清理根命令。重复 ACK 依赖驱动
         退役接口幂等；HostNode 适配器缺失时抛出 ``RuntimeError``，
@@ -629,7 +654,7 @@ class EdgeControlClient(BaseCommunicationClient):
 
         # 设备命令身份是设备执行账本的稳定物理效果键；一个最终对账 ACK
         # 可能同时结算精确子命令和工作流节点作业根命令。
-        device_command_ids: List[str] = []
+        device_command_ids: list[str] = []
         if event.event_type == "job.outcome_committed":
             try:
                 job_uuid = str(uuid.UUID(str(event.payload.get("job_uuid") or "")))
@@ -673,7 +698,7 @@ class EdgeControlClient(BaseCommunicationClient):
             retire(device_command_id)
 
     async def _send_pong(
-        self, ping_uuid: str, parent_carrier: Dict[str, str]
+        self, ping_uuid: str, parent_carrier: dict[str, str]
     ) -> None:
         """Reply to a heartbeat on its current connection without persistence."""
 
@@ -697,8 +722,8 @@ class EdgeControlClient(BaseCommunicationClient):
     async def _accept_job_start(
         self,
         command_uuid: str,
-        payload: Dict[str, Any],
-        command_trace: Dict[str, str],
+        payload: dict[str, Any],
+        command_trace: dict[str, str],
     ) -> None:
         if payload.get("executor_kind") != "device_action":
             raise ValueError("job.start executor_kind must be device_action")
@@ -727,8 +752,8 @@ class EdgeControlClient(BaseCommunicationClient):
     def _accept_material_changed(
         self,
         command_uuid: str,
-        payload: Dict[str, Any],
-        command_trace: Dict[str, str],
+        payload: dict[str, Any],
+        command_trace: dict[str, str],
     ) -> None:
         """确认 Backend 仅用于缓存失效提示的物料短通知。"""
 
@@ -749,15 +774,15 @@ class EdgeControlClient(BaseCommunicationClient):
     async def _accept_job_cancel(
         self,
         command_uuid: str,
-        payload: Dict[str, Any],
-        command_trace: Dict[str, str],
+        payload: dict[str, Any],
+        command_trace: dict[str, str],
     ) -> None:
         """接收工作流节点作业（WorkflowNodeJob）取消命令。
 
         ``command_uuid`` 是取消命令身份，``payload`` 必须携带作业身份，
         ``command_trace`` 传递追踪上下文；返回为空。未下发作业可直接结算，
         已进入设备边界但找不到运行中 ROS goal 时保持待核实，由
-        Backend 超时收敛为执行未知（execution_unknown）。
+        Backend 超时后让作业保持 ``running`` 并进入物理对账等待。
         """
 
         job_uuid = str(payload.get("job_uuid") or "")
@@ -800,8 +825,8 @@ class EdgeControlClient(BaseCommunicationClient):
     async def _accept_unknown_resolution(
         self,
         command_uuid: str,
-        payload: Dict[str, Any],
-        command_trace: Dict[str, str],
+        payload: dict[str, Any],
+        command_trace: dict[str, str],
     ) -> None:
         """在设备执行账本提交一条 UNKNOWN 命令的人工处置。
 
@@ -968,6 +993,9 @@ class EdgeControlClient(BaseCommunicationClient):
                     task_id=job.task_uuid,
                     node_id=job.node_uuid,
                     command_uuid=job.command_uuid,
+                    claim_uuid=job.claim_uuid,
+                    attempt=job.attempt,
+                    fences=job.fences,
                     device_id=str(payload["local_device_id"]),
                     action_name=str(payload["action_name"]),
                     action_type=str(payload.get("action_type") or ""),
@@ -1004,7 +1032,7 @@ class EdgeControlClient(BaseCommunicationClient):
                     self._active_jobs.discard(job_uuid)
 
     async def _commit_feedback(
-        self, job_uuid: str, feedback: Dict[str, Any]
+        self, job_uuid: str, feedback: dict[str, Any]
     ) -> None:
         """持久化一条工作流节点作业运行反馈。
 
@@ -1065,7 +1093,7 @@ class EdgeControlClient(BaseCommunicationClient):
         self,
         job_uuid: str,
         status: str,
-        result_data: Dict[str, Any],
+        result_data: dict[str, Any],
         return_info: Any,
         device_id: str = "",
     ) -> None:
@@ -1079,7 +1107,7 @@ class EdgeControlClient(BaseCommunicationClient):
         self,
         job_uuid: str,
         status: str,
-        result_data: Dict[str, Any],
+        result_data: dict[str, Any],
         return_info: Any,
         device_id: str = "",
     ) -> bool:
@@ -1095,7 +1123,7 @@ class EdgeControlClient(BaseCommunicationClient):
         if job.status == "cancel_requested" and outcome == "failed":
             outcome = "canceled"
         normalized_return = _return_info(return_info, result_data)
-        error_info: List[Dict[str, Any]] = []
+        error_info: list[dict[str, Any]] = []
         if outcome != "succeeded":
             error_info.append(_error_info(return_info, outcome))
         _, unknown_command_ids = _device_dispatch_state(
@@ -1133,7 +1161,7 @@ class EdgeControlClient(BaseCommunicationClient):
                         pending.unknown_command_ids,
                     )
                     result_uuid = str(committed.get("uuid") or "")
-                    event_payload: Dict[str, Any] = {"job_uuid": job_uuid}
+                    event_payload: dict[str, Any] = {"job_uuid": job_uuid}
                     if result_uuid:
                         event_payload["result_uuid"] = result_uuid
                     event_trace_context = _current_trace_carrier(
@@ -1168,10 +1196,10 @@ class EdgeControlClient(BaseCommunicationClient):
     def _enqueue_event(
         self,
         event_type: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         *,
-        parent_carrier: Optional[Dict[str, str]] = None,
-        fallback_carrier: Optional[Dict[str, str]] = None,
+        parent_carrier: dict[str, str] | None = None,
+        fallback_carrier: dict[str, str] | None = None,
     ) -> str:
         parent_context = (
             extract_trace_context(parent_carrier) if parent_carrier else None
@@ -1210,11 +1238,11 @@ def _host_node() -> Any:
 
 def _envelope(
     message_type: str,
-    payload: Dict[str, Any],
+    payload: dict[str, Any],
     *,
-    message_uuid: Optional[str] = None,
-    sent_at: Optional[str] = None,
-) -> Dict[str, Any]:
+    message_uuid: str | None = None,
+    sent_at: str | None = None,
+) -> dict[str, Any]:
     return {
         "protocol_version": 1,
         "message_uuid": message_uuid or str(uuid.uuid4()),
@@ -1225,8 +1253,8 @@ def _envelope(
 
 
 def _stored_event_envelope(
-    event: StoredEvent, trace_context: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+    event: StoredEvent, trace_context: dict[str, str] | None = None
+) -> dict[str, Any]:
     envelope = _envelope(
         event.event_type,
         event.payload,
@@ -1240,21 +1268,21 @@ def _stored_event_envelope(
     return envelope
 
 
-def _job_trace_carrier(job: StoredJob) -> Dict[str, str]:
+def _job_trace_carrier(job: StoredJob) -> dict[str, str]:
     return {
         "traceparent": job.traceparent,
         "tracestate": job.tracestate,
     }
 
 
-def _event_trace_carrier(event: StoredEvent) -> Dict[str, str]:
+def _event_trace_carrier(event: StoredEvent) -> dict[str, str]:
     return {
         "traceparent": event.traceparent,
         "tracestate": event.tracestate,
     }
 
 
-def _message_trace_carrier(message: Dict[str, Any]) -> Dict[str, str]:
+def _message_trace_carrier(message: dict[str, Any]) -> dict[str, str]:
     return {
         "traceparent": str(message.get("traceparent") or ""),
         "tracestate": str(message.get("tracestate") or ""),
@@ -1262,9 +1290,9 @@ def _message_trace_carrier(message: Dict[str, Any]) -> Dict[str, str]:
 
 
 def _current_trace_carrier(
-    *, fallback: Optional[Dict[str, str]] = None
-) -> Dict[str, str]:
-    carrier: Dict[str, Any] = {}
+    *, fallback: dict[str, str] | None = None
+) -> dict[str, str]:
+    carrier: dict[str, Any] = {}
     inject_trace_context(carrier)
     result = {
         key: str(carrier.get(key) or "")
@@ -1277,16 +1305,24 @@ def _current_trace_carrier(
     return result
 
 
-def _validate_job_payload(job: StoredJob, payload: Dict[str, Any]) -> None:
+def _validate_job_payload(job: StoredJob, payload: dict[str, Any]) -> None:
+    """证明 HTTP 载荷与 WebSocket 持久 Job/Claim/Fence 身份完全一致。"""
+
     expected = {
         "job_uuid": job.job_uuid,
         "task_uuid": job.task_uuid,
         "node_uuid": job.node_uuid,
         "command_uuid": job.command_uuid,
+        "claim_uuid": job.claim_uuid,
     }
     for field, value in expected.items():
         if str(payload.get(field) or "") != value:
             raise ValueError(f"HTTP Job {field} does not match job.start")
+    if payload.get("attempt") != job.attempt:
+        raise ValueError("HTTP Job attempt does not match job.start")
+    payload_fences = _normalize_job_payload_fences(payload.get("fences"))
+    if payload_fences != job.fences:
+        raise ValueError("HTTP Job fences do not match job.start")
     if not str(payload.get("local_device_id") or ""):
         raise ValueError("HTTP Job local_device_id is required")
     if not str(payload.get("action_name") or ""):
@@ -1295,7 +1331,32 @@ def _validate_job_payload(job: StoredJob, payload: Dict[str, Any]) -> None:
         raise ValueError("HTTP Job param must be an object")
 
 
-def _return_info(return_info: Any, result_data: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_job_payload_fences(value: Any) -> tuple[tuple[str, int], ...]:
+    """把 HTTP Job Fence 列表规范为可与 Edge 镜像比较的元组。"""
+
+    if not isinstance(value, list):
+        raise ValueError("HTTP Job fences must be a list")
+    result: list[tuple[str, int]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("HTTP Job fence must be an object")
+        lock_key = str(item.get("lock_key") or "").strip()
+        token = item.get("fencing_token")
+        if (
+            not lock_key
+            or isinstance(token, bool)
+            or not isinstance(token, int)
+            or token < 1
+        ):
+            raise ValueError("HTTP Job fence is invalid")
+        result.append((lock_key, token))
+    ordered = tuple(sorted(result))
+    if len({lock_key for lock_key, _ in ordered}) != len(ordered):
+        raise ValueError("HTTP Job fence lock_key is duplicated")
+    return ordered
+
+
+def _return_info(return_info: Any, result_data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(return_info, dict):
         normalized = copy.deepcopy(return_info)
     elif return_info is None:
@@ -1307,7 +1368,7 @@ def _return_info(return_info: Any, result_data: Dict[str, Any]) -> Dict[str, Any
     return normalized
 
 
-def _error_info(return_info: Any, outcome: str) -> Dict[str, Any]:
+def _error_info(return_info: Any, outcome: str) -> dict[str, Any]:
     if isinstance(return_info, dict):
         message = return_info.get("error") or return_info.get("message")
         if message:

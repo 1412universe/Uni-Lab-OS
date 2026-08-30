@@ -18,7 +18,8 @@ from tests.workflow.test_f05_task_scheduler_bridge import (
 )
 from unilabos.app.scheduler.dispatch import CancelDispatchState, RecordingDispatcher
 from unilabos.app.scheduler.service import EdgeScheduler
-from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.execution_claim import get_execution_claim
+from unilabos.workflow.store import StoreConflict, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
 
@@ -198,111 +199,42 @@ def _access_region_request(*, release_job_uuid: str) -> dict[str, str]:
     }
 
 
-def test_access_region_is_held_until_release_job_finishes(
+def test_execution_lock_rejects_plc_access_region_scope(
     store: WorkflowStore,
 ) -> None:
-    """入口动作完成后访问区域仍被持有，直到显式释放作业明确完成。
+    """持久资源门禁不得接受由 PLC 负责的访问区域软件锁。
 
-    参数：``store`` 是隔离工作流权威。返回无。异常：任一准入、持有者身份、
-    业务范围投影或释放时机不符合 Backend 合同即由断言暴露。
+    参数：``store`` 是隔离工作流权威。返回无；断言旧作用域失败关闭且 Job 保持
+    pending。异常：旧访问区域进入租约表会使测试失败。
     """
 
     _seed_task(store, with_material=False)
-    _seed_release_job(
-        store,
-        task_uuid=TASK_UUID,
-        node_uuid=RELEASE_NODE_UUID,
-        job_uuid=RELEASE_JOB_UUID,
-    )
-    _seed_second_task(store)
-    _seed_release_job(
-        store,
-        task_uuid=SECOND_TASK_UUID,
-        node_uuid=SECOND_RELEASE_NODE_UUID,
-        job_uuid=SECOND_RELEASE_JOB_UUID,
-    )
     projection = TaskRuntimeProjection(store)
-
-    first = projection.project_pre_dispatch(
-        task_uuid=TASK_UUID,
-        job_uuid=JOB_UUID,
-        execution_locks=[
-            {"lock_key": "/devices/reactor-a", "scope": "device"},
-            _access_region_request(release_job_uuid=RELEASE_JOB_UUID),
-        ],
-    )
-    assert first["jobs"][0]["status"] == "dispatched"
-    projection.project_dispatch_accepted(JOB_UUID)
-    projection.project_job_finished(job_uuid=JOB_UUID, scheduler_state="success")
-
-    carried = projection.list_execution_locks(RELEASE_JOB_UUID)
-    assert [(item["scope"], item["state"]) for item in carried] == [
-        ("access_region", "reserved")
-    ]
-    blocked = projection.project_pre_dispatch(
-        task_uuid=SECOND_TASK_UUID,
-        job_uuid=SECOND_JOB_UUID,
-        execution_locks=[
-            {"lock_key": "/devices/reactor-b", "scope": "device"},
-            _access_region_request(release_job_uuid=SECOND_RELEASE_JOB_UUID),
-        ],
-    )
-    assert blocked["jobs"][0]["status"] == "pending"
-    assert blocked["jobs"][0]["wait_reason"]["code"] == "operation_lease"
-
-    projection.project_pre_dispatch(
-        task_uuid=TASK_UUID,
-        job_uuid=RELEASE_JOB_UUID,
-        execution_locks=[
-            {"lock_key": "/devices/reactor-a", "scope": "device"},
-        ],
-    )
-    projection.project_dispatch_accepted(RELEASE_JOB_UUID)
-    projection.project_job_finished(
-        job_uuid=RELEASE_JOB_UUID,
-        scheduler_state="success",
-    )
-    release_states = {
-        item["state"] for item in projection.list_execution_locks(RELEASE_JOB_UUID)
-    }
-    assert release_states == {
-        "released"
-    }
-
-    retried = projection.project_pre_dispatch(
-        task_uuid=SECOND_TASK_UUID,
-        job_uuid=SECOND_JOB_UUID,
-        execution_locks=[
-            {"lock_key": "/devices/reactor-b", "scope": "device"},
-            _access_region_request(release_job_uuid=SECOND_RELEASE_JOB_UUID),
-        ],
-    )
-    assert retried["jobs"][0]["status"] == "dispatched"
+    with pytest.raises(StoreConflict, match="scope"):
+        projection.project_pre_dispatch(
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            execution_locks=[_access_region_request(release_job_uuid=RELEASE_JOB_UUID)],
+        )
+    assert store.get_job(JOB_UUID)["status"] == "pending"
 
 
-def test_cleanup_settled_releases_access_region_owned_by_pending_release_job(
+def test_cleanup_settled_releases_regular_task_claim(
     store: WorkflowStore,
 ) -> None:
-    """异常任务完成物理清理时必须回收尚未运行释放作业持有的区域锁。
+    """异常任务完成物理清理时必须幂等回收普通资源 Claim。
 
-    参数：``store`` 是隔离工作流权威。返回无。异常：清理状态和长锁释放不在
-    同一事务闭环时由断言暴露，避免任务已 settled 但区域永久不可用。
+    参数：``store`` 是隔离工作流权威。返回无。异常：清理状态和 Claim 释放不在
+    同一事务闭环时由断言暴露。
     """
 
     _seed_task(store, with_material=False)
-    _seed_release_job(
-        store,
-        task_uuid=TASK_UUID,
-        node_uuid=RELEASE_NODE_UUID,
-        job_uuid=RELEASE_JOB_UUID,
-    )
     projection = TaskRuntimeProjection(store)
     projection.project_pre_dispatch(
         task_uuid=TASK_UUID,
         job_uuid=JOB_UUID,
         execution_locks=[
             {"lock_key": "/devices/reactor-a", "scope": "device"},
-            _access_region_request(release_job_uuid=RELEASE_JOB_UUID),
         ],
     )
     projection.project_dispatch_accepted(JOB_UUID)
@@ -312,7 +244,7 @@ def test_cleanup_settled_releases_access_region_owned_by_pending_release_job(
 
     assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
     release_states = {
-        item["state"] for item in projection.list_execution_locks(RELEASE_JOB_UUID)
+        item["state"] for item in projection.list_execution_locks(JOB_UUID)
     }
     assert release_states == {
         "released"
@@ -389,10 +321,62 @@ def test_material_parent_lock_blocks_child_site_until_explicit_result(
     assert admitted["jobs"][0]["wait_reason"] == {}
 
 
-def test_restart_marks_inflight_job_unknown_and_keeps_lease(
+def test_claim_is_stable_per_attempt_and_fence_increases_per_resource(
     store: WorkflowStore,
 ) -> None:
-    """重启不能盲目重放已接受作业，必须保留锁并等待对账。"""
+    """同一 Job 尝试重放复用 Claim，后续 Job 获得更大的资源栅栏。
+
+    参数：``store`` 是隔离工作流权威。返回无；断言 Claim UUID、完整资源集合和
+    Fence 单调性。异常：派发重放生成新身份或资源复用未递增栅栏会使测试失败。
+    """
+
+    _seed_task(store, with_material=False)
+    _seed_second_task(store, device_id="reactor-a")
+    projection = TaskRuntimeProjection(store)
+    lock = {"lock_key": "/devices/reactor-a", "scope": "device"}
+
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[lock],
+    )
+    with store.transaction() as connection:
+        first = get_execution_claim(connection, job_uuid=JOB_UUID)
+    assert first is not None
+    assert first["resource_keys"] == ["/devices/reactor-a"]
+    assert first["fences"][0]["fencing_token"] == 1
+
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[lock],
+    )
+    with store.transaction() as connection:
+        replay = get_execution_claim(connection, job_uuid=JOB_UUID)
+    assert replay == first
+
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_job_finished(job_uuid=JOB_UUID, scheduler_state="success")
+    projection.project_pre_dispatch(
+        task_uuid=SECOND_TASK_UUID,
+        job_uuid=SECOND_JOB_UUID,
+        execution_locks=[lock],
+    )
+    with store.transaction() as connection:
+        second = get_execution_claim(connection, job_uuid=SECOND_JOB_UUID)
+    assert second is not None
+    assert second["claim_uuid"] != first["claim_uuid"]
+    assert second["fences"][0]["fencing_token"] == 2
+
+
+def test_restart_fails_inflight_job_and_keeps_uncertain_lease(
+    store: WorkflowStore,
+) -> None:
+    """执行进程重启必须失败在途作业，并保留锁等待物理结算。
+
+    参数：``store`` 是隔离工作流写模型。返回无；断言 Job/Task 使用明确失败状态，
+    且未把业务失败误作物理停止证据。异常：恢复实现冲突会使测试失败。
+    """
 
     _seed_task(store, with_material=False)
     projection = TaskRuntimeProjection(store)
@@ -415,9 +399,12 @@ def test_restart_marks_inflight_job_unknown_and_keeps_lease(
         bridge.close()
 
     assert [aggregate["task"]["uuid"] for aggregate in recovered] == [TASK_UUID]
-    assert store.get_job(JOB_UUID)["status"] == "execution_unknown"
+    job = store.get_job(JOB_UUID)
+    assert job["status"] == "failed"
+    assert job["error_info"][0]["code"] == "execution_process_restarted"
     task = store.get_task(TASK_UUID)
-    assert task["control_status"] == "waiting_reconciliation"
+    assert task["status"] == "failed"
+    assert task["attention_reason"] == "execution_process_restarted"
     assert task["cleanup_status"] == "requires_attention"
     assert {lease["state"] for lease in projection.list_execution_locks(JOB_UUID)} == {
         "uncertain"
@@ -535,10 +522,14 @@ def test_local_cancel_keeps_execution_lock_until_device_terminal(
         bridge.close()
 
 
-def test_local_cancel_acceptance_timeout_becomes_execution_unknown(
+def test_local_cancel_acceptance_timeout_keeps_running_with_uncertain_claim(
     store: WorkflowStore,
 ) -> None:
-    """执行器不确认取消时冻结为 execution_unknown 并保留不确定占用。"""
+    """执行器不确认取消时保持运行主状态并保留不确定占用。
+
+    参数：``store`` 是隔离工作流写模型。返回无；断言超时只改变物理对账事实，
+    不创建新的 Job 主状态。异常：计时或投影失败会使测试失败。
+    """
 
     task = _seed_task(store, with_material=False)
     scheduler = EdgeScheduler(dispatcher=_SilentCancelDispatcher())
@@ -556,10 +547,13 @@ def test_local_cancel_acceptance_timeout_becomes_execution_unknown(
         )
         deadline = time.time() + 1.0
         while time.time() < deadline:
-            if store.get_job(JOB_UUID)["status"] == "execution_unknown":
+            if store.get_job(JOB_UUID).get("uncertainty_reason"):
                 break
             time.sleep(0.01)
-        assert store.get_job(JOB_UUID)["status"] == "execution_unknown"
+        assert store.get_job(JOB_UUID)["status"] == "running"
+        assert store.get_job(JOB_UUID)["uncertainty_reason"] == (
+            "local_cancel_acceptance_timeout"
+        )
         assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
         assert {
             lease["state"] for lease in bridge._projection.list_execution_locks(JOB_UUID)
@@ -571,7 +565,11 @@ def test_local_cancel_acceptance_timeout_becomes_execution_unknown(
 def test_local_cancel_completion_timeout_keeps_uncertain_lock(
     store: WorkflowStore,
 ) -> None:
-    """取消已受理但设备无终态时进入 execution_unknown，不能提前复用设备。"""
+    """取消已受理但设备无终态时保持运行，不能提前复用设备。
+
+    参数：``store`` 是隔离工作流写模型。返回无；断言运行主状态与物理不确定原因
+    分离持久化。异常：计时或占用状态错误会使测试失败。
+    """
 
     task = _seed_task(store, with_material=False)
     scheduler = EdgeScheduler(dispatcher=_AcceptingCancelDispatcher())
@@ -590,11 +588,13 @@ def test_local_cancel_completion_timeout_keeps_uncertain_lock(
         assert store.get_job(JOB_UUID).get("cancel_accepted_at") is not None
         deadline = time.time() + 1.0
         while time.time() < deadline:
-            if store.get_job(JOB_UUID)["status"] == "execution_unknown":
+            if store.get_job(JOB_UUID).get("uncertainty_reason") == (
+                "local_cancel_completion_timeout"
+            ):
                 break
             time.sleep(0.01)
         job = store.get_job(JOB_UUID)
-        assert job["status"] == "execution_unknown"
+        assert job["status"] == "running"
         assert job["uncertainty_reason"] == "local_cancel_completion_timeout"
         assert {
             lease["state"] for lease in bridge._projection.list_execution_locks(JOB_UUID)
@@ -603,10 +603,14 @@ def test_local_cancel_completion_timeout_keeps_uncertain_lock(
         bridge.close()
 
 
-def test_restart_during_local_cancel_freezes_execution_as_unknown(
+def test_restart_during_local_cancel_fails_task_and_keeps_uncertain_claim(
     store: WorkflowStore,
 ) -> None:
-    """取消等待设备终态时进程重启，不能重放作业或释放持久执行占用。"""
+    """取消等待设备终态时重启，必须失败任务并保留持久执行占用。
+
+    参数：``store`` 是隔离工作流写模型。返回无；断言取消中的作业使用明确失败码，
+    不再创建执行未知主状态。异常：恢复或占用收敛错误会使测试失败。
+    """
 
     task = _seed_task(store, with_material=False)
     first_bridge = TaskSchedulerBridge(
@@ -636,9 +640,12 @@ def test_restart_during_local_cancel_freezes_execution_as_unknown(
 
     assert [aggregate["task"]["uuid"] for aggregate in recovered] == [TASK_UUID]
     job = store.get_job(JOB_UUID)
-    assert job["status"] == "execution_unknown"
-    assert job["uncertainty_reason"] == "local_cancel_restart_missing_terminal"
-    assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+    assert job["status"] == "failed"
+    assert job["uncertainty_reason"] == "execution_process_restarted"
+    assert job["error_info"][0]["code"] == "execution_process_restarted"
+    recovered_task = store.get_task(TASK_UUID)
+    assert recovered_task["status"] == "failed"
+    assert recovered_task["cleanup_status"] == "requires_attention"
     assert {
         lease["state"]
         for lease in recovered_bridge._projection.list_execution_locks(JOB_UUID)

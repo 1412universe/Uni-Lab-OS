@@ -97,7 +97,7 @@ class CallbackDispatcher:
 
         参数：``job_id`` 是稳定作业身份；``on_accepted`` 接收执行器异步受理事实。
         返回：即时判定；未配置取消回调时为 ``UNAVAILABLE``。异常由取消回调原样
-        传播，调度器会将其保守投影为执行未知（ExecutionUnknown）。
+        传播，调度器会让主状态保持 ``running`` 并记录物理不确定原因。
         """
 
         if self._cancel_fn is None:

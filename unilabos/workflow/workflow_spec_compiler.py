@@ -199,14 +199,21 @@ class WorkflowSpecCompiler:
             )
             continues_device_action = bool(node.get("continues_device_action", False))
             device_id = str(node.get("device_id") or "").strip()
+            raw_device_selector = node.get("device_selector") or {}
+            if not isinstance(raw_device_selector, Mapping):
+                raise WorkflowSpecCompilationError(
+                    "invalid_device_selector",
+                    f"动态设备选择器必须是对象：{node_uuid}",
+                )
+            device_selector = deepcopy(dict(raw_device_selector))
             dispatches_device_action = kind in {
                 "device_action",
                 "material_transfer",
             } or continues_device_action
             if dispatches_device_action:
-                if not device_id:
+                if not device_id and not device_selector:
                     raise WorkflowSpecCompilationError(
-                        "invalid_executor_binding", f"设备动作缺少固定执行器：{node_uuid}"
+                        "invalid_executor_binding", f"设备动作缺少执行器选择：{node_uuid}"
                     )
             else:
                 device_id = "manual-confirmation"
@@ -241,12 +248,17 @@ class WorkflowSpecCompiler:
                     id=node_uuid,
                     job_id=job_uuid,
                     device_id=device_id,
+                    device_material_uuid=str(node.get("material_uuid") or "").strip(),
+                    device_selector=device_selector,
                     action_name=action_name,
                     action_type=action_type,
                     param=self._merge_final_param(planned_param, job_param),
                     param_schema=param_schema,
                     executor_kind=kind,
                     execution_policy=deepcopy(dict(node.get("execution_policy") or {})),
+                    action_resource_contract=deepcopy(
+                        dict(node.get("action_resource_contract") or {})
+                    ),
                     node_type=("manual_confirm" if kind == "manual_confirm" else "ILab"),
                     manual_continues_device_action=continues_device_action,
                     disabled=False,

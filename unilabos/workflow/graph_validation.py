@@ -8,7 +8,6 @@ import re
 from collections import defaultdict
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List, Mapping
-from uuid import UUID
 
 from unilabos.workflow.json_codec import encode_json, strict_json_equal
 from unilabos.workflow.material_graph_validation import (
@@ -18,6 +17,10 @@ from unilabos.workflow.material_graph_validation import (
 from unilabos.workflow.material_selector import (
     MaterialSelectorError,
     validate_material_source_node,
+)
+from unilabos.workflow.execution_resource_policy import (
+    ExecutionResourcePolicyError,
+    normalize_execution_resource_policy,
 )
 from unilabos.workflow.models import (
     WorkflowEdgeWrite,
@@ -251,7 +254,23 @@ def validate_graph(
         _validate_execution_policy(node.execution_policy)
         if _node_kind(node, templates) == "device_action":
             if node.material_uuid is None:
-                raise GraphValidationError("设备动作节点必须绑定 material_uuid")
+                metadata = node_meta_data.get(node.uuid, {})
+                unilab = (
+                    metadata.get("unilab")
+                    if isinstance(metadata, Mapping)
+                    else None
+                )
+                binding = (
+                    unilab.get("executor_binding")
+                    if isinstance(unilab, Mapping)
+                    else None
+                )
+                if binding is not None:
+                    raise GraphValidationError("固定设备动作节点必须绑定 material_uuid")
+                if template_uuid is None or not str(
+                    templates[template_uuid].get("resource_template_uuid") or ""
+                ).strip():
+                    raise GraphValidationError("动态设备动作节点缺少设备类型")
 
 
 def _project_composite_boundary_inputs(
@@ -555,43 +574,22 @@ def _validated_input_bindings(
 
 
 def _validate_execution_policy(policy: Mapping[str, Any]) -> None:
-    """校验节点执行期限与跨节点访问区域策略。
+    """校验节点执行期限、完整资源声明并拒绝 PLC 访问区域锁。
 
-    参数：``policy`` 是应用图节点的公开执行策略。返回无。异常：超时非法、
-    区域键非规范或稳定身份缺失时抛 ``GraphValidationError``；释放节点的类型和
-    拓扑顺序由执行计划构建器在完整活动图上继续校验。
+    参数：``policy`` 是应用图节点的公开执行策略。返回无。异常：超时非法或
+    声明 ``access_region`` 时抛 ``GraphValidationError``；机械臂碰撞区域互斥
+    属于 PLC 安全责任，不得形成 Scheduler 资源作用域。
     """
 
-    if "execution_timeout_seconds" in policy:
-        value = policy["execution_timeout_seconds"]
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or value < 0
-            or value > _MAX_TIMEOUT_SECONDS
-        ):
-            raise GraphValidationError("execution_timeout_seconds 必须是非负整数")
-    access = policy.get("access_region")
-    if access is None:
-        return
-    if not isinstance(access, Mapping):
-        raise GraphValidationError("access_region 必须是对象")
-    key = str(access.get("key") or "").strip()
-    if (
-        not key
-        or key != key.lower()
-        or len(key) > 128
-        or any(character.isspace() for character in key)
-    ):
-        raise GraphValidationError("access_region.key 必须是非空规范小写 token")
-    for field in ("lock_material_uuid", "release_node_uuid"):
-        value = str(access.get(field) or "").strip()
-        try:
-            parsed = UUID(value)
-        except (TypeError, ValueError, AttributeError) as exc:
-            raise GraphValidationError(f"access_region.{field} 必须是 UUID") from exc
-        if str(parsed) != value.lower():
-            raise GraphValidationError(f"access_region.{field} 必须是规范 UUID")
+    if "access_region" in policy:
+        raise GraphValidationError("access_region 由 PLC 保证，工作流不得声明软件锁")
+    try:
+        normalized = normalize_execution_resource_policy(policy)
+    except ExecutionResourcePolicyError as error:
+        raise GraphValidationError(str(error)) from error
+    timeout = normalized.get("execution_timeout_seconds")
+    if timeout is not None and timeout > _MAX_TIMEOUT_SECONDS:
+        raise GraphValidationError("execution_timeout_seconds 超出 int64 纳秒范围")
 
 
 def _parse_schema(raw_schema: Any) -> Any:

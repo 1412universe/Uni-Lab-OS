@@ -314,8 +314,8 @@ def compose_workflow_runtime(
                 task_scheduler_bridge=task_scheduler_bridge,
             )
             if scheduler is not None:
-                # 本地组合根把执行微后端的异常决策端口接入持久工作流干预；
-                # Backend-controlled 模式没有本地 Scheduler，因此不会建立第二权威。
+                # 工站调度组合根把动作执行端的异常决策端口接入持久工作流干预；
+                # 纯创作组合不传 Scheduler，也不会意外建立运行权威。
                 intervention_delivery = getattr(scheduler, "_dispatcher", None)
                 if (
                     callable(
@@ -718,10 +718,10 @@ def get_workflow_service() -> Optional[WorkflowService]:
 
 
 def get_registry_template_projection() -> Optional[RegistryTemplateProjection]:
-    """返回本地模式最近装配的设备注册表模板投影。
+    """返回工站进程最近装配的设备注册表模板投影。
 
-    返回值：尚未建立本地模板权威时为 ``None``；后端控制（Backend-controlled）模式不得用
-    此函数隐式创建第二写权威。
+    返回值：尚未建立模板目录时为 ``None``；本函数只读取现有投影，不因上游
+    Backend 模式改变工站内注册表所有权，也不隐式创建第二写权威。
     """
 
     return _template_projection
@@ -740,6 +740,11 @@ def shutdown_workflow_runtime() -> None:
     global _monitor, _runtime_template_snapshot_provider, _service
     global _fixed_point_activation_enabled, _source_monitor_enabled, _template_projection
     with _lock:
+        from unilabos.workflow.station_event_http import (
+            shutdown_station_event_projection,
+        )
+
+        shutdown_station_event_projection()
         if _failed_runtime is not None:
             # 失败运行时是一个整体清理所有者；任一步再次失败都保留原对象和已完成
             # 标记，调用者可在外部条件修复后再次执行重置。

@@ -1,4 +1,4 @@
-"""本地调试用嵌入式 Scheduler 微后端运行模块。"""
+"""工站调度权威的嵌入式运行模块。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from unilabos.utils.banner_print import print_status
 def start_embedded_scheduler_runtime(
     context: ControlPlaneRuntimeContext,
 ) -> ControlPlaneRuntimeHandle:
-    """启动本地 Inventory、DAG Scheduler、历史存储和 HostLink。"""
+    """启动工站库存、DAG 调度器、历史存储和可选 HostLink。"""
 
     from unilabos.app.communication import (
         CommunicationClientFactory,
@@ -62,7 +62,7 @@ def start_embedded_scheduler_runtime(
         ),
     )
     print_status(
-        f"本地调试物料服务已启用 (SQLite WAL: {inventory_db})",
+        f"工站物料服务已启用 (SQLite WAL: {inventory_db})",
         "info",
     )
 
@@ -94,7 +94,7 @@ def start_embedded_scheduler_runtime(
     if BasicConfig.process_role != "workspace_backend":
         bridges.append(execution_backend)
     print_status(
-        "本地调试 Scheduler 已启用 (DAG 调度 + 设备状态 + 工作流历史)",
+        "工站调度器已启用 (DAG 调度 + 设备状态 + 工作流历史)",
         "info",
     )
 
@@ -105,7 +105,7 @@ def start_embedded_scheduler_runtime(
     )
     if host_network is not None:
         print_status(
-            f"本地调试微后端已监听 Slave 连接: "
+            f"工站微后端已监听 Slave 连接: "
             f"{HostLinkConfig.bind}:{host_network.server.port}",
             "info",
         )

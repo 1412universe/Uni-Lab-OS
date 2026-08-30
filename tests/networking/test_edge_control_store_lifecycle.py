@@ -12,6 +12,18 @@ import pytest
 from unilabos.app.edge_control.store import EdgeControlStore
 
 
+def _claim_fields() -> dict[str, object]:
+    """构造 Edge 执行镜像测试所需的稳定 Claim/Fence 载荷。"""
+
+    return {
+        "claim_uuid": str(uuid.uuid4()),
+        "attempt": 1,
+        "fences": [
+            {"lock_key": "/devices/test-device", "fencing_token": 1},
+        ],
+    }
+
+
 def test_acknowledged_protocol_state_is_retired_without_losing_highwater(
     tmp_path: Path,
 ) -> None:
@@ -41,6 +53,7 @@ def test_acknowledged_protocol_state_is_retired_without_losing_highwater(
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "temporary-secret",
+            **_claim_fields(),
         },
         command_uuid,
     )
@@ -70,7 +83,7 @@ def test_acknowledged_protocol_state_is_retired_without_losing_highwater(
     reopened.close()
 
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
         job_indexes = {
             row[1]
             for row in connection.execute("PRAGMA index_list(edge_job_runtime)")
@@ -94,6 +107,7 @@ def test_failed_serialization_rolls_back_immediate_transaction(tmp_path: Path) -
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "temporary-secret",
+            **_claim_fields(),
         },
         str(uuid.uuid4()),
     )
@@ -130,6 +144,7 @@ def test_unknown_outcome_waits_for_final_physical_settlement(tmp_path: Path) -> 
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "temporary-secret",
+            **_claim_fields(),
         },
         str(uuid.uuid4()),
     )
@@ -204,6 +219,7 @@ def test_final_unknown_marker_survives_pending_outcome_races(
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "temporary-secret",
+            **_claim_fields(),
         },
         str(uuid.uuid4()),
     )
@@ -277,6 +293,7 @@ def test_only_final_unknown_resolution_ack_retires_job_mirror(tmp_path: Path) ->
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "temporary-secret",
+            **_claim_fields(),
         },
         str(uuid.uuid4()),
     )
@@ -347,6 +364,7 @@ def test_settled_job_rejects_late_terminal_callback(tmp_path: Path) -> None:
             "task_uuid": str(uuid.uuid4()),
             "node_uuid": str(uuid.uuid4()),
             "job_access_token": "temporary-secret",
+            **_claim_fields(),
         },
         start_command_uuid,
     )

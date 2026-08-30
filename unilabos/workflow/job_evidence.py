@@ -7,7 +7,12 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
+from unilabos.workflow.event_writer import append_runtime_event
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
+from unilabos.workflow.station_event_outbox import (
+    append_station_event,
+    ensure_station_event_outbox_schema,
+)
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
 
 _TERMINAL_JOB_STATES = {"succeeded", "failed", "skipped", "canceled", "timeout"}
@@ -26,7 +31,7 @@ def _load(value: str) -> Any:
 
 
 def ensure_job_evidence_schema(connection: sqlite3.Connection) -> None:
-    """幂等创建不可变作业结果和有序反馈历史表。"""
+    """幂等创建不可变作业结果、有序反馈历史与工站事件发件箱。"""
 
     statements = (
         """
@@ -90,6 +95,7 @@ def ensure_job_evidence_schema(connection: sqlite3.Connection) -> None:
     )
     for statement in statements:
         connection.execute(statement)
+    ensure_station_event_outbox_schema(connection)
 
 
 def record_job_result(
@@ -121,7 +127,13 @@ def record_job_result(
             or _load(existing["error_info"]) != normalized_error
         ):
             raise StoreConflict(f"作业不可变结果冲突：{job_uuid}")
-        return _result_row(existing)
+        result = _result_row(existing)
+        _append_result_event(
+            connection,
+            job_row=job_row,
+            result=result,
+        )
+        return result
     now = utc_now()
     result_uuid = str(uuid4())
     connection.execute(
@@ -152,7 +164,13 @@ def record_job_result(
         (result_uuid,),
     ).fetchone()
     assert row is not None
-    return _result_row(row)
+    result = _result_row(row)
+    _append_result_event(
+        connection,
+        job_row=job_row,
+        result=result,
+    )
+    return result
 
 
 class JobEvidenceStore:
@@ -196,7 +214,7 @@ class JobEvidenceStore:
                 raise StoreNotFound(f"workflow node job {job_uuid} not found")
             if str(job["status"]) in _TERMINAL_JOB_STATES:
                 raise StoreConflict("作业终态后不能继续提交反馈")
-            if str(job["status"]) not in {"dispatched", "running", "execution_unknown"}:
+            if str(job["status"]) not in {"dispatched", "running"}:
                 raise StoreConflict("作业尚未派发，不能提交反馈")
             by_key = connection.execute(
                 """
@@ -224,11 +242,17 @@ class JobEvidenceStore:
                     or existing["idempotency_key"] != normalized_key
                 ):
                     raise StoreConflict("反馈序号或幂等键对应的内容冲突")
+                _append_feedback_event(
+                    connection,
+                    job_row=job,
+                    feedback_row=existing,
+                )
                 return {
                     "through_sequence": int(job["feedback_sequence"]),
                     "created": 0,
                 }
             now = utc_now()
+            feedback_uuid = str(uuid4())
             connection.execute(
                 """
                 INSERT INTO workflow_node_job_feedback_history(
@@ -238,7 +262,7 @@ class JobEvidenceStore:
                 ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    str(uuid4()),
+                    feedback_uuid,
                     now,
                     now,
                     job_uuid,
@@ -247,7 +271,7 @@ class JobEvidenceStore:
                     _json(normalized_data),
                     observed_at.strip(),
                     now,
-                    now,
+                    None,
                     normalized_key,
                 ),
             )
@@ -264,7 +288,7 @@ class JobEvidenceStore:
                 """,
                 (through, _json(normalized_data), now, now, job_uuid),
             )
-            WorkflowStore._append_runtime_event(
+            append_runtime_event(
                 connection,
                 task_uuid=str(job["workflow_task_uuid"]),
                 job_uuid=job_uuid,
@@ -273,21 +297,34 @@ class JobEvidenceStore:
                 to_status=("running" if job["status"] == "dispatched" else str(job["status"])),
                 now=now,
             )
+            feedback_row = connection.execute(
+                """
+                SELECT * FROM workflow_node_job_feedback_history
+                WHERE uuid = ?
+                """,
+                (feedback_uuid,),
+            ).fetchone()
+            assert feedback_row is not None
+            _append_feedback_event(
+                connection,
+                job_row=job,
+                feedback_row=feedback_row,
+            )
             return {"through_sequence": through, "created": 1}
 
     def list_feedback(self, *, job_uuid: str, page: int, page_size: int) -> dict[str, Any]:
         """按 sequence 升序分页返回作业反馈历史。"""
 
         offset = (page - 1) * page_size
-        with self._store._lock:
-            job = self._store._conn.execute(
+        with self._store.read() as connection:
+            job = connection.execute(
                 "SELECT 1 FROM workflow_node_job WHERE uuid = ? AND deleted_at IS NULL",
                 (job_uuid,),
             ).fetchone()
             if job is None:
                 raise StoreNotFound(f"workflow node job {job_uuid} not found")
             total = int(
-                self._store._conn.execute(
+                connection.execute(
                     """
                     SELECT COUNT(*) FROM workflow_node_job_feedback_history
                     WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
@@ -295,7 +332,7 @@ class JobEvidenceStore:
                     (job_uuid,),
                 ).fetchone()[0]
             )
-            rows = self._store._conn.execute(
+            rows = connection.execute(
                 """
                 SELECT * FROM workflow_node_job_feedback_history
                 WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
@@ -324,6 +361,76 @@ def _result_row(row: sqlite3.Row) -> dict[str, Any]:
         "error_info": _load(row["error_info"]),
         "committed_at": row["committed_at"],
     }
+
+
+def _append_result_event(
+    connection: sqlite3.Connection,
+    *,
+    job_row: sqlite3.Row,
+    result: Mapping[str, Any],
+) -> None:
+    """把本地不可变结果与 Backend 投影事件原子绑定。
+
+    参数：``connection`` 是结果写事务；``job_row`` 含实际派发参数；``result`` 是
+    已冻结结果。返回无。异常：幂等内容冲突时抛 ``StoreConflict`` 并回滚结果事务。
+    """
+
+    job_uuid = str(job_row["uuid"])
+    append_station_event(
+        connection,
+        event_type="job.outcome_committed",
+        aggregate_type="workflow_node_job",
+        aggregate_uuid=job_uuid,
+        source_kind="job_result",
+        source_uuid=str(result["uuid"]),
+        idempotency_key=f"station:{job_uuid}:outcome",
+        payload={
+            "task_uuid": str(job_row["workflow_task_uuid"]),
+            "job_uuid": job_uuid,
+            "workflow_node_uuid": str(job_row["workflow_node_uuid"]),
+            "edge_command_uuid": str(result["edge_command_uuid"]),
+            "attempt": int(job_row["attempt"]),
+            "actual_param": _load(str(job_row["param"])),
+            "outcome": str(result["outcome"]),
+            "return_info": dict(result["return_info"]),
+            "error_info": list(result["error_info"]),
+            "committed_at": str(result["committed_at"]),
+        },
+    )
+
+
+def _append_feedback_event(
+    connection: sqlite3.Connection,
+    *,
+    job_row: sqlite3.Row,
+    feedback_row: sqlite3.Row,
+) -> None:
+    """把一条本地反馈历史与 Backend 投影事件原子绑定。
+
+    参数：两行都来自当前事务。返回无。异常：同一反馈身份对应的事件内容冲突时
+    抛 ``StoreConflict``，确保反馈与发件箱不会分叉提交。
+    """
+
+    job_uuid = str(job_row["uuid"])
+    sequence = int(feedback_row["sequence"])
+    append_station_event(
+        connection,
+        event_type="job.feedback_committed",
+        aggregate_type="workflow_node_job",
+        aggregate_uuid=job_uuid,
+        source_kind="job_feedback",
+        source_uuid=str(feedback_row["uuid"]),
+        idempotency_key=f"station:{job_uuid}:feedback:{sequence}",
+        payload={
+            "task_uuid": str(job_row["workflow_task_uuid"]),
+            "job_uuid": job_uuid,
+            "sequence": sequence,
+            "feedback_type": str(feedback_row["feedback_type"]),
+            "data": _load(str(feedback_row["data"])),
+            "observed_at": str(feedback_row["observed_at"]),
+            "received_at": str(feedback_row["received_at"]),
+        },
+    )
 
 
 def _feedback_row(row: sqlite3.Row) -> dict[str, Any]:

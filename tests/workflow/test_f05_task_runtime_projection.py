@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from unilabos.workflow.station_event_outbox import StationEventOutboxStore
 from unilabos.workflow.store import StoreConflict, WorkflowStore
 
 WORKFLOW_UUID = "10000000-0000-4000-8000-000000000001"
@@ -707,6 +708,76 @@ def test_pre_dispatch_replay_is_zero_write(store: WorkflowStore) -> None:
     assert _aggregate(store) == first
 
 
+def test_pre_dispatch_persists_actual_device_binding_with_parameters(
+    store: WorkflowStore,
+) -> None:
+    """动态选择的实际设备必须与最终参数一起保存在工站调度库。
+
+    参数：``store`` 是隔离工作流权威。返回：无；断言作业 ``control_data`` 和
+    ``job.dispatched`` 事务发件箱都包含同一设备业务 ID、设备物料 UUID 与实际
+    参数。异常：参数或执行器快照无法编码时生产投影失败，测试不得只靠内存观察。
+    """
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    actual_param = {"temperature": 80}
+    actual_executor = {
+        "local_device_id": "reactor-b",
+        "material_uuid": "92000000-0000-4000-8000-000000000002",
+    }
+
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        resolved_param=actual_param,
+        actual_executor=actual_executor,
+    )
+
+    job = store.get_job(job_uuid)
+    assert job["param"] == actual_param
+    assert job["control_data"]["actual_executor"] == actual_executor
+    dispatched = next(
+        event
+        for event in StationEventOutboxStore(store).list_pending()
+        if event["event_type"] == "job.dispatched"
+    )
+    assert dispatched["payload"]["actual_param"] == actual_param
+    assert dispatched["payload"]["actual_executor"] == actual_executor
+
+
+def test_capacity_gate_wait_persists_reason_without_fake_resource_waiter(
+    store: WorkflowStore,
+) -> None:
+    """动态设备或库位容量等待不得伪造成一个可取得的资源锁。
+
+    参数：``store`` 是隔离工作流权威。返回：无；断言作业保存稳定门禁原因，
+    但不创建 ``execution_lock_waiter``，因此后续具体候选变化不会继承伪锁身份。
+    异常：缺少等待代码或中文原因时生产投影失败关闭。
+    """
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+
+    projection.project_execution_lock_wait(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        execution_locks=[],
+        wait_code="device_busy",
+        wait_message="匹配设备当前全部忙碌",
+    )
+
+    job = store.get_job(job_uuid)
+    assert job["status"] == "pending"
+    assert job["wait_reason"]["code"] == "device_busy"
+    with store.transaction() as connection:
+        count = connection.execute(
+            "SELECT COUNT(*) AS count FROM execution_lock_waiter "
+            "WHERE workflow_node_job_uuid=? AND state='waiting'",
+            (job_uuid,),
+        ).fetchone()["count"]
+    assert count == 0
+
+
 def test_runtime_journal_and_sse_invalidation_capture_dispatch_and_result(
     store: WorkflowStore,
 ) -> None:
@@ -956,3 +1027,52 @@ def test_projection_never_writes_legacy_history_or_execution_unknown(
     assert all(
         job["status"] != "execution_unknown" for job in store.list_jobs(TASK_UUID)
     )
+
+
+def test_execution_process_restart_fails_inflight_and_skips_pending_nodes(
+    store: WorkflowStore,
+) -> None:
+    """执行进程重启必须在一个事务中终止整张活动 DAG。
+
+    参数：``store`` 是隔离工作流写模型。返回无；断言在途 Job 明确失败、未派发
+    Job 跳过、父 Task 失败且清理状态独立需要人工处理。异常：事务状态不一致会使
+    测试失败。
+    """
+
+    first_job_uuid, second_job_uuid = _seed_task(store, job_count=2)
+    projection = _projection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=first_job_uuid,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    projection.project_dispatch_accepted(first_job_uuid)
+
+    aggregate = projection.project_execution_process_restarted(TASK_UUID)
+
+    assert aggregate is not None
+    jobs = {job["uuid"]: job for job in aggregate["jobs"]}
+    assert jobs[first_job_uuid]["status"] == "failed"
+    assert jobs[first_job_uuid]["error_info"][0]["code"] == (
+        "execution_process_restarted"
+    )
+    assert jobs[second_job_uuid]["status"] == "skipped"
+    assert jobs[second_job_uuid]["error_info"][0]["code"] == (
+        "upstream_execution_process_restarted"
+    )
+    assert aggregate["task"]["status"] == "failed"
+    assert aggregate["task"]["cleanup_status"] == "requires_attention"
+    assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "uncertain"
+    events = StationEventOutboxStore(store).list_pending()
+    assert [event["event_type"] for event in events] == [
+        "task.running",
+        "job.dispatched",
+        "job.running",
+        "job.outcome_committed",
+        "job.skipped",
+        "task.failed",
+    ]
+    assert events[3]["payload"]["outcome"] == "failed"
+    assert events[5]["payload"]["cleanup_status"] == "requires_attention"

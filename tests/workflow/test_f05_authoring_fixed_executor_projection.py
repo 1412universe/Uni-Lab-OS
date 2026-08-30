@@ -348,12 +348,12 @@ def test_persisted_nullable_node_defaults_remain_a_canvas_fixed_point(
 
 
 def test_dynamic_device_does_not_fabricate_concrete_material_identity() -> None:
-    """动态 ``device()`` 声明不得伪造物料（Material）身份并须关闭失败（Fail-closed）。
+    """动态 ``device()`` 声明应冻结设备类型选择器而不伪造实例身份。
 
-    参数说明：无。返回：无。异常/断言：
-    候选图构建器（Candidate Graph Builder）写入具体 ``material_uuid`` 或
-    ``executor_binding``，或可信工作流编译器（Authoring Compiler）放行当前
-    不可执行的动态 ``ILab`` 节点时测试失败。
+    参数说明：无。返回：无。异常/断言：候选图构建器（Candidate Graph
+    Builder）写入具体 ``material_uuid`` 或 ``executor_binding``，候选编译失败，
+    或执行计划（ExecutionPlan）没有冻结资源模板选择器时测试失败。具体设备只
+    能由门禁阶段依据注册和库存事实分配。
     """
 
     # ``graph`` 是动态 ``device()`` 声明产生的候选图（Candidate Graph），尚未
@@ -361,16 +361,26 @@ def test_dynamic_device_does_not_fabricate_concrete_material_identity() -> None:
     graph = _build_graph(None)
     # ``action_node`` 是必须保持空实际设备物料（Material）身份的设备动作节点。
     action_node = graph["nodes"][0]
-    # ``compilation`` 是动态声明的候选编译结果（CandidateCompilation）。
-    # 公共图校验（Graph Validation）必须对其动态执行器绑定（ExecutorBinding）
-    # 关闭失败（Fail-closed）。
+    # ``compilation`` 是动态声明的候选编译结果（CandidateCompilation），只证明
+    # 类型合同完整，绝不代表当前已经选择了设备实例。
     compilation = _compile(None)
 
     assert action_node["material_uuid"] is None
     assert "executor_binding" not in action_node["meta_data"]["unilab"]
-    assert not compilation.valid
-    assert compilation.graph is None
-    assert [item["code"] for item in compilation.diagnostics] == ["candidate_invalid"]
+    assert compilation.valid and compilation.graph is not None, compilation.diagnostics
+    # ``execution_plan`` 冻结设备类型；``planned_action`` 的空固定执行器证明
+    # 实际实例仍须在节点作业准入门禁中解析。
+    execution_plan, _jobs = ExecutionPlanBuilder().build(
+        compilation.graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+    planned_action = execution_plan["nodes"][0]
+    assert planned_action["device_id"] == ""
+    assert planned_action["device_selector"] == {
+        "mode": "resource_template",
+        "resource_template_uuid": DEVICE_RESOURCE_TEMPLATE_UUID,
+    }
 
 
 @pytest.mark.parametrize(

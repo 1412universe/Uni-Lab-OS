@@ -1,4 +1,4 @@
-"""访问区域策略从冻结工作流规格进入真实调度派发的合同。"""
+"""PLC 访问区域不得进入工站 Scheduler 软件占用集合的合同。"""
 
 from __future__ import annotations
 
@@ -53,11 +53,11 @@ def _node(
     )
 
 
-def test_scheduler_dispatches_access_region_with_later_release_job_identity() -> None:
-    """入口派发必须携带由后续物料转移作业持有的访问区域声明。
+def test_scheduler_rejects_legacy_access_region_without_compatibility_path() -> None:
+    """直接装配的旧访问区域策略必须关闭式拒绝。
 
-    参数：无。返回无。异常：调度器丢失策略、使用入口 Job 作为租约持有者或把
-    释放节点再次声明为入口时由断言暴露。持久化由投影层测试单独覆盖。
+    参数：无。返回无。异常：旧字段被静默忽略、生成软件锁或越过设备派发边界时
+    由断言暴露。新项目不提供升级兼容路径，正式发布边界会更早拒绝该字段。
     """
 
     policy = {
@@ -101,23 +101,6 @@ def test_scheduler_dispatches_access_region_with_later_release_job_identity() ->
 
     submitted = scheduler.submit_workflow(spec)
 
-    assert [item["job_id"] for item in submitted["dispatched"]] == [SOURCE_JOB_UUID]
-    access = next(
-        item
-        for item in dispatching[0]["execution_locks"]
-        if item["scope"] == "access_region"
-    )
-    assert access == {
-        "lock_key": (f"access_region/{MATERIAL_UUID}/s08-s09-reagent-corridor"),
-        "scope": "access_region",
-        "material_uuid": MATERIAL_UUID,
-        "access_region_key": "s08-s09-reagent-corridor",
-        "lease_owner_job_uuid": RELEASE_JOB_UUID,
-    }
-
-    scheduler.on_job_finished(SOURCE_JOB_UUID, True, {"ok": True})
-
-    assert dispatching[1]["job_id"] == RELEASE_JOB_UUID
-    assert all(
-        item["scope"] != "access_region" for item in dispatching[1]["execution_locks"]
-    )
+    assert submitted["dispatched"] == []
+    assert dispatching == []
+    assert scheduler.snapshot()["workflows"][TASK_UUID]["state"] == "failed"

@@ -4,6 +4,7 @@
 """
 
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
+from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
 from unilabos.app.scheduler.models import (
     Handle,
     NODE_TYPES,
@@ -95,6 +96,83 @@ class TestTriggerOnSubmit:
         assert result["state"] == "paused"
         assert result["dispatched"] == []
         assert dispatcher.dispatched == []
+
+
+def test_dynamic_device_selector_chooses_another_available_instance() -> None:
+    """同一设备类型的并发节点应按本轮忙碌事实选择不同实例。
+
+    参数：无。返回：无。断言工作流冻结的资源模板选择器在门禁阶段解析为具体
+    本地设备，首个实例忙碌后选择第二个；派发参数只携带已选实例，不修改冻结
+    工作流节点。异常：解析器收到非法选择器时由断言直接失败。
+    """
+
+    dispatcher = RecordingDispatcher()
+    # ``device_instances`` 是注册表与库存权威共同证明的两个同类型设备实例。
+    device_instances = (
+        ResolvedDeviceTarget("reactor-a", "device-material-a"),
+        ResolvedDeviceTarget("reactor-b", "device-material-b"),
+    )
+
+    def resolve_device(
+        selector: dict[str, str],
+        action_name: str,
+        busy_keys: set[str],
+    ) -> ResolvedDeviceTarget:
+        """按稳定实例顺序返回本轮第一个未被设备键占用的目标。
+
+        参数：``selector`` 是冻结类型选择器，``action_name`` 是目标动作，
+        ``busy_keys`` 是当前在途设备/动作键。返回：首个可用实例。异常：测试输入
+        合同或容量不足时抛 ``AssertionError``，不得伪造第三个设备。
+        """
+
+        assert selector == {
+            "mode": "resource_template",
+            "resource_template_uuid": "device-template-a",
+        }
+        assert action_name == "run"
+        for instance in device_instances:
+            if f"/devices/{instance.material_uuid}" not in busy_keys:
+                return instance
+        raise AssertionError("测试设备容量不足")
+
+    scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        device_target_resolver=resolve_device,
+    )
+
+    def dynamic_node(node_id: str) -> WorkflowNode:
+        """构造只冻结设备类型而不冻结实例的工作流节点。
+
+        参数：``node_id`` 是计划工作流节点稳定身份。返回：带资源模板选择器的
+        动态设备动作。异常：无；选择器形状由测试固定。
+        """
+
+        return WorkflowNode(
+            id=node_id,
+            device_selector={
+                "mode": "resource_template",
+                "resource_template_uuid": "device-template-a",
+            },
+            action_name="run",
+            action_type="goal",
+            param={},
+        )
+
+    first = scheduler.submit_workflow(
+        WorkflowSpec(workflow_id="wf-dynamic-a", nodes=[dynamic_node("node-a")])
+    )
+    second = scheduler.submit_workflow(
+        WorkflowSpec(workflow_id="wf-dynamic-b", nodes=[dynamic_node("node-b")])
+    )
+
+    assert [first["dispatched"][0]["node_id"], second["dispatched"][0]["node_id"]] == [
+        "node-a",
+        "node-b",
+    ]
+    assert [item["device_id"] for item in dispatcher.dispatched] == [
+        "reactor-a",
+        "reactor-b",
+    ]
 
 
 class TestStepControl:
@@ -361,7 +439,9 @@ class TestPriorityOrdering:
         assert dispatched[0]["workflow_id"] == "wf-high"
 
     def test_stable_orderer_key(self):
-        orderer = StableLocalOrderer()
+        """相同有效优先级按提交时间与稳定身份排序。"""
+
+        orderer = StableLocalOrderer(clock=lambda: 2.0)
         from unilabos.app.scheduler.models import ReadyTask
 
         t1 = ReadyTask("wf1", _node("A"), priority_weight=50.0, submitted_at=1.0)
@@ -369,6 +449,36 @@ class TestPriorityOrdering:
         t3 = ReadyTask("wf3", _node("A"), priority_weight=200.0, submitted_at=1.5)
         ordered = orderer.order([t1, t2, t3], OrderingContext(set()))
         assert [t.workflow_id for t in ordered] == ["wf3", "wf2", "wf1"]
+
+    def test_waiting_task_ages_without_preempting_running_action(self):
+        """等待候选按固定周期提高有效优先级，且排序器不触碰在途动作。
+
+        参数无。返回无；断言等待六个周期的低优先级候选可以超过新到候选。
+        异常：老化公式或稳定排序变化会使测试失败。
+        """
+
+        orderer = StableLocalOrderer(
+            aging_interval_seconds=30,
+            clock=lambda: 180.0,
+        )
+        from unilabos.app.scheduler.models import ReadyTask
+
+        aged = ReadyTask(
+            "wf-aged",
+            _node("A"),
+            priority_weight=50.0,
+            submitted_at=0.0,
+        )
+        fresh = ReadyTask(
+            "wf-fresh",
+            _node("A"),
+            priority_weight=55.0,
+            submitted_at=180.0,
+        )
+
+        ordered = orderer.order([fresh, aged], OrderingContext(set()))
+
+        assert [task.workflow_id for task in ordered] == ["wf-aged", "wf-fresh"]
 
 
 class TestParamFlow:

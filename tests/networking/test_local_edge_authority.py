@@ -18,6 +18,8 @@ from unilabos.app.scheduler.dispatch import DispatchPayload
 
 
 def _payload(*, device_id: str = "robot-01") -> DispatchPayload:
+    """构造已经由工站调度门禁签发的双进程派发载荷。"""
+
     return DispatchPayload(
         job_id=str(uuid.uuid4()),
         task_id=str(uuid.uuid4()),
@@ -27,6 +29,15 @@ def _payload(*, device_id: str = "robot-01") -> DispatchPayload:
         action="transfer",
         action_type="normal",
         action_args={"source": "A", "target": "B"},
+        attempt=1,
+        command_uuid=str(uuid.uuid4()),
+        claim_uuid=str(uuid.uuid4()),
+        fences=[
+            {
+                "lock_key": f"/devices/{device_id}",
+                "fencing_token": 1,
+            }
+        ],
     )
 
 
@@ -34,6 +45,25 @@ def _authority(path: Path) -> LocalEdgeControlAuthority:
     return LocalEdgeControlAuthority(
         LocalEdgeAuthorityStore(path), api_key="managed-local-secret"
     )
+
+
+def _attempt_identity(
+    payload: DispatchPayload,
+    command: dict[str, object],
+) -> dict[str, object]:
+    """从调度派发和持久命令构造 HTTP 事实所需的完整尝试身份。"""
+
+    command_payload = command["payload"]
+    assert isinstance(command_payload, dict)
+    return {
+        "job_uuid": payload["job_id"],
+        "task_uuid": payload["task_id"],
+        "node_uuid": payload["node_id"],
+        "command_uuid": command["message_uuid"],
+        "claim_uuid": command_payload["claim_uuid"],
+        "attempt": command_payload["attempt"],
+        "fences": command_payload["fences"],
+    }
 
 
 def test_latest_registration_returns_detached_edge_capabilities(
@@ -142,6 +172,7 @@ def test_http_websocket_round_trip_projects_one_terminal_outcome(
                     "payload": {
                         "edge_uuid": registration["edge_uuid"],
                         "session_uuid": registration["session_uuid"],
+                        "process_uuid": str(uuid.uuid4()),
                         "last_ack_command_sequence": 0,
                         "running_jobs": [],
                     },
@@ -180,8 +211,7 @@ def test_http_websocket_round_trip_projects_one_terminal_outcome(
         assert job.json()["data"]["param"] == payload["action_args"]
 
         outcome = {
-            "task_uuid": payload["task_id"],
-            "node_uuid": payload["node_id"],
+            **_attempt_identity(payload, command),
             "outcome": "succeeded",
             "return_info": {"return_value": {"moved": True}},
             "error_info": [],
@@ -244,8 +274,7 @@ def test_unknown_outcome_locks_device_until_explicit_reconciliation(
             job_token=job_token,
             idempotency_key="unknown-outcome",
             payload={
-                "task_uuid": payload["task_id"],
-                "node_uuid": payload["node_id"],
+                **_attempt_identity(payload, command),
                 "outcome": "failed",
                 "return_info": {},
                 "error_info": [{"message": "Edge disconnected"}],
@@ -299,8 +328,7 @@ def test_http_outcome_rejects_wrong_empty_json_types(
     application.include_router(create_local_edge_control_router(authority))
     client = TestClient(application)
     outcome: dict[str, object] = {
-        "task_uuid": payload["task_id"],
-        "node_uuid": payload["node_id"],
+        **_attempt_identity(payload, command),
         "outcome": "succeeded",
         "return_info": {},
         "error_info": [],
@@ -358,8 +386,7 @@ def test_http_outcome_rejects_unknown_command_from_another_job(
                 "X-Job-Token": command["payload"]["job_access_token"],
             },
             json={
-                "task_uuid": payload["task_id"],
-                "node_uuid": payload["node_id"],
+                **_attempt_identity(payload, command),
                 "outcome": "failed",
                 "return_info": {},
                 "error_info": [{"message": "连接中断"}],
@@ -382,6 +409,7 @@ def test_feedback_projection_failure_is_replayed_after_restart(tmp_path: Path) -
     authority.dispatch(payload)
     command = authority.store.pending_commands()[0]
     sample = {
+        **_attempt_identity(payload, command),
         "sequence": 1,
         "feedback_type": "progress",
         "data": {"percent": 25},
@@ -423,6 +451,52 @@ def test_feedback_projection_failure_is_replayed_after_restart(tmp_path: Path) -
         recovered.stop()
 
 
+def test_http_facts_reject_changed_job_attempt_identity(tmp_path: Path) -> None:
+    """反馈和结果均必须拒绝与已持久 Claim/Fence 尝试不一致的身份。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    identity = _attempt_identity(payload, command)
+    changed_feedback = {
+        **identity,
+        "claim_uuid": str(uuid.uuid4()),
+        "sequence": 1,
+        "feedback_type": "progress",
+        "data": {"percent": 50},
+        "observed_at": "2026-08-30T00:00:00Z",
+        "idempotency_key": "feedback-changed-claim",
+    }
+    changed_outcome = {
+        **identity,
+        "attempt": int(identity["attempt"]) + 1,
+        "outcome": "succeeded",
+        "return_info": {},
+        "error_info": [],
+        "unknown_command_ids": [],
+    }
+    try:
+        with pytest.raises(ValueError, match="claim_uuid does not match"):
+            authority.commit_feedback(
+                payload["job_id"],
+                command_uuid=command["message_uuid"],
+                job_token=command["payload"]["job_access_token"],
+                payload=changed_feedback,
+            )
+        with pytest.raises(ValueError, match="attempt does not match"):
+            authority.commit_outcome(
+                payload["job_id"],
+                command_uuid=command["message_uuid"],
+                job_token=command["payload"]["job_access_token"],
+                idempotency_key="outcome-changed-attempt",
+                payload=changed_outcome,
+            )
+        assert authority.store.job(payload["job_id"])["status"] == "pending"
+    finally:
+        authority.stop()
+
+
 def test_outcome_projection_failure_is_replayed_after_restart(tmp_path: Path) -> None:
     """Edge 不可变结果在工作流库恢复后必须可重放。"""
 
@@ -442,8 +516,7 @@ def test_outcome_projection_failure_is_replayed_after_restart(tmp_path: Path) ->
                 job_token=command["payload"]["job_access_token"],
                 idempotency_key="projection-failure",
                 payload={
-                    "task_uuid": payload["task_id"],
-                    "node_uuid": payload["node_id"],
+                    **_attempt_identity(payload, command),
                     "outcome": "succeeded",
                     "return_info": {"return_value": {"moved": True}},
                     "error_info": [],
@@ -508,8 +581,7 @@ def test_http_outcome_replay_preserves_exact_terminal_semantics(
             f"/api/v1/edge/jobs/{payload['job_id']}/outcome",
             headers=headers,
             json={
-                "task_uuid": payload["task_id"],
-                "node_uuid": payload["node_id"],
+                **_attempt_identity(payload, command),
                 "outcome": terminal_outcome,
                 "return_info": {"last_step": 3},
                 "error_info": error_info,
@@ -551,25 +623,45 @@ def test_http_outcome_replay_preserves_exact_terminal_semantics(
         recovered.stop()
 
 
-def test_disconnect_marks_dispatched_job_unknown_and_hello_can_reconcile(
+def test_transient_disconnect_marks_unknown_and_same_process_can_reconcile(
     tmp_path: Path,
 ) -> None:
+    """短暂断线先持久化不确定事实，同一动作进程重连后恢复运行态。
+
+    参数：``tmp_path`` 是隔离数据库目录。返回无。异常：回调遗漏、重复或早于
+    本地账本提交时断言失败；网络抖动误报进程重启时测试失败。
+    """
+
     authority = _authority(tmp_path / "authority.db")
     payload = _payload()
     authority.dispatch(payload)
     command = authority.store.pending_commands()[0]
     authority.store.acknowledge_command(command["message_uuid"])
+    process_uuid = str(uuid.uuid4())
+    restarted_notifications: list[tuple[str, ...]] = []
+    authority.add_execution_process_restarted_listener(
+        lambda job_uuids: restarted_notifications.append(job_uuids)
+    )
     try:
-        assert authority.store.mark_disconnected_jobs_unknown() == [
-            payload["job_id"]
-        ]
+        restarted, affected = authority.store.reconcile_hello(
+            {
+                "process_uuid": process_uuid,
+                "last_ack_command_sequence": command["sequence"],
+                "running_jobs": [],
+            }
+        )
+        assert (restarted, affected) == (False, ())
+        affected = authority.store.mark_disconnected_jobs_unknown()
+        assert affected == [payload["job_id"]]
+        assert restarted_notifications == []
         assert authority.store.job(payload["job_id"])["status"] == "unknown"
         assert authority.busy_device_action_keys() == {
             f"/devices/{payload['device_id']}/{payload['action']}"
         }
 
-        authority.store.reconcile_hello(
+        restarted, affected = authority.store.reconcile_hello(
             {
+                "process_uuid": process_uuid,
                 "last_ack_command_sequence": command["sequence"],
                 "running_jobs": [
                     {
@@ -580,6 +672,50 @@ def test_disconnect_marks_dispatched_job_unknown_and_hello_can_reconcile(
                 ],
             }
         )
+        assert (restarted, affected) == (False, ())
         assert authority.store.job(payload["job_id"])["status"] == "running"
+    finally:
+        authority.stop()
+
+
+def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
+    tmp_path: Path,
+) -> None:
+    """动作进程身份变化才通知重启，并保留在途作业不确定占用。
+
+    参数：``tmp_path`` 是隔离数据库目录。返回无。异常：身份变化未返回受影响
+    作业、错误恢复运行态或通知遗漏时断言失败。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    authority.store.acknowledge_command(command["message_uuid"])
+    first_process_uuid = str(uuid.uuid4())
+    authority.store.reconcile_hello(
+        {
+            "process_uuid": first_process_uuid,
+            "last_ack_command_sequence": command["sequence"],
+            "running_jobs": [],
+        }
+    )
+    authority.store.mark_disconnected_jobs_unknown()
+    notifications: list[tuple[str, ...]] = []
+    authority.add_execution_process_restarted_listener(notifications.append)
+    try:
+        restarted, affected = authority.store.reconcile_hello(
+            {
+                "process_uuid": str(uuid.uuid4()),
+                "last_ack_command_sequence": command["sequence"],
+                "running_jobs": [],
+            }
+        )
+        authority.notify_execution_process_restarted(affected)
+
+        assert restarted is True
+        assert affected == (payload["job_id"],)
+        assert notifications == [(payload["job_id"],)]
+        assert authority.store.job(payload["job_id"])["status"] == "unknown"
     finally:
         authority.stop()

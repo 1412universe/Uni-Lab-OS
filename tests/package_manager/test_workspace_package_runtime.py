@@ -494,21 +494,20 @@ def test_unsafe_active_changes_wait_for_restart_without_auto_exit(
     ("execution_state", "expected_request_count"),
     (
         ("running", 0),
-        ("execution_unknown", 0),
         ("idle", 1),
     ),
 )
-def test_restart_mode_never_restarts_running_or_unknown_execution(
+def test_restart_mode_never_restarts_running_execution(
     tmp_path: Path,
     execution_state: str,
     expected_request_count: int,
 ) -> None:
-    """监督重启模式也不得越过在途或结果不确定的物理执行。
+    """监督重启模式不得越过仍可能处于物理执行中的 running 作业。
 
     参数：``tmp_path`` 隔离候选代；``execution_state`` 是持久执行投影状态；
     ``expected_request_count`` 是允许提交给监督器的重启请求数。
-    返回：无；断言 ``running`` 与 ``execution_unknown`` 永不自动重启，空闲态只
-    请求一次且重复刷新保持幂等。
+    返回：无；断言 ``running`` 永不自动重启，空闲态只请求一次且重复刷新保持
+    幂等；物理结果不确定继续由 ``running`` 与独立清理状态表达。
     异常：危险状态触发重启或同一候选重复请求时测试失败。
     """
 

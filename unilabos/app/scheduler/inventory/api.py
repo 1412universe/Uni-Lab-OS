@@ -41,6 +41,7 @@ from unilabos.app.scheduler.inventory.schemas import (
     WorkflowReservationListResponse,
 )
 from unilabos.app.scheduler.inventory.service import InventoryService
+from unilabos.app.scheduler.inventory.ingress_api import create_ingress_router
 from unilabos.app.scheduler.inventory.sync import build_snapshot
 from unilabos.app.scheduler.inventory.material_compat import (
     build_legacy_material_nodes,
@@ -118,7 +119,9 @@ def create_router(service: InventoryService) -> APIRouter:
     def get_template(template_id: str) -> ResourceTemplateResponse:
         template = service.store.get_template(template_id)
         if template is None:
-            raise HTTPException(status_code=404, detail=f"template {template_id} not found")
+            raise HTTPException(
+                status_code=404, detail=f"template {template_id} not found"
+            )
         return template
 
     @router.get(
@@ -129,7 +132,9 @@ def create_router(service: InventoryService) -> APIRouter:
     def get_instance(edge_uuid: str) -> InstanceDetailResponse:
         inst = service.store.get_instance(edge_uuid)
         if inst is None:
-            raise HTTPException(status_code=404, detail=f"instance {edge_uuid} not found")
+            raise HTTPException(
+                status_code=404, detail=f"instance {edge_uuid} not found"
+            )
         relation = service.store.get_relation(edge_uuid)
         content = service.store.get_content(edge_uuid)
         return {**inst, "relation": relation, "content": content}
@@ -207,6 +212,14 @@ def create_router(service: InventoryService) -> APIRouter:
         """同步游标只读视图；游标写入仍由连续 ACK 协议独占。"""
         return {"cursors": service.store.list_cursors()}
 
+    router.include_router(
+        create_ingress_router(
+            service.store,
+            edge_id=service.edge_id,
+            lab_id=service.lab_id,
+        )
+    )
+
     return router
 
 
@@ -248,6 +261,8 @@ def create_app(service: Optional[InventoryService] = None) -> FastAPI:
     def _domain_error(_request, exc: InventoryError):  # type: ignore[no-untyped-def]
         from fastapi.responses import JSONResponse
 
-        return JSONResponse(status_code=409, content={"error": str(exc), "code": exc.code})
+        return JSONResponse(
+            status_code=409, content={"error": str(exc), "code": exc.code}
+        )
 
     return app

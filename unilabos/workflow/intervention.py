@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
+from unilabos.workflow.event_writer import append_frontend_event
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
 
@@ -199,7 +200,7 @@ class WorkflowInterventionStore:
                 """,
                 (now, task_uuid),
             )
-            WorkflowStore._append_event(
+            append_frontend_event(
                 connection,
                 event="workflow.runtime.changed",
                 data={"workflow_task_uuid": task_uuid},
@@ -216,8 +217,8 @@ class WorkflowInterventionStore:
         normalized = status.strip().lower() or "open"
         if normalized not in _STATUSES or not 1 <= limit <= 500:
             raise StoreConflict("干预查询状态或 limit 非法")
-        with self._store._lock:
-            rows = self._store._conn.execute(
+        with self._store.read() as connection:
+            rows = connection.execute(
                 """
                 SELECT * FROM workflow_intervention
                 WHERE status = ? AND deleted_at IS NULL
@@ -228,8 +229,8 @@ class WorkflowInterventionStore:
         return [_row(row) for row in rows]
 
     def get(self, intervention_uuid: str) -> dict[str, Any]:
-        with self._store._lock:
-            row = self._store._conn.execute(
+        with self._store.read() as connection:
+            row = connection.execute(
                 """
                 SELECT * FROM workflow_intervention
                 WHERE uuid = ? AND deleted_at IS NULL
@@ -330,7 +331,7 @@ class WorkflowInterventionStore:
                 (intervention_uuid,),
             ).fetchone()
             assert decided is not None
-            WorkflowStore._append_event(
+            append_frontend_event(
                 connection,
                 event="workflow.runtime.changed",
                 data={"workflow_task_uuid": str(row["workflow_task_uuid"])},
@@ -347,8 +348,8 @@ class WorkflowInterventionStore:
 
         if not 1 <= limit <= 500:
             raise StoreConflict("干预恢复 limit 非法")
-        with self._store._lock:
-            rows = self._store._conn.execute(
+        with self._store.read() as connection:
+            rows = connection.execute(
                 """
                 SELECT * FROM workflow_intervention
                 WHERE status='selected'

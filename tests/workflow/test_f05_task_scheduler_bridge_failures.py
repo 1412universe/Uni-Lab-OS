@@ -307,7 +307,10 @@ def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
         assert isinstance(captured_error.value.__cause__, RuntimeError)
         assert cancel_calls == []
         assert store.get_task(TASK_UUID)["status"] == "running"
-        assert store.get_job(JOB_UUID)["status"] == "execution_unknown"
+        assert store.get_job(JOB_UUID)["status"] == "running"
+        assert store.get_job(JOB_UUID)["uncertainty_reason"] == (
+            "local_dispatch_acceptance_unknown"
+        )
         assert store.get_task(TASK_UUID)["control_status"] == "waiting_reconciliation"
         assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
         assert {
@@ -315,7 +318,8 @@ def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
             for lease in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
         } == {"uncertain"}
         assert scheduler.snapshot()["inflight_jobs"][JOB_UUID]["resource_locks"] == [
-            f"material/{MATERIAL_UUID}/exclusive"
+            "/devices/reactor-a",
+            f"material/{MATERIAL_UUID}/exclusive",
         ]
 
         scheduler.on_job_finished(JOB_UUID, True, {"late": True})
@@ -350,17 +354,21 @@ class _FailOnceProjection:
         job_uuid: str,
         resolved_param: Mapping[str, Any],
         execution_locks: list[Mapping[str, Any]],
+        device_tenancy: Mapping[str, Any] | None = None,
+        actual_executor: Mapping[str, Any] | None = None,
         max_active_tasks: int = 500,
         max_tasks_per_workflow: int = 100,
         max_in_flight_jobs: int = 100,
     ) -> dict[str, Any]:
-        """委托派发前投影；参数含最终解析参数，返回标准聚合。"""
+        """委托派发前投影；参数含最终实参、资源与实际执行器，返回标准聚合。"""
 
         return self._delegate.project_pre_dispatch(
             task_uuid=task_uuid,
             job_uuid=job_uuid,
             resolved_param=resolved_param,
             execution_locks=execution_locks,
+            device_tenancy=device_tenancy,
+            actual_executor=actual_executor,
             max_active_tasks=max_active_tasks,
             max_tasks_per_workflow=max_tasks_per_workflow,
             max_in_flight_jobs=max_in_flight_jobs,
@@ -371,15 +379,20 @@ class _FailOnceProjection:
 
         return self._delegate.project_dispatch_accepted(job_uuid)
 
-    def project_execution_unknown(
+    def get_execution_claim(self, job_uuid: str) -> dict[str, Any] | None:
+        """委托读取持久 Claim/Fence；参数是稳定作业身份。"""
+
+        return self._delegate.get_execution_claim(job_uuid)
+
+    def project_execution_attention(
         self,
         job_uuid: str,
         *,
         reason: str,
     ) -> dict[str, Any]:
-        """委托执行未知投影；参数是作业身份和稳定原因。"""
+        """委托物理对账等待投影；参数是作业身份和稳定原因。"""
 
-        return self._delegate.project_execution_unknown(job_uuid, reason=reason)
+        return self._delegate.project_execution_attention(job_uuid, reason=reason)
 
     def project_job_finished(self, **values: Any) -> dict[str, Any]:
         """首次抛 SQLite 瞬态错误，随后委托同一完成事实。
@@ -453,6 +466,7 @@ def test_workflow_service_maps_bridge_failure_to_stable_internal_error() -> None
         recording_store,
         task_scheduler_bridge=_FailingBridge(),
     )
+    service.get_workflow = recording_store.get_workflow  # type: ignore[method-assign]
     try:
         with pytest.raises(WorkflowError) as captured_error:
             service.create_workflow_task(
