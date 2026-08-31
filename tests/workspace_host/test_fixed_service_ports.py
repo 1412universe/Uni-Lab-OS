@@ -15,15 +15,16 @@ from unilabos.workspace_host.launch import LaunchPlan
 from unilabos.workspace_host.model import WorkspacePaths
 
 
-def test_workspace_host_forwards_explicit_service_ports(
+def test_workspace_host_forwards_explicit_backend_port(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """容器部署应把固定 Backend 与 HostLink 端口交给启动计划。
+    """容器部署应只把固定 Backend 端口交给启动计划。
 
     参数：``tmp_path`` 提供隔离工作区，``monkeypatch`` 隔离真实子进程。返回：
     无；断言 Host 代际始终复用显式端口，使 Kubernetes Service 可稳定指向
-    Backend。异常：端口转发缺失或被改写时断言失败。
+    Backend；未由业务进程监听的 HostLink 不应成为部署接口。异常：端口转发缺失
+    或被改写时断言失败。
     """
 
     workspace = tmp_path / "workspace"
@@ -64,7 +65,6 @@ def test_workspace_host_forwards_explicit_service_ports(
         ensure_local_token(paths),
         readiness_timeout=0.1,
         backend_port=48_111,
-        hostlink_port=48_112,
     )
     monkeypatch.setattr(host, "_spawn", Mock(return_value=None))
     monkeypatch.setattr(host, "_wait_backend_ready", Mock(return_value=[]))
@@ -74,4 +74,4 @@ def test_workspace_host_forwards_explicit_service_ports(
         host.close()
 
     assert captured["backend_port"] == 48_111
-    assert captured["hostlink_port"] == 48_112
+    assert "hostlink_port" not in captured

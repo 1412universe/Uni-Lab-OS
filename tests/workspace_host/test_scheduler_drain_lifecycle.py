@@ -12,6 +12,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
 from unilabos.workspace_host.discovery import ensure_local_token
 from unilabos.workspace_host.host import WorkspaceHost
 from unilabos.workspace_host.model import WorkspacePaths
@@ -297,3 +299,44 @@ def test_workspace_start_backend_upstream_resumes_local_scheduler(
         ]
     finally:
         _cleanup(host, processes, server)
+
+
+def test_workspace_start_caps_scheduler_resume_request_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """恢复派发请求不能把统一启动拖过容器等待窗口。
+
+    参数：``tmp_path`` 提供隔离工作区，``monkeypatch`` 替换公开调度客户端。
+    返回无；断言即使组件 readiness 预算为 600 秒，单次恢复请求仍固定封顶 10 秒。
+    异常：预算再次随 readiness 放大时断言失败。
+    """
+
+    paths = WorkspacePaths.resolve(tmp_path)
+    host = WorkspaceHost(paths, ensure_local_token(paths), readiness_timeout=600.0)
+    captured: dict[str, object] = {}
+
+    def resume(address: str, *, timeout: float) -> dict[str, object]:
+        """记录恢复请求；参数是 Backend 地址和超时，返回合法运行状态，异常无。"""
+
+        captured.update(address=address, timeout=timeout)
+        return {
+            "phase": "running",
+            "active_device_job_count": 0,
+            "active_device_job_ids": [],
+        }
+
+    host._components["backend"].update(
+        phase="ready",
+        address="http://127.0.0.1:18003",
+    )
+    monkeypatch.setattr(host._scheduler_lifecycle, "resume", resume)
+    try:
+        host._resume_local_scheduler()
+    finally:
+        host.close()
+
+    assert captured == {
+        "address": "http://127.0.0.1:18003",
+        "timeout": 10.0,
+    }
