@@ -150,6 +150,7 @@ def build_candidate_graph(
                 applied,
                 declaration.node_uuid,
                 expansion,
+                catalog=catalog,
             )
             if compatible_template_uuid is not None:
                 compatible_catalog_replacements.add(compatible_template_uuid)
@@ -747,12 +748,15 @@ def _assert_composite_pin_compatible(
     applied_graph: Mapping[str, Any],
     invocation_uuid: str,
     expansion: CompositeExpansion,
+    *,
+    catalog: AuthoringCatalogSnapshot,
 ) -> str | None:
     """拒绝已应用调用节点的发布合同发生破坏性漂移。
 
-    参数：已应用图、调用 UUID 和当前展开。返回：首次调用时为 ``None``；旧
-    调用精确或可加兼容时返回允许整代替换的模板 UUID。异常：旧投影未经认证、
-    身份混代或合同破坏时抛出 ``AuthoringGraphError``。
+    参数：已应用图、调用 UUID、当前展开和同代不可变模板目录。返回：首次调用
+    时为 ``None``；旧调用精确或可加兼容时返回允许整代替换的模板 UUID。异常：
+    旧冻结投影、当前目录聚合、身份或合同不自洽时抛出
+    ``AuthoringGraphError``。
     """
 
     applied_node = next(
@@ -771,24 +775,35 @@ def _assert_composite_pin_compatible(
             "composite_contract_stale",
             "当前已发布工作流调用缺少冻结合同投影",
         )
+    current_template_uuid = current_node.get("workflow_node_template_uuid")
+    if not isinstance(current_template_uuid, str):
+        raise AuthoringGraphError(
+            "composite_contract_stale",
+            "当前已发布工作流模板身份无效",
+        )
+    try:
+        current_action = catalog.require_template(current_template_uuid)
+    except AuthoringCatalogError as error:
+        raise AuthoringGraphError(
+            "composite_contract_stale",
+            "当前已发布工作流目录聚合缺失",
+        ) from error
     compatibility = classify_pinned_published_workflow_invocation(
         previous_node=applied_node,
         current_node=current_node,
+        # Local Workflow Catalog 只保留当前目录代际；旧版合同由调用节点受保护
+        # 元数据认证，当前版必须再由同代目录模板和连接点完整认证。
         previous_templates=applied_graph["node_templates"],
         previous_handles=applied_graph["handle_templates"],
+        current_templates=(current_action.detached_template(),),
+        current_handles=tuple(current_action.detached_handles()),
     )
     if compatibility == "breaking":
         raise AuthoringGraphError(
             "composite_contract_stale",
             "已发布工作流合同发生破坏性变化",
         )
-    template_uuid = current_node.get("workflow_node_template_uuid")
-    if not isinstance(template_uuid, str):
-        raise AuthoringGraphError(
-            "composite_contract_stale",
-            "当前已发布工作流模板身份无效",
-        )
-    return template_uuid
+    return current_template_uuid
 
 
 def _composite_invocation_node(

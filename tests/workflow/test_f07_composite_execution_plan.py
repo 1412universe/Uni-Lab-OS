@@ -98,7 +98,12 @@ def _composite_node(
     invocation_uuid: str = INVOCATION_UUID,
     internal_uuid: str = INTERNAL_UUID,
 ) -> dict[str, Any]:
-    """构造带输入透传输出和完成边界的组合调用节点。"""
+    """构造带参数透传输出和完成边界的组合调用节点。
+
+    参数：``static_value`` 是可选节点固定值；``invocation_uuid`` 是组合调用稳定
+    身份；``internal_uuid`` 是本次展开的内部节点身份。返回：供公开执行计划编译器
+    使用的完整节点。异常：无；测试调用方负责提供符合 UUID 合同的身份。
+    """
 
     node = _node(
         invocation_uuid,
@@ -133,7 +138,7 @@ def _composite_node(
             ],
         },
         "contract_compatibility": {
-            "inputs": [
+            "parameters": [
                 {
                     "name": "value",
                     "handle_uuid": INVOCATION_TARGET,

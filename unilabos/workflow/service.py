@@ -6,7 +6,7 @@ import hashlib
 import logging
 import re
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -29,6 +29,11 @@ from unilabos.workflow.candidate_validation import (
 from unilabos.workflow.catalog_dependent_authoring_refresh import (
     CatalogAuthoringGenerationTracker,
     refresh_catalog_dependent_authoring,
+)
+from unilabos.workflow.composite_contract_refresh import (
+    CompositeContractRefreshPending,
+    graph_references_composite_child,
+    refresh_published_composite_invocations,
 )
 from unilabos.workflow.composite_invocation import (
     CompositeInvocationInvalid,
@@ -720,8 +725,11 @@ class WorkflowService:
         """把当前工作流修订冻结为不可变已发布工作流合同。
 
         参数：``workflow_uuid`` 是来源工作流稳定身份，``revision`` 是调用方确认
-        的当前修订。返回 Backend 公共发布投影；修订变化或同修订内容漂移抛
-        ``WorkflowConflict``，空图和非法边界抛 ``WorkflowError``。
+        的当前修订。返回 Backend 公共发布投影；存在父工作流引用时，额外返回
+        ``dependent_refresh``，分别列出已自动更新的父工作流和待处理诊断。
+        修订变化或同修订内容漂移抛 ``WorkflowConflict``，空图和非法边界抛
+        ``WorkflowError``。子合同提交后，任一父工作流刷新失败只进入诊断，不能
+        回滚已发布合同或把本次发布伪装成失败。
         """
 
         if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
@@ -738,7 +746,11 @@ class WorkflowService:
                 raise WorkflowError("invalid_input", message=str(error)) from None
             except PublishedContractConflict:
                 raise WorkflowConflict("workflow_revision_conflict") from None
-        return self._published_contract_store().public(contract)
+        public_contract = self._published_contract_store().public(contract)
+        dependent_refresh = self._refresh_published_contract_dependents(contract)
+        if dependent_refresh["updated_workflow_uuids"] or dependent_refresh["pending"]:
+            public_contract["dependent_refresh"] = dependent_refresh
+        return public_contract
 
     def list_published_workflow_contracts(
         self,
@@ -759,6 +771,136 @@ class WorkflowService:
             page_size=page_size,
             keyword=keyword,
         )
+
+    def _refresh_published_contract_dependents(
+        self,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """在子工作流发布后自动更新仍兼容的父工作流定义。
+
+        参数：``contract`` 是已经成功持久化的新发布合同。返回：已更新父工作流
+        UUID 和待人工处理诊断；没有引用者时两个集合均为空。异常：单个父工作流
+        的刷新失败只记入 ``pending``，不能把已经提交的子工作流发布伪装成失败。
+        已经创建的工作流任务使用各自冻结快照，不在此处读取或修改。
+        """
+
+        updated: list[str] = []
+        pending: list[dict[str, str]] = []
+        page = 1
+        while True:
+            listed = self._definition_store.list_workflows(
+                page=page,
+                page_size=100,
+            )
+            for workflow in listed["items"]:
+                # ``parent_uuid`` 是可能包含该子合同的父定义稳定身份；同一身份锁
+                # 同时串行化前端保存、领域源码回写和本次自动替换。
+                parent_uuid = str(workflow["uuid"])
+                if parent_uuid == contract.get("workflow_uuid"):
+                    continue
+                try:
+                    graph = self._definition_store.get_graph(parent_uuid)
+                except StoreNotFound:
+                    continue
+                if not graph_references_composite_child(
+                    graph,
+                    child_workflow_uuid=str(contract["workflow_uuid"]),
+                    except_contract_uuid=str(contract["uuid"]),
+                ):
+                    continue
+                try:
+                    with self._authoring_lock(parent_uuid):
+                        if (
+                            self._has_active_source(parent_uuid)
+                            and self.get_authoring(parent_uuid)["state"] != "applied"
+                        ):
+                            raise CompositeContractRefreshPending(
+                                "composite_parent_dirty",
+                                "父工作流存在尚未应用的编辑，本次未自动替换子工作流",
+                            )
+                        graph = self.get_graph(parent_uuid)
+                        refreshed = refresh_published_composite_invocations(
+                            parent_graph=graph,
+                            current_contract=contract,
+                            load_contract=self._published_contract_store().get,
+                            validate_bindings=(
+                                self._published_executor_bindings_are_valid
+                            ),
+                        )
+                        if not refreshed.invocation_uuids:
+                            continue
+                        self._save_server_generated_graph(
+                            parent_uuid,
+                            revision=int(graph["workflow"]["revision"]),
+                            nodes=[
+                                WorkflowNodeWrite.model_validate(node)
+                                for node in refreshed.graph["nodes"]
+                            ],
+                            edges=[
+                                WorkflowEdgeWrite.model_validate(edge)
+                                for edge in refreshed.graph["edges"]
+                            ],
+                        )
+                    updated.append(parent_uuid)
+                except CompositeContractRefreshPending as error:
+                    pending.append(
+                        {
+                            "workflow_uuid": parent_uuid,
+                            "code": error.code,
+                            "message": str(error),
+                        }
+                    )
+                except Exception:
+                    logger.exception(
+                        "published child refresh failed for parent %s",
+                        parent_uuid,
+                    )
+                    pending.append(
+                        {
+                            "workflow_uuid": parent_uuid,
+                            "code": "composite_refresh_failed",
+                            "message": "父工作流自动更新失败，请重试发布或检查工作流",
+                        }
+                    )
+            if page * int(listed["page_size"]) >= int(listed["total"]):
+                break
+            page += 1
+        return {
+            "updated_workflow_uuids": sorted(set(updated)),
+            "pending": pending,
+        }
+
+    def _published_executor_bindings_are_valid(
+        self,
+        requirements: Sequence[Mapping[str, Any]],
+        bindings: Mapping[str, str],
+    ) -> bool:
+        """判断父调用保存的设备绑定是否仍满足新发布合同。
+
+        参数：``requirements`` 是新合同的设备模板要求，``bindings`` 是父调用
+        原有的要求键到设备物料 UUID 映射。返回：键集合完全一致且每个活动物料
+        仍属于指定设备模板时为 ``True``；目录未装配或物料失效时关闭返回
+        ``False``。异常：物料读取异常由调用方收敛为父工作流待处理诊断。
+        """
+
+        required_keys = {
+            str(requirement.get("key"))
+            for requirement in requirements
+            if isinstance(requirement.get("key"), str)
+        }
+        if len(required_keys) != len(requirements) or set(bindings) != required_keys:
+            return False
+        if not requirements:
+            return True
+        if self._material_resolver is None:
+            return False
+        for requirement in requirements:
+            material = self._material_resolver(bindings[str(requirement["key"])])
+            if not isinstance(material, Mapping) or material.get(
+                "resource_template_uuid"
+            ) != requirement.get("resource_template_uuid"):
+                return False
+        return True
 
     def insert_composite_workflow(
         self,
@@ -842,7 +984,7 @@ class WorkflowService:
                     WorkflowEdgeWrite.model_validate(item)
                     for item in [*parent_graph["edges"], *insertion_edges]
                 ]
-                return self.save_graph(
+                return self._save_server_generated_graph(
                     parent_uuid,
                     revision=revision,
                     nodes=node_values,
@@ -962,7 +1104,56 @@ class WorkflowService:
         的后端（Backend）形状工作流图投影。异常：输入 DTO 或图语义非法抛出
         ``WorkflowError``；修订冲突抛出 ``WorkflowConflict``；任何失败都由存储
         适配器（Store Adapter）回滚，公共服务入口不会留下部分节点或修订写入。
-        旧形状只在存储适配器内兼容，公共入口始终使用同一个严格校验深模块。
+        公共入口始终保护系统保留元数据，并使用同一个严格校验深模块。
+        """
+
+        return self._save_graph(
+            workflow_uuid,
+            revision=revision,
+            nodes=nodes,
+            edges=edges,
+            protect_reserved_metadata=True,
+        )
+
+    def _save_server_generated_graph(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+        nodes: list[WorkflowNodeWrite | dict[str, Any]],
+        edges: list[WorkflowEdgeWrite | dict[str, Any]],
+    ) -> dict[str, Any]:
+        """保存由 OS 生成、并已完成组合合同校验的完整工作流图。
+
+        参数：``workflow_uuid`` 是父工作流稳定身份，``revision`` 是乐观并发基线，
+        ``nodes``/``edges`` 是包含可信组合元数据的完整替换集合。返回：提交后的
+        Backend 形状图。异常：校验、修订冲突与源码回写失败沿用 ``save_graph``
+        的公共语义；本入口仅允许服务内部调用，HTTP 载荷不能选择信任策略。
+        """
+
+        return self._save_graph(
+            workflow_uuid,
+            revision=revision,
+            nodes=nodes,
+            edges=edges,
+            protect_reserved_metadata=False,
+        )
+
+    def _save_graph(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+        nodes: list[WorkflowNodeWrite | dict[str, Any]],
+        edges: list[WorkflowEdgeWrite | dict[str, Any]],
+        protect_reserved_metadata: bool,
+    ) -> dict[str, Any]:
+        """在线性化锁内执行公共或系统生成图的统一保存事务。
+
+        参数：工作流身份、预期修订和完整节点/连线集合固定写入内容；
+        ``protect_reserved_metadata`` 为真表示来源是公共请求，必须拒绝修改系统
+        保留元数据，为假仅供已校验的 OS 组合展开结果。返回：提交后的完整图。
+        异常：DTO、图、源码或修订错误映射为稳定服务异常；失败不留下部分写入。
         """
 
         identity = self.get_workflow(workflow_uuid)["uuid"]
@@ -987,7 +1178,7 @@ class WorkflowService:
                         revision=revision,
                         nodes=node_values,
                         edges=edge_values,
-                        protect_reserved_metadata=True,
+                        protect_reserved_metadata=protect_reserved_metadata,
                         validate_workflow_io_contract=True,
                     )
                     return self._commit_domain_graph_candidate(
@@ -1000,7 +1191,7 @@ class WorkflowService:
                     revision=revision,
                     nodes=node_values,
                     edges=edge_values,
-                    protect_reserved_metadata=True,
+                    protect_reserved_metadata=protect_reserved_metadata,
                     validate_workflow_io_contract=True,
                 )
             except ValidationError:
@@ -3372,6 +3563,46 @@ class WorkflowService:
             if registration["workflow_uuid"] in active_workflow_uuids
         ]
 
+    def _composite_dependent_workflow_uuids(
+        self,
+        child_workflow_uuid: str,
+    ) -> tuple[str, ...]:
+        """返回直接引用指定子工作流的活动父工作流。
+
+        参数：``child_workflow_uuid`` 是刚应用新版本的子工作流稳定身份。返回：
+        按 UUID 稳定排序且去重的直接父工作流集合；优先使用领域包 AST 扫描得到的
+        import 依赖，并以已应用图中的 ``child_workflow_uuid`` 补偿旧包缺失依赖
+        元数据的情况。异常：单个父图暂不可读时仍把它列为待刷新对象，由提交后
+        刷新器把真实失败收敛为 warning，不能让已提交的子工作流伪装回滚。
+        """
+
+        # ``child_workflow_uuid`` 来自刚提交的子定义，不是某一修订或调用节点；
+        # 因此父源码依赖可跨修订稳定命中同一个子工作流。
+        with self._active_sources_lock:
+            active_workflow_uuids = tuple(self._active_source_workflow_uuids)
+            dependencies = dict(self._active_source_dependencies)
+        dependents: set[str] = set()
+        for workflow_uuid in active_workflow_uuids:
+            if workflow_uuid == child_workflow_uuid:
+                continue
+            if child_workflow_uuid in dependencies.get(
+                workflow_uuid,
+                frozenset(),
+            ):
+                dependents.add(workflow_uuid)
+                continue
+            try:
+                graph = self.get_graph(workflow_uuid)
+            except Exception:  # noqa: BLE001 - 交给提交后刷新器形成可观察警告。
+                dependents.add(workflow_uuid)
+                continue
+            if graph_references_composite_child(
+                graph,
+                child_workflow_uuid=child_workflow_uuid,
+            ):
+                dependents.add(workflow_uuid)
+        return tuple(sorted(dependents))
+
     def recover_registered_sources(
         self,
         *,
@@ -4430,11 +4661,17 @@ class WorkflowService:
             }
         if not self._workspace_activation_batch:
             refresh_catalog_dependent_authoring(
-                registrations=self.list_registered_sources(),
-                load_authoring_record=self._definition_store.get_authoring_record,
+                dependent_workflow_uuids=(
+                    self._composite_dependent_workflow_uuids(workflow_uuid)
+                ),
+                load_authoring=self.get_authoring,
                 reconcile_source=partial(
                     self.reconcile_registered_source,
                     force_compile=True,
+                    preserve_author_source=preserve_author_source,
+                ),
+                apply_candidate=partial(
+                    self.apply_authoring,
                     preserve_author_source=preserve_author_source,
                 ),
                 mutated_workflow_uuid=workflow_uuid,

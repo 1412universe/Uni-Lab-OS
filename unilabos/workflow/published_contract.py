@@ -135,10 +135,10 @@ def _boundary_contracts(
         workflow_io = validate_workflow_graph_io(graph)
     except (KeyError, TypeError, ValueError, WorkflowIOValidationError):
         raise PublishedContractInvalid("工作流输入输出合同不完整") from None
-    inputs = workflow_io.input_contract.to_dict().get("parameters", [])
+    parameters = workflow_io.input_contract.to_dict().get("parameters", [])
     outputs = workflow_io.output_contract.to_dict().get("outputs", [])
     return (
-        {"version": 1, "inputs": inputs},
+        {"version": 1, "parameters": parameters},
         {"version": 1, "outputs": outputs},
         workflow_io,
     )
@@ -161,13 +161,19 @@ def _published_template_projection(
     source_hash: str,
     contract_digest: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    """构造发布模板、公开连接点及服务端边界映射。"""
+    """构造发布模板、公开连接点及服务端边界映射。
+
+    参数：两个 UUID 固定发布合同与节点模板身份；``graph`` 是冻结工作流图；输入、
+    输出合同和 ``workflow_io`` 提供已校验的参数及连接关系；两个摘要固定来源与合同
+    内容。返回节点模板、连接点列表和边界映射。异常：合同缺少参数、连接点或绑定
+    时抛出 ``KeyError``，非法模板 UUID 由 ``UUID`` 构造器抛出 ``ValueError``。
+    """
 
     workflow = graph["workflow"]
     handles: list[dict[str, Any]] = []
     input_handle_by_name: dict[str, str] = {}
     output_handle_by_name: dict[str, str] = {}
-    for descriptor in input_contract["inputs"]:
+    for descriptor in input_contract["parameters"]:
         name = str(descriptor["name"])
         handle_uuid = _handle_uuid(node_template_uuid, "target", name)
         input_handle_by_name[name] = handle_uuid
@@ -254,11 +260,11 @@ def _published_template_projection(
                 "additionalProperties": False,
                 "properties": {
                     str(item["name"]): item["schema"]
-                    for item in input_contract["inputs"]
+                    for item in input_contract["parameters"]
                 },
                 "required": [
                     str(item["name"])
-                    for item in input_contract["inputs"]
+                    for item in input_contract["parameters"]
                     if item.get("required") is True
                 ],
             },
@@ -269,9 +275,7 @@ def _published_template_projection(
                     str(item["name"]): item["schema"]
                     for item in output_contract["outputs"]
                 },
-                "required": [
-                    str(item["name"]) for item in output_contract["outputs"]
-                ],
+                "required": [str(item["name"]) for item in output_contract["outputs"]],
             },
         },
         "required": ["goal", "result"],
@@ -303,10 +307,15 @@ def _published_template_projection(
         "name": f"workflow:{workflow['uuid']}:r{workflow['revision']}",
         "display_name": workflow["name"],
         "class": None,
-        "goal": {str(item["name"]): str(item["name"]) for item in input_contract["inputs"]},
+        "goal": {
+            str(item["name"]): str(item["name"])
+            for item in input_contract["parameters"]
+        },
         "goal_default": {},
         "feedback": {},
-        "result": {str(item["name"]): str(item["name"]) for item in output_contract["outputs"]},
+        "result": {
+            str(item["name"]): str(item["name"]) for item in output_contract["outputs"]
+        },
         "schema": schema,
         "type": "workflow",
         "node_type": "workflow",
@@ -403,7 +412,7 @@ class PublishedWorkflowContractStore:
         contract_digest = _digest(
             {
                 "version": 1,
-                "inputs": input_contract["inputs"],
+                "parameters": input_contract["parameters"],
                 "outputs": output_contract["outputs"],
                 "executor_requirements": executor_requirements,
             }
@@ -605,7 +614,12 @@ class PublishedWorkflowContractStore:
         page_size: int,
         keyword: str,
     ) -> dict[str, Any]:
-        """分页返回每个来源工作流的最新完整发布合同。"""
+        """分页返回每个来源工作流的最新完整发布合同。
+
+        参数：``page`` 与 ``page_size`` 决定分页窗口，``keyword`` 按名称模糊过滤。
+        返回公开合同列表和分页信息。异常：数据库读取失败时原样传播；本方法不吞掉
+        权威存储故障，也不返回同一工作流的旧发布版本。
+        """
 
         where = """
             published.deleted_at IS NULL
@@ -625,7 +639,8 @@ class PublishedWorkflowContractStore:
         with self._store.read() as connection:
             total = int(
                 connection.execute(
-                    f"SELECT COUNT(*) FROM published_workflow_contract AS published WHERE {where}",
+                    f"SELECT COUNT(*) FROM published_workflow_contract AS published "
+                    f"WHERE {where}",
                     values,
                 ).fetchone()[0]
             )

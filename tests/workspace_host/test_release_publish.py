@@ -1992,7 +1992,13 @@ def test_workflow_import_scaffolds_required_bound_inputs_for_publication() -> No
     }
 
 
-def test_workflow_import_scaffolds_composite_inputs_before_identity_remap() -> None:
+def test_workflow_import_scaffolds_composite_parameters_before_identity_remap() -> None:
+    """工作流导入须先按参数约束补值，再替换跨工作区物料身份。
+
+    参数：无。返回：无。异常：组合工作流参数没有按 ``parameters`` 约束补齐，
+    或补值发生在身份替换之后时由断言暴露。
+    """
+
     release = WorkspaceRelease(
         release_id="sha256:release-composite-input",
         source_workspace="/workspace",
@@ -2020,7 +2026,7 @@ def test_workflow_import_scaffolds_composite_inputs_before_identity_remap() -> N
                     "unilab": {
                         "composite": {
                             "contract_compatibility": {
-                                "inputs": [
+                                "parameters": [
                                     {
                                         "name": "resource",
                                         "required": True,

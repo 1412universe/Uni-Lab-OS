@@ -91,45 +91,89 @@ class CatalogAuthoringGenerationTracker:
 
 def refresh_catalog_dependent_authoring(
     *,
-    registrations: Iterable[Mapping[str, object]],
-    load_authoring_record: Callable[[str], Mapping[str, object]],
-    reconcile_source: Callable[[str], object],
+    dependent_workflow_uuids: Iterable[str],
+    load_authoring: Callable[[str], Mapping[str, object]],
+    reconcile_source: Callable[[str], Mapping[str, object]],
+    apply_candidate: Callable[..., Mapping[str, object]],
     warnings: list[dict[str, str]],
     mutated_workflow_uuid: str,
 ) -> None:
-    """刷新可能依赖刚发布目录合同的工作流创作派生状态。
+    """重新编译并安全应用依赖刚更新子工作流的父工作流。
 
-    参数：``registrations`` 是同一活动软件包目录（Package Catalog）代际的来源
-    登记；``load_authoring_record`` 按工作流 UUID 读取创作记录；
-    ``reconcile_source`` 强制重编译一个活动工作流源码（Workflow Source）；
-    ``warnings`` 收集主应用提交后不可回滚的刷新警告；
-    ``mutated_workflow_uuid`` 是刚发布的工作流（Workflow）身份。
-    返回：无；只刷新具有候选版本（Candidate）或诊断的其他活动来源。
-    异常：单项读取或重编译异常会被隔离并转成警告，绝不把已提交发布伪装成
-    失败。
+    参数：``dependent_workflow_uuids`` 是直接引用新子版本的父工作流稳定身份；
+    ``load_authoring`` 在刷新前读取当前 Python 文件与持久记录合成的创作状态，
+    ``reconcile_source`` 用当前目录重新编译父源码；``apply_candidate`` 通过公共
+    Apply 入口应用服务端候选；
+    ``warnings`` 收集子工作流提交后不可回滚的刷新问题；
+    ``mutated_workflow_uuid`` 是刚应用的子工作流身份。返回：无；干净父源码的
+    兼容候选会自动应用，已有未应用草稿只重新编译而不代替用户确认。异常：单项
+    读取、编译或应用异常会被隔离成警告，绝不把已经提交的子工作流伪装成失败。
     """
 
-    for registration in registrations:
-        # ``dependent_workflow_uuid`` 是可能引用新发布合同的活动工作流身份。
-        dependent_workflow_uuid = str(registration["workflow_uuid"])
+    refreshed: set[str] = set()
+    for dependent_workflow_uuid in dependent_workflow_uuids:
+        dependent_workflow_uuid = str(dependent_workflow_uuid)
         if dependent_workflow_uuid == mutated_workflow_uuid:
             continue
+        if dependent_workflow_uuid in refreshed:
+            continue
+        refreshed.add(dependent_workflow_uuid)
         try:
-            # ``authoring_record`` 中候选和诊断会随模板目录变化而失效。
-            authoring_record = load_authoring_record(dependent_workflow_uuid)
-            if (
-                authoring_record.get("candidate") is None
-                and not authoring_record.get("diagnostics")
-            ):
+            before_refresh = load_authoring(dependent_workflow_uuid)
+            # ``state=applied`` 由当前 Python 文件哈希、已应用来源、候选与诊断共同
+            # 推导；不能只看持久记录，否则 IDE 刚写入但 watcher 尚未同步的草稿
+            # 会被本轮目录刷新误当成干净来源并自动应用。
+            parent_is_clean = before_refresh.get("state") == "applied"
+            authoring = reconcile_source(dependent_workflow_uuid)
+            candidate = authoring.get("candidate")
+            if not parent_is_clean:
+                if candidate is not None or authoring.get("state") != "applied":
+                    _append_refresh_warning(warnings, dependent_workflow_uuid)
                 continue
-            reconcile_source(dependent_workflow_uuid)
-        except Exception:  # noqa: BLE001 - 主应用已提交，只能隔离派生刷新故障。
-            warnings.append(
-                {
-                    "code": "dependent_authoring_refresh_pending",
-                    "message": "工作流已应用，但依赖创作草稿仍待重新编译",
-                }
+            if candidate is None:
+                if authoring.get("state") != "applied":
+                    _append_refresh_warning(warnings, dependent_workflow_uuid)
+                continue
+            if not isinstance(candidate, Mapping):
+                raise TypeError("父工作流候选格式无效")
+            candidate_hash = candidate.get("candidate_hash")
+            if not isinstance(candidate_hash, str) or not candidate_hash:
+                raise ValueError("父工作流候选缺少稳定哈希")
+            result = apply_candidate(
+                dependent_workflow_uuid,
+                candidate_hash=candidate_hash,
             )
+            apply_result = result.get("apply_result")
+            nested_warnings = (
+                apply_result.get("warnings")
+                if isinstance(apply_result, Mapping)
+                else None
+            )
+            if isinstance(nested_warnings, list):
+                for warning in nested_warnings:
+                    if isinstance(warning, dict) and warning not in warnings:
+                        warnings.append(warning)
+        except Exception:  # noqa: BLE001 - 主应用已提交，只能隔离派生刷新故障。
+            _append_refresh_warning(warnings, dependent_workflow_uuid)
+
+
+def _append_refresh_warning(
+    warnings: list[dict[str, str]],
+    workflow_uuid: str,
+) -> None:
+    """追加一条去重的父工作流待处理警告。
+
+    参数：``warnings`` 是子工作流 Apply 结果中的可变警告集合；
+    ``workflow_uuid`` 是未完成自动刷新的父工作流身份。返回：无；同一父工作流
+    已存在相同警告时保持集合不变。异常：无。
+    """
+
+    warning = {
+        "code": "dependent_authoring_refresh_pending",
+        "message": f"子工作流已更新，但父工作流 {workflow_uuid} 仍需处理兼容问题",
+    }
+    if warning not in warnings:
+        warnings.append(warning)
 
 
 __all__ = [

@@ -687,6 +687,15 @@ class ExistingBackendDeploymentTarget:
         material_identities: Mapping[str, str],
         resource_template_identities: Mapping[str, str],
     ) -> dict[str, Any]:
+        """在正式导入前通过 Backend 公共接口展开组合工作流。
+
+        参数：``graph`` 是来源工作流图；``release`` 提供本次工作区发布物料图；
+        ``publications`` 是依赖工作流的已发布合同；两个身份映射把来源物料和资源
+        模板转换为目标 Backend 身份。返回移除临时展开身份后的独立导入图。异常：
+        依赖未发布、执行设备无法绑定或 Backend 展开失败时抛
+        ``WorkspaceHostError``；临时工作流始终在 ``finally`` 中删除。
+        """
+
         roots = [
             node
             for node in _mapping_list(graph.get("nodes"))
@@ -813,7 +822,7 @@ class ExistingBackendDeploymentTarget:
                 param = deepcopy(dict(_mapping_or_empty(root.get("param"))))
                 for contract_input in _mapping_list(
                     _mapping_or_empty(published.get("input_contract")).get(
-                        "inputs"
+                        "parameters"
                     )
                 ):
                     name = str(contract_input.get("name") or "")
@@ -2224,8 +2233,10 @@ def _workflow_import_payload(
             compatibility = _mapping_or_empty(
                 composite.get("contract_compatibility")
             )
-            composite_inputs = _mapping_list(compatibility.get("inputs"))
-            for composite_input in composite_inputs:
+            composite_parameters = _mapping_list(
+                compatibility.get("parameters")
+            )
+            for composite_input in composite_parameters:
                 parameter_name = str(composite_input.get("name") or "")
                 if not parameter_name or parameter_name in param:
                     continue

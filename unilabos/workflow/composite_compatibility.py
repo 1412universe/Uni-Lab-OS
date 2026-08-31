@@ -100,8 +100,7 @@ def published_workflow_compatibility_projection(
         schema_default = value_schema.pop("default", None)
         has_default = name in goal_default
         if has_schema_default != has_default or (
-            has_default
-            and not strict_json_equal(schema_default, goal_default[name])
+            has_default and not strict_json_equal(schema_default, goal_default[name])
         ):
             raise ValueError("已发布工作流默认值无效")
         handle = by_key[("target", name)]
@@ -154,7 +153,7 @@ def published_workflow_compatibility_projection(
         "workflow_uuid": workflow_uuid,
         "mode": extension["composition_allow_transparent"],
         "digest": extension["contract_digest"],
-        "inputs": inputs,
+        "parameters": inputs,
         "outputs": outputs,
     }
 
@@ -192,7 +191,7 @@ def classify_published_workflow_compatibility_projections(
         "workflow_uuid",
         "mode",
         "digest",
-        "inputs",
+        "parameters",
         "outputs",
     }
     if not isinstance(previous, Mapping) or not isinstance(current, Mapping):
@@ -204,8 +203,8 @@ def classify_published_workflow_compatibility_projections(
         for key in ("template_uuid", "workflow_uuid", "mode")
     ):
         return "breaking"
-    previous_inputs = previous.get("inputs")
-    current_inputs = current.get("inputs")
+    previous_inputs = previous.get("parameters")
+    current_inputs = current.get("parameters")
     previous_outputs = previous.get("outputs")
     current_outputs = current.get("outputs")
     if not all(
@@ -224,10 +223,9 @@ def classify_published_workflow_compatibility_projections(
             if previous_inputs == current_inputs and previous_outputs == current_outputs
             else "breaking"
         )
-    if (
-        list(current_inputs[: len(previous_inputs)]) != list(previous_inputs)
-        or list(current_outputs[: len(previous_outputs)]) != list(previous_outputs)
-    ):
+    if list(current_inputs[: len(previous_inputs)]) != list(previous_inputs) or list(
+        current_outputs[: len(previous_outputs)]
+    ) != list(previous_outputs):
         return "breaking"
     added_inputs = current_inputs[len(previous_inputs) :]
     if any(
@@ -279,28 +277,42 @@ def classify_pinned_published_workflow_invocation(
             "template_uuid"
         ):
             return "breaking"
-        templates = [item for item in previous_templates if item.get("uuid") == template_uuid]
+        templates = [
+            item for item in previous_templates if item.get("uuid") == template_uuid
+        ]
         handles = [
             item
             for item in previous_handles
             if item.get("workflow_node_template_uuid") == template_uuid
         ]
-        if len(templates) != 1:
-            return "breaking"
-        canonical = published_workflow_compatibility_projection(templates[0], handles)
-        extension = _schema_object(templates[0].get("schema"))[
-            "x-unilabos-workflow-contract"
-        ]
-        if canonical != _plain(previous_projection):
-            return "breaking"
-        if (
-            previous.get("child_workflow_revision")
-            != extension.get("workflow_revision")
-            or previous.get("child_applied_source_hash")
-            != extension.get("applied_source_hash")
-        ):
-            return "breaking"
         if (current_templates is None) != (current_handles is None):
+            return "breaking"
+        if len(templates) == 1:
+            extension = _schema_object(templates[0].get("schema"))[
+                "x-unilabos-workflow-contract"
+            ]
+            template_is_previous_generation = previous.get(
+                "child_workflow_revision"
+            ) == extension.get("workflow_revision") and previous.get(
+                "child_applied_source_hash"
+            ) == extension.get("applied_source_hash")
+            if template_is_previous_generation:
+                canonical = published_workflow_compatibility_projection(
+                    templates[0],
+                    handles,
+                )
+                if canonical != _plain(previous_projection):
+                    return "breaking"
+            elif current_templates is None or not _stored_projection_is_canonical(
+                previous_projection
+            ):
+                return "breaking"
+        elif current_templates is None or not _stored_projection_is_canonical(
+            previous_projection
+        ):
+            # Local Workflow Catalog 只保留当前模板代际，父图读取时无法再取得旧版
+            # 目录聚合。此时只信任受保护调用节点里的完整冻结投影；没有独立当前
+            # 目录认证的旧调用方仍保持原有关闭式行为。
             return "breaking"
         if current_templates is not None and current_handles is not None:
             current_template_uuid = str(current_projection["template_uuid"])
@@ -325,11 +337,10 @@ def classify_pinned_published_workflow_invocation(
             ]
             if authenticated_current != _plain(current_projection):
                 return "breaking"
-            if (
-                current.get("child_workflow_revision")
-                != current_extension.get("workflow_revision")
-                or current.get("child_applied_source_hash")
-                != current_extension.get("applied_source_hash")
+            if current.get("child_workflow_revision") != current_extension.get(
+                "workflow_revision"
+            ) or current.get("child_applied_source_hash") != current_extension.get(
+                "applied_source_hash"
             ):
                 return "breaking"
         return classify_published_workflow_compatibility_projections(
@@ -338,6 +349,48 @@ def classify_pinned_published_workflow_invocation(
         )
     except (KeyError, TypeError, ValueError):
         return "breaking"
+
+
+def _stored_projection_is_canonical(projection: Mapping[str, Any]) -> bool:
+    """认证调用节点里受保护的冻结兼容性投影。
+
+    参数：``projection`` 是父工作流应用图保存的旧子工作流输入、输出和摘要。
+    返回：字段集合、稳定身份、连接点身份与按内容重算的摘要全部自洽时为
+    ``True``，否则为 ``False``。异常：无；任何缺失或非法形状都关闭失败。
+    """
+
+    try:
+        if set(projection) != {
+            "template_uuid",
+            "workflow_uuid",
+            "mode",
+            "digest",
+            "parameters",
+            "outputs",
+        }:
+            return False
+        _uuid(projection["template_uuid"])
+        _uuid(projection["workflow_uuid"])
+        if not isinstance(projection["mode"], bool):
+            return False
+        inputs = projection["parameters"]
+        outputs = projection["outputs"]
+        if not isinstance(inputs, (list, tuple)) or not isinstance(
+            outputs,
+            (list, tuple),
+        ):
+            return False
+        for descriptor in [*inputs, *outputs]:
+            if not isinstance(descriptor, Mapping):
+                return False
+            _uuid(descriptor["handle_uuid"])
+        return projection["digest"] == _contract_digest(
+            inputs=inputs,
+            outputs=outputs,
+            mode=projection["mode"],
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _validate_provenance(template: Mapping[str, Any]) -> None:
@@ -492,7 +545,9 @@ def _validate_ready_handle(handle: Mapping[str, Any], io_type: str) -> None:
         raise ValueError("已发布工作流 ready 连接点无效")
 
 
-def _pin_matches_projection(pin: Mapping[str, Any], projection: Mapping[str, Any]) -> bool:
+def _pin_matches_projection(
+    pin: Mapping[str, Any], projection: Mapping[str, Any]
+) -> bool:
     """判断实现 pin 与兼容性投影的公共字段是否自洽。
 
     参数：``pin`` 是调用冻结实现身份，``projection`` 是认证兼容性投影。返回：
@@ -593,8 +648,10 @@ def _dotted(value: Any) -> bool:
     异常：无；非字符串返回 ``False``。
     """
 
-    return isinstance(value, str) and not value.startswith(".") and all(
-        part.isidentifier() for part in value.split(".")
+    return (
+        isinstance(value, str)
+        and not value.startswith(".")
+        and all(part.isidentifier() for part in value.split("."))
     )
 
 

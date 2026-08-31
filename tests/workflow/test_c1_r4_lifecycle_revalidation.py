@@ -69,7 +69,7 @@ def _projection(
         "workflow_uuid": CHILD_WORKFLOW_UUID,
         "mode": False,
         "digest": digest,
-        "inputs": inputs,
+        "parameters": inputs,
         "outputs": [
             {
                 "name": "result",
@@ -109,13 +109,13 @@ def test_compatibility_classifier_distinguishes_exact_additive_and_breaking() ->
         == "additive"
     )
     required = deepcopy(additive)
-    required["inputs"][-1]["required"] = True
+    required["parameters"][-1]["required"] = True
     assert (
         classify_published_workflow_compatibility_projections(previous, required)
         == "breaking"
     )
     reordered = deepcopy(additive)
-    reordered["inputs"].reverse()
+    reordered["parameters"].reverse()
     assert (
         classify_published_workflow_compatibility_projections(previous, reordered)
         == "breaking"
@@ -153,9 +153,9 @@ def _evolved_engine(kind: str) -> WorkflowAuthoringEngine:
         }
         snapshot["nodes"].append(added_node)
     elif kind == "mode":
-        snapshot["workflow"]["meta_data"]["unilab"][
-            "composition_allow_transparent"
-        ] = True
+        snapshot["workflow"]["meta_data"]["unilab"]["composition_allow_transparent"] = (
+            True
+        )
     else:
         assert kind == "exact"
 
@@ -210,7 +210,9 @@ def _evolved_engine(kind: str) -> WorkflowAuthoringEngine:
 
 
 @pytest.mark.parametrize("kind", ["exact", "additive"])
-def test_compatible_child_evolution_recompiles_to_current_fixed_point(kind: str) -> None:
+def test_compatible_child_evolution_recompiles_to_current_fixed_point(
+    kind: str,
+) -> None:
     """实现替换和末尾可选输入应升级父候选并保持新代际固定点。
 
     参数：``kind`` 选择精确或可加演进。返回：无；断言父候选升级并固定。

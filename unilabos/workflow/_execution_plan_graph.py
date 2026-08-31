@@ -117,13 +117,13 @@ class ExecutionPlanGraphNormalizer:
         for edge in incoming:
             incoming_by_handle[str(edge.get("target_handle_uuid") or "")].append(edge)
         contract = composite.get("contract_compatibility")
-        contract_inputs = (
-            contract.get("inputs") if isinstance(contract, Mapping) else None
+        contract_parameters = (
+            contract.get("parameters") if isinstance(contract, Mapping) else None
         )
         input_handles_by_name = {
             str(item.get("name") or ""): str(item.get("handle_uuid") or "")
             for item in self._mapping_items(
-                contract_inputs or [], field="contract.inputs"
+                contract_parameters or [], field="contract.parameters"
             )
         }
         input_names_by_handle = {

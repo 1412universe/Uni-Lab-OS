@@ -67,6 +67,16 @@ rebuilt at startup; API edits to an imported Workflow are written back to the
 same registered Python source before the in-memory revision advances.
 _Avoid_: SQLite definition authority, temporary upload, Backend replica
 
+**组合工作流调用（CompositeWorkflowInvocation）**:
+中文定义：父工作流中静态展开一个已发布子工作流的稳定调用节点。子工作流产生兼容的新应用
+定义或发布合同时，本地权威（Local Authority）自动刷新没有待应用编辑的父工作流，
+并保持调用 UUID、布局、参数值和外部连线；不兼容时保留父工作流上一个有效定义并
+返回诊断，已经创建的工作流任务（WorkflowTask）始终不变。
+中文避免：运行时动态读取子工作流、要求前端点击重新编译、静默重映射参数。
+English: A stable parent node that statically expands one published child and is
+automatically refreshed only when the new child contract is compatible.
+_Avoid_: Runtime child lookup, frontend recompile button, silent parameter remap
+
 **Workflow Task**:
 One durable execution created from a frozen Workflow graph. Its snapshot,
 execution plan, jobs, results, reservations, and recovery facts survive Local

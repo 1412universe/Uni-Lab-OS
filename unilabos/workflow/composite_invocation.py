@@ -110,6 +110,39 @@ def _references_workflow(nodes: list[Mapping[str, Any]], workflow_uuid: str) -> 
     return False
 
 
+def _invocation_param(
+    contract: Mapping[str, Any],
+    param: Mapping[str, Any],
+) -> dict[str, Any]:
+    """合并用户填写值与发布合同声明的可选参数默认值。
+
+    参数：``contract`` 是待展开发布合同，``param`` 是父调用节点已填写的参数；
+    用户值始终优先。返回：容器分离的完整调用参数。异常：输入合同损坏，或可选
+    参数没有规范默认值时抛 ``CompositeInvocationInvalid``，禁止生成运行时缺值。
+    """
+
+    envelope = contract.get("input_contract")
+    descriptors = envelope.get("parameters") if isinstance(envelope, Mapping) else None
+    if not isinstance(descriptors, list):
+        raise CompositeInvocationInvalid("发布合同输入定义损坏")
+    result = deepcopy(dict(param))
+    for descriptor in descriptors:
+        if (
+            not isinstance(descriptor, Mapping)
+            or not isinstance(descriptor.get("name"), str)
+            or not isinstance(descriptor.get("required"), bool)
+        ):
+            raise CompositeInvocationInvalid("发布合同输入参数损坏")
+        name = str(descriptor["name"])
+        if descriptor["required"]:
+            continue
+        if "default" not in descriptor:
+            raise CompositeInvocationInvalid("发布合同可选输入缺少默认值")
+        if name not in result:
+            result[name] = deepcopy(descriptor["default"])
+    return result
+
+
 def expand_composite_invocation(
     *,
     parent_graph: Mapping[str, Any],
@@ -167,11 +200,11 @@ def expand_composite_invocation(
         "name": contract["name"],
         "type": "workflow",
         "pose": deepcopy(dict(pose)),
-        "param": deepcopy(dict(param)),
+        "param": _invocation_param(contract, param),
         "execution_policy": {},
         "disabled": False,
         "minimized": False,
-        "description": "引用不可变已发布工作流合同；来源更新不会自动覆盖本次调用。",
+        "description": "引用已发布子工作流；兼容的新发布版本由 OS 自动替换。",
         "meta_data": {
             "unilab": {
                 "composite": {
@@ -182,7 +215,7 @@ def expand_composite_invocation(
                     "child_source_hash": contract["source_hash"],
                     "contract_digest": contract["contract_digest"],
                     "contract_compatibility": {
-                        "inputs": contract["input_contract"]["inputs"],
+                        "parameters": contract["input_contract"]["parameters"],
                         "outputs": contract["output_contract"]["outputs"],
                     },
                     "executor_requirements": deepcopy(
