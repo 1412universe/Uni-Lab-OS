@@ -607,6 +607,32 @@ class PublishedWorkflowContractStore:
             ).fetchone()
         return None if row is None else self._row(row)
 
+    def get_by_revision_fingerprint(
+        self,
+        *,
+        workflow_uuid: str,
+        revision_fingerprint: str,
+    ) -> dict[str, Any]:
+        """按工作流稳定身份和完整图指纹读取一个不可变发布修订。
+
+        参数：``workflow_uuid`` 是公开工作流身份，``revision_fingerprint`` 是
+        发布合同的 ``source_hash``。返回含冻结图的合同；组合不存在时抛
+        ``KeyError``，禁止调用方退回当前名称或最新修订。
+        """
+
+        with self._store.read() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM published_workflow_contract
+                WHERE workflow_uuid = ? AND source_hash = ?
+                  AND deleted_at IS NULL
+                """,
+                (workflow_uuid, revision_fingerprint),
+            ).fetchone()
+        if row is None:
+            raise KeyError((workflow_uuid, revision_fingerprint))
+        return self._row(row)
+
     def list_latest(
         self,
         *,
@@ -700,7 +726,9 @@ class PublishedWorkflowContractStore:
             "boundary_mapping",
             "graph_snapshot",
         }
-        return {key: value for key, value in contract.items() if key not in hidden}
+        result = {key: value for key, value in contract.items() if key not in hidden}
+        result["revision_fingerprint"] = contract["source_hash"]
+        return result
 
     def public(self, contract: Mapping[str, Any]) -> dict[str, Any]:
         """返回一个不暴露内部冻结字段的独立公共投影。"""

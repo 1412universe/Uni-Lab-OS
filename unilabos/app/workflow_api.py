@@ -13,7 +13,7 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from unilabos.app.workflow_template_api import (
     TemplateSnapshotProvider,
@@ -359,12 +359,17 @@ class WorkflowRunPreflightRequest(_BackendModel):
 
 
 class StationWorkflowInvocationRequest(_StrictModel):
-    """Backend 只提交工作流名称和入口参数的工站调用 DTO。"""
+    """Backend 提交冻结发布修订或兼容旧名称调用的工站 DTO。"""
 
-    backend_task_uuid: str
+    task_uuid: Optional[str] = None
+    workflow_id: Optional[str] = None
+    revision_fingerprint: Optional[HashToken] = None
+    normalized_input: Optional[Dict[str, Any]] = None
+    deadline: Optional[str] = None
+    backend_task_uuid: Optional[str] = None
     invocation_key: str
-    workflow_name: str
-    input: Dict[str, Any] = Field(default_factory=dict)
+    workflow_name: Optional[str] = None
+    input: Optional[Dict[str, Any]] = None
     priority: float = Field(default=1.0, allow_inf_nan=False)
     inventory_bindings: List[WorkflowInventoryBindingRequest] = Field(
         default_factory=list
@@ -372,29 +377,81 @@ class StationWorkflowInvocationRequest(_StrictModel):
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("backend_task_uuid")
+    @field_validator("task_uuid", "backend_task_uuid")
     @classmethod
-    def _backend_task_identity(cls, value: str) -> str:
+    def _backend_task_identity(cls, value: Optional[str]) -> Optional[str]:
         """规范 Backend Task UUID 并拒绝 nil 或非法身份。"""
 
-        return validate_uuid(value)
+        return None if value is None else validate_uuid(value)
+
+    @field_validator("workflow_id")
+    @classmethod
+    def _workflow_identity(cls, value: Optional[str]) -> Optional[str]:
+        """规范发布工作流 UUID；旧名称调用没有该字段。"""
+
+        return None if value is None else validate_uuid(value)
 
     @field_validator("invocation_key", "workflow_name")
     @classmethod
-    def _required_text(cls, value: str) -> str:
+    def _required_text(cls, value: Optional[str]) -> Optional[str]:
         """规范调用键和工作流名称，并限制持久索引文本长度。"""
 
+        if value is None:
+            return None
         normalized = value.strip()
         if not normalized or len(normalized) > 256:
             raise ValueError("value must be 1..256 characters")
         return normalized
 
-    @field_validator("input", "meta_data", mode="before")
+    @field_validator("input", "normalized_input", mode="before")
+    @classmethod
+    def _optional_json_object(cls, value: Any) -> Optional[Dict[str, Any]]:
+        """规范化两种协议形状中的可选入口参数对象。"""
+
+        if value is None:
+            return None
+        return normalize_json_object(value)
+
+    @field_validator("meta_data", mode="before")
     @classmethod
     def _json_object(cls, value: Any) -> Dict[str, Any]:
-        """规范化唯一入口参数与审计元数据对象。"""
+        """规范化审计元数据对象。"""
 
         return normalize_json_object(value)
+
+    @model_validator(mode="after")
+    def _invocation_shape(self) -> "StationWorkflowInvocationRequest":
+        """要求完整采用规范发布调用或旧名称调用，禁止两套身份混用。"""
+
+        canonical = any(
+            value is not None
+            for value in (
+                self.task_uuid,
+                self.workflow_id,
+                self.revision_fingerprint,
+                self.normalized_input,
+                self.deadline,
+            )
+        )
+        if canonical:
+            if (
+                self.task_uuid is None
+                or self.workflow_id is None
+                or self.revision_fingerprint is None
+                or self.normalized_input is None
+                or self.backend_task_uuid is not None
+                or self.workflow_name is not None
+                or self.input is not None
+            ):
+                raise ValueError("规范工站调用身份、修订或输入不完整")
+            return self
+        if (
+            self.backend_task_uuid is None
+            or self.workflow_name is None
+            or self.input is None
+        ):
+            raise ValueError("兼容工站调用身份、名称或输入不完整")
+        return self
 
 
 class DebugWorkflowTaskCreateRequest(_BackendModel):
@@ -528,8 +585,6 @@ def _public_data(data: Any) -> Any:
     if not isinstance(data, dict):
         return data
     result = {key: _public_data(value) for key, value in data.items()}
-    if "workflow_snapshot" in result and "workflow_uuid" in result:
-        result.pop("output", None)
     if "workflow_uuid" in result and "pose" in result and "param" in result:
         result.pop("status", None)
     return result
@@ -992,11 +1047,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             raise HTTPException(status_code=401, detail="工站调用凭据无效")
         return _success(
             service.submit_station_workflow(
-                backend_task_uuid=body.backend_task_uuid,
+                backend_task_uuid=body.task_uuid or body.backend_task_uuid or "",
                 invocation_key=body.invocation_key,
                 workflow_name=body.workflow_name,
-                input_value=body.input,
+                workflow_id=body.workflow_id,
+                revision_fingerprint=body.revision_fingerprint,
+                input_value=body.normalized_input or body.input or {},
                 priority=body.priority,
+                deadline=body.deadline,
                 inventory_bindings=[
                     binding.model_dump() for binding in body.inventory_bindings
                 ],

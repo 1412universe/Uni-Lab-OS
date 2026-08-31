@@ -73,6 +73,7 @@ def test_publication_is_idempotent_and_freezes_each_revision(tmp_path) -> None:
     assert first_contract["node_count"] == 1
     assert first_contract["edge_count"] == 0
     assert first_contract["source_hash"].startswith("sha256:")
+    assert first_contract["revision_fingerprint"] == first_contract["source_hash"]
     assert first_contract["contract_digest"].startswith("sha256:")
     assert first_contract["input_contract"] == {"version": 1, "parameters": []}
     assert "inputs" not in first_contract["input_contract"]

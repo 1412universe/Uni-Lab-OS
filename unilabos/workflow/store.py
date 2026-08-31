@@ -506,6 +506,11 @@ class WorkflowStore:
                 try:
                     ensure_device_action_run_schema(self._conn)
                     ensure_station_task_submission_schema(self._conn)
+                    from unilabos.workflow.workflow_boundary import (
+                        ensure_workflow_boundary_schema,
+                    )
+
+                    ensure_workflow_boundary_schema(self._conn)
                     from unilabos.workflow.station_event_outbox import (
                         ensure_station_event_outbox_schema,
                     )
@@ -1691,6 +1696,8 @@ class WorkflowStore:
         invocation_key: str | None = None,
         priority: float = 1.0,
         request_fingerprint: str = "",
+        revision_fingerprint: str | None = None,
+        deadline: str | None = None,
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
@@ -1753,9 +1760,9 @@ class WorkflowStore:
                     execution_plan, run_mode, target_node_uuid, control_status,
                     cleanup_status, trace_context, input, output, error_info,
                     backend_task_uuid, invocation_key, priority,
-                    request_fingerprint
+                    request_fingerprint, revision_fingerprint, timeout_at
                 ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?,
-                          'none', '{}', ?, '{}', '[]', ?, ?, ?, ?)
+                          'none', '{}', ?, '{}', '[]', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task_uuid,
@@ -1774,6 +1781,8 @@ class WorkflowStore:
                     invocation_key,
                     float(priority),
                     request_fingerprint,
+                    revision_fingerprint,
+                    deadline,
                 ),
             )
             from unilabos.workflow.station_status_projection import (
@@ -1801,6 +1810,11 @@ class WorkflowStore:
                 now=now,
             )
             for job in jobs:
+                initial_status = str(job.get("status") or "pending")
+                if initial_status not in {"pending", "succeeded"}:
+                    raise StoreConflict("首次作业状态只能是 pending 或 succeeded")
+                initial_return_info = job.get("return_info") or {}
+                initial_finished_at = now if initial_status == "succeeded" else None
                 conn.execute(
                     """
                     INSERT INTO workflow_node_job(
@@ -1809,9 +1823,10 @@ class WorkflowStore:
                         material_uuid, feedback_sequence, topological_index,
                         executor_kind, execution_policy,
                         execution_timeout_seconds, status, attempt, param,
-                        feedback_data, return_info, control_data, error_info
+                        feedback_data, return_info, control_data, error_info,
+                        finished_at
                     ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, ?, 0, ?, ?, ?,
-                              ?, 'pending', 1, ?, '{}', '{}', '{}', '[]')
+                              ?, ?, 1, ?, '{}', ?, '{}', '[]', ?)
                     """,
                     (
                         job["uuid"],
@@ -1824,7 +1839,10 @@ class WorkflowStore:
                         job["executor_kind"],
                         _json(job.get("execution_policy") or {}),
                         int(job.get("execution_timeout_seconds") or 0),
+                        initial_status,
                         _json(job.get("param") or {}),
+                        _json(initial_return_info),
+                        initial_finished_at,
                     ),
                 )
                 self._append_runtime_event(
@@ -1833,7 +1851,7 @@ class WorkflowStore:
                     job_uuid=job["uuid"],
                     kind="job_transition",
                     from_status=None,
-                    to_status="pending",
+                    to_status=initial_status,
                     now=now,
                 )
                 job_row = conn.execute(
@@ -1844,8 +1862,11 @@ class WorkflowStore:
                 append_job_state_event(
                     conn,
                     job_row=job_row,
-                    status="pending",
-                    details={"param": job.get("param") or {}},
+                    status=initial_status,
+                    details={
+                        "param": job.get("param") or {},
+                        "return_info": initial_return_info,
+                    },
                 )
             for allocation in inventory_allocations:
                 conn.execute(
@@ -1891,6 +1912,78 @@ class WorkflowStore:
                         ),
                         now,
                     ),
+                )
+            from unilabos.workflow.workflow_boundary import (
+                project_ready_workflow_output,
+            )
+
+            boundary = project_ready_workflow_output(
+                conn,
+                task_uuid=task_uuid,
+                now=now,
+                complete_task=True,
+            )
+            task_completed = boundary.task_completed
+            if not task_completed:
+                job_counts = conn.execute(
+                    """
+                    SELECT COUNT(*) AS total,
+                           SUM(CASE WHEN status != 'succeeded' THEN 1 ELSE 0 END)
+                               AS unfinished
+                    FROM workflow_node_job
+                    WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+                    """,
+                    (task_uuid,),
+                ).fetchone()
+                assert job_counts is not None
+                task_completed = bool(
+                    int(job_counts["total"] or 0) > 0
+                    and int(job_counts["unfinished"] or 0) == 0
+                )
+                if task_completed:
+                    conn.execute(
+                        """
+                        UPDATE workflow_task
+                        SET status = 'succeeded', update_time = ?, finished_at = ?
+                        WHERE uuid = ? AND status = 'pending'
+                        """,
+                        (now, now, task_uuid),
+                    )
+            if boundary.output_changed and boundary.output_job_uuid is not None:
+                self._append_runtime_event(
+                    conn,
+                    task_uuid=task_uuid,
+                    job_uuid=boundary.output_job_uuid,
+                    kind="job_transition",
+                    from_status="pending",
+                    to_status="succeeded",
+                    now=now,
+                )
+                boundary_row = conn.execute(
+                    "SELECT * FROM workflow_node_job WHERE uuid = ?",
+                    (boundary.output_job_uuid,),
+                ).fetchone()
+                assert boundary_row is not None
+                append_job_state_event(
+                    conn,
+                    job_row=boundary_row,
+                    status="succeeded",
+                    details={"return_info": boundary.result or {}},
+                )
+            if task_completed:
+                self._append_runtime_event(
+                    conn,
+                    task_uuid=task_uuid,
+                    kind="task_transition",
+                    from_status="pending",
+                    to_status="succeeded",
+                    now=now,
+                )
+                append_task_state_event(
+                    conn,
+                    task_uuid=task_uuid,
+                    status="succeeded",
+                    details={"finished_at": now},
                 )
             self._append_event(
                 conn,
@@ -3699,7 +3792,12 @@ class WorkflowStore:
             "finished_at",
             "backend_task_uuid",
             "invocation_key",
+            "revision_fingerprint",
         )
+        if row["backend_task_uuid"] is not None:
+            result["global_task_uuid"] = row["backend_task_uuid"]
+        if row["timeout_at"] is not None:
+            result["deadline"] = row["timeout_at"]
         return result
 
     @classmethod

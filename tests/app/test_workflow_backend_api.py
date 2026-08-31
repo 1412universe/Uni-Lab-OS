@@ -88,7 +88,7 @@ def test_workflow_definition_task_snapshot_and_soft_delete_match_backend(tmp_pat
     task = task_response.json()["data"]
     assert task["status"] == "pending"
     assert task["input"] == {}
-    assert "output" not in task
+    assert task["output"] == {}
     assert "status" not in task["workflow_snapshot"]["nodes"][0]
 
     deleted = client.delete(f"/api/v1/workflows/{workflow_uuid}")

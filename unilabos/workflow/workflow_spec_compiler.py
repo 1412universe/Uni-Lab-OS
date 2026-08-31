@@ -104,7 +104,8 @@ class WorkflowSpecCompiler:
         coordinator_node_uuids = {
             node_uuid
             for node_uuid, node in nodes.items()
-            if str(node.get("kind") or "").strip() == "material_source"
+            if str(node.get("kind") or "").strip()
+            in {"material_source", "workflow_input", "workflow_output"}
         }
         compiled_handles = self._compile_handles(
             ordered_handle_uuids=ordered_handle_uuids,
@@ -175,12 +176,12 @@ class WorkflowSpecCompiler:
                     "missing_workflow_node_job",
                     f"执行计划节点缺少持久作业身份：{node_uuid}",
                 )
-            if kind == "material_source":
+            if kind in {"material_source", "workflow_input", "workflow_output"}:
                 # ``executor_kind`` 明确证明该作业属于协调器，不能伪装成动作节点。
-                if str(job.get("executor_kind") or "") != "material_source":
+                if str(job.get("executor_kind") or "") != kind:
                     raise WorkflowSpecCompilationError(
                         "unsupported_executor_kind",
-                        f"物料来源作业执行种类非法：{node_uuid}",
+                        f"协调器作业执行种类非法：{node_uuid}",
                     )
                 continue
             if kind not in {"device_action", "material_transfer", "manual_confirm"}:

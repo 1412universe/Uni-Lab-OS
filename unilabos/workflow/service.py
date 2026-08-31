@@ -113,6 +113,7 @@ from unilabos.workflow.station_workflow_submission import (
     StationWorkflowSubmissionInvalid,
     prepare_station_workflow_submission,
 )
+from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.store import (
     StoreAuthoringConflict,
     StoreConflict,
@@ -2183,6 +2184,9 @@ class WorkflowService:
         invocation_key: str | None = None,
         priority: float = 1.0,
         request_fingerprint: str = "",
+        revision_fingerprint: str | None = None,
+        deadline: str | None = None,
+        frozen_graph: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """从已应用工作流图创建一次工作流任务（WorkflowTask）及其作业。
 
@@ -2199,7 +2203,10 @@ class WorkflowService:
 
         try:
             workflow_uuid = validate_uuid(workflow_uuid)
-            self._definition_store.get_workflow(workflow_uuid)
+            if frozen_graph is None:
+                self._definition_store.get_workflow(workflow_uuid)
+            elif str(frozen_graph.get("workflow", {}).get("uuid")) != workflow_uuid:
+                raise ValueError("冻结图与工作流身份不一致")
         except ValueError:
             raise WorkflowError("invalid_input") from None
         except StoreNotFound:
@@ -2289,7 +2296,9 @@ class WorkflowService:
 
         try:
             with self._authoring_lock(workflow_uuid):
-                applied_graph = self.get_graph(workflow_uuid)
+                applied_graph = (
+                    frozen_graph if frozen_graph is not None else self.get_graph(workflow_uuid)
+                )
                 task = self._store.create_task_with_jobs(
                     workflow_uuid=workflow_uuid,
                     task_uuid=task_uuid,
@@ -2304,9 +2313,14 @@ class WorkflowService:
                     invocation_key=invocation_key,
                     priority=priority,
                     request_fingerprint=request_fingerprint,
+                    revision_fingerprint=revision_fingerprint,
+                    deadline=deadline,
                 )
             task_created = bool(task.pop("_station_submission_created", True))
             if not task_created:
+                return task
+            if task["status"] == "succeeded":
+                # 纯数据边界工作流已经在创建事务内完成；不得再提交空物理 DAG。
                 return task
             if self._task_scheduler_bridge is None:
                 return task
@@ -2495,9 +2509,12 @@ class WorkflowService:
         *,
         backend_task_uuid: str,
         invocation_key: str,
-        workflow_name: str,
+        workflow_name: str | None,
+        workflow_id: str | None = None,
+        revision_fingerprint: str | None = None,
         input_value: dict[str, Any],
         priority: float = 1.0,
+        deadline: str | None = None,
         inventory_bindings: list[dict[str, Any]] | None = None,
         description: str | None = None,
         meta_data: dict[str, Any] | None = None,
@@ -2517,8 +2534,11 @@ class WorkflowService:
                 backend_task_uuid=backend_task_uuid,
                 invocation_key=invocation_key,
                 workflow_name=workflow_name,
+                workflow_id=workflow_id,
+                revision_fingerprint=revision_fingerprint,
                 input_value=input_value,
                 priority=priority,
+                deadline=deadline,
                 inventory_bindings=inventory_bindings,
                 description=description,
                 meta_data=meta_data,
@@ -2537,30 +2557,45 @@ class WorkflowService:
         if existing is not None:
             return existing
 
-        matches: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            result = self.list_workflows(
-                page=page,
-                page_size=100,
-                name=submission.workflow_name,
-            )
-            matches.extend(
-                workflow
-                for workflow in result["items"]
-                if workflow["name"] == submission.workflow_name
-            )
-            if page * result["page_size"] >= result["total"]:
-                break
-            page += 1
-        if not matches:
-            raise WorkflowError("workflow_not_found")
-        if len(matches) != 1:
-            raise WorkflowConflict(
-                "conflict",
-                message="工站工作流名称不唯一，无法安全选择运行定义",
-            )
-        workflow = matches[0]
+        frozen_graph: dict[str, Any] | None = None
+        if submission.workflow_id is not None:
+            try:
+                contract = self._published_contract_store().get_by_revision_fingerprint(
+                    workflow_uuid=submission.workflow_id,
+                    revision_fingerprint=submission.revision_fingerprint or "",
+                )
+            except KeyError:
+                raise WorkflowConflict(
+                    "workflow_revision_conflict",
+                    message="请求的工作流发布修订不存在或指纹不匹配",
+                ) from None
+            workflow = {"uuid": submission.workflow_id}
+            frozen_graph = dict(contract["graph_snapshot"])
+        else:
+            matches: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                result = self.list_workflows(
+                    page=page,
+                    page_size=100,
+                    name=submission.workflow_name or "",
+                )
+                matches.extend(
+                    workflow
+                    for workflow in result["items"]
+                    if workflow["name"] == submission.workflow_name
+                )
+                if page * result["page_size"] >= result["total"]:
+                    break
+                page += 1
+            if not matches:
+                raise WorkflowError("workflow_not_found")
+            if len(matches) != 1:
+                raise WorkflowConflict(
+                    "conflict",
+                    message="工站工作流名称不唯一，无法安全选择运行定义",
+                )
+            workflow = matches[0]
         return self.create_workflow_task(
             workflow_uuid=workflow["uuid"],
             run_mode="normal",
@@ -2573,6 +2608,9 @@ class WorkflowService:
             invocation_key=submission.invocation_key,
             priority=submission.priority,
             request_fingerprint=submission.request_fingerprint,
+            revision_fingerprint=submission.revision_fingerprint,
+            deadline=submission.deadline,
+            frozen_graph=frozen_graph,
         )
 
     def get_debug_workflow_task(self, task_uuid: str) -> dict[str, Any]:

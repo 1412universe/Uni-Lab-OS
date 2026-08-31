@@ -71,6 +71,10 @@ from unilabos.workflow.task_material_admission import (
     record_admitted_materials,
     record_blocked_admission,
 )
+from unilabos.workflow.workflow_boundary import (
+    WorkflowBoundaryError,
+    project_ready_workflow_output,
+)
 
 _ACTIVE_JOB_STATES = frozenset({"pending", "dispatched", "running"})
 _TERMINAL_JOB_STATES = frozenset(
@@ -859,10 +863,43 @@ class TaskRuntimeProjection:
                     now=projected_at,
                 )
 
+            try:
+                boundary = project_ready_workflow_output(
+                    connection,
+                    task_uuid=task_uuid,
+                    now=projected_at,
+                    complete_task=False,
+                )
+            except WorkflowBoundaryError as error:
+                raise StoreConflict(str(error)) from error
+            if boundary.output_changed and boundary.output_job_uuid is not None:
+                boundary_row = self._job_row(
+                    connection,
+                    boundary.output_job_uuid,
+                )
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=boundary.output_job_uuid,
+                    kind="job_transition",
+                    from_status="pending",
+                    to_status="succeeded",
+                    now=projected_at,
+                )
+                append_job_state_event(
+                    connection,
+                    job_row=boundary_row,
+                    status="succeeded",
+                    details={"return_info": boundary.result or {}},
+                )
+
             # 没有普通动作表示任务业务目标就是完成供料绑定；协调器工作不经历
             # ``running``，也不产生设备执行开始时间。
             ordinary_rows = [
-                row for row in job_rows if row["executor_kind"] != "material_source"
+                row
+                for row in self._job_rows(connection, task_uuid)
+                if row["executor_kind"]
+                not in {"material_source", "workflow_input", "workflow_output"}
             ]
             if not ordinary_rows and task_row["status"] == "pending":
                 updated_tasks = connection.execute(
@@ -2129,6 +2166,36 @@ class TaskRuntimeProjection:
                 to_status=target_job_status,
                 now=finished_at,
             )
+
+            try:
+                boundary = project_ready_workflow_output(
+                    connection,
+                    task_uuid=task_uuid,
+                    now=finished_at,
+                    complete_task=False,
+                )
+            except WorkflowBoundaryError as error:
+                raise StoreConflict(str(error)) from error
+            if boundary.output_changed and boundary.output_job_uuid is not None:
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=boundary.output_job_uuid,
+                    kind="job_transition",
+                    from_status="pending",
+                    to_status="succeeded",
+                    now=finished_at,
+                )
+                boundary_row = self._job_row(
+                    connection,
+                    boundary.output_job_uuid,
+                )
+                append_job_state_event(
+                    connection,
+                    job_row=boundary_row,
+                    status="succeeded",
+                    details={"return_info": boundary.result or {}},
+                )
 
             job_rows = self._job_rows(connection, task_uuid)
             was_waiting_reconciliation = (

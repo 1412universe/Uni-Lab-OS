@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,7 +16,12 @@ from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.json_codec import encode_json
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
-from unilabos.workflow.task_input import TaskInputError, prepare_task_input
+from unilabos.workflow.task_input import (
+    PreparedTaskInput,
+    TaskInputError,
+    prepare_task_input,
+)
+from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
 WORKFLOW_UUID = "61000000-0000-4000-8000-000000000001"
 NODE_UUID = "62000000-0000-4000-8000-000000000001"
@@ -229,8 +235,16 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     )
 
     assert prepared.resolved_input == {"count": 3, "label": "automatic"}
-    assert prepared.execution_plan["nodes"][0]["param"] == {"count": 3}
-    assert prepared.jobs[0]["param"] == {"count": 3}
+    action_node = next(
+        node
+        for node in prepared.execution_plan["nodes"]
+        if node["kind"] == "manual_confirm"
+    )
+    action_job = next(
+        job for job in prepared.jobs if job["executor_kind"] == "manual_confirm"
+    )
+    assert action_node["param"] == {"count": 3}
+    assert action_job["param"] == {"count": 3}
     assert prepared.workflow_snapshot == graph
     assert graph == original_graph
     assert plan == original_plan
@@ -287,11 +301,11 @@ def test_station_invocation_is_idempotent_and_allows_same_workflow_twice(
         assert first_task["invocation_key"] == "global-node-a"
         assert first_task["priority"] == 8.0
         assert first_task["input"] == {"count": 2, "label": "automatic"}
-        assert _row_counts(store) == (2, 2)
+        assert _row_counts(store) == (2, 4)
         event_count = store._conn.execute(
             "SELECT COUNT(*) FROM workflow_station_event_outbox"
         ).fetchone()[0]
-        assert event_count == 4
+        assert event_count == 6
     finally:
         store.close()
 
@@ -333,7 +347,7 @@ def test_station_invocation_rejects_changed_replay_and_internal_node_params(
         assert conflict.status_code == 200
         assert conflict.json()["code"] == 3003
         assert forbidden.status_code == 422
-        assert _row_counts(store) == (1, 1)
+        assert _row_counts(store) == (1, 2)
     finally:
         store.close()
 
@@ -401,7 +415,455 @@ def test_station_invocation_replay_keeps_first_revision_after_definition_changes
         assert replay.json()["data"]["workflow_snapshot"] == (
             first_task["workflow_snapshot"]
         )
-        assert _row_counts(store) == (1, 1)
+        assert _row_counts(store) == (1, 2)
+    finally:
+        store.close()
+
+
+def test_station_invocation_pins_published_revision_and_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """规范工站调用必须按发布指纹冻结修订，并保存全局身份与截止时间。
+
+    参数：``tmp_path`` 隔离运行库，``monkeypatch`` 安装工站协议密钥。返回无；
+    若调用退回按名称选择当前定义、接受错误指纹或丢失 deadline，则由断言失败。
+    """
+
+    client, store = _client(tmp_path / "station-published-revision.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        current = client.get(f"/api/v1/workflows/{workflow_uuid}/graph").json()[
+            "data"
+        ]
+        published = client.post(
+            f"/api/v1/workflows/{workflow_uuid}/publications",
+            json={"revision": current["workflow"]["revision"]},
+        )
+        assert published.status_code == 201
+        contract = published.json()["data"]
+
+        evolved = client.put(
+            f"/api/v1/workflows/{workflow_uuid}/graph",
+            json={
+                "revision": current["workflow"]["revision"],
+                "nodes": [
+                    {
+                        "uuid": NODE_UUID,
+                        "name": "approval after publication",
+                        "type": "manual_confirm",
+                        "pose": {},
+                        "param": {},
+                        "execution_policy": {},
+                        "disabled": False,
+                        "minimized": False,
+                        "meta_data": {},
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        assert evolved.status_code == 200
+
+        monkeypatch.setattr(EdgeControlConfig, "api_key", "station-secret")
+        headers = {"Authorization": "Bearer station-secret"}
+        global_task_uuid = "71000000-0000-4000-8000-000000000004"
+        body = {
+            "task_uuid": global_task_uuid,
+            "invocation_key": "global-node-published",
+            "workflow_id": workflow_uuid,
+            "revision_fingerprint": contract["revision_fingerprint"],
+            "normalized_input": {"count": 4},
+            "priority": 5,
+            "deadline": "2030-01-02T03:04:05Z",
+        }
+        accepted = client.post(
+            "/api/v1/station/workflow-invocations",
+            json=body,
+            headers=headers,
+        )
+
+        assert accepted.status_code == 201
+        task = accepted.json()["data"]
+        assert task["backend_task_uuid"] == global_task_uuid
+        assert task["global_task_uuid"] == global_task_uuid
+        assert task["revision_fingerprint"] == contract["source_hash"]
+        assert task["deadline"] == "2030-01-02T03:04:05Z"
+        assert task["workflow_snapshot"]["workflow"]["revision"] == contract[
+            "workflow_revision"
+        ]
+        assert task["workflow_snapshot"]["nodes"][0]["name"] == "approval"
+
+        changed_replay = client.post(
+            "/api/v1/station/workflow-invocations",
+            json={**body, "deadline": "2030-01-02T03:04:06Z"},
+            headers=headers,
+        )
+        assert changed_replay.status_code == 200
+        assert changed_replay.json()["code"] == 3003
+
+        rejected = client.post(
+            "/api/v1/station/workflow-invocations",
+            json={
+                **body,
+                "invocation_key": "global-node-wrong-revision",
+                "revision_fingerprint": "sha256:" + "f" * 64,
+            },
+            headers=headers,
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["code"] == 3003
+        assert store._conn.execute(
+            "SELECT COUNT(*) FROM workflow_task"
+        ).fetchone()[0] == 1
+    finally:
+        store.close()
+
+
+def test_workflow_boundary_jobs_publish_input_as_result(tmp_path: Path) -> None:
+    """纯数据工作流必须创建正式输入/输出 Job 并持久化结果记录。
+
+    参数：``tmp_path`` 隔离运行库。返回无；断言只经过 WorkflowService 的 HTTP
+    边界观察任务、作业与结果，内部表结构不作为行为合同。
+    """
+
+    client, store = _client(tmp_path / "workflow-boundary-jobs.db")
+    try:
+        created = client.post(
+            "/api/v1/workflows",
+            json={"name": "identity workflow", "tags": [], "meta_data": {}},
+        )
+        assert created.status_code == 201
+        workflow_uuid = created.json()["data"]["uuid"]
+        boundary_contract = {
+            "unilab": {
+                "input_contract": {
+                    "version": 1,
+                    "parameters": [
+                        {
+                            "name": "count",
+                            "schema": {"type": "integer"},
+                            "required": True,
+                        }
+                    ],
+                },
+                "output_contract": {
+                    "version": 1,
+                    "outputs": [
+                        {"name": "echo", "schema": {"type": "integer"}}
+                    ],
+                },
+                "output_bindings": {
+                    "echo": {"kind": "workflow_input", "parameter": "count"}
+                },
+            }
+        }
+        store._conn.execute(
+            "UPDATE workflow SET meta_data = ? WHERE uuid = ?",
+            (encode_json(boundary_contract, sort_keys=True).decode(), workflow_uuid),
+        )
+        store._conn.commit()
+
+        response = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "run_mode": "normal",
+                "input": {"count": 7},
+                "meta_data": {},
+            },
+        )
+
+        assert response.status_code == 201
+        task = response.json()["data"]
+        jobs = client.get(
+            f"/api/v1/workflow-tasks/{task['uuid']}/jobs"
+        ).json()["data"]
+        assert [job["executor_kind"] for job in jobs] == [
+            "workflow_input",
+            "workflow_output",
+        ]
+        assert [job["status"] for job in jobs] == ["succeeded", "succeeded"]
+        assert jobs[0]["return_info"] == {"count": 7}
+        assert jobs[1]["return_info"] == {"echo": 7}
+        assert task["output"] == {"echo": 7}
+        assert task["status"] == "succeeded"
+    finally:
+        store.close()
+
+
+def test_input_only_workflow_finishes_after_input_job_succeeds(tmp_path: Path) -> None:
+    """仅含输入边界的纯数据工作流应随输入 Job 原子成功而完成。"""
+
+    client, store = _client(tmp_path / "workflow-input-only.db")
+    try:
+        created = client.post(
+            "/api/v1/workflows",
+            json={"name": "input only", "tags": [], "meta_data": {}},
+        ).json()["data"]
+        contract = {
+            "unilab": {
+                "input_contract": {
+                    "version": 1,
+                    "parameters": [
+                        {
+                            "name": "count",
+                            "schema": {"type": "integer"},
+                            "required": True,
+                        }
+                    ],
+                },
+                "output_contract": {"version": 1, "outputs": []},
+                "output_bindings": {},
+            }
+        }
+        store._conn.execute(
+            "UPDATE workflow SET meta_data = ? WHERE uuid = ?",
+            (encode_json(contract, sort_keys=True).decode(), created["uuid"]),
+        )
+        store._conn.commit()
+
+        response = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": created["uuid"],
+                "run_mode": "normal",
+                "input": {"count": 5},
+                "meta_data": {},
+            },
+        )
+
+        task = response.json()["data"]
+        jobs = client.get(
+            f"/api/v1/workflow-tasks/{task['uuid']}/jobs"
+        ).json()["data"]
+        assert [(job["executor_kind"], job["status"]) for job in jobs] == [
+            ("workflow_input", "succeeded")
+        ]
+        assert task["status"] == "succeeded"
+        assert task["output"] == {}
+    finally:
+        store.close()
+
+
+def test_workflow_output_success_does_not_finish_unrelated_branch(
+    tmp_path: Path,
+) -> None:
+    """输出 Job 只等待显式数据边，成功后不得替代整个任务终态判断。"""
+
+    client, store = _client(tmp_path / "workflow-output-independent.db")
+    try:
+        created = client.post(
+            "/api/v1/workflows",
+            json={"name": "independent branch", "tags": [], "meta_data": {}},
+        ).json()["data"]
+        contract = {
+            "unilab": {
+                "input_contract": {
+                    "version": 1,
+                    "parameters": [
+                        {
+                            "name": "count",
+                            "schema": {"type": "integer"},
+                            "required": True,
+                        }
+                    ],
+                },
+                "output_contract": {
+                    "version": 1,
+                    "outputs": [
+                        {"name": "echo", "schema": {"type": "integer"}}
+                    ],
+                },
+                "output_bindings": {
+                    "echo": {"kind": "workflow_input", "parameter": "count"}
+                },
+            }
+        }
+        store._conn.execute(
+            "UPDATE workflow SET meta_data = ? WHERE uuid = ?",
+            (encode_json(contract, sort_keys=True).decode(), created["uuid"]),
+        )
+        store._conn.commit()
+        saved = client.put(
+            f"/api/v1/workflows/{created['uuid']}/graph",
+            json={
+                "revision": 1,
+                "nodes": [
+                    {
+                        "uuid": NODE_UUID,
+                        "name": "unrelated approval",
+                        "type": "manual_confirm",
+                        "pose": {},
+                        "param": {},
+                        "execution_policy": {},
+                        "disabled": False,
+                        "minimized": False,
+                        "meta_data": {},
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        assert saved.status_code == 200
+
+        task = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": created["uuid"],
+                "run_mode": "normal",
+                "input": {"count": 9},
+                "meta_data": {},
+            },
+        ).json()["data"]
+        jobs = client.get(
+            f"/api/v1/workflow-tasks/{task['uuid']}/jobs"
+        ).json()["data"]
+        by_kind = {job["executor_kind"]: job for job in jobs}
+
+        assert by_kind["workflow_output"]["status"] == "succeeded"
+        assert by_kind["workflow_output"]["return_info"] == {"echo": 9}
+        assert by_kind["manual_confirm"]["status"] == "pending"
+        assert task["status"] == "pending"
+        assert task["output"] == {"echo": 9}
+    finally:
+        store.close()
+
+
+def test_node_output_binding_creates_result_after_source_job_succeeds(
+    tmp_path: Path,
+) -> None:
+    """来源 Job 成功后，输出 Job 必须按冻结 Handle 映射生成任务结果。"""
+
+    store = WorkflowStore(tmp_path / "workflow-node-output.db")
+    try:
+        workflow = store.create_workflow(
+            workflow_uuid=str(uuid4()),
+            name="node output",
+            tags=[],
+            description=None,
+            meta_data={},
+        )
+        source_handle_uuid = "64000000-0000-4000-8000-000000000002"
+        graph = {
+            "workflow": {
+                **workflow,
+                "meta_data": {
+                    "unilab": {
+                        "input_contract": {"version": 1, "parameters": []},
+                        "output_contract": {
+                            "version": 1,
+                            "outputs": [
+                                {
+                                    "name": "measurement",
+                                    "schema": {"type": "integer"},
+                                }
+                            ],
+                        },
+                        "output_bindings": {
+                            "measurement": {
+                                "kind": "node_output",
+                                "workflow_node_uuid": NODE_UUID,
+                                "source_handle_uuid": source_handle_uuid,
+                            }
+                        },
+                    }
+                },
+            },
+            "nodes": [
+                {
+                    "uuid": NODE_UUID,
+                    "workflow_node_template_uuid": TEMPLATE_UUID,
+                    "name": "measure",
+                    "type": "manual_confirm",
+                    "pose": {},
+                    "param": {},
+                    "execution_policy": {},
+                    "disabled": False,
+                    "minimized": False,
+                    "meta_data": {},
+                }
+            ],
+            "edges": [],
+            "node_templates": [
+                {
+                    "uuid": TEMPLATE_UUID,
+                    "node_type": "manual_confirm",
+                    "type": "manual_confirm",
+                }
+            ],
+            "handle_templates": [
+                {
+                    "uuid": source_handle_uuid,
+                    "workflow_node_template_uuid": TEMPLATE_UUID,
+                    "handle_key": "measurement",
+                    "io_type": "source",
+                    "display_name": "Measurement",
+                    "description": "",
+                    "type": "integer",
+                    "required": False,
+                    "data_source": "executor",
+                    "data_key": "value",
+                    "meta_data": {
+                        "unilab": {"value_schema": {"type": "integer"}}
+                    },
+                }
+            ],
+        }
+        plan, jobs = ExecutionPlanBuilder().build(
+            graph,
+            run_mode="normal",
+            target_node_uuid=None,
+        )
+        prepared = prepare_task_input(
+            graph=graph,
+            raw_input={},
+            execution_plan=plan,
+            jobs=jobs,
+        )
+        task_uuid = str(uuid4())
+        task = store.create_task_with_jobs(
+            workflow_uuid=workflow["uuid"],
+            task_uuid=task_uuid,
+            run_mode="normal",
+            target_node_uuid=None,
+            description=None,
+            meta_data={},
+            plan_builder=lambda _graph: PreparedTaskInput(
+                workflow_snapshot=prepared.workflow_snapshot,
+                resolved_input=prepared.resolved_input,
+                execution_plan=prepared.execution_plan,
+                jobs=prepared.jobs,
+            ),
+            applied_graph=graph,
+        )
+        source_job = next(
+            job
+            for job in store.list_jobs(task_uuid)
+            if job["executor_kind"] == "manual_confirm"
+        )
+        store._conn.execute(
+            "UPDATE workflow_task SET status = 'running' WHERE uuid = ?",
+            (task_uuid,),
+        )
+        store._conn.execute(
+            "UPDATE workflow_node_job SET status = 'running' WHERE uuid = ?",
+            (source_job["uuid"],),
+        )
+        store._conn.commit()
+
+        aggregate = TaskRuntimeProjection(store).project_job_finished(
+            job_uuid=source_job["uuid"],
+            scheduler_state="success",
+            return_info={"return_value": {"value": 12}},
+        )
+        by_kind = {job["executor_kind"]: job for job in aggregate["jobs"]}
+
+        assert task["status"] == "pending"
+        assert by_kind["workflow_output"]["status"] == "succeeded"
+        assert by_kind["workflow_output"]["return_info"] == {"measurement": 12}
+        assert aggregate["task"]["output"] == {"measurement": 12}
+        assert aggregate["task"]["status"] == "succeeded"
     finally:
         store.close()
 
