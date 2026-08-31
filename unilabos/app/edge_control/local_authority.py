@@ -18,7 +18,9 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -171,111 +173,154 @@ class LocalEdgeAuthorityStore:
         return list(affected or ()) if edge_offline else []
 
     def reconcile_hello(self, payload: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
-        """对账动作进程身份与持久游标，并识别真实进程重启。
+        """为身份匹配的已注册会话提交 hello 对账事实。
 
-        参数：``payload`` 是动作进程 hello，必须包含该进程生命周期内稳定、重启
-        后变化的 ``process_uuid``。返回：是否发生进程重启及受影响作业 UUID。
-        异常：身份、游标或运行作业引用非法时事务回滚。短暂 WebSocket 断线不会
-        被解释成进程重启；只有持久进程身份发生变化才失败相关任务。
+        参数：``payload`` 必须包含注册返回的 Session/Edge UUID、动作进程 UUID、
+        ACK 游标与运行作业。返回：是否发生进程重启及受影响 Job UUID。异常：
+        身份、游标、运行作业或注册绑定非法时整个事务回滚；任何对账写都发生在
+        Session 存在且 Edge 身份匹配的验证之后。
         """
 
-        process_uuid = str(uuid.UUID(_required_text(payload, "process_uuid")))
-        last_ack = payload.get("last_ack_command_sequence", 0)
-        if isinstance(last_ack, bool) or not isinstance(last_ack, int) or last_ack < 0:
-            raise ValueError("last_ack_command_sequence is invalid")
-        running_jobs = payload.get("running_jobs") or []
-        if not isinstance(running_jobs, list) or any(
-            not isinstance(job, dict) for job in running_jobs
-        ):
-            raise ValueError("running_jobs must be a list of objects")
-        with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            try:
-                previous = self._connection.execute(
-                    "SELECT value FROM local_edge_meta WHERE key='execution_process_uuid'"
-                ).fetchone()
-                previous_process_uuid = (
-                    str(previous["value"]) if previous is not None else ""
-                )
-                process_restarted = bool(
-                    previous_process_uuid
-                    and previous_process_uuid != process_uuid
-                )
-                self._connection.execute(
-                    "INSERT INTO local_edge_meta(key,value) VALUES "
-                    "('execution_process_uuid',?) ON CONFLICT(key) DO UPDATE "
-                    "SET value=excluded.value",
-                    (process_uuid,),
-                )
-                self._connection.execute(
-                    """
-                    UPDATE local_edge_command
-                    SET status = 'acked', acked_at = COALESCE(acked_at, ?)
-                    WHERE sequence <= ?
-                    """,
-                    (time.time(), last_ack),
-                )
-                self._connection.execute(
+        (
+            session_uuid,
+            edge_uuid,
+            process_uuid,
+            last_ack,
+            running_jobs,
+        ) = _normalize_edge_hello(payload)
+        return self._sessions.reconcile_registered_session(
+            session_uuid,
+            edge_uuid,
+            partial(
+                self._reconcile_hello_locked,
+                process_uuid=process_uuid,
+                last_ack=last_ack,
+                running_jobs=running_jobs,
+            ),
+        )
+
+    @contextmanager
+    def activate_session_and_reconcile(
+        self,
+        payload: dict[str, Any],
+    ) -> Iterator[tuple[str, bool, tuple[str, ...]]]:
+        """原子验证、对账并激活一份尚未连接的 hello 注册。
+
+        参数：``payload`` 是完整 hello 载荷。返回：上下文中产出规范 Session
+        UUID、进程是否重启及受影响 Job UUID；调用方须在上下文内同步切换内存
+        generation，严禁跨 ``await``。异常：未知、伪造或已 active 的 Session，
+        非法对账载荷、内存切换及 SQLite 提交失败均回滚整个激活事务。
+        """
+
+        (
+            session_uuid,
+            edge_uuid,
+            process_uuid,
+            last_ack,
+            running_jobs,
+        ) = _normalize_edge_hello(payload)
+        with self._sessions.activation_transaction(
+            session_uuid,
+            edge_uuid,
+            partial(
+                self._reconcile_hello_locked,
+                process_uuid=process_uuid,
+                last_ack=last_ack,
+                running_jobs=running_jobs,
+            ),
+        ) as (process_restarted, affected):
+            yield session_uuid, process_restarted, affected
+
+    def _reconcile_hello_locked(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        process_uuid: str,
+        last_ack: int,
+        running_jobs: list[dict[str, Any]],
+    ) -> tuple[bool, tuple[str, ...]]:
+        """在已验证 Session 的调用方事务内写入 hello 对账事实。
+
+        参数：``connection`` 已进入写事务；其余参数是规范化的进程身份、ACK
+        游标与运行 Job 声明。返回：是否发生进程重启及受影响 Job UUID。异常：
+        运行 Job 身份未知或 SQLite 写入失败时原样传播；本函数不提交或回滚。
+        """
+
+        previous = connection.execute(
+            "SELECT value FROM local_edge_meta WHERE key='execution_process_uuid'"
+        ).fetchone()
+        previous_process_uuid = str(previous["value"]) if previous is not None else ""
+        process_restarted = bool(
+            previous_process_uuid and previous_process_uuid != process_uuid
+        )
+        connection.execute(
+            "INSERT INTO local_edge_meta(key,value) VALUES "
+            "('execution_process_uuid',?) ON CONFLICT(key) DO UPDATE "
+            "SET value=excluded.value",
+            (process_uuid,),
+        )
+        connection.execute(
+            """
+            UPDATE local_edge_command
+            SET status = 'acked', acked_at = COALESCE(acked_at, ?)
+            WHERE sequence <= ?
+            """,
+            (time.time(), last_ack),
+        )
+        connection.execute(
+            """
+            UPDATE local_edge_job
+            SET status = 'dispatched', updated_at = ?
+            WHERE status = 'pending' AND command_uuid IN (
+                SELECT command_uuid FROM local_edge_command
+                WHERE sequence <= ? AND status = 'acked'
+            )
+            """,
+            (time.time(), last_ack),
+        )
+        affected: tuple[str, ...] = ()
+        if process_restarted:
+            rows = connection.execute(
+                """
+                SELECT job_uuid FROM local_edge_job
+                WHERE status IN ('dispatched', 'running', 'unknown')
+                  AND outcome_json IS NULL
+                ORDER BY created_at, job_uuid
+                """
+            ).fetchall()
+            affected = tuple(str(row["job_uuid"]) for row in rows)
+            for job_uuid in affected:
+                connection.execute(
                     """
                     UPDATE local_edge_job
-                    SET status = 'dispatched', updated_at = ?
-                    WHERE status = 'pending' AND command_uuid IN (
-                        SELECT command_uuid FROM local_edge_command
-                        WHERE sequence <= ? AND status = 'acked'
-                    )
+                    SET status = 'unknown', unknown_command_ids_json = ?, updated_at = ?
+                    WHERE job_uuid = ?
                     """,
-                    (time.time(), last_ack),
+                    (
+                        json.dumps([f"workflow-node-job:{job_uuid}"]),
+                        time.time(),
+                        job_uuid,
+                    ),
                 )
-                affected: tuple[str, ...] = ()
-                if process_restarted:
-                    rows = self._connection.execute(
-                        """
-                        SELECT job_uuid FROM local_edge_job
-                        WHERE status IN ('dispatched', 'running', 'unknown')
-                          AND outcome_json IS NULL
-                        ORDER BY created_at, job_uuid
-                        """
-                    ).fetchall()
-                    affected = tuple(str(row["job_uuid"]) for row in rows)
-                    for job_uuid in affected:
-                        self._connection.execute(
-                            """
-                            UPDATE local_edge_job
-                            SET status = 'unknown', unknown_command_ids_json = ?,
-                                updated_at = ?
-                            WHERE job_uuid = ?
-                            """,
-                            (
-                                json.dumps([f"workflow-node-job:{job_uuid}"]),
-                                time.time(),
-                                job_uuid,
-                            ),
-                        )
-                else:
-                    for reported in running_jobs:
-                        job_uuid = str(
-                            uuid.UUID(_required_text(reported, "job_uuid"))
-                        )
-                        command_uuid = str(
-                            uuid.UUID(_required_text(reported, "command_uuid"))
-                        )
-                        changed = self._connection.execute(
-                            """
-                            UPDATE local_edge_job
-                            SET status = 'running', unknown_command_ids_json = '[]',
-                                updated_at = ?
-                            WHERE job_uuid = ? AND command_uuid = ?
-                              AND outcome_json IS NULL
-                            """,
-                            (time.time(), job_uuid, command_uuid),
-                        ).rowcount
-                        if changed != 1:
-                            raise ValueError("running Edge job identity is unknown")
-                self._connection.commit()
-                return process_restarted, affected
-            except BaseException:
-                self._connection.rollback()
-                raise
+        else:
+            for reported in running_jobs:
+                job_uuid = str(uuid.UUID(_required_text(reported, "job_uuid")))
+                command_uuid = str(
+                    uuid.UUID(_required_text(reported, "command_uuid"))
+                )
+                changed = connection.execute(
+                    """
+                    UPDATE local_edge_job
+                    SET status = 'running', unknown_command_ids_json = '[]',
+                        updated_at = ?
+                    WHERE job_uuid = ? AND command_uuid = ?
+                      AND outcome_json IS NULL
+                    """,
+                    (time.time(), job_uuid, command_uuid),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("running Edge job identity is unknown")
+        return process_restarted, affected
 
     def mark_disconnected_jobs_unknown(self) -> list[str]:
         """显式锁定可能已跨越物理动作边界的所有在途作业。
@@ -1557,6 +1602,7 @@ def create_local_edge_control_router(
         await websocket.accept()
         session_uuid = ""
         session_generation = 0
+        activated = False
         try:
             hello = json.loads(await asyncio.wait_for(websocket.receive_text(), 10))
             if hello.get("type") != "hello" or not isinstance(
@@ -1564,22 +1610,38 @@ def create_local_edge_control_router(
             ):
                 await websocket.close(code=4400)
                 return
-            session_uuid = _required_text(hello["payload"], "session_uuid")
-            process_restarted, affected_job_uuids = authority.store.reconcile_hello(
-                hello["payload"]
-            )
             handler_task = asyncio.current_task()
             if handler_task is None:
                 raise RuntimeError("Edge WebSocket handler task is unavailable")
             async with active_session_lock:
-                authority.store.set_session_connected(session_uuid, True)
-                replaced_websocket = active_websocket
-                replaced_handler_task = active_handler_task
-                active_generation += 1
-                session_generation = active_generation
-                active_session_uuid = session_uuid
-                active_websocket = websocket
-                active_handler_task = handler_task
+                previous_generation = active_generation
+                previous_session_uuid = active_session_uuid
+                previous_websocket = active_websocket
+                previous_handler_task = active_handler_task
+                try:
+                    with authority.store.activate_session_and_reconcile(
+                        hello["payload"]
+                    ) as (
+                        activated_session_uuid,
+                        process_restarted,
+                        affected_job_uuids,
+                    ):
+                        session_uuid = activated_session_uuid
+                        replaced_websocket = active_websocket
+                        replaced_handler_task = active_handler_task
+                        active_generation += 1
+                        session_generation = active_generation
+                        active_session_uuid = session_uuid
+                        active_websocket = websocket
+                        active_handler_task = handler_task
+                    activated = True
+                except BaseException:
+                    active_generation = previous_generation
+                    active_session_uuid = previous_session_uuid
+                    active_websocket = previous_websocket
+                    active_handler_task = previous_handler_task
+                    session_generation = 0
+                    raise
             if (
                 replaced_handler_task is not None
                 and replaced_handler_task is not handler_task
@@ -1635,7 +1697,8 @@ def create_local_edge_control_router(
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
-            if session_uuid:
+            if activated:
+                owns_active_generation = False
                 async with active_session_lock:
                     if (
                         active_generation == session_generation
@@ -1644,10 +1707,12 @@ def create_local_edge_control_router(
                         active_session_uuid = ""
                         active_websocket = None
                         active_handler_task = None
-                try:
-                    authority.store.disconnect_session(session_uuid)
-                except ValueError:
-                    pass
+                        owns_active_generation = True
+                if owns_active_generation:
+                    try:
+                        authority.store.disconnect_session(session_uuid)
+                    except ValueError:
+                        pass
 
     return router
 
@@ -1693,6 +1758,33 @@ def _required_text(payload: dict[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field} is required")
     return value.strip()
+
+
+def _normalize_edge_hello(
+    payload: dict[str, Any],
+) -> tuple[str, str, str, int, list[dict[str, Any]]]:
+    """在任何持久写入前规范并完整校验 Edge hello。
+
+    参数：``payload`` 必须包含注册 Session/Edge UUID、进程 UUID、非负 ACK 游标
+    及对象数组形式的运行 Job。返回三个规范 UUID、游标与运行 Job 脱离列表。
+    异常：字段缺失、UUID/游标或数组形状非法时抛 ``ValueError``，且不访问数据库。
+    """
+
+    session_uuid = str(uuid.UUID(_required_text(payload, "session_uuid")))
+    edge_uuid = str(uuid.UUID(_required_text(payload, "edge_uuid")))
+    process_uuid = str(uuid.UUID(_required_text(payload, "process_uuid")))
+    last_ack = payload.get("last_ack_command_sequence", 0)
+    if isinstance(last_ack, bool) or not isinstance(last_ack, int) or last_ack < 0:
+        raise ValueError("last_ack_command_sequence is invalid")
+    raw_running_jobs = payload.get("running_jobs")
+    running_jobs = [] if raw_running_jobs is None else raw_running_jobs
+    if not isinstance(running_jobs, list) or any(
+        not isinstance(job, dict) for job in running_jobs
+    ):
+        raise ValueError("running_jobs must be a list of objects")
+    return session_uuid, edge_uuid, process_uuid, last_ack, [
+        dict(job) for job in running_jobs
+    ]
 
 
 def _normalize_unknown_command_ids(job_uuid: str, values: Any) -> list[str]:

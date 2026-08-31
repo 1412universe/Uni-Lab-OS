@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -19,11 +20,18 @@ from unilabos.app.edge_control.local_authority import (
     LocalEdgeControlAuthority,
     create_local_edge_control_router,
 )
+from unilabos.app.edge_control.local_edge_session import (
+    project_local_edge_readiness,
+)
 from unilabos.app.scheduler.dispatch import DispatchPayload
 
 
 class _StalledWebSocket:
-    """用于证明半开旧连接不会持有换主锁的最小 WebSocket 替身。"""
+    """用于证明半开旧连接不会持有换主锁的最小 WebSocket 替身。
+
+    参数：构造时接收 hello 消息和是否阻塞发送。返回：可注入生产路由 handler
+    的异步替身。异常：替身只传播任务取消，不模拟其他网络故障。
+    """
 
     def __init__(self, hello: dict[str, Any], *, stall_send: bool) -> None:
         """初始化单条 hello 输入及可选的永久背压发送。
@@ -106,6 +114,27 @@ def _authority(path: Path) -> LocalEdgeControlAuthority:
         LocalEdgeAuthorityStore(path),
         api_key="managed-local-secret",
     )
+
+
+def _durable_authority_facts(path: Path) -> dict[str, list[tuple[Any, ...]]]:
+    """读取会被伪造 hello 污染的完整持久事实快照。
+
+    参数：``path`` 是 Authority SQLite 路径。返回 meta、session、command 与 Job
+    全列的稳定有序元组。异常：数据库打开或查询失败时原样传播；只读连接不写入。
+    """
+
+    with sqlite3.connect(path) as connection:
+        query = connection.execute
+        return {
+            "meta": query("SELECT * FROM local_edge_meta ORDER BY key").fetchall(),
+            "sessions": query(
+                "SELECT * FROM local_edge_session ORDER BY session_uuid"
+            ).fetchall(),
+            "commands": query(
+                "SELECT * FROM local_edge_command ORDER BY sequence"
+            ).fetchall(),
+            "jobs": query("SELECT * FROM local_edge_job ORDER BY job_uuid").fetchall(),
+        }
 
 
 def _registration_payload(
@@ -619,6 +648,152 @@ def test_stalled_old_send_does_not_block_new_generation(tmp_path: Path) -> None:
                 *(task for task in (second_task,) if task is not None),
                 return_exceptions=True,
             )
+            authority.stop()
+
+    asyncio.run(scenario())
+
+
+def test_failed_hello_cannot_mutate_or_disconnect_active_generation(tmp_path: Path) -> None:
+    """伪造或复用 active Session 的失败 hello 必须完全无副作用。
+
+    参数：``tmp_path`` 隔离 A 的在线代际及持久账本。返回无。异常：未知 Session、
+    Edge 伪造、非法进程/运行 Job，或合法载荷复用 active UUID 后改变 READY、
+    process meta、Command、Job、Session 任一事实，或结束 A handler 时由断言失败。
+    """
+
+    async def scenario() -> None:
+        """保持 A 发送半开并依次注入六种失败的 B hello。
+
+        参数：无。返回无。异常：任一失败 handler 未抛 ``ValueError``、污染完整
+        SQLite 快照或取得内存 generation 时由断言失败；清理阶段只取消 A。
+        """
+
+        database = tmp_path / "authority.db"
+        authority = _authority(database)
+        endpoint = _websocket_endpoint(authority)
+        process_uuid = str(uuid.uuid4())
+        replacement_process_uuid = str(uuid.uuid4())
+        active_registration = authority.store.register_session(
+            _registration_payload()
+        )
+        dispatched_job = _dispatch_payload()
+        authority.dispatch(dispatched_job)
+        acknowledged_command = authority.store.pending_commands()[0]
+        authority.store.acknowledge_command(
+            str(acknowledged_command["message_uuid"])
+        )
+        pending_job = _dispatch_payload()
+        authority.dispatch(pending_job)
+        active_socket = _StalledWebSocket(
+            _hello_message(
+                active_registration,
+                process_uuid=process_uuid,
+                last_ack_sequence=int(acknowledged_command["sequence"]),
+            ),
+            stall_send=True,
+        )
+        active_task = asyncio.create_task(endpoint(active_socket))
+
+        async def assert_rejected(
+            message: dict[str, Any],
+            expected_error: str,
+            baseline: dict[str, list[tuple[Any, ...]]],
+        ) -> None:
+            """断言一个 B hello 失败且 A 的内存与完整 SQLite 事实不变。
+
+            参数：``message`` 是待注入 hello；``expected_error`` 是稳定错误片段；
+            ``baseline`` 是 A active 后快照。返回无。异常：handler 未按预期失败、
+            A 被取消、READY 撤销或任何持久列变化时由断言失败。
+            """
+
+            failed_socket = _StalledWebSocket(message, stall_send=False)
+            result = await asyncio.gather(endpoint(failed_socket), return_exceptions=True)
+            assert len(result) == 1
+            assert isinstance(result[0], ValueError)
+            assert expected_error in str(result[0])
+            assert not active_task.done()
+            assert _durable_authority_facts(database) == baseline
+            ready, _ = project_local_edge_readiness(authority.store.latest_registration())
+            assert ready is True
+            assert authority.store.job(dispatched_job["job_id"])["status"] == "dispatched"
+            assert authority.store.job(pending_job["job_id"])["status"] == "pending"
+
+        try:
+            await asyncio.wait_for(active_socket.send_started.wait(), timeout=2.0)
+            rollback_registration = authority.store.register_session(_registration_payload())
+            baseline = _durable_authority_facts(database)
+            ready, _ = project_local_edge_readiness(authority.store.latest_registration())
+            assert ready is True
+
+            partial_write = _hello_message(
+                rollback_registration,
+                process_uuid=process_uuid,
+                last_ack_sequence=999,
+            )
+            partial_write["payload"]["running_jobs"] = [{
+                "job_uuid": str(uuid.uuid4()),
+                "command_uuid": str(uuid.uuid4()),
+                "state": "running",
+            }]
+            await assert_rejected(partial_write, "running Edge job identity is unknown", baseline)
+
+            unknown_session = _hello_message(
+                {
+                    "edge_uuid": str(uuid.uuid4()),
+                    "session_uuid": str(uuid.uuid4()),
+                },
+                process_uuid=replacement_process_uuid,
+                last_ack_sequence=999,
+            )
+            await assert_rejected(unknown_session, "unknown Edge session", baseline)
+
+            forged_edge = _hello_message(
+                {
+                    **active_registration,
+                    "edge_uuid": str(uuid.uuid4()),
+                },
+                process_uuid=replacement_process_uuid,
+                last_ack_sequence=999,
+            )
+            await assert_rejected(
+                forged_edge,
+                "Edge session identity changed",
+                baseline,
+            )
+
+            invalid_process = _hello_message(
+                active_registration,
+                process_uuid="invalid-process-uuid",
+                last_ack_sequence=999,
+            )
+            await assert_rejected(invalid_process, "badly formed", baseline)
+
+            invalid_running_jobs = _hello_message(
+                active_registration,
+                process_uuid=replacement_process_uuid,
+                last_ack_sequence=999,
+            )
+            invalid_running_jobs["payload"]["running_jobs"] = {"invalid": True}
+            await assert_rejected(
+                invalid_running_jobs,
+                "running_jobs must be a list of objects",
+                baseline,
+            )
+
+            reused_active = _hello_message(
+                active_registration,
+                process_uuid=replacement_process_uuid,
+                last_ack_sequence=999,
+            )
+            await assert_rejected(
+                reused_active,
+                "Edge session is already connected",
+                baseline,
+            )
+        finally:
+            if not active_task.done():
+                active_task.cancel()
+            await asyncio.gather(active_task, return_exceptions=True)
             authority.stop()
 
     asyncio.run(scenario())

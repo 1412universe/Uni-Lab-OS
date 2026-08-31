@@ -6,7 +6,8 @@ import json
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from typing import Any, TypeVar
 
 _SESSION_SCHEMA = """
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS local_edge_session (
 """
 
 _OfflineResult = TypeVar("_OfflineResult")
+_ActivationResult = TypeVar("_ActivationResult")
 
 
 class LocalEdgeSessionStore:
@@ -135,6 +137,111 @@ class LocalEdgeSessionStore:
             except BaseException:
                 self._connection.rollback()
                 raise
+
+    @contextmanager
+    def activation_transaction(
+        self,
+        session_uuid: str,
+        edge_uuid: str,
+        reconcile: Callable[[sqlite3.Connection], _ActivationResult],
+    ) -> Iterator[_ActivationResult]:
+        """在一个写事务内验证注册、对账 hello 并激活新会话。
+
+        参数：``session_uuid`` 与 ``edge_uuid`` 必须匹配一份尚未连接的注册；
+        ``reconcile`` 在同一连接上写入进程、游标与 Job 对账事实且不得提交。
+        返回：上下文中产出对账结果；调用方须在 yield 内同步切换内存 generation，
+        严禁跨 ``await``。异常：未知、Edge 不匹配或已 active 的会话抛
+        ``ValueError``；对账、调用方切换或提交失败时回滚全部 SQLite 变更。
+        """
+
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._validate_registered_session_locked(
+                    session_uuid,
+                    edge_uuid,
+                    require_disconnected=True,
+                )
+                result = reconcile(self._connection)
+                now = time.time()
+                self._connection.execute(
+                    """
+                    UPDATE local_edge_session SET connected = 0, updated_at = ?
+                    WHERE session_uuid != ? AND connected != 0
+                    """,
+                    (now, session_uuid),
+                )
+                changed = self._connection.execute(
+                    """
+                    UPDATE local_edge_session SET connected = 1, updated_at = ?
+                    WHERE session_uuid = ? AND connected = 0
+                    """,
+                    (now, session_uuid),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("Edge session activation changed concurrently")
+                yield result
+                self._connection.commit()
+            except BaseException:
+                self._connection.rollback()
+                raise
+
+    def reconcile_registered_session(
+        self,
+        session_uuid: str,
+        edge_uuid: str,
+        reconcile: Callable[[sqlite3.Connection], _ActivationResult],
+    ) -> _ActivationResult:
+        """只为身份匹配的已注册会话提交 hello 对账事实。
+
+        参数：``session_uuid`` 与 ``edge_uuid`` 共同证明注册身份；``reconcile``
+        在同一写事务内执行对账且不得提交。返回回调的对账结果。异常：未知或
+        Edge 不匹配时抛 ``ValueError``；回调或 SQLite 失败时回滚全部写入。
+        """
+
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                self._validate_registered_session_locked(
+                    session_uuid,
+                    edge_uuid,
+                    require_disconnected=False,
+                )
+                result = reconcile(self._connection)
+                self._connection.commit()
+                return result
+            except BaseException:
+                self._connection.rollback()
+                raise
+
+    def _validate_registered_session_locked(
+        self,
+        session_uuid: str,
+        edge_uuid: str,
+        *,
+        require_disconnected: bool,
+    ) -> sqlite3.Row:
+        """在调用方写事务中校验 Session 与 Edge 注册绑定。
+
+        参数：两个 UUID 是 hello 声明身份；``require_disconnected`` 为真时拒绝
+        复用已 active 的 Session。返回匹配的 SQLite 行。异常：注册不存在、
+        Edge 不匹配或违反 active 前置条件时抛 ``ValueError``；本函数不提交。
+        """
+
+        row = self._connection.execute(
+            """
+            SELECT edge_uuid, connected FROM local_edge_session
+            WHERE session_uuid = ?
+            """,
+            (session_uuid,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown Edge session")
+        if str(row["edge_uuid"]) != edge_uuid:
+            raise ValueError("Edge session identity changed")
+        if require_disconnected and bool(row["connected"]):
+            raise ValueError("Edge session is already connected")
+        return row
 
     def disconnect_session(
         self,
