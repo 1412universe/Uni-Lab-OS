@@ -1,0 +1,129 @@
+"""实验操作类别的薄 HTTP 适配器。"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+from pydantic import BaseModel, ConfigDict, Field
+
+from unilabos.app.workflow_api import (
+    BackendJSONResponse,
+    BackendJSONRoute,
+    workflow_success_response,
+)
+from unilabos.workflow.service import WorkflowService
+
+
+class _StrictModel(BaseModel):
+    """拒绝未知字段的类别写入 DTO 基类。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class OperationCategoryCreateRequest(_StrictModel):
+    """新增实验操作类别的公共 DTO。"""
+
+    name: str = Field(min_length=1, max_length=64)
+    sort_order: int = Field(default=100, ge=0, le=10_000, strict=True)
+
+
+class OperationCategoryUpdateRequest(_StrictModel):
+    """修改实验操作类别名称或顺序的公共 DTO。"""
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    sort_order: int | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+        strict=True,
+    )
+
+
+def create_operation_category_router(service: WorkflowService) -> APIRouter:
+    """创建实验操作类别 CRUD 路由。
+
+    参数：``service`` 是同一工作流定义权威，负责类别引用完整性。返回：只承载
+    类别接口的路由。异常：服务错误交给上层已安装的统一工作流错误处理器。
+    """
+
+    router = APIRouter(
+        prefix="/api/v1/experiment-operation-categories",
+        tags=["experiment-operation-category"],
+        route_class=BackendJSONRoute,
+    )
+
+    @router.get("")
+    def list_experiment_operation_categories() -> BackendJSONResponse:
+        """返回领域包当前可用的实验操作类别。
+
+        参数：无。返回：按展示顺序排列的类别集合。异常：领域包配置损坏时交给
+        公共工作流错误适配器，避免前端使用半份分类数据。
+        """
+
+        return workflow_success_response(
+            {"items": service.list_operation_categories()}
+        )
+
+    @router.post("")
+    def create_experiment_operation_category(
+        body: OperationCategoryCreateRequest,
+    ) -> BackendJSONResponse:
+        """在唯一领域包中新增实验操作类别。
+
+        参数：``body`` 含显示名与顺序。返回：新类别，HTTP 201。异常：名称冲突
+        或领域包不可写时由服务层映射为统一业务响应。
+        """
+
+        return workflow_success_response(
+            service.create_operation_category(**body.model_dump()),
+            status=201,
+        )
+
+    @router.get("/{category_uuid}")
+    def get_experiment_operation_category(
+        category_uuid: str,
+    ) -> BackendJSONResponse:
+        """按稳定 UUID 返回一个实验操作类别。
+
+        参数：``category_uuid`` 是路径身份。返回：类别读模型。异常：非法或缺失
+        身份由服务层映射为统一业务响应。
+        """
+
+        return workflow_success_response(
+            service.get_operation_category(category_uuid)
+        )
+
+    @router.put("/{category_uuid}")
+    def update_experiment_operation_category(
+        category_uuid: str,
+        body: OperationCategoryUpdateRequest,
+    ) -> BackendJSONResponse:
+        """修改实验操作类别名称或展示顺序。
+
+        参数：路径 UUID 定位类别，``body`` 至少应提供一个修改字段。返回：修改后
+        类别。异常：空修改、名称冲突或 CAS 冲突由服务层处理。
+        """
+
+        return workflow_success_response(
+            service.update_operation_category(
+                category_uuid,
+                **body.model_dump(exclude_unset=True),
+            )
+        )
+
+    @router.delete("/{category_uuid}")
+    def delete_experiment_operation_category(
+        category_uuid: str,
+    ) -> BackendJSONResponse:
+        """删除未被任何子工作流引用的实验操作类别。
+
+        参数：``category_uuid`` 是路径身份。返回：统一空成功响应。异常：仍被引用
+        时返回冲突，防止现有实验操作静默失去分类。
+        """
+
+        service.delete_operation_category(category_uuid)
+        return workflow_success_response()
+
+    return router
+
+
+__all__ = ["create_operation_category_router"]

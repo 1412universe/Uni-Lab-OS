@@ -151,7 +151,9 @@ def _parse_positive_decimal(value: str, *, maximum: int) -> int:
     return int(significant, 10)
 
 
-class WorkflowCreateRequest(_BackendModel):
+class WorkflowWriteRequest(_BackendModel):
+    """创建与更新工作流共用的公开字段。"""
+
     name: str
     tags: List[Any] = Field(default_factory=list)
     description: Optional[str] = None
@@ -168,8 +170,18 @@ class WorkflowCreateRequest(_BackendModel):
         return normalize_json_object(value)
 
 
-class WorkflowUpdateRequest(WorkflowCreateRequest):
-    pass
+class WorkflowCreateRequest(WorkflowWriteRequest):
+    """创建工作流；旧调用省略类型时默认创建普通工作流。"""
+
+    workflow_type: Literal["normal", "subworkflow"] = "normal"
+    operation_category_uuid: Optional[str] = None
+
+
+class WorkflowUpdateRequest(WorkflowWriteRequest):
+    """更新工作流；省略类型时保持当前分类。"""
+
+    workflow_type: Optional[Literal["normal", "subworkflow"]] = None
+    operation_category_uuid: Optional[str] = None
 
 
 class GraphWriteRequest(_BackendModel):
@@ -259,6 +271,7 @@ class LegacyWorkflowImportRequest(_BackendModel):
     tags: List[Any] = Field(default_factory=list)
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+    workflow_type: Literal["normal", "subworkflow"] = "normal"
     nodes: List[Dict[str, Any]] = Field(default_factory=list)
     edges: List[Dict[str, Any]] = Field(default_factory=list)
     inventory_requirements: List[Dict[str, Any]] = Field(default_factory=list)
@@ -612,8 +625,9 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
         参数：``payload`` 是服务层返回的工作流或完整图投影。返回：输入不是
         完整图时原样返回；包含 ``workflow.uuid`` 的图则复制顶层对象，并在其中
-        增加派生的 ``workflow.status``。异常：状态读取错误原样传播；不修改服务
-        层图快照，避免派生字段进入 AST、发布合同或任务快照。
+        增加派生的 ``workflow.status`` 与顶层实验操作类别，并移除内部元数据中
+        的类别副本。异常：状态读取错误原样传播；不修改服务层图快照，避免派生
+        字段进入 AST、发布合同或任务快照。
         """
 
         if not isinstance(payload, dict):
@@ -621,19 +635,30 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         workflow = payload.get("workflow")
         if not isinstance(workflow, dict) or not isinstance(workflow.get("uuid"), str):
             return payload
+        public_workflow = service.get_workflow(workflow["uuid"])
         projected = dict(payload)
         projected["workflow"] = {
             **workflow,
-            "status": service.get_workflow(workflow["uuid"])["status"],
+            "meta_data": public_workflow["meta_data"],
+            "operation_category_uuid": public_workflow[
+                "operation_category_uuid"
+            ],
+            "status": public_workflow["status"],
         }
         return projected
 
     @router.post("/workflows")
     def create_workflow(body: WorkflowCreateRequest) -> JSONResponse:
-        return _success(
-            service.create_workflow(**body.model_dump()),
-            status=201,
-        )
+        """创建普通工作流或带可选类别的子工作流。
+
+        参数：``body`` 是保持旧默认值的完整根字段。返回：新工作流，HTTP 201。
+        异常：类型、类别或字段组合非法时由服务层映射为统一业务响应。
+        """
+
+        payload = body.model_dump()
+        if "operation_category_uuid" not in body.model_fields_set:
+            payload.pop("operation_category_uuid", None)
+        return _success(service.create_workflow(**payload), status=201)
 
     @router.post("/workflows/import")
     def import_legacy_workflow(
@@ -679,12 +704,35 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         page: int = Query(default=1),
         page_size: int = Query(default=20),
         keyword: str = Query(default=""),
+        name: Optional[str] = Query(default=None),
+        workflow_type: Optional[Literal["normal", "subworkflow"]] = Query(
+            default=None
+        ),
+        status: Optional[Literal["source", "published"]] = Query(default=None),
+        operation_category_uuid: Optional[str] = Query(default=None),
     ) -> JSONResponse:
-        result = service.list_workflows(
-            page=page,
-            page_size=page_size,
-            name=keyword,
-        )
+        """分页读取工作流，可按类型及当前发布状态组合筛选。
+
+        参数：页码、页长和旧 ``keyword`` 保持兼容；新 ``name`` 是同义名称
+        筛选且优先于 ``keyword``；类型、状态和实验操作类别筛选均可省略。返回：
+        统一 Backend 响应中的工作流列表与 ``has_more``。异常：非法枚举由请求
+        校验拒绝，服务错误交给公共适配器。
+        """
+
+        list_options: Dict[str, Any] = {
+            "page": page,
+            "page_size": page_size,
+            "name": keyword if name is None else name,
+        }
+        # 省略新增筛选时保持旧调用形状，避免只实现既有列表合同的适配器被迫
+        # 同步升级；真正使用筛选时才把对应条件交给工作流服务。
+        if workflow_type is not None:
+            list_options["workflow_type"] = workflow_type
+        if status is not None:
+            list_options["status"] = status
+        if operation_category_uuid is not None:
+            list_options["operation_category_uuid"] = operation_category_uuid
+        result = service.list_workflows(**list_options)
         return _success(
             {
                 "items": result["items"],
@@ -719,7 +767,16 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         workflow_uuid: str,
         body: WorkflowUpdateRequest,
     ) -> JSONResponse:
-        return _success(service.update_workflow(workflow_uuid, **body.model_dump()))
+        """更新工作流根字段，并区分类别省略与显式清空。
+
+        参数：路径 UUID 定位工作流，``body`` 是完整旧字段与可选新增字段。返回：
+        更新后工作流。异常：修订、源码或类别冲突由服务层统一处理。
+        """
+
+        payload = body.model_dump()
+        if "operation_category_uuid" not in body.model_fields_set:
+            payload.pop("operation_category_uuid", None)
+        return _success(service.update_workflow(workflow_uuid, **payload))
 
     @router.delete("/workflows/{workflow_uuid}")
     def delete_workflow(workflow_uuid: str) -> JSONResponse:
@@ -1413,6 +1470,7 @@ def install_workflow_api(
         """
 
         workflow_prefixes = (
+            "/api/v1/experiment-operation-categories",
             "/api/v1/local/workflows",
             "/api/v1/workflows",
             "/api/v1/workflow-tasks",
@@ -1430,6 +1488,12 @@ def install_workflow_api(
         return await request_validation_exception_handler(request, error)
 
     app.include_router(create_workflow_router(service))
+    # 类别 CRUD 是独立深模块；延迟导入避免其复用公共响应适配器时形成模块环。
+    from unilabos.app.operation_category_api import (
+        create_operation_category_router,
+    )
+
+    app.include_router(create_operation_category_router(service))
     if template_snapshot_provider is not None:
         app.include_router(
             create_workflow_template_router(

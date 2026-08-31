@@ -29,9 +29,10 @@ from unilabos.workflow.models import (
 from unilabos.workflow.source_coordinates import (
     codepoint_offset_to_utf16_column,
     source_lines,
-    utf16_length,
     utf8_offset_to_utf16_column,
+    utf16_length,
 )
+from unilabos.workflow.workflow_type import normalize_workflow_type
 
 _NODE_ANCHOR = re.compile(
     r"^[ \t]*#[ \t]*unilab:node_uuid=([0-9a-fA-F-]{36})"
@@ -140,6 +141,7 @@ class WorkflowProgram:
     description: str | None
     tags: list[Any] | None
     meta_data: dict[str, Any] | None
+    workflow_type: str | None
     imports: tuple[tuple[str, str], ...]
     devices: tuple[DeviceDeclaration, ...]
     input_contract: dict[str, Any]
@@ -228,10 +230,14 @@ def parse_authoring_source(
     # ``function_docstring`` 只由 Python AST 的规范函数文档语义读取；普通首表达式
     # 不会成为文档，且整个过程不 import、compile 或执行作者代码。
     function_docstring = ast.get_docstring(function, clean=True)
-    workflow_uuid, display_name, description, tags, meta_data = _workflow_declaration(
-        function,
-        imports,
-    )
+    (
+        workflow_uuid,
+        display_name,
+        description,
+        tags,
+        meta_data,
+        workflow_type,
+    ) = _workflow_declaration(function, imports)
     if workflow_uuid != validate_uuid(expected_workflow_uuid):
         _fail(
             "invalid_workflow_declaration",
@@ -289,6 +295,7 @@ def parse_authoring_source(
         description=description,
         tags=tags,
         meta_data=meta_data,
+        workflow_type=workflow_type,
         imports=tuple(sorted(imports.items())),
         devices=tuple(devices),
         input_contract=input_contract,
@@ -509,12 +516,19 @@ def _device_declaration(
 def _workflow_declaration(
     function: ast.FunctionDef,
     imports: dict[str, str],
-) -> tuple[str, str, str | None, list[Any] | None, dict[str, Any] | None]:
+) -> tuple[
+    str,
+    str,
+    str | None,
+    list[Any] | None,
+    dict[str, Any] | None,
+    str | None,
+]:
     """读取工作流定义装饰器的稳定元数据。
 
     参数说明：``function`` 是唯一函数，``imports`` 用于识别装饰器；返回工作流
-    UUID、展示名、可选描述、标签和公开元数据。位置参数、动态值或重复字段
-    失败关闭；标签和元数据只接受有限 JSON 字面量。
+    UUID、展示名、可选描述、标签、公开元数据和可选工作流类型。位置参数、动态
+    值或重复字段失败关闭；标签和元数据只接受有限 JSON 字面量。
     """
 
     declarations = [
@@ -538,6 +552,7 @@ def _workflow_declaration(
         "description",
         "tags",
         "meta_data",
+        "workflow_type",
     }:
         _fail("invalid_workflow_declaration", "工作流声明包含未知字段", declaration)
     try:
@@ -573,7 +588,26 @@ def _workflow_declaration(
             "工作流公开元数据不能覆盖系统保留的 unilab 字段",
             declaration,
         )
-    return workflow_uuid, display_name.strip(), description, tags, meta_data
+    try:
+        workflow_type = (
+            normalize_workflow_type(values["workflow_type"])
+            if "workflow_type" in values
+            else None
+        )
+    except ValueError:
+        _fail(
+            "invalid_workflow_declaration",
+            "工作流类型只能是 normal 或 subworkflow",
+            declaration,
+        )
+    return (
+        workflow_uuid,
+        display_name.strip(),
+        description,
+        tags,
+        meta_data,
+        workflow_type,
+    )
 
 
 def _workflow_parameters(

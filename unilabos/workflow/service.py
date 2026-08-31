@@ -82,6 +82,12 @@ from unilabos.workflow.models import (
     normalize_json_object,
     validate_uuid,
 )
+from unilabos.workflow.operation_category import (
+    OperationCategoryCatalog,
+    OperationCategoryError,
+    default_operation_categories,
+    legacy_operation_category_uuid,
+)
 from unilabos.workflow.published_contract import (
     PublishedContractConflict,
     PublishedContractInvalid,
@@ -127,11 +133,14 @@ from unilabos.workflow.task_input import (
     prepare_task_input,
 )
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridgeError
+from unilabos.workflow.workflow_type import normalize_workflow_type
 
 logger = logging.getLogger(__name__)
 
 _WORKFLOW_STATUS_SOURCE = "source"
 _WORKFLOW_STATUS_PUBLISHED = "published"
+_OPERATION_CATEGORY_META_KEY = "operation_category_uuid"
+_OPERATION_CATEGORY_UNSET = object()
 
 _ERRORS = {
     "invalid_input": (400, "提交内容格式不正确"),
@@ -197,6 +206,7 @@ _WORKFLOW_READ_FIELDS = {
     "meta_data",
     "name",
     "tags",
+    "workflow_type",
     "revision",
     "description",
 }
@@ -236,7 +246,10 @@ _HANDLE_TEMPLATE_READ_FIELDS = {
     "data_source",
     "data_key",
 }
-_WORKFLOW_REQUIRED_READ_FIELDS = _WORKFLOW_READ_FIELDS - {"description"}
+_WORKFLOW_REQUIRED_READ_FIELDS = _WORKFLOW_READ_FIELDS - {
+    "description",
+    "workflow_type",
+}
 _NODE_REQUIRED_READ_FIELDS = {
     "uuid",
     "create_time",
@@ -452,7 +465,8 @@ class WorkflowService:
         负责编译可信工作流源码；
         ``compiler_rebuilder`` 在成功应用后重建包含已发布工作流的完整目录代际；
         ``source_target`` 是用户 JSON/Python 导入默认写入的唯一领域包，导入后
-        的图和元数据编辑也回写该目标；省略时仅保留无领域工作区的遗留内存行为；
+        的图、元数据和实验操作类别编辑也回写该目标；省略时仅保留无领域工作区
+        的遗留内存行为和三个只读默认类别；
         ``material_resolver`` 按物料 UUID 读取活动物料身份，供设备单动作运行
         （DeviceActionRun）关闭式校验；``task_scheduler_bridge`` 把普通工作流任务
         （WorkflowTask）与首次创建的设备单动作聚合交给同一本地调度器。返回无。
@@ -478,6 +492,18 @@ class WorkflowService:
             raise TypeError("compiler_rebuilder 必须是可调用对象")
         self._compiler_rebuilder = compiler_rebuilder
         self._source_target = source_target
+        self._operation_category_catalog = (
+            None
+            if source_target is None
+            else OperationCategoryCatalog(
+                package_root=source_target.package_root,
+                package_root_identity=source_target.package_root_identity,
+            )
+        )
+        # ``_operation_category_lock`` 线性化类别删除与工作流类别引用写入。类别
+        # 文件和工作流定义位于不同存储，不能依赖单个 SQLite/文件事务维护引用；
+        # 同一服务进程必须保证“先检查引用再删除”和“先验证类别再写入”互斥。
+        self._operation_category_lock = threading.RLock()
         self._device_action_runs = DeviceActionRunService(
             store,
             material_resolver=material_resolver,
@@ -530,13 +556,24 @@ class WorkflowService:
         """给工作流公共读模型补充稳定的源码/已发布状态。
 
         参数：``workflow`` 是定义仓储返回的工作流行投影。返回：不修改输入的
-        工作流副本，并增加 ``status``；只有最新发布合同的
+        工作流副本，提取顶层 ``operation_category_uuid`` 并增加 ``status``；
+        只有最新发布合同的
         ``workflow_revision`` 与当前工作流 ``revision`` 相同时才返回
         ``published``，其余情况统一返回 ``source``。异常：合同仓储的数据库
         读取错误原样传播；没有发布合同不视为异常。
         """
 
         projected = dict(workflow)
+        meta_data = dict(projected.get("meta_data") or {})
+        category_was_explicit = _OPERATION_CATEGORY_META_KEY in meta_data
+        category_uuid = meta_data.pop(_OPERATION_CATEGORY_META_KEY, None)
+        if (
+            not category_was_explicit
+            and projected.get("workflow_type") == "subworkflow"
+        ):
+            category_uuid = legacy_operation_category_uuid(projected.get("tags"))
+        projected["meta_data"] = meta_data
+        projected["operation_category_uuid"] = category_uuid
         latest_contract = self._published_contract_store().latest_for_workflow(
             str(projected["uuid"])
         )
@@ -593,6 +630,260 @@ class WorkflowService:
 
     # 工作流（Workflow）与图（Graph） -------------------------------------
 
+    def list_operation_categories(self) -> list[dict[str, Any]]:
+        """列出领域包中的全部实验操作类别。
+
+        参数：无。返回：按展示顺序排列的类别列表；未配置领域包或类别文件时返回
+        三个产品默认类别。异常：领域包类别文件损坏或目录不安全时关闭式失败。
+        """
+
+        if self._operation_category_catalog is None:
+            return default_operation_categories()
+        try:
+            return self._operation_category_catalog.list_categories()
+        except OperationCategoryError as error:
+            self._raise_operation_category_error(error)
+
+    def get_operation_category(self, category_uuid: str) -> dict[str, Any]:
+        """按 UUID 读取一个实验操作类别。
+
+        参数：``category_uuid`` 是稳定类别身份。返回：类别读模型。异常：身份
+        非法、类别不存在或领域包配置不可用时映射为公共工作流错误。
+        """
+
+        if self._operation_category_catalog is None:
+            try:
+                identity = validate_uuid(category_uuid)
+            except ValueError:
+                raise WorkflowError("invalid_input") from None
+            category = next(
+                (
+                    item
+                    for item in default_operation_categories()
+                    if item["uuid"] == identity
+                ),
+                None,
+            )
+            if category is None:
+                raise WorkflowError("not_found")
+            return category
+        try:
+            return self._operation_category_catalog.get_category(category_uuid)
+        except OperationCategoryError as error:
+            self._raise_operation_category_error(error)
+
+    def create_operation_category(
+        self,
+        *,
+        name: str,
+        sort_order: int,
+    ) -> dict[str, Any]:
+        """在唯一领域包中新增实验操作类别。
+
+        参数：``name`` 是显示名称，``sort_order`` 是升序展示权重。返回：新类别。
+        异常：没有唯一领域包、名称重复、输入非法或 CAS 冲突时返回稳定业务错误。
+        """
+
+        catalog = self._writable_operation_category_catalog()
+        try:
+            return catalog.create_category(name=name, sort_order=sort_order)
+        except OperationCategoryError as error:
+            self._raise_operation_category_error(error)
+
+    def update_operation_category(
+        self,
+        category_uuid: str,
+        *,
+        name: str | None = None,
+        sort_order: int | None = None,
+    ) -> dict[str, Any]:
+        """修改类别名称或展示顺序，保持类别 UUID 不变。
+
+        参数：``category_uuid`` 定位类别；名称和顺序至少提供一项。返回：更新后
+        类别。异常：无唯一领域包、类别不存在、名称冲突或持久化失败时关闭写入。
+        """
+
+        catalog = self._writable_operation_category_catalog()
+        try:
+            return catalog.update_category(
+                category_uuid,
+                name=name,
+                sort_order=sort_order,
+            )
+        except OperationCategoryError as error:
+            self._raise_operation_category_error(error)
+
+    def delete_operation_category(self, category_uuid: str) -> None:
+        """删除没有被任何子工作流引用的实验操作类别。
+
+        参数：``category_uuid`` 是稳定类别身份。返回：无。异常：仍被显式类别或
+        兼容标签引用时返回冲突；身份、目录或并发错误按公共合同返回。
+        """
+
+        with self._operation_category_lock:
+            category = self.get_operation_category(category_uuid)
+            if self._operation_category_is_referenced(category["uuid"]):
+                raise WorkflowConflict(
+                    "conflict",
+                    message="该类别仍被实验操作引用，请先调整对应实验操作",
+                )
+            catalog = self._writable_operation_category_catalog()
+            try:
+                catalog.delete_category(category["uuid"])
+            except OperationCategoryError as error:
+                self._raise_operation_category_error(error)
+
+    def _writable_operation_category_catalog(self) -> OperationCategoryCatalog:
+        """返回唯一领域包的可写类别目录。
+
+        参数：无。返回：已在服务构造时绑定目录身份的深模块。异常：没有唯一领域
+        包时抛 ``source_target_unavailable``，不把分类落到临时 SQLite 或内存。
+        """
+
+        if self._operation_category_catalog is None:
+            raise WorkflowError("source_target_unavailable")
+        return self._operation_category_catalog
+
+    @staticmethod
+    def _raise_operation_category_error(error: OperationCategoryError) -> None:
+        """把类别目录内部错误映射为稳定工作流 HTTP 错误。
+
+        参数：``error`` 是类别目录错误。返回：不返回。异常：总是抛出对应的
+        ``WorkflowError`` 或 ``WorkflowConflict``，隐藏文件系统实现细节。
+        """
+
+        if error.code == "invalid_input":
+            raise WorkflowError("invalid_input") from None
+        if error.code == "not_found":
+            raise WorkflowError("not_found") from None
+        if error.code == "conflict":
+            raise WorkflowConflict("conflict") from None
+        raise WorkflowError(
+            "source_publication_failed",
+            message="实验操作类别配置不可用，请检查领域包目录",
+        ) from None
+
+    def _validate_workflow_operation_category(
+        self,
+        *,
+        workflow_type: str,
+        category_uuid: Any,
+    ) -> str | None:
+        """校验工作流类型与实验操作类别的组合。
+
+        参数：``workflow_type`` 是规范工作流类型；``category_uuid`` 是可空类别
+        身份。返回：规范 UUID 或 ``None``。异常：普通工作流携带类别、类型错误或
+        类别不存在时关闭当前写入。
+        """
+
+        if category_uuid is None:
+            return None
+        if workflow_type != "subworkflow" or not isinstance(category_uuid, str):
+            raise WorkflowError("invalid_input")
+        return self.get_operation_category(category_uuid)["uuid"]
+
+    def _validated_operation_category_meta_data(
+        self,
+        *,
+        workflow_type: str,
+        meta_data: Mapping[str, Any],
+        tags: Any,
+    ) -> dict[str, Any]:
+        """校验领域源码或导入图中的实验操作类别引用。
+
+        参数：``workflow_type`` 是已规范化的工作流类型，``meta_data`` 是候选
+        工作流根元数据，``tags`` 用于兼容旧前端的类别标签。返回：保留其他字段
+        并规范类别 UUID 的新字典；显式 ``null`` 会作为“已清空”标记保留，避免
+        旧标签再次回填；未显式提供类别的子工作流会把仍存在的旧标签类别固化为
+        UUID。异常：普通工作流挂类别、类别已删除或身份非法时关闭候选写入。
+        """
+
+        normalized = dict(meta_data)
+        if _OPERATION_CATEGORY_META_KEY not in normalized:
+            if workflow_type != "subworkflow":
+                return normalized
+            legacy_uuid = legacy_operation_category_uuid(tags)
+            if legacy_uuid is None:
+                return normalized
+            normalized[_OPERATION_CATEGORY_META_KEY] = legacy_uuid
+        category_uuid = self._validate_workflow_operation_category(
+            workflow_type=workflow_type,
+            category_uuid=normalized[_OPERATION_CATEGORY_META_KEY],
+        )
+        if workflow_type == "normal":
+            normalized.pop(_OPERATION_CATEGORY_META_KEY, None)
+        else:
+            normalized[_OPERATION_CATEGORY_META_KEY] = category_uuid
+        return normalized
+
+    def _operation_category_is_referenced(self, category_uuid: str) -> bool:
+        """检查类别是否仍被当前内存工作流目录引用。
+
+        参数：``category_uuid`` 是已存在类别身份。返回：显式元数据或旧类别标签
+        命中时为 ``True``。异常：定义目录读取错误原样传播。
+        """
+
+        page = 1
+        while True:
+            batch = self._definition_store.list_workflows(
+                page=page,
+                page_size=100,
+                workflow_type="subworkflow",
+            )
+            if any(
+                self._public_workflow_with_status(item).get(
+                    "operation_category_uuid"
+                )
+                == category_uuid
+                for item in batch["items"]
+            ):
+                return True
+            if page * 100 >= int(batch["total"]):
+                return False
+            page += 1
+
+    def _list_workflows_by_operation_category(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        name: str,
+        workflow_type: str | None,
+        status: str | None,
+        category_uuid: str,
+    ) -> dict[str, Any]:
+        """在既有工作流筛选结果上按实验操作类别分页。
+
+        参数：页码、页长、名称、类型和状态与公开列表一致；``category_uuid`` 已
+        验证存在。返回：类别过滤后的标准分页结构。异常：定义或发布目录读取错误
+        原样传播。省略类别的旧请求不经过此兼容扫描路径。
+        """
+
+        matched: list[dict[str, Any]] = []
+        source_page = 1
+        while True:
+            batch = self._definition_store.list_workflows(
+                page=source_page,
+                page_size=100,
+                name=name,
+                workflow_type=workflow_type,
+                publication_status=status,
+            )
+            for item in batch["items"]:
+                projected = self._public_workflow_with_status(item)
+                if projected.get("operation_category_uuid") == category_uuid:
+                    matched.append(projected)
+            if source_page * 100 >= int(batch["total"]):
+                break
+            source_page += 1
+        start = (page - 1) * page_size
+        return {
+            "items": matched[start : start + page_size],
+            "total": len(matched),
+            "page": page,
+            "page_size": page_size,
+        }
+
     def create_workflow(
         self,
         *,
@@ -600,8 +891,20 @@ class WorkflowService:
         tags: list[Any],
         description: str | None,
         meta_data: dict[str, Any],
+        workflow_type: str = "normal",
+        operation_category_uuid: str | None | object = _OPERATION_CATEGORY_UNSET,
         workflow_uuid: str | None = None,
     ) -> dict[str, Any]:
+        """创建普通工作流或子工作流定义。
+
+        参数：名称、标签、描述和公开元数据沿用既有合同；``workflow_type`` 省略
+        时为普通工作流；实验操作可通过 ``operation_category_uuid`` 归类，省略
+        类别时兼容解析旧类别标签，显式 ``null`` 表示不分类；可选工作流 UUID
+        主要供内部确定性创建。返回：含类型、类别和派生发布状态的工作流。异常：
+        字段无效或旧标签对应类别已删除时映射为 ``invalid_input``，身份冲突映射
+        为 ``conflict``。
+        """
+
         try:
             name = name.strip()
             if not name:
@@ -609,15 +912,31 @@ class WorkflowService:
             identity = validate_uuid(workflow_uuid or str(uuid4()))
             tags = normalize_json_array(tags)
             meta_data = normalize_json_object(meta_data)
+            workflow_type = normalize_workflow_type(workflow_type)
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
-            workflow = self._definition_store.create_workflow(
-                workflow_uuid=identity,
-                name=name,
-                tags=tags,
-                description=self._optional_text(description),
-                meta_data=public_meta_data,
+            public_meta_data.pop(_OPERATION_CATEGORY_META_KEY, None)
+            category_was_provided = (
+                operation_category_uuid is not _OPERATION_CATEGORY_UNSET
             )
+            if category_was_provided:
+                public_meta_data[_OPERATION_CATEGORY_META_KEY] = (
+                    operation_category_uuid
+                )
+            with self._operation_category_lock:
+                public_meta_data = self._validated_operation_category_meta_data(
+                    workflow_type=workflow_type,
+                    meta_data=public_meta_data,
+                    tags=tags,
+                )
+                workflow = self._definition_store.create_workflow(
+                    workflow_uuid=identity,
+                    name=name,
+                    tags=tags,
+                    description=self._optional_text(description),
+                    meta_data=public_meta_data,
+                    workflow_type=workflow_type,
+                )
             return self._public_workflow_with_status(workflow)
         except (ValueError, ValidationError):
             raise WorkflowError("invalid_input") from None
@@ -642,12 +961,49 @@ class WorkflowService:
         page: int = 1,
         page_size: int = 20,
         name: str = "",
+        workflow_type: str | None = None,
+        status: str | None = None,
+        operation_category_uuid: str | None = None,
     ) -> dict[str, Any]:
+        """分页查询工作流并支持类型、当前发布状态组合筛选。
+
+        参数：页码、页长和名称沿用旧合同；可选类型为普通或子工作流，可选状态为
+        源码或已发布；类别筛选同时兼容旧标签分类。返回：筛选后当前页及总数，
+        调用方省略新增条件时仍读取全部。异常：未知类型、状态或类别映射为稳定
+        公共错误。
+        """
+
         page, page_size = self._normalize_page(page, page_size)
+        try:
+            normalized_workflow_type = (
+                None
+                if workflow_type is None
+                else normalize_workflow_type(workflow_type)
+            )
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        if status not in {None, _WORKFLOW_STATUS_SOURCE, _WORKFLOW_STATUS_PUBLISHED}:
+            raise WorkflowError("invalid_input")
+        if status is not None:
+            # 状态筛选依赖不可变发布合同；先建立其表结构，再让目录仓储在数据库
+            # 内完成筛选和分页，避免先分页后过滤导致 ``has_more`` 错误。
+            self._published_contract_store()
+        if operation_category_uuid is not None:
+            category_uuid = self.get_operation_category(operation_category_uuid)["uuid"]
+            return self._list_workflows_by_operation_category(
+                page=page,
+                page_size=page_size,
+                name=name,
+                workflow_type=normalized_workflow_type,
+                status=status,
+                category_uuid=category_uuid,
+            )
         result = self._definition_store.list_workflows(
             page=page,
             page_size=page_size,
             name=name,
+            workflow_type=normalized_workflow_type,
+            publication_status=status,
         )
         result["items"] = [
             self._public_workflow_with_status(item) for item in result["items"]
@@ -662,52 +1018,114 @@ class WorkflowService:
         tags: list[Any],
         description: str | None,
         meta_data: dict[str, Any],
+        workflow_type: str | None = None,
+        operation_category_uuid: str | None | object = _OPERATION_CATEGORY_UNSET,
     ) -> dict[str, Any]:
+        """更新工作流根字段并保持旧调用的类型兼容。
+
+        参数：名称、标签、描述和元数据是既有完整更新值；``workflow_type`` 省略
+        时沿用当前分类；类别字段省略时保持原值，显式 ``null`` 时清空。返回：含
+        类型、类别和派生状态的最新定义。异常：字段、源码写回、修订或身份错误
+        映射为稳定工作流错误；领域包来源的修改只有在 Python 固定点验证及 CAS
+        写回成功后才推进内存定义。
+        """
+
         current = self.get_workflow(workflow_uuid)
         identity = current["uuid"]
         with self._authoring_lock(identity):
             current = self.get_workflow(identity)
+            raw_current = self._definition_store.get_workflow(identity)
+            raw_current_meta_data = dict(raw_current.get("meta_data") or {})
+            current_category_was_explicit = (
+                _OPERATION_CATEGORY_META_KEY in raw_current_meta_data
+            )
             try:
                 name = name.strip()
                 if not name:
                     raise ValueError("workflow name must not be blank")
                 tags = normalize_json_array(tags)
                 public_meta_data = dict(normalize_json_object(meta_data))
+                normalized_workflow_type = normalize_workflow_type(
+                    workflow_type,
+                    default=current["workflow_type"],
+                )
             except (AttributeError, TypeError, ValueError):
                 raise WorkflowError("invalid_input") from None
             public_meta_data.pop("unilab", None)
-            if "unilab" in current["meta_data"]:
-                public_meta_data["unilab"] = current["meta_data"]["unilab"]
-            if self._has_active_source(identity):
-                unilab_meta = dict(public_meta_data.get("unilab") or {})
-                root_fields = set(unilab_meta.get("authoring_root_fields") or [])
-                root_fields.update({"tags", "meta_data"})
-                unilab_meta["authoring_root_fields"] = sorted(root_fields)
-                public_meta_data["unilab"] = unilab_meta
-                graph = self.get_graph(identity)
-                graph["workflow"] = {
-                    **graph["workflow"],
-                    "name": name,
-                    "tags": tags,
-                    "description": self._optional_text(description),
-                    "meta_data": public_meta_data,
-                }
-                return self._public_workflow_with_status(
-                    self._commit_domain_graph_candidate(
-                        identity,
-                        revision=int(current["revision"]),
-                        graph=graph,
-                    )["workflow"]
-                )
-            return self._public_workflow_with_status(
-                self._definition_store.update_workflow(
-                    identity,
-                    name=name,
-                    tags=tags,
-                    description=self._optional_text(description),
-                    meta_data=public_meta_data,
-                )
+            public_meta_data.pop(_OPERATION_CATEGORY_META_KEY, None)
+            category_was_provided = (
+                operation_category_uuid is not _OPERATION_CATEGORY_UNSET
             )
+            requested_category_uuid = (
+                operation_category_uuid
+                if category_was_provided
+                else current.get("operation_category_uuid")
+            )
+            with self._operation_category_lock:
+                if normalized_workflow_type == "normal":
+                    if category_was_provided and requested_category_uuid is not None:
+                        raise WorkflowError("invalid_input")
+                    normalized_category_uuid = None
+                else:
+                    if (
+                        not category_was_provided
+                        and not current_category_was_explicit
+                        and requested_category_uuid is None
+                    ):
+                        requested_category_uuid = legacy_operation_category_uuid(
+                            tags
+                        )
+                    normalized_category_uuid = (
+                        self._validate_workflow_operation_category(
+                            workflow_type=normalized_workflow_type,
+                            category_uuid=requested_category_uuid,
+                        )
+                    )
+                if normalized_category_uuid is not None or (
+                    (category_was_provided or current_category_was_explicit)
+                    and normalized_workflow_type == "subworkflow"
+                ):
+                    # 显式 null 是持久的“已清空”事实；否则旧分类标签会在读路径
+                    # 再次映射成类别，使前端无法真正解除分类。
+                    public_meta_data[_OPERATION_CATEGORY_META_KEY] = (
+                        normalized_category_uuid
+                    )
+                if "unilab" in current["meta_data"]:
+                    public_meta_data["unilab"] = current["meta_data"]["unilab"]
+                if self._has_active_source(identity):
+                    unilab_meta = dict(public_meta_data.get("unilab") or {})
+                    root_fields = set(unilab_meta.get("authoring_root_fields") or [])
+                    root_fields.update({"tags", "meta_data"})
+                    if workflow_type is not None:
+                        root_fields.add("workflow_type")
+                    unilab_meta["authoring_root_fields"] = sorted(root_fields)
+                    public_meta_data["unilab"] = unilab_meta
+                    graph = self.get_graph(identity)
+                    graph["workflow"] = {
+                        **graph["workflow"],
+                        "name": name,
+                        "tags": tags,
+                        "description": self._optional_text(description),
+                        "meta_data": public_meta_data,
+                        "workflow_type": normalized_workflow_type,
+                    }
+                    return self._public_workflow_with_status(
+                        self._commit_domain_graph_candidate(
+                            identity,
+                            revision=int(current["revision"]),
+                            graph=graph,
+                        )["workflow"]
+                    )
+                return self._public_workflow_with_status(
+                    self._definition_store.update_workflow(
+                        identity,
+                        name=name,
+                        tags=tags,
+                        description=self._optional_text(description),
+                        meta_data=public_meta_data,
+                        workflow_type=normalized_workflow_type,
+                    )
+                )
 
     def delete_workflow(self, workflow_uuid: str) -> None:
         identity = self.get_workflow(workflow_uuid)["uuid"]
@@ -1541,7 +1959,13 @@ class WorkflowService:
         *,
         name: str | None,
     ) -> dict[str, Any]:
-        """在一个 SQLite 事务中复制工作流主记录和完整图。"""
+        """在一个定义事务中复制工作流主记录和完整图。
+
+        参数：``workflow_uuid`` 是来源工作流身份；``name`` 是可选新名称，省略
+        时追加 ``copy``。返回：新身份、首版修订及完整图。异常：来源不存在、
+        来源没有节点、名称非法、节点或连线身份冲突时转换为稳定工作流错误；
+        失败不保留不完整副本。
+        """
 
         source = self.get_graph(workflow_uuid)
         if not source["nodes"]:
@@ -1564,6 +1988,9 @@ class WorkflowService:
                 meta_data=dict(source["workflow"].get("meta_data", {})),
                 nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
                 edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
+                workflow_type=str(
+                    source["workflow"].get("workflow_type", "normal")
+                ),
             )
         except ValidationError:
             raise WorkflowError("invalid_input") from None
@@ -1579,7 +2006,13 @@ class WorkflowService:
         *,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """原子导入旧版工作流定义，并重建节点与连线身份。"""
+        """原子导入旧版 JSON 工作流，并转成领域包 Python 定义。
+
+        参数：``payload`` 是旧版工作流根对象，或用 ``data`` 包裹的同形对象。
+        返回：重建节点与连线身份后的首版完整图。异常：名称、图、模板、工作流
+        类型或实验操作类别非法时关闭导入；领域包或编译器不可用时不留下定义、
+        清单或源码半状态。
+        """
 
         definition = (
             payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
@@ -1643,6 +2076,9 @@ class WorkflowService:
                 edges.append(build_workflow_edge(edge_payload))
             tags = normalize_json_array(definition.get("tags"))
             meta_data = normalize_json_object(definition.get("meta_data"))
+            workflow_type = normalize_workflow_type(
+                definition.get("workflow_type")
+            )
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
         except (
@@ -1672,6 +2108,7 @@ class WorkflowService:
             meta_data=public_meta_data,
             nodes=nodes,
             edges=edges,
+            workflow_type=workflow_type,
         )
 
     def _commit_legacy_domain_import(
@@ -1684,23 +2121,43 @@ class WorkflowService:
         meta_data: Mapping[str, Any],
         nodes: list[dict[str, Any]],
         edges: list[dict[str, Any]],
+        workflow_type: str,
     ) -> dict[str, Any]:
-        """在工作流锁内把旧 JSON 规范化为首版领域 Python 定义。"""
+        """在工作流锁内把旧 JSON 规范化为首版领域 Python 定义。
+
+        参数：``registration`` 固定目标领域包身份和文件；其余字段是已规范的根
+        字段、节点、连线与工作流类型。返回：已发布到领域包并应用的首版完整图。
+        异常：类别引用、模板、编译、来源发布或内存定义提交失败时回滚本次定义、
+        源码和清单，既有领域包内容不受影响。
+        """
 
         identity = registration.workflow_uuid
         source_registered = False
         workflow_created = False
         with self._authoring_lock(identity):
             try:
-                created = self._definition_store.create_workflow_with_graph(
-                    workflow_uuid=identity,
-                    name=name,
-                    tags=tags,
-                    description=description,
-                    meta_data=dict(meta_data),
-                    nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
-                    edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
-                )
+                with self._operation_category_lock:
+                    validated_meta_data = (
+                        self._validated_operation_category_meta_data(
+                            workflow_type=workflow_type,
+                            meta_data=meta_data,
+                            tags=tags,
+                        )
+                    )
+                    created = self._definition_store.create_workflow_with_graph(
+                        workflow_uuid=identity,
+                        name=name,
+                        tags=tags,
+                        description=description,
+                        meta_data=validated_meta_data,
+                        nodes=[
+                            WorkflowNodeWrite.model_validate(node) for node in nodes
+                        ],
+                        edges=[
+                            WorkflowEdgeWrite.model_validate(edge) for edge in edges
+                        ],
+                        workflow_type=workflow_type,
+                    )
                 workflow_created = True
             except (KeyError, TypeError, ValueError, ValidationError):
                 raise WorkflowError("invalid_input") from None
@@ -1715,7 +2172,11 @@ class WorkflowService:
                 source_meta_data = dict(created["workflow"].get("meta_data") or {})
                 source_meta_data["unilab"] = {
                     "source_bootstrap": self._source_bootstrap_metadata(registration),
-                    "authoring_root_fields": ["meta_data", "tags"],
+                    "authoring_root_fields": [
+                        "meta_data",
+                        "tags",
+                        "workflow_type",
+                    ],
                 }
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
@@ -1753,31 +2214,50 @@ class WorkflowService:
                 if not canonical.valid or canonical.graph is None:
                     raise WorkflowError("candidate_invalid")
                 canonical_workflow = canonical.graph["workflow"]
-                self._definition_store.discard_uncommitted_workflow(identity)
-                workflow_created = False
-                created = self._definition_store.create_workflow_with_graph(
-                    workflow_uuid=identity,
-                    name=canonical_workflow["name"],
-                    tags=list(canonical_workflow.get("tags") or []),
-                    description=canonical_workflow.get("description"),
-                    meta_data=dict(canonical_workflow.get("meta_data") or {}),
-                    nodes=[
-                        WorkflowNodeWrite.model_validate(node)
-                        for node in canonical.graph["nodes"]
-                    ],
-                    edges=[
-                        WorkflowEdgeWrite.model_validate(edge)
-                        for edge in canonical.graph["edges"]
-                    ],
-                    node_templates=list(canonical.graph.get("node_templates") or []),
-                    handle_templates=list(
-                        canonical.graph.get("handle_templates") or []
-                    ),
-                    template_catalog_fingerprint=(
-                        canonical.template_catalog_fingerprint
-                    ),
-                    trusted_authoring_graph=True,
+                canonical_workflow_type = normalize_workflow_type(
+                    canonical_workflow.get("workflow_type")
                 )
+                # 首次空投影会被规范 Python 重新编译出的完整图替换。类别锁必须
+                # 覆盖“校验、移除空投影、创建最终图”，避免类别删除恰好落在两次
+                # 定义写入之间，留下指向已删除类别的工作流。
+                with self._operation_category_lock:
+                    canonical_meta_data = (
+                        self._validated_operation_category_meta_data(
+                            workflow_type=canonical_workflow_type,
+                            meta_data=dict(
+                                canonical_workflow.get("meta_data") or {}
+                            ),
+                            tags=canonical_workflow.get("tags"),
+                        )
+                    )
+                    self._definition_store.discard_uncommitted_workflow(identity)
+                    workflow_created = False
+                    created = self._definition_store.create_workflow_with_graph(
+                        workflow_uuid=identity,
+                        name=canonical_workflow["name"],
+                        tags=list(canonical_workflow.get("tags") or []),
+                        description=canonical_workflow.get("description"),
+                        meta_data=canonical_meta_data,
+                        nodes=[
+                            WorkflowNodeWrite.model_validate(node)
+                            for node in canonical.graph["nodes"]
+                        ],
+                        edges=[
+                            WorkflowEdgeWrite.model_validate(edge)
+                            for edge in canonical.graph["edges"]
+                        ],
+                        node_templates=list(
+                            canonical.graph.get("node_templates") or []
+                        ),
+                        handle_templates=list(
+                            canonical.graph.get("handle_templates") or []
+                        ),
+                        template_catalog_fingerprint=(
+                            canonical.template_catalog_fingerprint
+                        ),
+                        trusted_authoring_graph=True,
+                        workflow_type=canonical_workflow_type,
+                    )
                 workflow_created = True
                 self._provision_domain_source(
                     registration=registration,
@@ -1911,34 +2391,55 @@ class WorkflowService:
         graph_meta_data: Mapping[str, Any],
         candidate: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """在工作流锁内原子提交 Python 定义、领域来源及创作状态。"""
+        """在工作流锁内原子提交 Python 定义、领域来源及创作状态。
+
+        参数：``registration`` 固定领域包来源身份；``workflow``/``graph`` 是
+        静态 AST 编译后的可信候选；``graph_meta_data`` 合并来源追踪元数据；
+        ``candidate`` 固定目录指纹与规范源码。返回：可跨重启恢复的首版完整图。
+        异常：类型、类别、模板、身份或来源发布失败时撤销本次内存定义、源码和
+        清单，不执行上传的 Python 文件。
+        """
 
         source_registered = False
         workflow_created = False
         with self._authoring_lock(registration.workflow_uuid):
             try:
                 try:
-                    created = self._definition_store.create_workflow_with_graph(
-                        workflow_uuid=registration.workflow_uuid,
-                        name=str(workflow["name"]),
-                        tags=list(workflow.get("tags") or []),
-                        description=workflow.get("description"),
-                        meta_data=dict(graph_meta_data),
-                        nodes=[
-                            WorkflowNodeWrite.model_validate(node)
-                            for node in graph["nodes"]
-                        ],
-                        edges=[
-                            WorkflowEdgeWrite.model_validate(edge)
-                            for edge in graph["edges"]
-                        ],
-                        node_templates=list(graph.get("node_templates") or []),
-                        handle_templates=list(graph.get("handle_templates") or []),
-                        template_catalog_fingerprint=str(
-                            candidate["template_catalog_fingerprint"]
-                        ),
-                        trusted_authoring_graph=True,
+                    workflow_type = normalize_workflow_type(
+                        workflow.get("workflow_type")
                     )
+                    with self._operation_category_lock:
+                        validated_meta_data = (
+                            self._validated_operation_category_meta_data(
+                                workflow_type=workflow_type,
+                                meta_data=graph_meta_data,
+                                tags=workflow.get("tags"),
+                            )
+                        )
+                        created = self._definition_store.create_workflow_with_graph(
+                            workflow_uuid=registration.workflow_uuid,
+                            name=str(workflow["name"]),
+                            tags=list(workflow.get("tags") or []),
+                            description=workflow.get("description"),
+                            meta_data=validated_meta_data,
+                            nodes=[
+                                WorkflowNodeWrite.model_validate(node)
+                                for node in graph["nodes"]
+                            ],
+                            edges=[
+                                WorkflowEdgeWrite.model_validate(edge)
+                                for edge in graph["edges"]
+                            ],
+                            node_templates=list(graph.get("node_templates") or []),
+                            handle_templates=list(
+                                graph.get("handle_templates") or []
+                            ),
+                            template_catalog_fingerprint=str(
+                                candidate["template_catalog_fingerprint"]
+                            ),
+                            trusted_authoring_graph=True,
+                            workflow_type=workflow_type,
+                        )
                     workflow_created = True
                 except StoreAuthoringConflict as error:
                     raise WorkflowConflict(error.code) from None
@@ -4506,6 +5007,17 @@ class WorkflowService:
                 if self._catalog_fingerprint() != linearized_catalog_fingerprint:
                     raise WorkflowConflict("template_catalog_conflict")
 
+            try:
+                candidate_workflow = candidate["graph"]["workflow"]
+                candidate_workflow_type = normalize_workflow_type(
+                    candidate_workflow.get("workflow_type")
+                )
+                candidate_meta_data = dict(
+                    candidate_workflow.get("meta_data") or {}
+                )
+            except (KeyError, TypeError, ValueError):
+                raise WorkflowError("candidate_invalid") from None
+
             normalized_source = candidate["normalized_python_source"]
             normalized_bytes = normalized_source.encode("utf-8")
             normalized_hash = _sha256(normalized_bytes)
@@ -4522,21 +5034,32 @@ class WorkflowService:
             if self._catalog_fingerprint() != expected_catalog_fingerprint:
                 raise WorkflowConflict("template_catalog_conflict")
             previous_revision = expected_workflow_revision
-            try:
-                (
-                    resulting_revision,
-                    writeback_generation,
-                ) = self._definition_store.apply_authoring_candidate(
-                    workflow_uuid=workflow_uuid,
-                    candidate_hash=candidate_hash,
-                    authoring_authority_validator=validate_authoring_authorities,
+            with self._operation_category_lock:
+                # Python 文件可以直接修改根类型和类别。应用候选前重新读取类别
+                # 权威，并把校验与定义事务线性化；这样类别删除不会与源码应用
+                # 交错，普通工作流也不能经 AST 路径旁路类别组合约束。
+                self._validated_operation_category_meta_data(
+                    workflow_type=candidate_workflow_type,
+                    meta_data=candidate_meta_data,
+                    tags=candidate_workflow.get("tags"),
                 )
-            except StoreAuthoringConflict as error:
-                raise WorkflowConflict(error.code) from None
-            except StoreRevisionConflict:
-                raise WorkflowConflict("workflow_revision_conflict") from None
-            except (StoreConflict, ValidationError):
-                raise WorkflowError("candidate_invalid") from None
+                try:
+                    (
+                        resulting_revision,
+                        writeback_generation,
+                    ) = self._definition_store.apply_authoring_candidate(
+                        workflow_uuid=workflow_uuid,
+                        candidate_hash=candidate_hash,
+                        authoring_authority_validator=(
+                            validate_authoring_authorities
+                        ),
+                    )
+                except StoreAuthoringConflict as error:
+                    raise WorkflowConflict(error.code) from None
+                except StoreRevisionConflict:
+                    raise WorkflowConflict("workflow_revision_conflict") from None
+                except (StoreConflict, ValidationError):
+                    raise WorkflowError("candidate_invalid") from None
 
             warnings: list[dict[str, str]] = []
             if (
@@ -5390,7 +5913,9 @@ class WorkflowService:
         exact(workflow, {"tags"}, list)
         normalize_json_object(workflow["meta_data"])
         normalize_json_array(workflow["tags"])
-        optional(workflow, {"description"}, str)
+        optional(workflow, {"description", "workflow_type"}, str)
+        if "workflow_type" in workflow:
+            normalize_workflow_type(workflow["workflow_type"])
         revision = workflow["revision"]
         if type(revision) is not int or not 1 <= revision <= (1 << 63) - 1:
             raise ValueError

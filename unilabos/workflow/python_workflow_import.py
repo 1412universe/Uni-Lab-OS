@@ -42,6 +42,7 @@ class PythonWorkflowImportSource:
                 "update_time": timestamp,
                 "name": PurePosixPath(self.file_name).stem,
                 "tags": [],
+                "workflow_type": "normal",
                 "description": None,
                 "meta_data": {
                     "unilab": {

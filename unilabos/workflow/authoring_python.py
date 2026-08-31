@@ -242,6 +242,8 @@ def render_authoring_python(
             "    meta_data="
             f"{_stable_python_json(_public_workflow_meta_data(workflow))!r},"
         )
+    if "workflow_type" in root_fields:
+        lines.append(f"    workflow_type={workflow.get('workflow_type')!r},")
     if workflow.get("description") is not None:
         lines.append(f"    description={workflow.get('description')!r},")
     lines.append(")")
@@ -407,7 +409,12 @@ def _public_workflow_meta_data(workflow: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _authoring_root_fields(workflow: Mapping[str, Any]) -> set[str]:
-    """读取由领域 Python 明确拥有的可选工作流根字段。"""
+    """读取由领域 Python 明确拥有的可选工作流根字段。
+
+    参数：``workflow`` 是当前完整图中的工作流根投影。返回：允许生成器写回的
+    ``tags``、``meta_data``、``workflow_type`` 子集；旧图未声明所有权时为空。
+    异常：无；畸形元数据按未声明处理，不把运行派生字段写入作者源码。
+    """
 
     meta_data = workflow.get("meta_data")
     unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
@@ -421,7 +428,7 @@ def _authoring_root_fields(workflow: Mapping[str, Any]) -> set[str]:
     return {
         value
         for value in values
-        if value in {"tags", "meta_data"}
+        if value in {"tags", "meta_data", "workflow_type"}
     }
 
 

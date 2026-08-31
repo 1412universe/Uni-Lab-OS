@@ -64,7 +64,11 @@ def _service(
 def test_python_import_and_api_edits_survive_restart_via_domain_source(
     tmp_path: Path,
 ) -> None:
-    """Python 导入及后续元数据/图修改都应回写同一文件并可冷启动重建。"""
+    """Python 导入及后续元数据/图修改都应回写同一文件并可冷启动重建。
+
+    参数：``tmp_path`` 是本用例独占的领域包与运行事实目录。返回：无。异常：
+    导入、API 编辑、原子写回或重启恢复丢失任一工作流事实时由断言暴露。
+    """
 
     selected_root = tmp_path / "domain"
     package_root = _empty_domain_package(selected_root)
@@ -97,6 +101,7 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
             tags=["production", "domain"],
             description="修改后仍以领域 Python 为准",
             meta_data={"owner": "lab"},
+            workflow_type="subworkflow",
         )
         graph = service.get_graph(WORKFLOW_UUID)
         edited_nodes = []
@@ -116,6 +121,7 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
         source = source_path.read_text(encoding="utf-8")
         assert "displayname='领域包工作流'" in source
         assert "tags=['production', 'domain']" in source
+        assert "workflow_type='subworkflow'" in source
         assert "meta_data={'owner': 'lab'}" in source
         assert "# [领域包加样]: 由工作台修改并回写" in source
         assert runtime_store.count_rows("workflow") == 0
@@ -131,6 +137,7 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
         rebuilt = reopened.get_graph(WORKFLOW_UUID)
         assert rebuilt["workflow"]["name"] == "领域包工作流"
         assert rebuilt["workflow"]["tags"] == ["production", "domain"]
+        assert rebuilt["workflow"]["workflow_type"] == "subworkflow"
         assert rebuilt["workflow"]["meta_data"]["owner"] == "lab"
         assert next(
             node for node in rebuilt["nodes"] if node["uuid"] == PREPARE_NODE_UUID

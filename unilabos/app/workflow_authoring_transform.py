@@ -42,6 +42,7 @@ _WORKFLOW_FIELDS = {
     "meta_data",
     "name",
     "tags",
+    "workflow_type",
     "revision",
     "description",
 }
