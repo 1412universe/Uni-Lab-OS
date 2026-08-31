@@ -252,9 +252,9 @@ def test_local_composition_uses_one_scheduler_listener_pair_for_d1a(
         with (
             patch.object(
                 scheduler,
-                "add_job_pre_dispatch_listener",
-                wraps=scheduler.add_job_pre_dispatch_listener,
-            ) as add_pre_dispatch_listener,
+                "bind_dispatch_admission_authority",
+                wraps=scheduler.bind_dispatch_admission_authority,
+            ) as bind_dispatch_admission_authority,
             patch.object(
                 scheduler,
                 "add_job_finished_listener",
@@ -268,7 +268,7 @@ def test_local_composition_uses_one_scheduler_listener_pair_for_d1a(
                 scheduler=scheduler,
             )
 
-        assert add_pre_dispatch_listener.call_count == 1
+        assert bind_dispatch_admission_authority.call_count == 1
         assert add_finished_listener.call_count == 1
     finally:
         reset_workflow_service_for_test()

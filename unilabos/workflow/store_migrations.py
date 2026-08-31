@@ -372,6 +372,26 @@ def ensure_execution_lock_schema(connection: sqlite3.Connection) -> None:
             ADD COLUMN wait_reason TEXT NOT NULL DEFAULT '{}'
             """
         )
+    if "dispatch_effect_uuid" not in job_columns:
+        connection.execute(
+            "ALTER TABLE workflow_node_job ADD COLUMN dispatch_effect_uuid TEXT"
+        )
+    if "dispatch_parameter_hash" not in job_columns:
+        connection.execute(
+            "ALTER TABLE workflow_node_job ADD COLUMN dispatch_parameter_hash TEXT"
+        )
+    if "expected_change_set" not in job_columns:
+        connection.execute(
+            "ALTER TABLE workflow_node_job "
+            "ADD COLUMN expected_change_set TEXT NOT NULL DEFAULT '{}'"
+        )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_node_job_dispatch_effect
+        ON workflow_node_job(dispatch_effect_uuid)
+        WHERE dispatch_effect_uuid IS NOT NULL
+        """
+    )
 
     _execute_script_in_transaction(
         connection,

@@ -12,7 +12,7 @@ import pytest
 
 from unilabos.app.scheduler import integration
 from unilabos.app.scheduler.dispatch import CancelDispatchState, RecordingDispatcher
-from unilabos.app.scheduler.service import EdgeScheduler
+from unilabos.app.scheduler.service import EdgeScheduler, ExecutionPolicyError
 from unilabos.app.ws_client import DeviceActionManager, MessageProcessor
 
 
@@ -253,37 +253,27 @@ class TestIntegrationWiring:
             s2, b2 = integration.setup_edge_scheduler(ws_client=ws)
             assert s2 is scheduler and b2 is backend
 
-            # 终态上报：单节点工作流 job 完成 → success → workflow_status 消息
-            r = scheduler.submit_workflow(
-                __import__(
-                    "unilabos.app.scheduler.models", fromlist=["spec_from_dict"]
-                ).spec_from_dict(
-                    {
-                        "workflow_id": "wf-report",
-                        "nodes": [
-                            {
-                                "id": "A",
-                                "device_id": "d9",
-                                "action_name": "run",
-                                "action_type": "goal",
-                            }
-                        ],
-                    }
+            # 云端旧整图路径没有标准 Task/Job 和库存权威，不能再直接产生物理派发。
+            with pytest.raises(
+                ExecutionPolicyError,
+                match="持久派发准入权威未装配",
+            ):
+                scheduler.submit_workflow(
+                    __import__(
+                        "unilabos.app.scheduler.models", fromlist=["spec_from_dict"]
+                    ).spec_from_dict(
+                        {
+                            "workflow_id": "wf-report",
+                            "nodes": [
+                                {
+                                    "id": "A",
+                                    "device_id": "d9",
+                                    "action_name": "run",
+                                    "action_type": "goal",
+                                }
+                            ],
+                        }
+                    )
                 )
-            )
-            # HostNode 不存在意味着动作 Schema 也不存在，调度器必须在发送前失败关闭。
-            deadline = time.time() + 5
-            statuses = []
-            while time.time() < deadline and not statuses:
-                statuses = [
-                    m
-                    for m in _drain(ws.message_processor.send_queue)
-                    if m.get("action") == "workflow_status"
-                ]
-                time.sleep(0.02)
-            assert statuses, "expected workflow_status report"
-            assert statuses[0]["data"]["workflow_id"] == "wf-report"
-            assert statuses[0]["data"]["status"] == "failed"
-            assert r["dispatched"] == []
         finally:
             backend.stop()

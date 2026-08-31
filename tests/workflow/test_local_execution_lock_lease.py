@@ -369,6 +369,83 @@ def test_claim_is_stable_per_attempt_and_fence_increases_per_resource(
     assert second["fences"][0]["fencing_token"] == 2
 
 
+def test_persistent_waiter_allows_higher_priority_task_to_pass(
+    store: WorkflowStore,
+) -> None:
+    """较早排队的低优先级作业不能反向阻塞新到的高优先级作业。"""
+
+    _seed_task(store, with_material=False)
+    _seed_second_task(store, device_id="reactor-a")
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET priority=1 WHERE uuid=?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            "UPDATE workflow_task SET priority=10 WHERE uuid=?",
+            (SECOND_TASK_UUID,),
+        )
+    projection = TaskRuntimeProjection(store)
+    lock = [{"lock_key": "/devices/reactor-a", "scope": "device"}]
+    projection.project_execution_lock_wait(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=lock,
+    )
+
+    admitted = projection.project_pre_dispatch(
+        task_uuid=SECOND_TASK_UUID,
+        job_uuid=SECOND_JOB_UUID,
+        execution_locks=lock,
+    )
+
+    assert admitted["jobs"][0]["status"] == "dispatched"
+
+
+def test_persistent_waiter_aging_eventually_beats_fresh_priority(
+    store: WorkflowStore,
+) -> None:
+    """低优先级等待者经过足够老化后阻止新到高优先级作业插队。"""
+
+    _seed_task(store, with_material=False)
+    _seed_second_task(store, device_id="reactor-a")
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET priority=1 WHERE uuid=?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            "UPDATE workflow_task SET priority=10 WHERE uuid=?",
+            (SECOND_TASK_UUID,),
+        )
+    projection = TaskRuntimeProjection(store)
+    lock = [{"lock_key": "/devices/reactor-a", "scope": "device"}]
+    projection.project_execution_lock_wait(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=lock,
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE execution_lock_waiter
+            SET enqueued_at='2026-08-30T00:00:00Z'
+            WHERE workflow_node_job_uuid=? AND state='waiting'
+            """,
+            (JOB_UUID,),
+        )
+
+    blocked = projection.project_pre_dispatch(
+        task_uuid=SECOND_TASK_UUID,
+        job_uuid=SECOND_JOB_UUID,
+        execution_locks=lock,
+        aging_interval_seconds=30,
+    )
+
+    assert blocked["jobs"][0]["status"] == "pending"
+    assert blocked["jobs"][0]["wait_reason"]["blocking_job_uuid"] == JOB_UUID
+
+
 def test_restart_fails_inflight_job_and_keeps_uncertain_lease(
     store: WorkflowStore,
 ) -> None:

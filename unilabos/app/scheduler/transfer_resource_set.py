@@ -16,6 +16,17 @@ from unilabos.app.scheduler.site_target import ResolvedSiteTarget
 class TransferResourceSetError(ValueError):
     """转运动作完整资源集无法由库存事实证明。"""
 
+    def __init__(self, code: str, message: str) -> None:
+        """保存库存条件的稳定错误码和中文原因。
+
+        参数：``code`` 是调度器用于等待/失败分类的错误码；``message`` 是展示
+        原因。返回：无。异常：无；调用点必须明确区分临时条件和永久合同错误。
+        """
+
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
 
 @dataclass(frozen=True, slots=True)
 class TransferResourceSet:
@@ -61,7 +72,7 @@ def resolve_transfer_resource_set(
             )
         )
     except StationResourceError as error:
-        raise TransferResourceSetError(error.message) from error
+        raise TransferResourceSetError(error.code, error.message) from error
     keys = {
         material_lock_key(resource_material_uuid),
         site_lock_key(

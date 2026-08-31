@@ -14,6 +14,31 @@ from typing import List, Protocol, Set
 
 from unilabos.app.scheduler.models import ReadyTask
 
+DEFAULT_AGING_INTERVAL_SECONDS = 30.0
+
+
+def aged_priority(
+    base_priority: float,
+    *,
+    waited_seconds: float,
+    aging_interval_seconds: float,
+) -> float:
+    """计算不会抢占在途动作的等待老化优先级。
+
+    参数：基础优先级、非负等待秒数和正有限老化周期。返回：每经过一个完整周期
+    增加一的有效优先级。异常：非法周期或非有限数值抛 ``ValueError``，防止内存
+    排序与持久 Claim 队列产生不同裁决。
+    """
+
+    interval = float(aging_interval_seconds)
+    base = float(base_priority)
+    waited = float(waited_seconds)
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError("调度优先级老化周期必须是正有限秒数")
+    if not math.isfinite(base) or not math.isfinite(waited):
+        raise ValueError("调度优先级和等待时间必须是有限数")
+    return base + math.floor(max(0.0, waited) / interval)
+
 
 class OrderingContext:
     """一次重排的资源上下文。"""
@@ -24,6 +49,12 @@ class OrderingContext:
 
 
 class TaskOrderer(Protocol):
+    @property
+    def aging_interval_seconds(self) -> float:
+        """返回内存排序与持久等待队列共享的老化周期。"""
+
+        ...
+
     def order(self, ready: List[ReadyTask], ctx: OrderingContext) -> List[ReadyTask]:
         """返回下发顺序（可含全部 ready；service 层负责跳过锁忙的节点）。"""
         ...
@@ -35,7 +66,7 @@ class StableLocalOrderer:
     def __init__(
         self,
         *,
-        aging_interval_seconds: float = 30.0,
+        aging_interval_seconds: float = DEFAULT_AGING_INTERVAL_SECONDS,
         clock: Callable[[], float] = time.time,
     ) -> None:
         """配置等待任务的优先级老化周期。
@@ -50,6 +81,12 @@ class StableLocalOrderer:
             raise ValueError("调度优先级老化周期必须是正有限秒数")
         self._aging_interval_seconds = interval
         self._clock = clock
+
+    @property
+    def aging_interval_seconds(self) -> float:
+        """返回内存和持久资源队列共同使用的老化周期秒数。"""
+
+        return self._aging_interval_seconds
 
     def order(self, ready: List[ReadyTask], ctx: OrderingContext) -> List[ReadyTask]:
         """按有效优先级、提交时间和稳定身份排列本轮候选。
@@ -72,8 +109,11 @@ class StableLocalOrderer:
             """
 
             waited_seconds = max(0.0, now - float(task.submitted_at))
-            aging_bonus = math.floor(waited_seconds / self._aging_interval_seconds)
-            effective_priority = float(task.priority_weight) + aging_bonus
+            effective_priority = aged_priority(
+                task.priority_weight,
+                waited_seconds=waited_seconds,
+                aging_interval_seconds=self._aging_interval_seconds,
+            )
             return (
                 -effective_priority,
                 task.submitted_at,
@@ -88,7 +128,9 @@ class StableLocalOrderer:
 
 
 __all__ = [
+    "DEFAULT_AGING_INTERVAL_SECONDS",
     "OrderingContext",
     "StableLocalOrderer",
     "TaskOrderer",
+    "aged_priority",
 ]

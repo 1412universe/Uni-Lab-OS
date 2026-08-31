@@ -29,6 +29,7 @@ from unilabos.app.edge_control.http import (
     websocket_url,
 )
 from unilabos.app.edge_control.store import EdgeControlStore, StoredEvent, StoredJob
+from unilabos.app.scheduler.execution_outcome import normalize_executor_outcome
 from unilabos.config.config import BasicConfig, EdgeControlConfig, HTTPConfig
 from unilabos.resources.instance_identity import normalize_resource_instance_barcode
 from unilabos.utils.log import get_comm_logger
@@ -1114,14 +1115,11 @@ class EdgeControlClient(BaseCommunicationClient):
         job = self.store.get_job(job_uuid)
         if job is None:
             return False
-        outcome = {
-            "success": "succeeded",
-            "failed": "failed",
-            "canceled": "canceled",
-            "timeout": "timeout",
-        }.get(status, "failed")
-        if job.status == "cancel_requested" and outcome == "failed":
-            outcome = "canceled"
+        outcome = normalize_executor_outcome(
+            status,
+            return_info,
+            cancel_requested=job.status == "cancel_requested",
+        )
         normalized_return = _return_info(return_info, result_data)
         error_info: list[dict[str, Any]] = []
         if outcome != "succeeded":

@@ -188,3 +188,127 @@ def test_uncertain_resolution_rejects_unprovable_success(tmp_path) -> None:
         if bridge is not None:
             bridge.close()
         store.close()
+
+
+def test_restart_failed_job_can_request_stop_proof(tmp_path) -> None:
+    """执行进程重启把主状态置失败后，仍可请求 Edge 提交停止证明。"""
+
+    store = WorkflowStore(tmp_path / "restart-failed-resolution.db")
+    bridge = None
+    try:
+        projection = _seed_uncertain_job(store)
+        projection.project_execution_process_restarted(TASK_UUID)
+        bridge = TaskSchedulerBridge(
+            store,
+            scheduler=EdgeScheduler(dispatcher=_ResolutionDispatcher()),
+        )
+        client = TestClient(
+            create_workflow_app(
+                WorkflowService(store, task_scheduler_bridge=bridge)
+            )
+        )
+
+        response = client.post(
+            f"/api/v1/workflow-node-jobs/{JOB_UUID}/resolve-uncertain",
+            json={
+                "resolution": "canceled",
+                "reason": "执行进程重启，确认设备已经停止",
+            },
+        )
+
+        assert response.status_code == 202
+        assert response.json()["data"]["pending_edge_confirmation"] is True
+        assert store.get_job(JOB_UUID)["status"] == "failed"
+        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
+            "uncertain"
+        }
+    finally:
+        if bridge is not None:
+            bridge.close()
+        store.close()
+
+
+def test_failed_job_stop_proof_releases_no_inventory_change_claim(tmp_path) -> None:
+    """无库存变化的失败作业拿到停止证明后释放占用，重放保持幂等。"""
+
+    store = WorkflowStore(tmp_path / "failed-stop-proof.db")
+    try:
+        projection = _seed_uncertain_job(store)
+        projection.project_execution_process_restarted(TASK_UUID)
+
+        first = projection.project_failed_job_execution_stopped(
+            JOB_UUID,
+            outcome="canceled",
+            return_info={"stopped": True},
+            error_info=[],
+        )
+        replay = projection.project_failed_job_execution_stopped(
+            JOB_UUID,
+            outcome="canceled",
+            return_info={"stopped": True},
+            error_info=[],
+        )
+
+        assert first["task"]["status"] == "failed"
+        assert replay["task"]["status"] == "failed"
+        assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
+        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
+            "released"
+        }
+    finally:
+        store.close()
+
+
+def test_failed_transfer_waits_for_inventory_reconciliation(tmp_path) -> None:
+    """失败转运即使设备已停止，也要等实际物料位置入账后才释放占用。"""
+
+    store = WorkflowStore(tmp_path / "failed-transfer-settlement.db")
+    try:
+        projection = _seed_uncertain_job(store)
+        with store.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE workflow_node_job
+                SET expected_change_set=?
+                WHERE uuid=?
+                """,
+                (
+                    '{"kind":"material_transfer","material_uuid":"material-a",'
+                    '"source_site_uuid":"site-a","target_site_uuid":"site-b"}',
+                    JOB_UUID,
+                ),
+            )
+        projection.project_execution_process_restarted(TASK_UUID)
+
+        projection.project_failed_job_execution_stopped(
+            JOB_UUID,
+            outcome="failed",
+            return_info={"stopped": True},
+            error_info=[{"code": "execution_process_restarted"}],
+        )
+
+        assert store.get_job(JOB_UUID)["uncertainty_reason"] == (
+            "material_transfer_inventory_reconciliation_required"
+        )
+        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
+            "uncertain"
+        }
+
+        projection.project_failed_job_inventory_reconciled(
+            JOB_UUID,
+            actual_change_set={
+                "kind": "material_transfer",
+                "material_uuid": "material-a",
+                "target_owner_material_uuid": "device-b",
+                "target_site_uuid": "site-b",
+            },
+            reason="现场确认物料已在目标库位",
+        )
+
+        assert store.get_job(JOB_UUID)["status"] == "failed"
+        assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
+        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
+            "released"
+        }
+    finally:
+        store.close()

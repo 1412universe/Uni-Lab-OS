@@ -79,6 +79,9 @@ from unilabos.app.scheduler.resource_lock import (
     normalize_resource_lock_keys,
     site_lock_key,
 )
+from unilabos.app.scheduler.resource_wait_policy import (
+    is_temporary_resource_condition,
+)
 from unilabos.app.scheduler.site_target import (
     ResolvedSiteTarget,
     SiteTargetResolutionError,
@@ -176,7 +179,6 @@ class EdgeScheduler:
         workflow_state_listener: Callable[[str, str], None] | None = None,
         inventory: Any = None,
         station_resources: StationResourceInventory | None = None,
-        material_lock_resolver: Callable[[str, str, dict[str, Any]], tuple[str, ...]] | None = None,
         device_target_resolver: Callable[[Mapping[str, Any], str, set[str]], ResolvedDeviceTarget] | None = None,
         estimator: DurationEstimator | None = None,
         timeline_capacity: int = 400,
@@ -197,8 +199,6 @@ class EdgeScheduler:
             inventory: 本地库存（Inventory）预留、消费和释放服务。
             station_resources: 设备、库位（Site）与转运事实的窄库存接口；生产
                 组合根显式注入，隔离测试可从 ``InventoryService`` 读取同一接口。
-            material_lock_resolver: 遗留直接调用根据实时注册表
-                （Registry）Schema 与最终参数解析物料 UUID 的兼容函数。
             device_target_resolver: 按冻结设备类型从当前 Edge 注册选择实例的函数。
             estimator: 动作预计时长计算器。
             timeline_capacity: 内存时间线最多保留的作业数量。
@@ -245,14 +245,16 @@ class EdgeScheduler:
         self._inventory = inventory
         # 工站资源读取只依赖公开窄接口，调度器不得再穿透 InventoryService.store。
         self._station_resources = station_resources
-        if self._station_resources is None and inventory is not None:
+        if (
+            self._station_resources is None
+            and inventory is not None
+            and hasattr(type(inventory), "station_resources")
+        ):
             candidate_station_resources = getattr(inventory, "station_resources", None)
             if candidate_station_resources is not None:
                 self._station_resources = candidate_station_resources
         # 有物料需求的 workflow（其余 workflow 不产生任何 inventory 调用）
         self._material_workflows: set[str] = set()
-        # 动作物料锁解析器消费规范动作 Schema；None 仅用于无注册表的隔离测试。
-        self._material_lock_resolver = material_lock_resolver
         self._device_target_resolver = device_target_resolver
         # job_id -> 该作业（Job）持有的物料与库位锁键；完成或取消时释放。
         self._job_resource_locks: dict[str, set[str]] = {}
@@ -278,10 +280,11 @@ class EdgeScheduler:
         # 长生命周期根 span：workflow → action/job。只保存上下文/句柄，不保存 payload。
         self._workflow_spans: dict[str, DetachedSpan] = {}
         self._job_spans: dict[str, DetachedSpan] = {}
-        # 生命周期监听器仅承载标准 Task/Job 兼容回写，不成为第二个状态权威。
-        self._job_pre_dispatch_listeners: list[
-            Callable[[dict[str, Any]], bool | None]
-        ] = []
+        # 物理派发只有一个持久准入权威。单一绑定防止普通观察器伪造 Permit，
+        # 也避免多个数据库权威以未定义顺序分别取得部分资源。
+        self._dispatch_admission_authority: (
+            Callable[[dict[str, Any]], bool] | None
+        ) = None
         self._job_execution_wait_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._job_dispatch_accepted_listeners: list[Callable[[str], None]] = []
         self._job_dispatch_uncertain_listeners: list[
@@ -326,6 +329,22 @@ class EdgeScheduler:
         """
 
         return self._station_resources
+
+    @property
+    def physical_dispatch_enabled(self) -> bool:
+        """返回当前执行适配器是否会越过真实物理派发边界。
+
+        参数：无。返回：记录型干跑适配器为假，其余适配器为真。异常：无。该值
+        只用于组合根强制装配库存准入权威，不能作为动作级安全判断。
+        """
+
+        return not isinstance(self._dispatcher, RecordingDispatcher)
+
+    @property
+    def aging_interval_seconds(self) -> float:
+        """返回内存排序与持久资源队列共享的优先级老化周期。"""
+
+        return self._orderer.aging_interval_seconds
 
     @property
     def max_in_flight_jobs(self) -> int:
@@ -392,30 +411,36 @@ class EdgeScheduler:
             if current != listener
         ]
 
-    def add_job_pre_dispatch_listener(
+    def bind_dispatch_admission_authority(
         self,
-        listener: Callable[[dict[str, Any]], bool | None],
+        authority: Callable[[dict[str, Any]], bool],
     ) -> None:
-        """注册作业派发前监听器。
+        """绑定唯一持久派发准入权威。
 
-        参数：``listener`` 接收即将派发的作业摘要。监听器返回 ``False`` 表示
-        持久执行资源暂不可用，本轮保持等待；``None`` 兼容旧监听器并视为允许。
-        异常会中止物理派发，禁止形成先发设备后记数据库的窗口。
+        参数：``authority`` 必须在一个权威事务中复验条件、取得 Claim/Fence 并
+        把完整 DispatchPermit 写回派发摘要。返回无。异常：重复绑定或传入不可
+        调用对象时抛 ``ExecutionPolicyError``；不允许观察器共享此安全接缝。
         """
 
-        self._job_pre_dispatch_listeners.append(listener)
+        if not callable(authority):
+            raise ExecutionPolicyError("持久派发准入权威必须可调用")
+        if self._dispatch_admission_authority is not None:
+            raise ExecutionPolicyError("持久派发准入权威已经绑定")
+        self._dispatch_admission_authority = authority
 
-    def remove_job_pre_dispatch_listener(
+    def unbind_dispatch_admission_authority(
         self,
-        listener: Callable[[dict[str, Any]], bool | None],
+        authority: Callable[[dict[str, Any]], bool],
     ) -> None:
-        """移除派发前监听器；参数 ``listener`` 必须是此前注册的同一回调。"""
+        """解绑同一持久准入权威，非当前绑定不得改变安全配置。
 
-        self._job_pre_dispatch_listeners = [
-            current
-            for current in self._job_pre_dispatch_listeners
-            if current != listener
-        ]
+        参数：``authority`` 是组合根此前绑定的同一回调。返回无。异常：身份不
+        匹配时抛 ``ExecutionPolicyError``，避免错误组件卸掉仍在使用的权威。
+        """
+
+        if self._dispatch_admission_authority != authority:
+            raise ExecutionPolicyError("解绑的持久派发准入权威身份不匹配")
+        self._dispatch_admission_authority = None
 
     def add_job_execution_wait_listener(
         self,
@@ -698,17 +723,48 @@ class EdgeScheduler:
         ]
 
     def _notify_job_pre_dispatch(self, dispatching: dict[str, Any]) -> bool:
-        """同步通知派发意图；参数 ``dispatching`` 是即将越过执行边界的摘要。
+        """调用唯一持久准入权威；参数是即将越过执行边界的作业摘要。
 
-        返回：全部监听器允许派发时为真；任一标准持久准入返回 ``False`` 时为假。
-        监听器可在同一 ``dispatching`` 对象补入已持久化的 Command、Claim 和
-        Fence；任何监听器异常都会阻止执行适配器调用。
+        返回：权威完成门禁并补入 Command、Claim、Fence、效果身份与参数哈希时
+        为真，资源等待时为假。异常：物理执行适配器未装配唯一权威或权威内部
+        失败时抛 ``ExecutionPolicyError``/原始异常；内建记录适配器仅生成隔离
+        干跑凭据，不会触达设备，也不能用于生产物理派发。
         """
 
-        for listener in tuple(self._job_pre_dispatch_listeners):
-            if listener(dispatching) is False:
-                return False
-        return True
+        authority = self._dispatch_admission_authority
+        if authority is None:
+            if not isinstance(self._dispatcher, RecordingDispatcher):
+                raise ExecutionPolicyError("持久派发准入权威未装配")
+            # ``dry_run_identity`` 只让记录适配器走完调度观察路径，不代表持久占用。
+            dry_run_identity = str(dispatching.get("job_id") or "")
+            dispatching.update(
+                {
+                    "attempt": 1,
+                    "command_uuid": str(
+                        uuid_mod.uuid5(
+                            uuid_mod.NAMESPACE_URL,
+                            "unilabos-dry-run-command:" + dry_run_identity,
+                        )
+                    ),
+                    "claim_uuid": str(
+                        uuid_mod.uuid5(
+                            uuid_mod.NAMESPACE_URL,
+                            "unilabos-dry-run-claim:" + dry_run_identity,
+                        )
+                    ),
+                    "fences": [],
+                    "effect_uuid": str(
+                        uuid_mod.uuid5(
+                            uuid_mod.NAMESPACE_URL,
+                            "unilabos-dry-run-effect:" + dry_run_identity,
+                        )
+                    ),
+                    "parameter_hash": "dry-run",
+                    "expected_change_set": {"kind": "dry_run"},
+                }
+            )
+            return True
+        return authority(dispatching)
 
     def _notify_job_execution_wait(self, waiting: dict[str, Any]) -> None:
         """在内存设备锁或动作物料锁先命中时同步持久化等待顺序。"""
@@ -1201,17 +1257,23 @@ class EdgeScheduler:
 
             # 库存只在设备明确成功后结算。扣减失败时保留在途作业、执行占用和
             # 完成投递，禁止出现“作业成功但库存仍未扣减”的公开事实。
-            if (
-                success
-                and suc_type != "skip"
-                and job.workflow_id in self._material_workflows
-            ):
+            if success and job.workflow_id in self._material_workflows:
                 node = next(
                     (candidate for candidate in run.spec.nodes if candidate.id == job.node_id),
                     None,
                 )
                 if node is not None and node.material_requirements:
                     self._inventory.consume_reservation(job.workflow_id, job.node_id)
+                    if suc_type == "skip":
+                        # skip 表示设备动作没有正常完成，物料却可能已进入物理
+                        # 过程。先按实际使用结算，再隔离，禁止把数量虚假放回库存。
+                        self._inventory.quarantine_reservation(
+                            job.workflow_id,
+                            job.node_id,
+                            reason="device_action_skipped",
+                            actor="edge_scheduler",
+                            causation_id=job_id,
+                        )
 
             # 标准完成事实必须先持久化；任一监听器失败时保留在途作业与资源锁，
             # 允许设备对同一结果进行投递重放（DeliveryReplay）。库存消费本身也
@@ -1542,6 +1604,9 @@ class EdgeScheduler:
             )
 
             run = self._workflows[task.workflow_id]
+            # ``transfer_dispatch_condition`` 由库存解析快照产生，但只在门禁 7 的
+            # 同一库存事务内复验后才具有派发效力。
+            transfer_dispatch_condition: dict[str, str] | None = None
             try:
                 resolved_args = run.resolve_params(task.node.id)
             except ParamResolveError as exc:
@@ -1596,12 +1661,19 @@ class EdgeScheduler:
                         ),
                     )
                     lock_keys.update(transfer_resources.lock_keys)
+                    transfer_dispatch_condition = {
+                        "material_uuid": moved_material_uuid,
+                        "source_owner_material_uuid": (
+                            transfer_resources.source_owner_material_uuid
+                        ),
+                        "source_site_uuid": transfer_resources.source_site_uuid,
+                        "target_owner_material_uuid": resolved_site.owner_material_uuid,
+                        "target_site_uuid": resolved_site.uuid,
+                        "executor_material_uuid": selected_device_material_uuid,
+                        "gripper_site_uuid": transfer_resources.gripper_site_uuid,
+                    }
             except SiteTargetResolutionError as error:
-                if error.code in {
-                    "site_claimed",
-                    "site_occupied",
-                    "site_group_unavailable",
-                }:
+                if is_temporary_resource_condition(error.code):
                     selector_uuids = resource_policy.target_site_uuids
                     self._notify_job_execution_wait(
                         {
@@ -1627,11 +1699,39 @@ class EdgeScheduler:
                 )
                 run.mark_failed(task.node.id)
                 continue
+            except TransferResourceSetError as error:
+                if is_temporary_resource_condition(error.code):
+                    self._notify_job_execution_wait(
+                        {
+                            "job_id": job_id,
+                            "workflow_id": task.workflow_id,
+                            "node_id": task.node.id,
+                            "resolved_args": resolved_args,
+                            "execution_locks": [],
+                            "blocking_job_id": None,
+                            "blocking_workflow_id": None,
+                            "wait_code": error.code,
+                            "wait_message": error.message,
+                            "candidate_site_uuids": list(
+                                resource_policy.target_site_uuids
+                            ),
+                        }
+                    )
+                    continue
+                logger.error(
+                    "[EdgeScheduler] 转运完整资源集解析失败 "
+                    "wf=%s node=%s code=%s: %s",
+                    task.workflow_id,
+                    task.node.id,
+                    error.code,
+                    error.message,
+                )
+                run.mark_failed(task.node.id)
+                continue
             except (
                 ExecutionPolicyError,
                 ExecutionResourcePolicyError,
                 MaterialLockSchemaError,
-                TransferResourceSetError,
             ) as error:
                 logger.error(
                     "[EdgeScheduler] 动作资源锁解析失败 "
@@ -1656,7 +1756,11 @@ class EdgeScheduler:
                 parts = lock_key.split("/")
                 if lock_key.startswith("/devices/"):
                     execution_locks.append(
-                        {"lock_key": lock_key, "scope": "device"}
+                        {
+                            "lock_key": lock_key,
+                            "scope": "device",
+                            "material_uuid": parts[2],
+                        }
                     )
                 elif len(parts) == 3:
                     execution_locks.append(
@@ -1784,6 +1888,7 @@ class EdgeScheduler:
                         },
                         "execution_locks": execution_locks,
                         "device_tenancy": resource_policy.device_tenancy,
+                        "transfer_dispatch_condition": transfer_dispatch_condition,
                     }
                     admitted = self._notify_job_pre_dispatch(dispatching)
                     if not admitted:
@@ -1799,22 +1904,22 @@ class EdgeScheduler:
                         "command_uuid",
                         "claim_uuid",
                         "fences",
+                        "effect_uuid",
+                        "parameter_hash",
+                        "expected_change_set",
                     )
-                    present_credentials = [
+                    missing_credentials = [
                         field
                         for field in required_dispatch_fields
-                        if field in dispatching
+                        if field not in dispatching
                     ]
-                    if present_credentials and len(present_credentials) != len(
-                        required_dispatch_fields
-                    ):
+                    if missing_credentials:
                         raise ExecutionPolicyError(
                             "持久派发凭据不完整："
-                            + ",".join(sorted(present_credentials))
+                            + ",".join(sorted(missing_credentials))
                         )
                     for field in required_dispatch_fields:
-                        if field in dispatching:
-                            payload[field] = dispatching[field]
+                        payload[field] = dispatching[field]
                     dispatch_intent_committed = True
                     # 派发意图持久化后，先保守登记本地在途作业和动作物料锁，再
                     # 调用不可原子确认的执行适配器。适配器异常不得回滚这些事实。
@@ -2045,9 +2150,8 @@ class EdgeScheduler:
         最终参数；``transfer_contract`` 是 AST 冻结的转运参数与夹爪角色映射；
         ``site_uuids`` 是冻结等价组，``unavailable_site_uuids`` 是本轮已有作业
         执行占用选中的库位。返回：规范参数和具体目标；非转运动作原样返回。
-        异常：合同字段缺失、显式库位无法验证或库存权威不可用时抛
-        ``SiteTargetResolutionError``；仅遗留 ``transfer_resource`` 名称允许
-        在未提供稳定库位 UUID 时维持名称兼容路径。
+        异常：合同字段缺失、目标库位无法验证或库存权威不可用时抛
+        ``SiteTargetResolutionError``；不根据动作名称或库位名称猜测资源。
         """
 
         if transfer_contract is None:
@@ -2096,28 +2200,15 @@ class EdgeScheduler:
             resolved_args.get(material_param),
             argument_name=material_param,
         )
-        try:
-            target = resolve_site_target(
-                self._station_resources,
-                owner_material_uuid=mount_uuid,
-                site_uuid=site_uuid,
-                site_name=site_name,
-                site_uuids=site_uuids,
-                occupant_material_uuid=resource_uuid,
-                unavailable_site_uuids=unavailable_site_uuids,
-            )
-        except SiteTargetResolutionError as error:
-            if site_uuid or error.code != "site_not_found":
-                raise
-            # 历史工作流只保存设备侧库位名；本地 Site 投影尚未补齐时维持旧执行
-            # 语义，并保守占用整个父物料。显式 UUID 绝不走该兼容分支。
-            logger.warning(
-                "[EdgeScheduler] 旧库位名未进入本地库存；退回整父物料忙碌键 "
-                "wf_node=%s site=%s",
-                getattr(node, "id", ""),
-                site_name,
-            )
-            return resolved_args, None
+        target = resolve_site_target(
+            self._station_resources,
+            owner_material_uuid=mount_uuid,
+            site_uuid=site_uuid,
+            site_name=site_name,
+            site_uuids=site_uuids,
+            occupant_material_uuid=resource_uuid,
+            unavailable_site_uuids=unavailable_site_uuids,
+        )
         canonical_args = dict(resolved_args)
         # 设备驱动沿用库位名称；稳定 UUID 只用于身份解析和本地互斥。
         if site_name_param:
@@ -2135,7 +2226,8 @@ class EdgeScheduler:
 
         if self._station_resources is None:
             raise TransferResourceSetError(
-                "本地库存权威未初始化，无法解析转运完整资源集"
+                "station_resource_authority_unavailable",
+                "本地库存权威未初始化，无法解析转运完整资源集",
             )
         return self._station_resources
 
@@ -2144,8 +2236,7 @@ class EdgeScheduler:
         """读取节点冻结的机械臂转运资源映射。
 
         参数：``node`` 是调度候选节点。返回：AST 资源合同中的 ``transfer`` 映射；
-        对既有 Host ``transfer_resource`` 生成不含夹爪角色的兼容映射，其他动作
-        返回 ``None``。异常：冻结合同 ``transfer`` 不是对象或字段值不是字符串时
+        非转运动作返回 ``None``。异常：冻结合同 ``transfer`` 不是对象或字段值不是字符串时
         抛 ``TransferResourceSetError``，禁止根据动作实现猜测资源。
         """
 
@@ -2155,18 +2246,18 @@ class EdgeScheduler:
             if isinstance(resource_contract, Mapping)
             else None
         )
-        if transfer is None and getattr(node, "action_name", "") == "transfer_resource":
-            transfer = {
-                "material_param": "resource",
-                "target_owner_param": "mount_resource",
-                "target_site_uuid_param": "site_uuid",
-                "target_site_name_param": "site",
-                "gripper_site_role": "",
-            }
         if transfer is None:
+            if getattr(node, "executor_kind", "") == "material_transfer":
+                raise TransferResourceSetError(
+                    "missing_transfer_resource_contract",
+                    "物料转移动作缺少 AST 冻结资源合同",
+                )
             return None
         if not isinstance(transfer, Mapping):
-            raise TransferResourceSetError("冻结动作的 transfer 资源合同不是对象")
+            raise TransferResourceSetError(
+                "invalid_transfer_resource_contract",
+                "冻结动作的 transfer 资源合同不是对象",
+            )
         required = {
             "material_param",
             "target_owner_param",
@@ -2177,7 +2268,10 @@ class EdgeScheduler:
         if set(transfer) != required or any(
             not isinstance(transfer[field], str) for field in required
         ):
-            raise TransferResourceSetError("冻结动作的 transfer 资源合同字段非法")
+            raise TransferResourceSetError(
+                "invalid_transfer_resource_contract",
+                "冻结动作的 transfer 资源合同字段非法",
+            )
         return {field: str(transfer[field]) for field in required}
 
     def _resource_lock_keys(
@@ -2193,8 +2287,8 @@ class EdgeScheduler:
         ``resolved_args`` 是合并上游输出后的最终动作参数。返回：使用
         ``material/{uuid}/exclusive`` 物料锁；``resolved_site`` 非空时把
         ``mount_resource`` 的整物料锁替换为具体库位锁。异常：冻结动作合同
-        （Action Contract）、遗留注册表（Registry）Schema 或最终参数不能安全
-        解析时抛 ``MaterialLockSchemaError``。
+        （Action Contract）或最终参数不能安全解析时抛
+        ``MaterialLockSchemaError``。
         """
 
         keys: set[str] = set()
@@ -2204,17 +2298,6 @@ class EdgeScheduler:
                 frozen_schema
             ).material_lock_uuids(resolved_args)
             keys.update(material_lock_key(item) for item in material_uuids)
-        elif self._material_lock_resolver is not None:
-            # ``material_uuids`` 只为无冻结合同的遗留直接调用读取实时注册表。
-            material_uuids = self._material_lock_resolver(
-                node.device_id,
-                node.action_name,
-                resolved_args,
-            )
-            keys.update(
-                material_lock_key(material_uuid)
-                for material_uuid in material_uuids
-            )
         if resolved_site is not None:
             keys.discard(material_lock_key(resolved_site.owner_material_uuid))
             keys.add(

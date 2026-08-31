@@ -81,7 +81,7 @@ def test_v9_database_adds_sample_and_current_substance_tables(tmp_path) -> None:
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
     }
-    assert reopened.query_one("PRAGMA user_version") == {"user_version": 11}
+    assert reopened.query_one("PRAGMA user_version") == {"user_version": 13}
     assert {"sample", "current_substance"} <= tables
     reopened.close()
 

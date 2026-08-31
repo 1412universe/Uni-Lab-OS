@@ -326,19 +326,25 @@ def test_device_action_run_api_submits_only_created_job_to_edge_scheduler(
         created_data = created.json()["data"]
         assert created_data["task"]["status"] == "running"
         assert created_data["job"]["status"] == "running"
-        assert dispatcher.dispatched == [
-            {
-                "job_id": created_data["job"]["uuid"],
-                "task_id": created_data["task"]["uuid"],
-                "node_id": created_data["job"]["workflow_node_uuid"],
-                "workflow_id": created_data["task"]["uuid"],
-                "device_id": "contract-device",
-                "action": "hold",
-                "action_type": "UniLabJsonCommand",
-                "action_args": {"duration_seconds": 3},
-                "sample_material": {},
-            }
-        ]
+        assert len(dispatcher.dispatched) == 1
+        dispatched = dispatcher.dispatched[0]
+        assert dispatched["job_id"] == created_data["job"]["uuid"]
+        assert dispatched["task_id"] == created_data["task"]["uuid"]
+        assert dispatched["node_id"] == created_data["job"]["workflow_node_uuid"]
+        assert dispatched["workflow_id"] == created_data["task"]["uuid"]
+        assert dispatched["device_id"] == "contract-device"
+        assert dispatched["action"] == "hold"
+        assert dispatched["action_type"] == "UniLabJsonCommand"
+        assert dispatched["action_args"] == {"duration_seconds": 3}
+        assert dispatched["sample_material"] == {}
+        assert dispatched["attempt"] == 1
+        assert dispatched["command_uuid"]
+        assert dispatched["claim_uuid"]
+        # RecordingDispatcher 是隔离干跑，不装配库存 Permit；生产物理派发测试另行
+        # 断言三项均为非空。这里仅确认新协议字段没有被旧精确载荷断言裁掉。
+        assert "effect_uuid" in dispatched
+        assert "parameter_hash" in dispatched
+        assert "expected_change_set" in dispatched
         assert repeated.status_code == 200
         assert repeated.json()["data"]["created"] is False
         assert len(dispatcher.dispatched) == 1

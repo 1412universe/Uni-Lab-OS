@@ -3735,6 +3735,7 @@ class WorkflowStore:
             "control_data": _load(row["control_data"], {}),
             "error_info": _load(row["error_info"], []),
             "wait_reason": _load(row["wait_reason"], {}),
+            "expected_change_set": _load(row["expected_change_set"], {}),
         }
         cls._add_optional(
             result,
@@ -3749,6 +3750,8 @@ class WorkflowStore:
             "cancel_complete_deadline_at",
             "cancel_accepted_at",
             "uncertainty_reason",
+            "dispatch_effect_uuid",
+            "dispatch_parameter_hash",
             "started_at",
             "finished_at",
         )

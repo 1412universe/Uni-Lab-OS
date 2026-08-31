@@ -7,6 +7,11 @@ from typing import Any
 import pytest
 
 from unilabos.app.scheduler.dispatch import CallbackDispatcher, RecordingDispatcher
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    DispatchAdmissionDecision,
+    DispatchFence,
+    DispatchPermit,
+)
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.device_action_run_store import DeviceActionRunStore
 from unilabos.workflow.store import WorkflowStore
@@ -25,6 +30,40 @@ JOB_A_UUID = "30000000-0000-4000-8000-000000000001"
 JOB_B_UUID = "30000000-0000-4000-8000-000000000002"
 NODE_A_UUID = "40000000-0000-4000-8000-000000000001"
 NODE_B_UUID = "40000000-0000-4000-8000-000000000002"
+
+
+class _PermitInventory:
+    """为物理边界顺序测试签发完整但隔离的 DispatchPermit。"""
+
+    def acquire_dispatch_permit(self, request: Any) -> DispatchAdmissionDecision:
+        """按请求完整资源返回同一 Claim 和 Fence 集合。"""
+
+        return DispatchAdmissionDecision(
+            permit=DispatchPermit(
+                effect_uuid=request.effect_uuid,
+                claim_uuid="50000000-0000-4000-8000-000000000001",
+                task_uuid=request.task_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=tuple(
+                    DispatchFence(resource.lock_key, index)
+                    for index, resource in enumerate(request.resources, start=1)
+                ),
+            )
+        )
+
+    def transition_dispatch_permit(
+        self,
+        claim_uuid: str,
+        *,
+        target_state: str,
+    ) -> None:
+        """接受同一 Claim 的生命周期推进；身份或状态漂移时测试失败。"""
+
+        assert claim_uuid == "50000000-0000-4000-8000-000000000001"
+        assert target_state in {"reserved", "running", "released", "uncertain"}
 
 
 def test_bridge_reuses_standard_job_identity_and_writes_terminal_state(
@@ -99,7 +138,11 @@ def test_bridge_commits_standard_job_before_physical_dispatch(tmp_path: Any) -> 
             )
         )
 
-    scheduler = EdgeScheduler(dispatcher=CallbackDispatcher(observe_dispatch))
+    inventory = _PermitInventory()
+    scheduler = EdgeScheduler(
+        dispatcher=CallbackDispatcher(observe_dispatch),
+        station_resources=inventory,  # type: ignore[arg-type]
+    )
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:
         aggregate = _insert_run(
@@ -143,9 +186,11 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
             execution_locks: list[dict[str, Any]] | None = None,
             device_tenancy: dict[str, Any] | None = None,
             actual_executor: dict[str, Any] | None = None,
+            dispatch_permit: dict[str, Any] | None = None,
             max_active_tasks: int = 500,
             max_tasks_per_workflow: int = 100,
             max_in_flight_jobs: int = 100,
+            aging_interval_seconds: float = 30.0,
         ) -> dict[str, Any]:
             """拒绝派发意图投影。
 
@@ -160,9 +205,11 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
                 execution_locks,
                 device_tenancy,
                 actual_executor,
+                dispatch_permit,
                 max_active_tasks,
                 max_tasks_per_workflow,
                 max_in_flight_jobs,
+                aging_interval_seconds,
             )
             raise RuntimeError("workflow database unavailable")
 

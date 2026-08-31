@@ -422,6 +422,10 @@ def _compile_projection(
                     "size": site.get("size"),
                 }
             }
+            declared_metadata = _json_object(
+                site.get("meta_data"),
+                f"config site {site_name}.meta_data",
+            )
             sites.append(
                 {
                     "uuid": _stable_uuid(
@@ -433,6 +437,7 @@ def _compile_projection(
                     "occupied_material_uuid": occupant_uuid,
                     "description": _optional_text(site.get("description")),
                     "meta_data": {
+                        **declared_metadata,
                         "source": "resource-tree-set-config",
                         "source_node_id": owner_node_id,
                     },

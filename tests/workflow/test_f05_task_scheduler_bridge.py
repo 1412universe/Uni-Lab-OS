@@ -13,10 +13,20 @@ from fastapi.testclient import TestClient
 
 from unilabos.app.scheduler.dispatch import CommittedJobOutcome, RecordingDispatcher
 from unilabos.app.scheduler.inventory.domain import InsufficientStock
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    DispatchAdmissionDecision,
+    DispatchFence,
+    DispatchPermit,
+)
+from unilabos.app.scheduler.inventory.station_resource import (
+    StationSiteTarget,
+    TransferResourceFacts,
+)
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
 WORKFLOW_UUID = "11000000-0000-4000-8000-000000000001"
 TASK_UUID = "21000000-0000-4000-8000-000000000001"
@@ -1007,14 +1017,16 @@ def test_edge_http_outcome_projects_exact_terminal_evidence(
     assert job["error_info"] == error_info
 
 
-def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
+@pytest.mark.parametrize("outcome", ["succeeded", "failed", "canceled", "timeout"])
+def test_edge_material_transfer_settles_only_after_inventory_is_certain(
     store: WorkflowStore,
+    outcome: str,
 ) -> None:
-    """双进程成功转运先更新调度侧库位事实，再提交 Job 终态。
+    """双进程转运只有物料位置明确后才能释放调度侧 Claim。
 
-    参数：``store`` 是隔离任务权威。返回无；断言 Edge HTTP 成功结果使用持久实参
-    调用工站库存，随后 Job/Task 才进入 succeeded。异常：库存结算丢失或身份漂移
-    会使测试失败。
+    参数：``store`` 是隔离任务权威；``outcome`` 覆盖成功与失败停止证明。返回无；
+    断言成功结果先结算位置再释放，失败结果冻结 Claim/Fence，直到操作员提交实际
+    ChangeSet 才释放。异常：库存结算丢失、身份漂移或提前释放会使测试失败。
     """
 
     class _TransferInventory:
@@ -1026,6 +1038,75 @@ def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
             """创建空调用列表；参数、返回和异常均为空。"""
 
             self.moves: list[dict[str, Any]] = []
+            self.claim_states: list[str] = []
+
+        def resolve_target_site(self, request: Any) -> StationSiteTarget:
+            """返回测试冻结的唯一目标库位。
+
+            参数：``request`` 是生产目标选择条件。返回：明确 UUID、名称和父设备。
+            异常：无；该替身只服务本纵向结果测试。
+            """
+
+            return StationSiteTarget(
+                uuid=request.site_uuid,
+                name="A1",
+                owner_material_uuid=request.owner_material_uuid,
+            )
+
+        def resolve_transfer_resources(self, request: Any) -> TransferResourceFacts:
+            """返回完整来源、两端设备和夹爪事实。
+
+            参数：``request`` 是转运资源解析请求。返回：测试固定资源集合。异常：
+            无；库存原子复验由专门集成测试覆盖。
+            """
+
+            return TransferResourceFacts(
+                source_site_uuid="72000000-0000-4000-8000-000000000001",
+                source_owner_material_uuid=(
+                    "73000000-0000-4000-8000-000000000001"
+                ),
+                source_device_material_uuid=(
+                    "73000000-0000-4000-8000-000000000001"
+                ),
+                target_device_material_uuid=request.target_owner_material_uuid,
+                gripper_site_uuid="74000000-0000-4000-8000-000000000001",
+            )
+
+        def acquire_dispatch_permit(self, request: Any) -> DispatchAdmissionDecision:
+            """签发与完整锁集合一一对应的测试 Permit。
+
+            参数：``request`` 是桥生成的不可变派发请求。返回：稳定 Claim 和每项
+            Fence。异常：无；字段漂移会由生产投影再次校验。
+            """
+
+            permit = DispatchPermit(
+                effect_uuid=request.effect_uuid,
+                claim_uuid="75000000-0000-4000-8000-000000000001",
+                task_uuid=request.task_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=tuple(
+                    DispatchFence(resource.lock_key, index)
+                    for index, resource in enumerate(request.resources, start=1)
+                ),
+            )
+            return DispatchAdmissionDecision(permit=permit)
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            """记录测试 Claim 的生命周期转换。
+
+            参数：Claim 身份和目标状态。返回：无。异常：身份不匹配时断言失败。
+            """
+
+            assert claim_uuid == "75000000-0000-4000-8000-000000000001"
+            self.claim_states.append(target_state)
 
         def move_instance(self, material_uuid: str, **kwargs: Any) -> dict[str, Any]:
             """记录转移结算命令并返回同一事实。
@@ -1047,13 +1128,20 @@ def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
             return self.move_instance(
                 command.material_uuid,
                 parent_uuid=command.target_owner_material_uuid,
-                slot_id=command.target_site_uuid or command.target_site_name,
+                slot_id=(
+                    "A1"
+                    if command.target_site_uuid
+                    == "71000000-0000-4000-8000-000000000001"
+                    else command.target_site_name
+                ),
                 actor=command.actor,
                 causation_id=command.causation_id,
             )
 
     _seed_task(store, with_material=False)
     parent_uuid = "52000000-0000-4000-8000-000000000001"
+    robot_uuid = "70000000-0000-4000-8000-000000000001"
+    target_site_uuid = "71000000-0000-4000-8000-000000000001"
     with store.transaction() as connection:
         row = connection.execute(
             "SELECT execution_plan FROM workflow_task WHERE uuid=?",
@@ -1061,10 +1149,21 @@ def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
         ).fetchone()
         plan = json.loads(str(row["execution_plan"]))
         plan["nodes"][0]["kind"] = "material_transfer"
+        plan["nodes"][0]["material_uuid"] = robot_uuid
+        plan["nodes"][0]["action_resource_contract"] = {
+            "version": 1,
+            "transfer": {
+                "material_param": "resource",
+                "target_owner_param": "mount_resource",
+                "target_site_uuid_param": "site_uuid",
+                "target_site_name_param": "",
+                "gripper_site_role": "robot.gripper",
+            },
+        }
         plan["nodes"][0]["param"] = {
             "resource": {"uuid": MATERIAL_UUID},
             "mount_resource": {"uuid": parent_uuid},
-            "site": "A1",
+            "site_uuid": target_site_uuid,
         }
         connection.execute(
             "UPDATE workflow_task SET execution_plan=? WHERE uuid=?",
@@ -1087,12 +1186,36 @@ def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
         scheduler.on_job_outcome(
             JOB_UUID,
             CommittedJobOutcome(
-                outcome="succeeded",
-                return_info={"result": "ok"},
-                error_info=[],
+                outcome=outcome,
+                return_info={"result": "ok" if outcome == "succeeded" else "stopped"},
+                error_info=([] if outcome == "succeeded" else [{"code": "grip_failed"}]),
                 unknown_command_ids=[],
             ),
         )
+        if outcome != "succeeded":
+            failed_job = store.get_job(JOB_UUID)
+            assert failed_job["status"] == outcome
+            assert failed_job["uncertainty_reason"] == (
+                "material_transfer_inventory_reconciliation_required"
+            )
+            assert inventory.moves == []
+            assert inventory.claim_states == ["reserved", "running", "uncertain"]
+            assert {
+                item["state"]
+                for item in TaskRuntimeProjection(store).list_execution_locks(
+                    JOB_UUID
+                )
+            } == {"uncertain"}
+            bridge.settle_failed_material_transfer(
+                JOB_UUID,
+                actual_change_set={
+                    "kind": "material_transfer",
+                    "material_uuid": MATERIAL_UUID,
+                    "target_owner_material_uuid": parent_uuid,
+                    "target_site_uuid": target_site_uuid,
+                },
+                reason="现场确认物料已在目标库位",
+            )
     finally:
         bridge.close()
 
@@ -1101,14 +1224,36 @@ def test_successful_edge_material_transfer_settles_scheduler_inventory_first(
             "material_uuid": MATERIAL_UUID,
             "parent_uuid": parent_uuid,
             "slot_id": "A1",
-            "actor": "station_scheduler.material_transfer",
+            "actor": (
+                "station_scheduler.material_transfer"
+                if outcome == "succeeded"
+                else "physical_settlement"
+            ),
             "causation_id": (
                 f"workflow-node-job:{JOB_UUID}:material-transfer"
+                if outcome == "succeeded"
+                else JOB_UUID
             ),
         }
     ]
-    assert store.get_job(JOB_UUID)["status"] == "succeeded"
-    assert store.get_task(TASK_UUID)["status"] == "succeeded"
+    assert store.get_job(JOB_UUID)["status"] == outcome
+    assert store.get_task(TASK_UUID)["status"] == outcome
+    assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
+    if outcome == "succeeded":
+        assert inventory.claim_states == ["reserved", "running", "released"]
+    else:
+        assert inventory.claim_states == [
+            "reserved",
+            "running",
+            "uncertain",
+            "released",
+        ]
+        assert store.get_task(TASK_UUID)["control_status"] == "active"
+        assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+        assert {
+            item["state"]
+            for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
+        } == {"released"}
 
 
 def test_edge_http_unknown_outcome_keeps_running_job_for_reconciliation(
@@ -1187,6 +1332,68 @@ def test_restart_failed_job_with_uncertain_claim_blocks_scheduler_drain(
     assert drain["active_device_job_ids"] == [JOB_UUID]
 
 
+def test_terminal_recovery_freezes_inventory_claim_before_cleanup(
+    store: WorkflowStore,
+) -> None:
+    """失败作业仍待物理结算时，启动恢复只能冻结库存 Claim，不能标记清理完成。"""
+
+    class _ClaimRecorder:
+        """记录库存 Claim 生命周期转换的窄测试替身。"""
+
+        def __init__(self) -> None:
+            self.transitions: list[tuple[str, str]] = []
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            """记录 Claim 和目标状态；参数均原样保存，返回与异常均无。"""
+
+            self.transitions.append((claim_uuid, target_state))
+
+        def release_unprojected_dispatch_permits(
+            self,
+            *,
+            known_claim_uuids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            """确认测试 Claim 已在工作流库投影，不释放任何身份。"""
+
+            assert known_claim_uuids
+            return ()
+
+    _seed_task(store, with_material=False)
+    projection = TaskRuntimeProjection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_execution_process_restarted(TASK_UUID)
+    claim = projection.get_execution_claim(JOB_UUID)
+    assert claim is not None
+    inventory = _ClaimRecorder()
+    bridge = _bridge(
+        store,
+        EdgeScheduler(
+            dispatcher=RecordingDispatcher(),
+            station_resources=inventory,
+        ),
+    )
+    try:
+        assert bridge.recover_active_tasks() == []
+    finally:
+        bridge.close()
+
+    assert inventory.transitions == [(claim["claim_uuid"], "uncertain")]
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+    assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "uncertain"
+
+
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(
     store: WorkflowStore,
 ) -> None:
@@ -1199,14 +1406,14 @@ def test_close_is_idempotent_and_unregisters_scheduler_listeners(
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
     bridge = _bridge(store, scheduler)
 
-    assert len(scheduler._job_pre_dispatch_listeners) == 1
+    assert scheduler._dispatch_admission_authority is not None
     assert len(scheduler._job_finished_listeners) == 1
     assert len(scheduler._job_settled_listeners) == 1
 
     bridge.close()
     bridge.close()
 
-    assert scheduler._job_pre_dispatch_listeners == []
+    assert scheduler._dispatch_admission_authority is None
     assert scheduler._job_finished_listeners == []
     assert scheduler._job_settled_listeners == []
     assert scheduler._execution_process_restarted_listeners == []
@@ -1252,6 +1459,76 @@ def test_execution_process_restart_fails_task_and_stops_dag_advance(
         assert bridge.active_or_uncertain_job_ids() == {JOB_UUID}
     finally:
         bridge.close()
+
+
+def test_execution_process_restart_skips_stale_task_and_converges_active_task(
+    store: WorkflowStore,
+) -> None:
+    """一个陈旧终态任务不得中断同批活跃任务的重启收敛。
+
+    参数：``store`` 是隔离工作流权威。返回：无；断言陈旧 Job 被幂等跳过，后续
+    活跃任务仍整体失败且下游跳过。异常：桥接器因单项无变化抛错或提前终止时
+    测试失败。
+    """
+
+    _seed_two_node_debug_task(store)
+    # ``active_plan`` 把待验证任务置为可真实派发状态，确保首节点越过执行边界。
+    active_task = store.get_task(TASK_UUID)
+    active_plan = dict(active_task["execution_plan"])
+    active_plan["run_mode"] = "normal"
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET execution_plan = ?, run_mode = 'normal', control_status = 'active'
+            WHERE uuid = ?
+            """,
+            (json.dumps(active_plan), TASK_UUID),
+        )
+    # 两个稳定身份只用于构造已经完成的陈旧任务，不参与活跃任务的 DAG。
+    stale_task_uuid = "21000000-0000-4000-8000-000000000099"
+    stale_job_uuid = "41000000-0000-4000-8000-000000000099"
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO workflow_task(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_uuid, status, workflow_snapshot,
+                execution_plan, run_mode, target_node_uuid, control_status,
+                cleanup_status, trace_context, input, output, error_info
+            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, 'failed', '{}',
+                      '{"version":1,"nodes":[],"edges":[],"handles":[]}',
+                      'normal', NULL, 'active', 'settled', '{}', '{}', '{}', '[]')
+            """,
+            (stale_task_uuid, _CREATED_AT, _CREATED_AT, WORKFLOW_UUID),
+        )
+        connection.execute(
+            """
+            INSERT INTO workflow_node_job(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_uuid,
+                feedback_sequence, topological_index, executor_kind,
+                execution_policy, execution_timeout_seconds, status, attempt,
+                param, feedback_data, return_info, control_data, error_info
+            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 0, 0,
+                      'device_action', '{}', 0, 'failed', 1, '{}', '{}',
+                      '{}', '{}', '[]')
+            """,
+            (stale_job_uuid, _CREATED_AT, _CREATED_AT, stale_task_uuid, NODE_UUID),
+        )
+
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        scheduler.on_execution_process_restarted((stale_job_uuid, JOB_UUID))
+    finally:
+        bridge.close()
+
+    jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
+    assert jobs[JOB_UUID]["status"] == "failed"
+    assert jobs[SECOND_JOB_UUID]["status"] == "skipped"
+    assert store.get_task(TASK_UUID)["status"] == "failed"
 
 
 def test_restart_fails_running_task_between_nodes_without_physical_replay(

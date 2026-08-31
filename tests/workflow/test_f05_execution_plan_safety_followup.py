@@ -318,10 +318,7 @@ def test_frozen_action_contract_wins_over_changed_registry() -> None:
     plan, jobs = _build_real_plan()
     spec = _compile_real_plan(plan, jobs)
     stale_registry = _StaleRegistryResolver()
-    scheduler = EdgeScheduler(
-        dispatcher=RecordingDispatcher(),
-        material_lock_resolver=stale_registry,
-    )
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
 
     result = scheduler.submit_workflow(spec)
     inflight_jobs = scheduler.snapshot()["inflight_jobs"]

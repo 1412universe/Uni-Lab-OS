@@ -387,6 +387,17 @@ class WorkflowTaskSchedulerBridge(Protocol):
 
         ...
 
+    def settle_failed_material_transfer(
+        self,
+        job_uuid: str,
+        *,
+        actual_change_set: Mapping[str, Any],
+        reason: str,
+    ) -> dict[str, Any]:
+        """提交失败转运的实际物料位置并完成物理结算。"""
+
+        ...
+
 
 class WorkflowInterventionDelivery(Protocol):
     """本地设备异常决定的投递端口。"""
@@ -2920,6 +2931,11 @@ class WorkflowService:
         except StoreNotFound:
             raise WorkflowError("not_found") from None
 
+    def get_execution_wait_graph(self) -> dict[str, Any]:
+        """返回工站内全部持久资源等待边和循环诊断。"""
+
+        return TaskRuntimeProjection(self._store).get_execution_wait_graph()
+
     def get_manual_confirmation(self, confirmation_uuid: str) -> dict[str, Any]:
         """读取一条人工确认事实。"""
 
@@ -2973,10 +2989,10 @@ class WorkflowService:
                     "created": False,
                 }
             if (
-                job.get("status") != "running"
+                job.get("status") not in {"running", "failed"}
                 or not str(job.get("uncertainty_reason") or "").strip()
             ):
-                raise StoreConflict("作业不是等待物理对账的运行中作业")
+                raise StoreConflict("作业不是等待物理对账的运行中或失败作业")
             if self._task_scheduler_bridge is None:
                 raise StoreConflict("当前模式没有本地 UNKNOWN 处置端口")
             command_id = (
@@ -2990,6 +3006,34 @@ class WorkflowService:
                 identity,
                 reason=normalized_reason,
                 device_command_id=command_id,
+            )
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except (StoreConflict, TaskSchedulerBridgeError):
+            raise WorkflowConflict("conflict") from None
+
+    def settle_failed_material_transfer(
+        self,
+        job_uuid: str,
+        *,
+        actual_change_set: Mapping[str, Any],
+        reason: str,
+    ) -> dict[str, Any]:
+        """提交失败转运的实际位置，保持失败主状态并释放已结算占用。"""
+
+        try:
+            identity = validate_uuid(job_uuid)
+            normalized_reason = reason.strip()
+            if not normalized_reason or not isinstance(actual_change_set, Mapping):
+                raise ValueError
+            if self._task_scheduler_bridge is None:
+                raise StoreConflict("当前模式没有本地物理结算端口")
+            return self._task_scheduler_bridge.settle_failed_material_transfer(
+                identity,
+                actual_change_set=actual_change_set,
+                reason=normalized_reason,
             )
         except ValueError:
             raise WorkflowError("invalid_input") from None

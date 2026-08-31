@@ -205,6 +205,27 @@ def build_run_preflight_report(
                     node_name=node_name,
                 )
             )
+        device_selector = planned.get("device_selector")
+        if (
+            kind in {"device_action", "material_transfer"}
+            and isinstance(device_selector, Mapping)
+            and device_selector
+        ):
+            report["checks"].append(
+                _check(
+                    check_type="device_selection",
+                    status="deferred",
+                    code="device_instance_selected_at_dispatch",
+                    message="具体设备实例将在派发门禁按冻结设备类选择并原子占用",
+                    node_uuid=node_uuid,
+                    node_name=node_name,
+                    details={
+                        "resource_template_uuid": str(
+                            device_selector.get("resource_template_uuid") or ""
+                        )
+                    },
+                )
+            )
         material_uuid = planned.get("material_uuid")
         if kind == "device_action" and isinstance(material_uuid, str):
             material = (
@@ -239,9 +260,12 @@ def build_run_preflight_report(
     report["checks"].append(
         _check(
             check_type="resource_lock",
-            status="passed",
-            code="no_static_resource_lock_conflict",
-            message="当前只读快照未发现静态执行占用冲突；派发时仍会原子复核",
+            status="deferred",
+            code="resource_admission_at_dispatch",
+            message=(
+                "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在"
+                "派发门禁的库存事务中原子复核"
+            ),
         )
     )
     return _finalize(report)

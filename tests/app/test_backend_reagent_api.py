@@ -175,7 +175,7 @@ def test_inventory_database_reuses_edge_ledger_for_reagent_schema(tmp_path) -> N
         )
     }
 
-    assert store.query_one("PRAGMA user_version") == {"user_version": 11}
+    assert store.query_one("PRAGMA user_version") == {"user_version": 13}
     assert {
         "reagent_info",
         "reagent",

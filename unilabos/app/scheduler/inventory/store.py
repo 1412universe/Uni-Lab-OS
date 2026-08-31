@@ -17,13 +17,16 @@ from typing import Any, Dict, Iterator, List, Optional
 from unilabos.app.scheduler.inventory.content_store import (
     migrate_container_content_schema,
 )
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    migrate_dispatch_admission_schema,
+)
 from unilabos.app.scheduler.inventory.ingress_schema import migrate_ingress_schema
 from unilabos.app.scheduler.inventory.reagent_store import migrate_reagent_schema
 from unilabos.registry.runtime_device_catalog import RuntimeDeviceTemplateCatalog
 
 # v8 已由生产分支用于物料来源绑定；试剂和容器内容依次占用后续版本。
 # v11 把物料模板引用改为由 SQLite 物料模板与内存设备目录共同校验。
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 class InvalidCursorAdvance(ValueError):
@@ -1144,6 +1147,9 @@ class InventoryStore:
             # v12 增加 Backend AGV 调用的目标 Edge 入口预留状态机。结构迁移保持
             # 幂等，修复开发数据库被手工提高版本但缺少业务表的情况。
             migrate_ingress_schema(self._conn)
+            # v13 把门禁 7 的条件复验、完整 Claim 和 Fence 收敛到库存写事务。
+            # 工作流库只保存同一 Permit 的审计投影，不再成为资源竞争权威。
+            migrate_dispatch_admission_schema(self._conn)
             if current >= 5:
                 # A development build may have added the v6 column before the
                 # deterministic backfill was introduced; keep this idempotent.

@@ -34,7 +34,14 @@ _MATERIAL_UUID_A = "11111111-1111-1111-1111-111111111111"
 _MATERIAL_UUID_B = "22222222-2222-2222-2222-222222222222"
 
 
-def _node(node_id, device="dev1", action="run", param=None, materials=None):
+def _node(
+    node_id,
+    device="dev1",
+    action="run",
+    param=None,
+    materials=None,
+    param_schema=None,
+):
     """构造本地调度测试使用的工作流节点。
 
     Args:
@@ -51,6 +58,7 @@ def _node(node_id, device="dev1", action="run", param=None, materials=None):
     return WorkflowNode(
         id=node_id, device_id=device, action_name=action, action_type="goal",
         param=param or {}, material_requirements=materials or [],
+        param_schema=param_schema,
     )
 
 
@@ -68,44 +76,30 @@ def _edge(src, dst):
     return WorkflowEdge(uuid=f"{src}->{dst}", source_node_id=src, target_node_id=dst)
 
 
-def _compiled_plate_resolver(device_id, action_name, final_param):
-    """按测试动作 Schema 校验参数并返回需要锁定的物料 UUID。
+def _plate_action_schema() -> dict[str, Any]:
+    """返回任务创建时冻结的 plate 物料锁动作合同。"""
 
-    Args:
-        device_id: 当前设备身份，本测试只验证解析接口形状。
-        action_name: 当前动作名，本测试只验证解析接口形状。
-        final_param: 合并完成的动作最终参数。
-
-    Returns:
-        规范化、去重和稳定排序的物料 UUID。
-    """
-
-    del device_id, action_name
-    # ``compiled`` 表示设备动作目录中已固化的 Goal 参数合同。
-    compiled = compile_material_lock_schema(
-        {
-            "type": "object",
-            "properties": {
-                "goal": {
-                    "type": "object",
-                    "properties": {
-                        "plate": {
-                            "type": "object",
-                            "x-unilabos-material-lock": True,
-                            "properties": {
-                                "uuid": {"type": "string", "format": "uuid"},
-                            },
-                            "required": ["uuid"],
-                            "additionalProperties": False,
+    return {
+        "type": "object",
+        "properties": {
+            "goal": {
+                "type": "object",
+                "properties": {
+                    "plate": {
+                        "type": "object",
+                        "x-unilabos-material-lock": True,
+                        "properties": {
+                            "uuid": {"type": "string", "format": "uuid"},
                         },
+                        "required": ["uuid"],
+                        "additionalProperties": False,
                     },
-                    "required": ["plate"],
-                    "additionalProperties": False,
                 },
+                "required": ["plate"],
+                "additionalProperties": False,
             },
-        }
-    )
-    return compiled.material_lock_uuids(final_param)
+        },
+    }
 
 
 class TestSchemaMaterialLockSerializesAcrossDevices:
@@ -113,11 +107,7 @@ class TestSchemaMaterialLockSerializesAcrossDevices:
         """装配使用真实 Schema 提取接缝的本地调度器。"""
 
         dispatcher = RecordingDispatcher()
-        # 两台设备的 run 动作共享同一个规范参数合同。
-        scheduler = EdgeScheduler(
-            dispatcher=dispatcher,
-            material_lock_resolver=_compiled_plate_resolver,
-        )
+        scheduler = EdgeScheduler(dispatcher=dispatcher)
         return scheduler, dispatcher
 
     def test_shared_resource_waits(self):
@@ -126,8 +116,8 @@ class TestSchemaMaterialLockSerializesAcrossDevices:
         spec = WorkflowSpec(
             workflow_id="wf1",
             nodes=[
-                _node("A", device="dev1", param={"plate": {"uuid": _MATERIAL_UUID_A}}),
-                _node("B", device="dev2", param={"plate": {"uuid": _MATERIAL_UUID_A}}),
+                _node("A", device="dev1", param={"plate": {"uuid": _MATERIAL_UUID_A}}, param_schema=_plate_action_schema()),
+                _node("B", device="dev2", param={"plate": {"uuid": _MATERIAL_UUID_A}}, param_schema=_plate_action_schema()),
             ],
         )
         result = scheduler.submit_workflow(spec)
@@ -136,6 +126,7 @@ class TestSchemaMaterialLockSerializesAcrossDevices:
         snap = scheduler.snapshot()
         (job_id, job), = snap["inflight_jobs"].items()
         assert job["resource_locks"] == [
+            "/devices/dev1",
             f"material/{_MATERIAL_UUID_A}/exclusive"
         ]
 
@@ -151,8 +142,8 @@ class TestSchemaMaterialLockSerializesAcrossDevices:
         spec = WorkflowSpec(
             workflow_id="wf1",
             nodes=[
-                _node("A", device="dev1", param={"plate": {"uuid": _MATERIAL_UUID_A}}),
-                _node("B", device="dev2", param={"plate": {"uuid": _MATERIAL_UUID_B}}),
+                _node("A", device="dev1", param={"plate": {"uuid": _MATERIAL_UUID_A}}, param_schema=_plate_action_schema()),
+                _node("B", device="dev2", param={"plate": {"uuid": _MATERIAL_UUID_B}}, param_schema=_plate_action_schema()),
             ],
         )
         result = scheduler.submit_workflow(spec)
@@ -178,7 +169,13 @@ class TestSchemaMaterialLockSerializesAcrossDevices:
         scheduler, dispatcher = self._make()
         spec = WorkflowSpec(
             workflow_id="wf-invalid-param",
-            nodes=[_node("A", param={"plate": {}})],
+            nodes=[
+                _node(
+                    "A",
+                    param={"plate": {}},
+                    param_schema=_plate_action_schema(),
+                )
+            ],
         )
 
         result = scheduler.submit_workflow(spec)
@@ -218,7 +215,7 @@ class TestInstanceRequirementLock:
         scheduler.submit_workflow(spec)
         snap = scheduler.snapshot()
         (job,) = snap["inflight_jobs"].values()
-        assert job["resource_locks"] == []
+        assert job["resource_locks"] == ["/devices/dev1"]
 
 
 class TestSkipQuarantinesMaterials:

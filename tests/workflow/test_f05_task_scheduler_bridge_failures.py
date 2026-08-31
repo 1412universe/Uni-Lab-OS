@@ -19,6 +19,11 @@ from tests.workflow.test_f05_task_scheduler_bridge import (
 )
 from tests.workflow.test_f05_task_scheduler_composition import _RecordingStore
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    DispatchAdmissionDecision,
+    DispatchFence,
+    DispatchPermit,
+)
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow import composition
 from unilabos.workflow.service import WorkflowError, WorkflowService
@@ -104,14 +109,14 @@ def test_composition_closes_store_when_shared_bridge_construction_fails(
     with (
         patch.object(
             scheduler,
-            "add_job_pre_dispatch_listener",
-            wraps=scheduler.add_job_pre_dispatch_listener,
-        ) as add_pre_dispatch_listener,
+            "bind_dispatch_admission_authority",
+            wraps=scheduler.bind_dispatch_admission_authority,
+        ) as bind_dispatch_admission_authority,
         patch.object(
             scheduler,
-            "remove_job_pre_dispatch_listener",
-            wraps=scheduler.remove_job_pre_dispatch_listener,
-        ) as remove_pre_dispatch_listener,
+            "unbind_dispatch_admission_authority",
+            wraps=scheduler.unbind_dispatch_admission_authority,
+        ) as unbind_dispatch_admission_authority,
         patch.object(
             scheduler,
             "add_job_finished_listener",
@@ -130,8 +135,8 @@ def test_composition_closes_store_when_shared_bridge_construction_fails(
             material_resolver=lambda _uuid: None,
         )
 
-    assert add_pre_dispatch_listener.call_count == 0
-    assert remove_pre_dispatch_listener.call_count == 0
+    assert bind_dispatch_admission_authority.call_count == 0
+    assert unbind_dispatch_admission_authority.call_count == 0
     assert add_finished_listener.call_count == 0
     assert remove_finished_listener.call_count == 0
     assert len(captured_stores) == 2
@@ -182,14 +187,14 @@ def test_composition_closes_shared_bridge_when_service_construction_fails(
     with (
         patch.object(
             scheduler,
-            "add_job_pre_dispatch_listener",
-            wraps=scheduler.add_job_pre_dispatch_listener,
-        ) as add_pre_dispatch_listener,
+            "bind_dispatch_admission_authority",
+            wraps=scheduler.bind_dispatch_admission_authority,
+        ) as bind_dispatch_admission_authority,
         patch.object(
             scheduler,
-            "remove_job_pre_dispatch_listener",
-            wraps=scheduler.remove_job_pre_dispatch_listener,
-        ) as remove_pre_dispatch_listener,
+            "unbind_dispatch_admission_authority",
+            wraps=scheduler.unbind_dispatch_admission_authority,
+        ) as unbind_dispatch_admission_authority,
         patch.object(
             scheduler,
             "add_job_finished_listener",
@@ -208,9 +213,9 @@ def test_composition_closes_shared_bridge_when_service_construction_fails(
             material_resolver=lambda _uuid: None,
         )
 
-    add_pre_dispatch_listener.assert_called_once()
-    remove_pre_dispatch_listener.assert_called_once_with(
-        add_pre_dispatch_listener.call_args.args[0]
+    bind_dispatch_admission_authority.assert_called_once()
+    unbind_dispatch_admission_authority.assert_called_once_with(
+        bind_dispatch_admission_authority.call_args.args[0]
     )
     add_finished_listener.assert_called_once()
     remove_finished_listener.assert_called_once_with(
@@ -275,6 +280,96 @@ class _FailingDispatcher(RecordingDispatcher):
 
         super().dispatch(payload)
         raise RuntimeError("执行适配器确认丢失")
+
+
+class _PermitCommitFailureInventory:
+    """模拟工作流已投影、库存 Permit 确认失败的跨库窗口。"""
+
+    claim_uuid = "75000000-0000-4000-8000-000000000099"
+
+    def __init__(self) -> None:
+        """初始化生命周期记录；参数无，返回无，不访问外部状态。"""
+
+        self.transitions: list[str] = []
+
+    def acquire_dispatch_permit(self, request: Any) -> DispatchAdmissionDecision:
+        """签发与全部锁资源一一对应的 prepared Permit。"""
+
+        return DispatchAdmissionDecision(
+            permit=DispatchPermit(
+                effect_uuid=request.effect_uuid,
+                claim_uuid=self.claim_uuid,
+                task_uuid=request.task_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=tuple(
+                    DispatchFence(resource.lock_key, index)
+                    for index, resource in enumerate(request.resources, start=1)
+                ),
+            )
+        )
+
+    def transition_dispatch_permit(
+        self,
+        claim_uuid: str,
+        *,
+        target_state: str,
+    ) -> None:
+        """记录转换，并仅在 reserved 确认点注入存储故障。"""
+
+        assert claim_uuid == self.claim_uuid
+        self.transitions.append(target_state)
+        if target_state == "reserved":
+            raise RuntimeError("库存 Permit 提交确认丢失")
+
+    def release_unprojected_dispatch_permits(
+        self,
+        *,
+        known_claim_uuids: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        """满足恢复窄接口；本用例不执行启动恢复。"""
+
+        del known_claim_uuids
+        return ()
+
+
+def test_inventory_permit_commit_failure_freezes_projected_claim(
+    store: WorkflowStore,
+) -> None:
+    """Permit 确认失败时必须冻结双库 Claim，且不得派发设备。"""
+
+    task = _seed_task(store, with_material=False)
+    inventory = _PermitCommitFailureInventory()
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        station_resources=inventory,  # type: ignore[arg-type]
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        with pytest.raises(TaskSchedulerBridgeError) as captured_error:
+            bridge.submit(task)
+
+        assert isinstance(captured_error.value.__cause__, RuntimeError)
+        assert inventory.transitions == ["reserved", "uncertain"]
+        assert "released" not in inventory.transitions
+        assert dispatcher.dispatched == []
+        assert store.get_job(JOB_UUID)["status"] == "running"
+        assert store.get_job(JOB_UUID)["uncertainty_reason"] == (
+            "inventory_permit_commit_unknown"
+        )
+        assert store.get_task(TASK_UUID)["control_status"] == (
+            "waiting_reconciliation"
+        )
+        assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+        assert {
+            lease["state"]
+            for lease in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
+        } == {"uncertain"}
+    finally:
+        bridge.close()
 
 
 def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
@@ -356,9 +451,11 @@ class _FailOnceProjection:
         execution_locks: list[Mapping[str, Any]],
         device_tenancy: Mapping[str, Any] | None = None,
         actual_executor: Mapping[str, Any] | None = None,
+        dispatch_permit: Mapping[str, Any] | None = None,
         max_active_tasks: int = 500,
         max_tasks_per_workflow: int = 100,
         max_in_flight_jobs: int = 100,
+        aging_interval_seconds: float = 30.0,
     ) -> dict[str, Any]:
         """委托派发前投影；参数含最终实参、资源与实际执行器，返回标准聚合。"""
 
@@ -369,9 +466,11 @@ class _FailOnceProjection:
             execution_locks=execution_locks,
             device_tenancy=device_tenancy,
             actual_executor=actual_executor,
+            dispatch_permit=dispatch_permit,
             max_active_tasks=max_active_tasks,
             max_tasks_per_workflow=max_tasks_per_workflow,
             max_in_flight_jobs=max_in_flight_jobs,
+            aging_interval_seconds=aging_interval_seconds,
         )
 
     def project_dispatch_accepted(self, job_uuid: str) -> dict[str, Any]:

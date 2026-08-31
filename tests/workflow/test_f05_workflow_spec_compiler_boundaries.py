@@ -466,6 +466,21 @@ def test_plan_freezes_trusted_material_transfer_executor_kind() -> None:
     release_template = _template(TEMPLATE_B_UUID)
     release_template["name"] = "transfer_resource"
     release_template["meta_data"]["unilab"]["executor_kind"] = "material_transfer"
+    action_schema = release_template["meta_data"]["unilab"][
+        "action_contract_schema"
+    ]
+    action_schema["x-unilabos-action-contract"] = {
+        "resource_contract": {
+            "version": 1,
+            "transfer": {
+                "material_param": "resource",
+                "target_owner_param": "target_warehouse",
+                "target_site_uuid_param": "",
+                "target_site_name_param": "target_site",
+                "gripper_site_role": "robot.gripper",
+            },
+        }
+    }
     graph["nodes"].append(release_node)
     graph["node_templates"].append(release_template)
     plan, jobs = _build_plan(graph)
@@ -477,6 +492,26 @@ def test_plan_freezes_trusted_material_transfer_executor_kind() -> None:
         "device_action",
         "material_transfer",
     ]
+
+
+def test_material_transfer_without_complete_resource_contract_is_rejected() -> None:
+    """物料转移动作缺少完整资源合同时必须在冻结计划前关闭失败。
+
+    参数：无。返回：无；断言受信执行种类不能把空资源合同带入调度器。
+    异常：计划构建必须抛出稳定错误，证明真实执行不会只取得机械臂占用后再
+    进入设备内部等待库位条件。
+    """
+
+    graph = _single_action_graph()
+    graph["node_templates"][0]["meta_data"]["unilab"][
+        "executor_kind"
+    ] = "material_transfer"
+
+    with pytest.raises(
+        ExecutionPlanBuildError,
+        match="物料转移动作必须声明物料、目标设备、目标库位和机械臂夹爪角色",
+    ):
+        _build_plan(graph)
 
 
 def test_plan_rejects_plc_access_region_software_lock() -> None:

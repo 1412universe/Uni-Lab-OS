@@ -329,11 +329,12 @@ def _parameter_name(value: Any, path: str) -> str:
 def _optional_parameter_name(value: Any, path: str) -> str:
     """校验一个可省略的声明参数名。
 
-    参数：``value`` 是可疑值或 ``None``，``path`` 是诊断路径。返回：省略时为空
-    字符串，否则返回规范名称。异常：非空值非法时抛 ``ActionResourceContractError``。
+    参数：``value`` 是可疑值、``None`` 或已规范化的空字符串，``path`` 是诊断
+    路径。返回：省略时为空字符串，否则返回规范名称。异常：非空值非法时抛
+    ``ActionResourceContractError``；重复规范化保持幂等。
     """
 
-    if value is None:
+    if value is None or value == "":
         return ""
     return _parameter_name(value, path)
 

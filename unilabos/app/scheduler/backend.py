@@ -33,6 +33,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from unilabos.app.scheduler.dispatch import CancelDispatchState, DispatchPayload
+from unilabos.app.scheduler.execution_outcome import normalize_executor_outcome
 from unilabos.app.ws_client import (
     DeviceActionManager,
     JobInfo,
@@ -277,9 +278,9 @@ class JobExecutionBackend:
             # （normal / skip / operator_intervention，见 registry.action_policy）
             ret_value = return_info.get("return_value")
             suc_type = str(return_info.get("suc_type") or "normal")
-        effective_success = status == "success"
-        if isinstance(ret_value, Mapping) and ret_value.get("success") is False:
-            effective_success = False
+        effective_success = (
+            normalize_executor_outcome(status, return_info) == "succeeded"
+        )
         parent = extract_trace_context(item.trace_context)
         self._put_event(
             ("finished", item.job_id, effective_success, ret_value, suc_type),
@@ -702,7 +703,6 @@ def create_edge_stack(
         busy_key_provider=backend.busy_device_action_keys,
         inventory=inventory,
         station_resources=station_resources,
-        material_lock_resolver=make_device_material_lock_resolver(host_node_getter),
         device_target_resolver=device_target_resolver,
         estimator=estimator,
         monitor=monitor,

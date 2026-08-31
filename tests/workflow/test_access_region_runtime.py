@@ -95,7 +95,7 @@ def test_scheduler_rejects_legacy_access_region_without_compatibility_path() -> 
     )
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
     dispatching: list[dict[str, Any]] = []
-    scheduler.add_job_pre_dispatch_listener(
+    scheduler.bind_dispatch_admission_authority(
         lambda payload: dispatching.append(payload) or True
     )
 

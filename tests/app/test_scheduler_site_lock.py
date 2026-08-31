@@ -56,6 +56,13 @@ def inventory(
             "name": "库位父物料",
         }
     )
+    source_owner = backend.create_material(
+        {
+            "resource_template_uuid": template_by_name["test.site-owner"],
+            "barcode": "SOURCE-OWNER",
+            "name": "来源库位父物料",
+        }
+    )
     first = backend.create_material(
         {
             "resource_template_uuid": template_by_name["test.transfer-item"],
@@ -94,12 +101,47 @@ def inventory(
                     json.dumps([template_by_name["test.transfer-item"]]),
                 ),
             )
+        for site_uuid, name, order, occupant in (
+            (
+                "55555555-5555-4555-8555-555555555551",
+                "SOURCE-A",
+                0,
+                first["uuid"],
+            ),
+            (
+                "55555555-5555-4555-8555-555555555552",
+                "SOURCE-B",
+                1,
+                second["uuid"],
+            ),
+        ):
+            connection.execute(
+                """
+                INSERT INTO site(
+                    uuid,create_time,update_time,meta_data,material_uuid,name,
+                    sort_order,allowed_resource_template_uuids,
+                    occupied_material_uuid,position_x,position_y,position_z,
+                    depth,length,width
+                ) VALUES (?,?,?,'{}',?,?,?,?,?,0,0,0,0,0,0)
+                """,
+                (
+                    site_uuid,
+                    "2026-08-25T00:00:00Z",
+                    "2026-08-25T00:00:00Z",
+                    source_owner["uuid"],
+                    name,
+                    order,
+                    json.dumps([template_by_name["test.transfer-item"]]),
+                    occupant,
+                ),
+            )
     try:
         yield (
             store,
             InventoryService(store),
             {
                 "owner": owner["uuid"],
+                "source_owner": source_owner["uuid"],
                 "first": first["uuid"],
                 "second": second["uuid"],
             },
@@ -126,7 +168,7 @@ def _material_reference_schema() -> dict[str, Any]:
 def _action_schema(*, include_site_uuid: bool = True) -> dict[str, Any]:
     """返回转运动作冻结合同。
 
-    参数：``include_site_uuid`` 为假时模拟升级前只含 ``site`` 的历史合同。
+    参数：``include_site_uuid`` 为假时验证只按库位名称选择的显式合同。
     返回：严格 Goal 参数 Schema。异常：无。
     """
 
@@ -168,7 +210,7 @@ def _node(
     """构造真实参数形状的 ``transfer_resource`` 工作流节点。
 
     参数：节点、设备、待转物料、父物料和两个库位选择字段；
-    ``include_site_uuid`` 控制是否模拟历史合同。返回：冻结了动作合同的节点。
+    ``include_site_uuid`` 控制合同是否提供稳定库位 UUID 参数。返回：冻结了动作合同的节点。
     异常：无。
     """
 
@@ -187,6 +229,19 @@ def _node(
         action_type="goal",
         param=param,
         param_schema=_action_schema(include_site_uuid=include_site_uuid),
+        executor_kind="material_transfer",
+        action_resource_contract={
+            "version": 1,
+            "transfer": {
+                "material_param": "resource",
+                "target_owner_param": "mount_resource",
+                "target_site_uuid_param": (
+                    "site_uuid" if include_site_uuid else ""
+                ),
+                "target_site_name_param": "site",
+                "gripper_site_role": "",
+            },
+        },
         always_free=True,
     )
 
@@ -226,16 +281,20 @@ def test_site_uuid_has_priority_and_fills_canonical_site_name(
     job_uuid = result["dispatched"][0]["job_id"]
     assert set(scheduler.snapshot()["inflight_jobs"][job_uuid]["resource_locks"]) == {
         f"material/{identities['first']}/exclusive",
+        (
+            f"material/{identities['source_owner']}/site/"
+            "55555555-5555-4555-8555-555555555551/exclusive"
+        ),
         f"material/{identities['owner']}/site/{_SITE_UUID_A}/exclusive",
     }
 
 
-def test_legacy_site_name_resolves_without_requiring_site_uuid(
+def test_explicit_site_name_resolves_without_requiring_site_uuid(
     inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:
-    """验证旧工作流只传库位名仍可解析并派发。
+    """验证显式名称合同不传库位 UUID 时仍按权威库位解析。
 
-    参数：``inventory`` 提供隔离库存。返回：无。异常：兼容路径失效时由断言
+    参数：``inventory`` 提供隔离库存。返回：无。异常：名称解析失效时由断言
     报告。
     """
 
@@ -266,13 +325,13 @@ def test_legacy_site_name_resolves_without_requiring_site_uuid(
     }
 
 
-def test_unknown_legacy_site_name_falls_back_to_whole_parent_lock(
+def test_unknown_site_name_fails_closed_without_parent_lock_fallback(
     inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:
-    """验证未知历史库位名退回整父物料忙碌键。
+    """验证未知库位名失败关闭，不退化成整父物料锁后继续派发。
 
-    参数：``inventory`` 提供隔离库存。返回：无。异常：兼容派发或保守互斥
-    失效时由断言报告。
+    参数：``inventory`` 提供隔离库存。返回：无。异常：未知名称越过派发边界
+    时由断言报告。
     """
 
     _, service, identities = inventory
@@ -294,13 +353,9 @@ def test_unknown_legacy_site_name_falls_back_to_whole_parent_lock(
         )
     )
 
-    assert len(result["dispatched"]) == 1
-    assert dispatcher.dispatched[0]["action_args"]["site"] == "LEGACY-SITE"
-    job_uuid = result["dispatched"][0]["job_id"]
-    assert set(scheduler.snapshot()["inflight_jobs"][job_uuid]["resource_locks"]) == {
-        f"material/{identities['first']}/exclusive",
-        f"material/{identities['owner']}/exclusive",
-    }
+    assert result["dispatched"] == []
+    assert dispatcher.dispatched == []
+    assert scheduler.workflow_snapshot("wf-legacy-unknown-site")["state"] == "failed"
 
 
 def test_site_uuid_from_another_owner_is_rejected(
@@ -406,12 +461,12 @@ def test_invalid_site_selection_fails_closed(
     site_uuid: str,
     site: str,
     expected_code: str,
-    capfd: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """验证非法库位选择全部失败关闭。
 
     参数：``inventory`` 是隔离库存；``site_uuid``、``site`` 和
-    ``expected_code`` 描述错误样例；``capfd`` 捕获稳定诊断。返回：无。
+    ``expected_code`` 描述错误样例；``caplog`` 捕获稳定诊断。返回：无。
     异常：非法选择被派发或诊断漂移时由断言报告。
     """
 
@@ -439,7 +494,7 @@ def test_invalid_site_selection_fails_closed(
     assert (
         scheduler.workflow_snapshot(f"wf-invalid-{expected_code}")["state"] == "failed"
     )
-    assert expected_code in capfd.readouterr().err
+    assert expected_code in caplog.text
 
 
 def test_occupied_site_is_rejected_before_dispatch(
@@ -453,6 +508,11 @@ def test_occupied_site_is_rejected_before_dispatch(
 
     store, service, identities = inventory
     with store.transaction() as connection:
+        connection.execute(
+            "UPDATE site SET occupied_material_uuid=NULL "
+            "WHERE occupied_material_uuid=?",
+            (identities["second"],),
+        )
         connection.execute(
             "UPDATE site SET occupied_material_uuid=? WHERE uuid=?",
             (identities["second"], _SITE_UUID_A),

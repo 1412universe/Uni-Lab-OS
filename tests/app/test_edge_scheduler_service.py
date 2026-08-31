@@ -3,7 +3,9 @@
 核心断言：**每个工作流提交、每个子 action 完成，都触发一次重排**。
 """
 
-from unilabos.app.scheduler.dispatch import RecordingDispatcher
+import pytest
+
+from unilabos.app.scheduler.dispatch import CallbackDispatcher, RecordingDispatcher
 from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
 from unilabos.app.scheduler.models import (
     Handle,
@@ -14,7 +16,7 @@ from unilabos.app.scheduler.models import (
     normalize_node_type,
 )
 from unilabos.app.scheduler.ordering import OrderingContext, StableLocalOrderer
-from unilabos.app.scheduler.service import EdgeScheduler
+from unilabos.app.scheduler.service import EdgeScheduler, ExecutionPolicyError
 
 
 def _node(node_id: str, device: str = "dev1", action: str = "run") -> WorkflowNode:
@@ -61,6 +63,60 @@ def test_transfer_node_type_is_canonical_but_not_executable_as_ilab():
     node = WorkflowNode(id="transfer", node_type=normalize_node_type("transfer"))
     assert node.node_type == "Transfer"
     assert not node.is_ilab()
+
+
+def test_physical_dispatch_requires_persistent_admission_authority() -> None:
+    """物理执行适配器未装配持久准入权威时必须关闭失败。
+
+    参数：无。返回：无；断言工作流不会越过执行边界。异常：调度器应抛稳定
+    ``ExecutionPolicyError``，且执行适配器不得收到任何载荷。
+    """
+
+    dispatched: list[dict] = []
+    scheduler = EdgeScheduler(
+        dispatcher=CallbackDispatcher(lambda payload: dispatched.append(dict(payload)))
+    )
+
+    with pytest.raises(ExecutionPolicyError, match="持久派发准入权威未装配"):
+        scheduler.submit_workflow(_chain_spec("wf-missing-dispatch-authority"))
+
+    assert dispatched == []
+
+
+def test_admission_authority_cannot_return_without_complete_permit() -> None:
+    """持久准入权威未写入完整 Permit 时不能越过物理边界。
+
+    参数：无。返回：无；断言缺少 Command、Claim 与 Fence 时不执行物理动作。
+    异常：调度器必须报告凭据不完整，证明安全接口不能被布尔监听器绕过。
+    """
+
+    dispatched: list[dict] = []
+    scheduler = EdgeScheduler(
+        dispatcher=CallbackDispatcher(lambda payload: dispatched.append(dict(payload)))
+    )
+    scheduler.bind_dispatch_admission_authority(lambda _dispatching: True)
+
+    with pytest.raises(ExecutionPolicyError, match="持久派发凭据不完整"):
+        scheduler.submit_workflow(_chain_spec("wf-incomplete-dispatch-permit"))
+
+    assert dispatched == []
+
+
+def test_dispatch_admission_authority_is_single_assignment() -> None:
+    """调度器只能绑定一个库存权威，禁止多监听器形成部分资源事务。
+
+    参数：无。返回：无；断言第二个准入权威无法覆盖或追加。异常：重复绑定必须
+    抛 ``ExecutionPolicyError``，第一个权威仍保持有效。
+    """
+
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    first = lambda _dispatching: True
+    scheduler.bind_dispatch_admission_authority(first)
+
+    with pytest.raises(ExecutionPolicyError, match="已经绑定"):
+        scheduler.bind_dispatch_admission_authority(lambda _dispatching: True)
+
+    assert scheduler._dispatch_admission_authority is first
 
 
 class TestTriggerOnSubmit:

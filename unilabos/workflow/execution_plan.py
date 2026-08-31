@@ -160,6 +160,10 @@ class ExecutionPlanBuilder:
                     }
                     else {}
                 )
+                self._require_complete_material_transfer_contract(
+                    kind=kind,
+                    resource_contract=resource_contract,
+                )
                 policy = merge_action_resource_policy(
                     resource_contract,
                     raw_policy,
@@ -616,6 +620,41 @@ class ExecutionPlanBuilder:
                 "动作资源合同必须是对象",
             )
         return deepcopy(dict(resource_contract))
+
+    @staticmethod
+    def _require_complete_material_transfer_contract(
+        *,
+        kind: str,
+        resource_contract: Mapping[str, Any],
+    ) -> None:
+        """禁止物料转移动作以空合同进入执行计划。
+
+        参数：``kind`` 是冻结执行责任，``resource_contract`` 是 AST 编译后的
+        声明式资源合同。返回：合同包含完整 ``transfer`` 映射时无返回值。
+        异常：物料转移缺少映射时抛 ``ExecutionPlanBuildError``，关闭失败并阻止
+        调度器退化为仅占用机械臂执行器。
+        """
+
+        if kind != "material_transfer":
+            return
+        transfer = resource_contract.get("transfer")
+        required_text = (
+            "material_param",
+            "target_owner_param",
+            "gripper_site_role",
+        )
+        if (
+            not isinstance(transfer, Mapping)
+            or any(not str(transfer.get(field) or "").strip() for field in required_text)
+            or not (
+                str(transfer.get("target_site_uuid_param") or "").strip()
+                or str(transfer.get("target_site_name_param") or "").strip()
+            )
+        ):
+            raise ExecutionPlanBuildError(
+                "missing_material_transfer_resource_contract",
+                "物料转移动作必须声明物料、目标设备、目标库位和机械臂夹爪角色",
+            )
 
     @staticmethod
     def _device_action_contract(

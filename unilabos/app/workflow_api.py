@@ -479,11 +479,18 @@ class WorkflowInterventionDecisionRequest(_StrictModel):
 
 
 class UncertainJobResolutionRequest(_StrictModel):
-    """物理结果不确定但主状态仍为 running 的作业安全处置请求。"""
+    """物理结果不确定的运行中或失败作业安全处置请求。"""
 
     resolution: str
     reason: str
     device_command_id: Optional[str] = None
+
+
+class FailedMaterialTransferSettlementRequest(_StrictModel):
+    """失败转运在设备停止后提交实际物料位置的结算请求。"""
+
+    actual_change_set: Dict[str, Any]
+    reason: str
 
 
 class DraftWriteRequest(_StrictModel):
@@ -1156,6 +1163,12 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def get_workflow_node_job(job_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_node_job(job_uuid))
 
+    @router.get("/workflow-runtime/wait-graph")
+    def get_execution_wait_graph() -> JSONResponse:
+        """返回整站作业等待图与运行时循环诊断。"""
+
+        return _success(service.get_execution_wait_graph())
+
     @router.get("/workflow-node-jobs/{job_uuid}/feedback")
     def list_workflow_node_job_feedback(
         job_uuid: str,
@@ -1186,6 +1199,21 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         return _success(
             result,
             status=202 if result["pending_edge_confirmation"] else 200,
+        )
+
+    @router.post("/workflow-node-jobs/{job_uuid}/settle-material-transfer")
+    def settle_failed_material_transfer(
+        job_uuid: str,
+        body: FailedMaterialTransferSettlementRequest,
+    ) -> JSONResponse:
+        """提交失败转运的实际物料位置并完成物理结算。"""
+
+        return _success(
+            service.settle_failed_material_transfer(
+                job_uuid,
+                actual_change_set=body.actual_change_set,
+                reason=body.reason,
+            )
         )
 
     @router.get("/workflow-manual-confirmations/{confirmation_uuid}")

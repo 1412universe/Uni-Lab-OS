@@ -8,6 +8,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    DispatchAdmissionDecision,
+    DispatchAdmissionRequest,
+    TemporaryDispatchCondition,
+    acquire_dispatch_permit,
+    release_unprojected_dispatch_permits,
+    transition_dispatch_permit,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
 
 
@@ -126,6 +134,40 @@ class StationResourceInventory(Protocol):
         参数：``command`` 包含物料、目标父资源、目标库位与因果身份。返回：库存
         权威持久化后的移动结果。异常：目标身份不完整、结算冲突或数据库故障时
         原样传播，调用方不得自行补写库位占用。
+        """
+
+    def acquire_dispatch_permit(
+        self,
+        request: DispatchAdmissionRequest,
+    ) -> DispatchAdmissionDecision:
+        """在库存事务内复验条件并取得完整 Claim/Fence。
+
+        参数：``request`` 是稳定派发效果、最终参数、预期变化与全资源集合。返回：
+        成功 Permit 或正常竞争等待结果。异常：运行条件改变时抛稳定
+        ``StationResourceError``；合同和数据库故障原样传播。
+        """
+
+    def transition_dispatch_permit(
+        self,
+        claim_uuid: str,
+        *,
+        target_state: str,
+    ) -> None:
+        """推进库存 Claim 的派发、运行、不确定或释放状态。
+
+        参数：``claim_uuid`` 是 Permit 身份；``target_state`` 是目标生命周期状态。
+        返回：无。异常：非法转换或数据库故障原样传播。
+        """
+
+    def release_unprojected_dispatch_permits(
+        self,
+        *,
+        known_claim_uuids: Sequence[str],
+    ) -> tuple[str, ...]:
+        """释放未在工作流库留下 Claim 投影的 prepared Permit。
+
+        参数：``known_claim_uuids`` 是工作流权威当前仍保存的全部活动 Claim。
+        返回：本次释放的库存 Claim UUID。异常：身份或数据库错误原样传播。
         """
 
 
@@ -372,6 +414,60 @@ class SqliteStationResourceInventory:
             actor=command.actor,
             causation_id=command.causation_id,
         )
+
+    def acquire_dispatch_permit(
+        self,
+        request: DispatchAdmissionRequest,
+    ) -> DispatchAdmissionDecision:
+        """在库存单写事务内完成条件复验与完整资源 Claim/Fence。
+
+        参数：``request`` 是调度器冻结的派发效果和全资源请求。返回：成功 Permit
+        或资源竞争等待结果。异常：可变化条件转为 ``StationResourceError``；合同
+        冲突与 SQLite 故障原样传播，整个事务自动回滚。
+        """
+
+        try:
+            with self._store.transaction() as connection:
+                return acquire_dispatch_permit(connection, request)
+        except TemporaryDispatchCondition as error:
+            raise StationResourceError(error.code, error.message) from error
+
+    def transition_dispatch_permit(
+        self,
+        claim_uuid: str,
+        *,
+        target_state: str,
+    ) -> None:
+        """在库存事务内幂等推进 Claim 与全部 Lease。
+
+        参数：``claim_uuid`` 是库存签发身份；``target_state`` 是 reserved、
+        running、uncertain 或 released。返回：无。异常：非法转换与 SQLite 故障
+        原样传播，调用方不得只修改工作流库投影。
+        """
+
+        with self._store.transaction() as connection:
+            transition_dispatch_permit(
+                connection,
+                claim_uuid=claim_uuid,
+                target_state=target_state,
+            )
+
+    def release_unprojected_dispatch_permits(
+        self,
+        *,
+        known_claim_uuids: Sequence[str],
+    ) -> tuple[str, ...]:
+        """在库存事务内回收未被工作流库投影的 prepared Permit。
+
+        参数：工作流库仍保存的活动 Claim 身份。返回：本次释放身份。异常：身份
+        或 SQLite 错误原样传播，已越过 prepared 的 Claim 不受影响。
+        """
+
+        with self._store.transaction() as connection:
+            return release_unprojected_dispatch_permits(
+                connection,
+                known_claim_uuids=known_claim_uuids,
+            )
 
     def _site_candidates(
         self,

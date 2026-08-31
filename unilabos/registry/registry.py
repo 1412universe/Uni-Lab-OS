@@ -33,9 +33,9 @@ from unilabos.registry.decorators import (
     is_not_action,
     is_always_free,
     get_topic_config,
-    ExecutorKind,
-    NodeType,
-    normalize_enum_value,
+)
+from unilabos.registry.action_execution_metadata import (
+    normalize_action_execution_metadata,
 )
 from unilabos.registry.init_enforce import validate_init_param_enforce
 from unilabos.registry.package_generation import PackageRegistryGeneration
@@ -79,15 +79,7 @@ from msgcenterpy.instances.ros2_instance import ROS2MessageInstance
 def _apply_action_execution_metadata(entry: Dict[str, Any], action_args: Dict[str, Any]) -> None:
     """把创作节点类型与受控执行器提示规范化到动作注册条目。"""
 
-    node_type = normalize_enum_value(action_args.get("node_type"), NodeType)
-    if node_type:
-        entry["node_type"] = node_type
-    executor_kind = normalize_enum_value(action_args.get("executor_kind"), ExecutorKind)
-    if executor_kind:
-        allowed_executor_kinds = {kind.value for kind in ExecutorKind}
-        if executor_kind not in allowed_executor_kinds:
-            raise ValueError(f"不支持的 executor_kind: {executor_kind}")
-        entry["executor_kind"] = executor_kind
+    entry.update(normalize_action_execution_metadata(action_args))
 
 
 _module_hash_cache: Dict[str, Optional[str]] = {}

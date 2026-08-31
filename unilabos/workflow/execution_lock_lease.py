@@ -10,10 +10,15 @@ import sqlite3
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from unilabos.app.scheduler.resource_lock import conflicting_resource_lock_keys
+from unilabos.app.scheduler.ordering import (
+    DEFAULT_AGING_INTERVAL_SECONDS,
+    aged_priority,
+)
 from unilabos.workflow.execution_claim import (
     ensure_execution_claim,
     next_fencing_token,
@@ -85,16 +90,32 @@ def try_acquire_execution_locks(
     task_uuid: str,
     job_uuid: str,
     requests: Sequence[Mapping[str, Any]] | None,
+    claim_uuid: str | None = None,
+    fencing_tokens: Mapping[str, int] | None = None,
+    aging_interval_seconds: float = DEFAULT_AGING_INTERVAL_SECONDS,
 ) -> ExecutionLockDecision:
-    """在当前写事务中为一个待处理作业全有或全无取得执行锁。"""
+    """在当前写事务中投影一个作业全有或全无的库存执行占用。
+
+    参数：工作流事务、Task/Job 身份、完整锁请求，以及可选库存 Claim UUID 与
+    Fence 映射。返回：取得/等待决定。异常：库存 Permit 与锁集合不一致、同次
+    尝试漂移或数据库冲突时抛 ``StoreConflict``。未提供 Permit 仅用于隔离干跑
+    和遗留投影测试；物理派发必须由组合根传入库存签发凭据。
+    """
 
     normalized = normalize_execution_lock_requests(requests)
+    provided_fences = dict(fencing_tokens or {})
+    normalized_keys = {request.lock_key for request in normalized}
+    if claim_uuid is not None and set(provided_fences) != normalized_keys:
+        raise StoreConflict("库存 Permit Fence 与完整执行锁集合不一致")
+    if any(token <= 0 for token in provided_fences.values()):
+        raise StoreConflict("库存 Permit Fence 必须是正整数")
     if not normalized:
         claim = ensure_execution_claim(
             connection,
             task_uuid=task_uuid,
             job_uuid=job_uuid,
             resource_keys=(),
+            claim_uuid=claim_uuid,
         )
         _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
         return ExecutionLockDecision(
@@ -120,6 +141,8 @@ def try_acquire_execution_locks(
         if own_keys != requested_keys:
             raise StoreConflict(f"作业持久执行锁集合发生变化：{job_uuid}")
         claim = required_active_claim(connection, job_uuid=job_uuid)
+        if claim_uuid is not None and str(claim["claim_uuid"]) != claim_uuid:
+            raise StoreConflict(f"持久 Claim 与库存 Permit 不一致：{job_uuid}")
         fencing_tokens = tuple(
             sorted(
                 (
@@ -207,17 +230,20 @@ def try_acquire_execution_locks(
         )
 
     current_task = connection.execute(
-        "SELECT create_time FROM workflow_task WHERE uuid = ?",
+        "SELECT create_time, priority FROM workflow_task WHERE uuid = ?",
         (task_uuid,),
     ).fetchone()
     if current_task is None:
         raise StoreConflict(f"执行锁所属任务不存在：{task_uuid}")
-    current_order = (enqueued_at, str(current_task["create_time"]), task_uuid, job_uuid)
     older = _older_conflicting_waiter(
         connection,
         job_uuid=job_uuid,
-        current_order=current_order,
+        current_enqueued_at=enqueued_at,
+        current_task_create_time=str(current_task["create_time"]),
+        current_task_uuid=task_uuid,
+        current_priority=float(current_task["priority"]),
         requested_keys=requested_keys - owned_tenancy_keys,
+        aging_interval_seconds=aging_interval_seconds,
     )
     if older is not None:
         return _record_wait(
@@ -237,15 +263,18 @@ def try_acquire_execution_locks(
         job_uuid=job_uuid,
         resource_keys=tuple(sorted(requested_keys)),
         acquired_at=acquired_at,
+        claim_uuid=claim_uuid,
     )
     claim_uuid = str(claim["claim_uuid"])
     fencing_tokens: list[tuple[str, int]] = []
     for request in normalized:
-        fencing_token = next_fencing_token(
-            connection,
-            lock_key=request.lock_key,
-            now=acquired_at,
-        )
+        fencing_token = provided_fences.get(request.lock_key)
+        if fencing_token is None:
+            fencing_token = next_fencing_token(
+                connection,
+                lock_key=request.lock_key,
+                now=acquired_at,
+            )
         fencing_tokens.append((request.lock_key, fencing_token))
         metadata = {
             "semantic_scope": request.scope,
@@ -529,23 +558,27 @@ def _older_conflicting_waiter(
     connection: sqlite3.Connection,
     *,
     job_uuid: str,
-    current_order: tuple[str, str, str, str],
+    current_enqueued_at: str,
+    current_task_create_time: str,
+    current_task_uuid: str,
+    current_priority: float,
     requested_keys: set[str],
+    aging_interval_seconds: float,
 ) -> tuple[str, str] | None:
-    """查找排序早于当前作业且与尚未托管资源冲突的等待作业。
+    """查找有效优先级领先且与尚未托管资源冲突的等待作业。
 
     参数：``connection`` 是工作流权威事务；``job_uuid`` 是当前作业身份；
-    ``current_order`` 是等待时间、任务创建时间和稳定身份组成的公平顺序；
-    ``requested_keys`` 已排除当前任务长期托管的设备键。返回：最早阻塞任务和作业
-    UUID，或无冲突时返回 ``None``。异常：数据库读取错误原样传播。长期托管设备
-    必须让所属任务优先完成操作或卸载，不能被外部等待者反向阻塞。
+    当前等待、任务创建、稳定身份和基础优先级共同构成排序；``requested_keys``
+    已排除当前任务长期托管的设备键。返回：领先的阻塞任务和作业 UUID，或无冲突
+    时返回 ``None``。异常：时间或数据库事实非法时原样传播。长期托管设备必须让
+    所属任务优先完成操作或卸载，不能被外部等待者反向阻塞。
     """
 
     rows = connection.execute(
         """
         SELECT waiter.workflow_task_uuid, waiter.workflow_node_job_uuid,
                waiter.lock_key, waiter.enqueued_at,
-               task.create_time AS task_create_time
+               task.create_time AS task_create_time, task.priority
         FROM execution_lock_waiter AS waiter
         JOIN workflow_node_job AS job
           ON job.uuid = waiter.workflow_node_job_uuid
@@ -562,21 +595,81 @@ def _older_conflicting_waiter(
         """,
         (job_uuid,),
     ).fetchall()
-    grouped: dict[tuple[str, str, str, str], set[str]] = defaultdict(set)
+    grouped: dict[tuple[str, str, str, str, float], set[str]] = defaultdict(set)
     for row in rows:
         order = (
             str(row["enqueued_at"]),
             str(row["task_create_time"]),
             str(row["workflow_task_uuid"]),
             str(row["workflow_node_job_uuid"]),
+            float(row["priority"]),
         )
         grouped[order].add(str(row["lock_key"]))
-    for order in sorted(grouped):
-        if order >= current_order:
-            break
-        if conflicting_resource_lock_keys(requested_keys, grouped[order]):
-            return order[2], order[3]
+    now_seconds = _rfc3339_seconds(utc_now())
+    current_rank = _waiter_rank(
+        priority=current_priority,
+        enqueued_at=current_enqueued_at,
+        task_create_time=current_task_create_time,
+        task_uuid=current_task_uuid,
+        job_uuid=job_uuid,
+        now_seconds=now_seconds,
+        aging_interval_seconds=aging_interval_seconds,
+    )
+    candidates: list[tuple[tuple[float, str, str, str, str], str, str]] = []
+    for order, lock_keys in grouped.items():
+        enqueued_at, task_create_time, task_uuid, waiter_job_uuid, priority = order
+        if not conflicting_resource_lock_keys(requested_keys, lock_keys):
+            continue
+        rank = _waiter_rank(
+            priority=priority,
+            enqueued_at=enqueued_at,
+            task_create_time=task_create_time,
+            task_uuid=task_uuid,
+            job_uuid=waiter_job_uuid,
+            now_seconds=now_seconds,
+            aging_interval_seconds=aging_interval_seconds,
+        )
+        if rank < current_rank:
+            candidates.append((rank, task_uuid, waiter_job_uuid))
+    if candidates:
+        _, blocking_task_uuid, blocking_job_uuid = min(candidates)
+        return blocking_task_uuid, blocking_job_uuid
     return None
+
+
+def _waiter_rank(
+    *,
+    priority: float,
+    enqueued_at: str,
+    task_create_time: str,
+    task_uuid: str,
+    job_uuid: str,
+    now_seconds: float,
+    aging_interval_seconds: float,
+) -> tuple[float, str, str, str, str]:
+    """把持久等待事实转换为与内存调度一致的稳定升序键。"""
+
+    effective = aged_priority(
+        priority,
+        waited_seconds=now_seconds - _rfc3339_seconds(enqueued_at),
+        aging_interval_seconds=aging_interval_seconds,
+    )
+    return (
+        -effective,
+        enqueued_at,
+        task_create_time,
+        task_uuid,
+        job_uuid,
+    )
+
+
+def _rfc3339_seconds(value: str) -> float:
+    """解析带时区 RFC3339 时间并返回 UTC epoch 秒。"""
+
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("持久等待时间缺少时区")
+    return parsed.astimezone(timezone.utc).timestamp()
 
 
 def _record_wait(

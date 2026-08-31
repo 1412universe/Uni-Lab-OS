@@ -90,7 +90,7 @@ def _transfer_contract(
     job: Mapping[str, Any],
     execution_plan: Mapping[str, Any] | None,
 ) -> dict[str, str] | None:
-    """从冻结计划读取作业转运映射并兼容内置记账动作。
+    """从冻结计划读取作业唯一合法的转运参数映射。
 
     参数：``job`` 提供节点和执行种类；``execution_plan`` 是父任务的不可变计划。
     返回：五个转运参数/角色字段组成的稳定映射；非转运动作返回 ``None``。异常：
@@ -122,15 +122,9 @@ def _transfer_contract(
         if isinstance(resource_contract, Mapping)
         else None
     )
-    if transfer is None and str(job.get("executor_kind") or "") == "material_transfer":
-        transfer = {
-            "material_param": "resource",
-            "target_owner_param": "mount_resource",
-            "target_site_uuid_param": "site_uuid",
-            "target_site_name_param": "site",
-            "gripper_site_role": "",
-        }
     if transfer is None:
+        if str(job.get("executor_kind") or "") == "material_transfer":
+            raise StoreConflict(f"物料转移作业缺少冻结资源合同：{node_uuid}")
         return None
     required = {
         "material_param",

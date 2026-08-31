@@ -6,6 +6,7 @@ FakeHostNode 模拟设备执行：send_goal 后按配置同步回报 publish_job
 
 import threading
 import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from unilabos.app.scheduler.backend import JobExecutionBackend, create_edge_stack
@@ -103,6 +104,33 @@ def _make_backend(auto_complete: bool = True):
     ref["backend"] = backend
     backend.start()
     return backend, host
+
+
+def _bind_isolated_admission_authority(scheduler: Any) -> None:
+    """为只验证执行适配器的测试绑定显式隔离准入权威。
+
+    参数：``scheduler`` 是测试调度器。返回无。异常：凭据形状漂移会在生产派发
+    边界失败；该替身不用于产品组合，也不声称拥有库存事务。
+    """
+
+    def admit(dispatching: dict[str, Any]) -> bool:
+        """按作业身份生成稳定测试 Permit 并允许派发。"""
+
+        job_id = str(dispatching["job_id"])
+        dispatching.update(
+            {
+                "attempt": 1,
+                "command_uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, "command:" + job_id)),
+                "claim_uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, "claim:" + job_id)),
+                "fences": [],
+                "effect_uuid": str(uuid.uuid5(uuid.NAMESPACE_URL, "effect:" + job_id)),
+                "parameter_hash": "isolated-adapter-test",
+                "expected_change_set": {"kind": "no_inventory_change"},
+            }
+        )
+        return True
+
+    scheduler.bind_dispatch_admission_authority(admit)
 
 
 class TestBackendAlone:
@@ -313,6 +341,7 @@ class TestEdgeStackEndToEnd:
         ref: Dict[str, Any] = {}
         host = FakeHostNode(ref, auto_complete=True)
         scheduler, backend = create_edge_stack(host_node_getter=lambda: host)
+        _bind_isolated_admission_authority(scheduler)
         ref["backend"] = backend
         try:
             spec = WorkflowSpec(
@@ -332,6 +361,7 @@ class TestEdgeStackEndToEnd:
         ref: Dict[str, Any] = {}
         host = FakeHostNode(ref, auto_complete=True)
         scheduler, backend = create_edge_stack(host_node_getter=lambda: host)
+        _bind_isolated_admission_authority(scheduler)
         ref["backend"] = backend
         try:
             for wid in ("wf1", "wf2"):
@@ -361,6 +391,7 @@ class TestEdgeStackEndToEnd:
         # 为第二个动作提供合法注册表 Schema，避免合同缺失掩盖设备级互斥行为。
         host._action_value_mappings["shared"]["inspect"] = _unlocked_action_mapping()
         scheduler, backend = create_edge_stack(host_node_getter=lambda: host)
+        _bind_isolated_admission_authority(scheduler)
         backend_ref["backend"] = backend
         try:
             first_result = scheduler.submit_workflow(
@@ -399,6 +430,7 @@ class TestEdgeStackEndToEnd:
         # 两个动作合同均合法，使本测试只观察设备级准入而非 Schema 失败。
         host._action_value_mappings["shared"]["inspect"] = _unlocked_action_mapping()
         scheduler, backend = create_edge_stack(host_node_getter=lambda: host)
+        _bind_isolated_admission_authority(scheduler)
         backend_ref["backend"] = backend
         try:
             first_result = scheduler.submit_workflow(

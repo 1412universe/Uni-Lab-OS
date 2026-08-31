@@ -7,6 +7,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from unilabos.registry.ast_registry_scanner import _parse_file
+from unilabos.registry.action_execution_metadata import (
+    normalize_action_execution_metadata,
+)
 
 from ...model import (
     PackageCompileError,
@@ -303,6 +306,7 @@ def _static_device_entry(
             action_entry["always_free"] = True
         if action_args.get("error_policy"):
             action_entry["error_policy"] = action_args["error_policy"]
+        action_entry.update(normalize_action_execution_metadata(action_args))
         action_mappings[action_name] = action_entry
     # ``status_types`` 是设备只读状态属性的传输类型投影，不属于动作结果合同。
     status_types = {

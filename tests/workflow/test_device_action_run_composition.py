@@ -28,14 +28,9 @@ def test_local_runtime_submits_device_action_run_to_existing_scheduler(
 
     reset_workflow_service_for_test()
     # ``dispatcher`` 记录真正越过执行适配器边界的命令；``scheduler`` 是产品现有
-    # 本地调度器（EdgeScheduler），物料锁解析器在此动作无物料参数时返回空集合。
+    # 本地调度器（EdgeScheduler）；动作合同由标准任务计划冻结后交给调度器。
     dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(
-        dispatcher=dispatcher,
-        material_lock_resolver=(
-            lambda _device_id, _action_name, _param: ()
-        ),
-    )
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
     try:
         workflow_service, projection = compose_local_workflow_template_runtime(
             tmp_path,

@@ -66,12 +66,14 @@ def ensure_execution_claim(
     job_uuid: str,
     resource_keys: tuple[str, ...],
     acquired_at: str | None = None,
+    claim_uuid: str | None = None,
 ) -> sqlite3.Row:
     """为一个 Job 尝试幂等创建稳定 Claim，且禁止资源集合漂移。
 
-    参数：工作流写事务、任务/作业身份、完整资源键集合和可选取得时间。返回：
-    已存在或新建的 Claim 行。异常：作业不存在、同一次尝试的资源集合变化或已
-    释放 Claim 被重用时抛 ``StoreConflict``；SQLite 写入错误原样传播。
+    参数：工作流写事务、任务/作业身份、完整资源键集合、可选取得时间和库存
+    权威已签发的 ``claim_uuid``。返回：已存在或新建的审计 Claim 行。异常：作业
+    不存在、同一次尝试的身份/资源集合变化或已释放 Claim 被重用时抛
+    ``StoreConflict``；SQLite 写入错误原样传播。
     """
 
     job = connection.execute(
@@ -93,13 +95,15 @@ def ensure_execution_claim(
         (job_uuid, attempt),
     ).fetchone()
     if existing is not None:
+        if claim_uuid is not None and str(existing["claim_uuid"]) != claim_uuid:
+            raise StoreConflict(f"Claim 身份与库存 Permit 不一致：{job_uuid}")
         if str(existing["resource_keys"]) != resource_json:
             raise StoreConflict(f"Claim 完整资源集合发生变化：{job_uuid}")
         if existing["state"] == "released":
             raise StoreConflict(f"已释放 Claim 不能重新派发：{job_uuid}")
         return existing
     now = acquired_at or utc_now()
-    claim_uuid = str(uuid4())
+    resolved_claim_uuid = claim_uuid or str(uuid4())
     connection.execute(
         """
         INSERT INTO execution_claim(
@@ -109,7 +113,7 @@ def ensure_execution_claim(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?, NULL)
         """,
         (
-            claim_uuid,
+            resolved_claim_uuid,
             now,
             now,
             task_uuid,
@@ -121,7 +125,7 @@ def ensure_execution_claim(
     )
     row = connection.execute(
         "SELECT * FROM execution_claim WHERE claim_uuid = ?",
-        (claim_uuid,),
+        (resolved_claim_uuid,),
     ).fetchone()
     assert row is not None
     return row
@@ -150,6 +154,25 @@ def required_active_claim(
     if row is None:
         raise StoreConflict(f"作业执行租约缺少 Claim：{job_uuid}")
     return row
+
+
+def list_active_execution_claim_uuids(
+    connection: sqlite3.Connection,
+) -> tuple[str, ...]:
+    """列出工作流库仍承担安全意义的全部 Claim 身份。
+
+    参数：工作流读事务。返回：按取得时间与 UUID 稳定排序的 reserved、running、
+    uncertain Claim UUID。异常：SQLite 读取错误原样传播。
+    """
+
+    rows = connection.execute(
+        """
+        SELECT claim_uuid FROM execution_claim
+        WHERE state IN ('reserved', 'running', 'uncertain')
+        ORDER BY acquired_at, claim_uuid
+        """
+    ).fetchall()
+    return tuple(str(row["claim_uuid"]) for row in rows)
 
 
 def next_fencing_token(
@@ -189,6 +212,7 @@ def next_fencing_token(
 __all__ = [
     "ensure_execution_claim",
     "get_execution_claim",
+    "list_active_execution_claim_uuids",
     "next_fencing_token",
     "required_active_claim",
 ]

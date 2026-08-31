@@ -38,7 +38,13 @@ def test_empty_workflow_preflight_is_read_only_and_ready(tmp_path) -> None:
     assert report["can_run"] is True
     assert report["summary"]["execution_node_count"] == 0
     assert report["summary"]["blocking_check_count"] == 0
+    assert report["summary"]["deferred_check_count"] == 1
     assert len(report["checks"]) == 2
+    resource_check = next(
+        check for check in report["checks"] if check["type"] == "resource_lock"
+    )
+    assert resource_check["status"] == "deferred"
+    assert resource_check["code"] == "resource_admission_at_dispatch"
 
     tasks = client.get(
         "/api/v1/workflow-tasks", params={"workflow_uuid": workflow["uuid"]}
