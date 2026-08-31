@@ -68,10 +68,23 @@ class WorkspaceHost:
         token: str,
         *,
         readiness_timeout: float = _READINESS_TIMEOUT_SECONDS,
+        backend_port: int | None = None,
+        hostlink_port: int | None = None,
     ) -> None:
+        """初始化工作区唯一的进程所有者并恢复持久化组件状态。
+
+        参数：``paths`` 是工作区标准路径，``token`` 是本地 Host 鉴权令牌，
+        ``readiness_timeout`` 是组件业务就绪总预算，``backend_port`` 与
+        ``hostlink_port`` 是容器部署可选的固定监听端口。返回：无；实例启动串行
+        操作线程并准备组件监控。异常：持久化状态无效、路径不可访问或恢复失败时
+        透传 ``WorkspaceHostError`` 或相应系统异常。
+        """
+
         self.paths = paths
         self.token = token
         self.readiness_timeout = readiness_timeout
+        self._backend_port = backend_port
+        self._hostlink_port = hostlink_port
         self._lock = threading.RLock()
         self._lifecycle_lock = threading.Lock()
         self._operation_queue: queue.Queue[str | None] = queue.Queue()
@@ -754,6 +767,8 @@ class WorkspaceHost:
             or _optional_text(configuration.get("graphPath")),
             runtime_mode=_optional_text(parameters.get("runtimeMode"))
             or _optional_text(configuration.get("runtimeMode")),
+            backend_port=self._backend_port,
+            hostlink_port=self._hostlink_port,
         )
         self._spawn(plan)
         package_mounts = self._wait_backend_ready(plan)
@@ -2489,10 +2504,19 @@ def sys_platform() -> str:
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """解析 Workspace Host 服务进程的命令行参数。
+
+    参数：``argv`` 是可选参数序列；为 ``None`` 时读取当前进程参数。返回：包含
+    工作区、监听地址、固定业务端口和就绪预算的 ``argparse.Namespace``。异常：
+    参数缺失、格式错误或取值越界时 ``argparse`` 抛出 ``SystemExit``。
+    """
+
     parser = argparse.ArgumentParser(description="Start one Uni-Lab Workspace Host")
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1"])
     parser.add_argument("--port", default=0, type=int)
+    parser.add_argument("--backend-port", default=None, type=int)
+    parser.add_argument("--hostlink-port", default=None, type=int)
     parser.add_argument(
         "--readiness-timeout", default=_READINESS_TIMEOUT_SECONDS, type=float
     )
@@ -2500,13 +2524,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """启动并托管单实例 Workspace Host HTTP 服务直到收到停止信号。
+
+    参数：``argv`` 是可选命令行参数序列。返回：无；服务退出前关闭 HTTP Server、
+    Host 线程并释放单实例锁。异常：参数无效时抛 ``SystemExit``；工作区准备、
+    单实例锁、Host 初始化或监听失败时透传 ``WorkspaceHostError`` 或系统异常。
+    """
+
     args = _parse_args(argv)
     paths = WorkspacePaths.resolve(args.workspace)
     paths.prepare()
     singleton = WorkspaceHostLock(paths)
     singleton.acquire()
     token = ensure_local_token(paths)
-    host = WorkspaceHost(paths, token, readiness_timeout=args.readiness_timeout)
+    host = WorkspaceHost(
+        paths,
+        token,
+        readiness_timeout=args.readiness_timeout,
+        backend_port=args.backend_port,
+        hostlink_port=args.hostlink_port,
+    )
     server = ThreadingHTTPServer((args.host, args.port), _handler_type(host))
     endpoint = f"http://{args.host}:{server.server_address[1]}"
     host.publish_endpoint(endpoint)

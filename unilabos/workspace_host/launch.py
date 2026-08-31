@@ -115,8 +115,14 @@ def resolve_backend_launch(
     validated_graph = runtime_directory / "selected-graph.json"
     shutil.copyfile(graph, validated_graph)
     os.chmod(validated_graph, 0o600)
-    backend_port = backend_port or available_loopback_port()
-    hostlink_port = hostlink_port or available_loopback_port()
+    backend_port = _configured_service_port(
+        backend_port,
+        field="backend_port",
+    ) or available_loopback_port()
+    hostlink_port = _configured_service_port(
+        hostlink_port,
+        field="hostlink_port",
+    ) or available_loopback_port()
     if backend_port == hostlink_port:
         raise WorkspaceHostError("port_conflict", "Backend 与 HostLink 端口不能相同")
     environment = _runtime_environment(paths, generation)
@@ -620,6 +626,28 @@ def _workspace_edge_key(paths: WorkspacePaths) -> str:
 
 def _optional_text(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
+
+
+def _configured_service_port(value: object, *, field: str) -> int | None:
+    """校验容器部署显式指定的业务服务端口。
+
+    参数：``value`` 是待校验端口或 ``None``，``field`` 是稳定错误信息中的配置
+    字段名。返回：合法的 1 至 65535 整数；未配置时返回 ``None``，由调用方动态
+    分配。异常：布尔值、非整数或超出端口范围时抛 ``WorkspaceHostError``。
+    """
+
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 < value <= 65_535
+    ):
+        raise WorkspaceHostError(
+            "port_configuration_invalid",
+            f"{field} 必须是 1 到 65535 的整数",
+        )
+    return value
 
 
 def _configured_port(value: object, default: int) -> int:
