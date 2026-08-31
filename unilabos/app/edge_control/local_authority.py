@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +26,15 @@ from fastapi import APIRouter, Header, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 
+from unilabos.app.edge_control.local_edge_session import (
+    LocalEdgeSessionStore,
+    project_local_edge_readiness,
+)
 from unilabos.app.scheduler.dispatch import CommittedJobOutcome, DispatchPayload
 
 _PROTOCOL_VERSION = 1
 _COMMAND_RETRY_SECONDS = 0.5
+_REPLACED_SOCKET_CLOSE_TIMEOUT_SECONDS = 0.5
 
 
 class LocalEdgeOutcomeConflict(ValueError):
@@ -61,16 +66,6 @@ class LocalEdgeAuthorityStore:
                 CREATE TABLE IF NOT EXISTS local_edge_meta (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS local_edge_session (
-                    session_uuid TEXT PRIMARY KEY,
-                    edge_uuid TEXT NOT NULL,
-                    instance_uuid TEXT NOT NULL,
-                    edge_key TEXT NOT NULL,
-                    devices_json TEXT NOT NULL,
-                    connected INTEGER NOT NULL DEFAULT 0,
-                    created_at REAL NOT NULL,
-                    updated_at REAL NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS local_edge_command (
                     command_uuid TEXT PRIMARY KEY,
@@ -132,50 +127,22 @@ class LocalEdgeAuthorityStore:
                     self._connection.execute(
                         f"ALTER TABLE local_edge_job ADD COLUMN {name} {declaration}"
                     )
-            self._connection.execute(
-                """
-                UPDATE local_edge_session SET connected = 0, updated_at = ?
-                WHERE connected != 0
-                """,
-                (time.time(),),
-            )
             self._connection.commit()
+        self._sessions = LocalEdgeSessionStore(self._connection, self._lock)
 
     def close(self) -> None:
         with self._lock:
             self._connection.close()
 
     def register_session(self, payload: dict[str, Any]) -> dict[str, Any]:
-        edge_key = _required_text(payload, "edge_key")
-        instance_uuid = str(uuid.UUID(_required_text(payload, "instance_uuid")))
-        devices = payload.get("devices")
-        if not isinstance(devices, list) or any(
-            not isinstance(device, dict) for device in devices
-        ):
-            raise ValueError("devices must be a list of objects")
-        edge_uuid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"unilab:{edge_key}"))
-        session_uuid = str(uuid.uuid4())
-        now = time.time()
-        with self._lock:
-            self._connection.execute(
-                """
-                INSERT INTO local_edge_session(
-                    session_uuid, edge_uuid, instance_uuid, edge_key,
-                    devices_json, connected, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 0, ?, ?)
-                """,
-                (
-                    session_uuid,
-                    edge_uuid,
-                    instance_uuid,
-                    edge_key,
-                    json.dumps(devices, ensure_ascii=False, separators=(",", ":")),
-                    now,
-                    now,
-                ),
-            )
-            self._connection.commit()
-        return {"edge_uuid": edge_uuid, "session_uuid": session_uuid}
+        """通过兼容门面持久化一份尚未连接的 Edge 注册。
+
+        参数：``payload`` 包含 Edge 身份、实例 UUID 与设备能力。返回稳定
+        ``edge_uuid`` 和新 ``session_uuid``。异常：载荷非法时抛 ``ValueError``，
+        SQLite 错误原样传播；具体会话语义由 ``LocalEdgeSessionStore`` 独占。
+        """
+
+        return self._sessions.register_session(payload)
 
     def set_session_connected(self, session_uuid: str, connected: bool) -> None:
         """原子切换唯一当前 Edge 会话的连接状态。
@@ -186,31 +153,22 @@ class LocalEdgeAuthorityStore:
         留下的陈旧 ``connected=1`` 使实时就绪探针误报。
         """
 
-        with self._lock:
-            self._connection.execute("BEGIN IMMEDIATE")
-            try:
-                now = time.time()
-                if connected:
-                    self._connection.execute(
-                        """
-                        UPDATE local_edge_session SET connected = 0, updated_at = ?
-                        WHERE session_uuid != ? AND connected != 0
-                        """,
-                        (now, session_uuid),
-                    )
-                changed = self._connection.execute(
-                    """
-                    UPDATE local_edge_session SET connected = ?, updated_at = ?
-                    WHERE session_uuid = ?
-                    """,
-                    (1 if connected else 0, now, session_uuid),
-                ).rowcount
-                if changed != 1:
-                    raise ValueError("unknown Edge session")
-                self._connection.commit()
-            except BaseException:
-                self._connection.rollback()
-                raise
+        self._sessions.set_session_connected(session_uuid, connected)
+
+    def disconnect_session(self, session_uuid: str) -> list[str]:
+        """关闭一个 WebSocket 会话并仅在 Edge 真离线时锁定在途作业。
+
+        参数：``session_uuid`` 是进入 ``finally`` 的会话身份。返回：仅当该会话
+        原本确为 active 且 Authority 已无在线接管会话时转为 ``unknown`` 的 Job
+        UUID；否则为空列表。异常：会话不存在时抛 ``ValueError``，SQLite 错误
+        原样传播；会话关闭、全局代际检查与作业转换共享一个写事务。
+        """
+
+        edge_offline, affected = self._sessions.disconnect_session(
+            session_uuid,
+            self._mark_disconnected_jobs_unknown_locked,
+        )
+        return list(affected or ()) if edge_offline else []
 
     def reconcile_hello(self, payload: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
         """对账动作进程身份与持久游标，并识别真实进程重启。
@@ -320,30 +278,56 @@ class LocalEdgeAuthorityStore:
                 raise
 
     def mark_disconnected_jobs_unknown(self) -> list[str]:
-        """Lock jobs which may already have crossed the physical-action boundary."""
+        """显式锁定可能已跨越物理动作边界的所有在途作业。
+
+        参数：无。返回：转为 ``unknown`` 的 Job UUID。异常：SQLite 错误导致
+        整个事务回滚并原样传播。WebSocket 断线应调用 ``disconnect_session``，
+        由会话代际检查决定是否执行本操作。
+        """
 
         with self._lock:
-            rows = self._connection.execute(
-                """
-                SELECT job_uuid FROM local_edge_job
-                WHERE status IN ('dispatched', 'running') AND outcome_json IS NULL
-                """
-            ).fetchall()
-            job_uuids = [str(row["job_uuid"]) for row in rows]
-            for job_uuid in job_uuids:
-                self._connection.execute(
-                    """
-                    UPDATE local_edge_job
-                    SET status = 'unknown', unknown_command_ids_json = ?, updated_at = ?
-                    WHERE job_uuid = ?
-                    """,
-                    (
-                        json.dumps([f"workflow-node-job:{job_uuid}"]),
-                        time.time(),
-                        job_uuid,
-                    ),
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                job_uuids = self._mark_disconnected_jobs_unknown_locked(
+                    self._connection
                 )
-            self._connection.commit()
+                self._connection.commit()
+                return job_uuids
+            except BaseException:
+                self._connection.rollback()
+                raise
+
+    def _mark_disconnected_jobs_unknown_locked(
+        self,
+        connection: sqlite3.Connection,
+    ) -> list[str]:
+        """在调用方持有的写事务中固化物理动作结果不明事实。
+
+        参数：``connection`` 是已进入 ``BEGIN IMMEDIATE`` 的 Authority 连接。
+        返回：从 ``dispatched`` 或 ``running`` 转为 ``unknown`` 的 Job UUID。
+        异常：SQLite 错误原样传播；本函数不提交也不回滚事务。
+        """
+
+        rows = connection.execute(
+            """
+            SELECT job_uuid FROM local_edge_job
+            WHERE status IN ('dispatched', 'running') AND outcome_json IS NULL
+            """
+        ).fetchall()
+        job_uuids = [str(row["job_uuid"]) for row in rows]
+        for job_uuid in job_uuids:
+            connection.execute(
+                """
+                UPDATE local_edge_job
+                SET status = 'unknown', unknown_command_ids_json = ?, updated_at = ?
+                WHERE job_uuid = ?
+                """,
+                (
+                    json.dumps([f"workflow-node-job:{job_uuid}"]),
+                    time.time(),
+                    job_uuid,
+                ),
+            )
         return job_uuids
 
     def dispatch(self, payload: DispatchPayload) -> dict[str, Any]:
@@ -1025,30 +1009,13 @@ class LocalEdgeAuthorityStore:
         return _job_projection(row)
 
     def online_devices(self) -> dict[str, dict[str, Any]]:
-        """Project the currently connected Edge registration as online facts."""
+        """通过兼容门面读取唯一在线会话的设备投影。
 
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT devices_json FROM local_edge_session
-                WHERE connected = 1 ORDER BY updated_at DESC LIMIT 1
-                """
-            ).fetchone()
-        if row is None:
-            return {}
-        devices = json.loads(str(row["devices_json"]))
-        return {
-            str(device["local_id"]): {
-                "device_key": f"/devices/{device['local_id']}/{device['local_id']}",
-                "namespace": f"/devices/{device['local_id']}",
-                "machine_name": "managed-local-edge",
-                "uuid": str(device.get("material_uuid") or ""),
-                "node_name": str(device["local_id"]),
-                "transport": "edge-control",
-            }
-            for device in devices
-            if isinstance(device, dict) and str(device.get("local_id") or "")
-        }
+        参数：无。返回：无在线会话时为空字典，否则按本地设备身份索引在线事实。
+        异常：持久 JSON 或数据库损坏时原样传播；投影语义由会话深模块独占。
+        """
+
+        return self._sessions.online_devices()
 
     def latest_registration(self) -> dict[str, Any] | None:
         """返回最近一次 Edge 注册的脱离副本，不把 SQLite 行泄漏给调用方。
@@ -1058,32 +1025,7 @@ class LocalEdgeAuthorityStore:
         失败关闭，数据库错误原样传播。
         """
 
-        with self._lock:
-            row = self._connection.execute(
-                """
-                SELECT edge_uuid,instance_uuid,edge_key,devices_json,connected,
-                       created_at,updated_at
-                FROM local_edge_session
-                ORDER BY connected DESC,updated_at DESC,created_at DESC LIMIT 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        decoded = json.loads(str(row["devices_json"]))
-        devices = (
-            [dict(device) for device in decoded if isinstance(device, dict)]
-            if isinstance(decoded, list)
-            else []
-        )
-        return {
-            "edge_uuid": str(row["edge_uuid"]),
-            "instance_uuid": str(row["instance_uuid"]),
-            "edge_key": str(row["edge_key"]),
-            "connected": bool(row["connected"]),
-            "created_at": float(row["created_at"]),
-            "updated_at": float(row["updated_at"]),
-            "devices": devices,
-        }
+        return self._sessions.latest_registration()
 
     def _authorized_job(
         self, job_uuid: str, command_uuid: str, job_token: str
@@ -1460,6 +1402,11 @@ def create_local_edge_control_router(
     """
 
     router = APIRouter(prefix="/api/v1/edge", tags=["local-edge-control"])
+    active_session_lock = asyncio.Lock()
+    active_generation = 0
+    active_session_uuid = ""
+    active_websocket: WebSocket | None = None
+    active_handler_task: asyncio.Task[Any] | None = None
 
     def authorize(value: str | None) -> None:
         expected = f"Bearer {authority.api_key}"
@@ -1475,7 +1422,9 @@ def create_local_edge_control_router(
         存储读取错误原样传播；响应不包含令牌、设备清单或动作参数。
         """
 
-        ready, summary = _local_edge_readiness(authority.store.latest_registration())
+        ready, summary = project_local_edge_readiness(
+            authority.store.latest_registration()
+        )
         return JSONResponse(status_code=200 if ready else 503, content=summary)
 
     @router.post("/sessions")
@@ -1590,10 +1539,14 @@ def create_local_edge_control_router(
     async def edge_websocket(websocket: WebSocket) -> None:
         """维护动作执行进程会话并投递持久命令通知。
 
-        参数：``websocket`` 是同工站动作进程连接。返回无；鉴权或握手错误关闭
-        会话。普通断线只固化不确定事实并等待同一进程重连；只有 hello 中进程
-        身份变化才通知工站调度器失败相关 DAG。
+        参数：``websocket`` 是同工站动作进程连接。返回无。异常：鉴权、握手或
+        会话代际冲突通过关闭连接失败关闭；普通断线仅在没有新会话接管时固化
+        不确定事实，载荷与持久存储错误原样传播；只有 hello 中进程身份变化才
+        通知工站调度器失败相关 DAG。
         """
+
+        nonlocal active_generation, active_handler_task
+        nonlocal active_session_uuid, active_websocket
 
         authorization = websocket.headers.get("Authorization")
         if authorization is None or not hmac.compare_digest(
@@ -1603,6 +1556,7 @@ def create_local_edge_control_router(
             return
         await websocket.accept()
         session_uuid = ""
+        session_generation = 0
         try:
             hello = json.loads(await asyncio.wait_for(websocket.receive_text(), 10))
             if hello.get("type") != "hello" or not isinstance(
@@ -1614,13 +1568,55 @@ def create_local_edge_control_router(
             process_restarted, affected_job_uuids = authority.store.reconcile_hello(
                 hello["payload"]
             )
-            authority.store.set_session_connected(session_uuid, True)
+            handler_task = asyncio.current_task()
+            if handler_task is None:
+                raise RuntimeError("Edge WebSocket handler task is unavailable")
+            async with active_session_lock:
+                authority.store.set_session_connected(session_uuid, True)
+                replaced_websocket = active_websocket
+                replaced_handler_task = active_handler_task
+                active_generation += 1
+                session_generation = active_generation
+                active_session_uuid = session_uuid
+                active_websocket = websocket
+                active_handler_task = handler_task
+            if (
+                replaced_handler_task is not None
+                and replaced_handler_task is not handler_task
+            ):
+                replaced_handler_task.cancel()
+            if replaced_websocket is not None and replaced_websocket is not websocket:
+                try:
+                    await asyncio.wait_for(
+                        replaced_websocket.close(code=4409),
+                        timeout=_REPLACED_SOCKET_CLOSE_TIMEOUT_SECONDS,
+                    )
+                except (RuntimeError, WebSocketDisconnect, TimeoutError):
+                    pass
             if process_restarted:
                 authority.notify_execution_process_restarted(affected_job_uuids)
             while True:
+                async with active_session_lock:
+                    current_generation = (
+                        active_generation == session_generation
+                        and active_session_uuid == session_uuid
+                    )
+                if not current_generation:
+                    break
+                stale_generation = False
                 for command in authority.store.pending_commands():
+                    async with active_session_lock:
+                        current_generation = (
+                            active_generation == session_generation
+                            and active_session_uuid == session_uuid
+                        )
+                    if not current_generation:
+                        stale_generation = True
+                        break
                     await websocket.send_text(json.dumps(command, ensure_ascii=False))
                     authority.store.mark_command_sent(str(command["message_uuid"]))
+                if stale_generation:
+                    break
                 try:
                     encoded = await asyncio.wait_for(
                         websocket.receive_text(), timeout=0.1
@@ -1628,107 +1624,32 @@ def create_local_edge_control_router(
                 except TimeoutError:
                     continue
                 event = json.loads(encoded)
+                async with active_session_lock:
+                    current_generation = (
+                        active_generation == session_generation
+                        and active_session_uuid == session_uuid
+                    )
+                if not current_generation:
+                    break
                 await _handle_edge_event(authority, websocket, event)
         except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
             if session_uuid:
-                authority.store.mark_disconnected_jobs_unknown()
+                async with active_session_lock:
+                    if (
+                        active_generation == session_generation
+                        and active_session_uuid == session_uuid
+                    ):
+                        active_session_uuid = ""
+                        active_websocket = None
+                        active_handler_task = None
                 try:
-                    authority.store.set_session_connected(session_uuid, False)
+                    authority.store.disconnect_session(session_uuid)
                 except ValueError:
                     pass
 
     return router
-
-
-def _local_edge_readiness(
-    registration: Mapping[str, Any] | None,
-) -> tuple[bool, dict[str, Any]]:
-    """从最近注册快照生成关闭式实时就绪摘要。
-
-    参数：``registration`` 是 ``latest_registration`` 返回的脱离副本或 ``None``。
-    返回：就绪布尔值与不含令牌、完整设备清单及动作参数的摘要。异常：无；缺失、
-    非规范身份、空设备集或非法动作声明均转换为 ``not_ready``，不伪造目录指纹。
-    """
-
-    edge_key = ""
-    instance_uuid = ""
-    connected = False
-    devices: Any = None
-    if isinstance(registration, Mapping):
-        raw_edge_key = registration.get("edge_key")
-        edge_key = raw_edge_key.strip() if isinstance(raw_edge_key, str) else ""
-        raw_instance_uuid = registration.get("instance_uuid")
-        instance_uuid = (
-            raw_instance_uuid.strip() if isinstance(raw_instance_uuid, str) else ""
-        )
-        connected = registration.get("connected") is True
-        devices = registration.get("devices")
-
-    valid_devices = (
-        isinstance(devices, list)
-        and bool(devices)
-        and all(_valid_readiness_device(device) for device in devices)
-    )
-    ready = bool(
-        connected
-        and edge_key
-        and _is_canonical_uuid(instance_uuid)
-        and valid_devices
-    )
-    return ready, {
-        "status": "ready" if ready else "not_ready",
-        "edge_key": edge_key,
-        "instance_uuid": instance_uuid,
-        "connected": connected,
-        "device_count": len(devices) if isinstance(devices, list) else 0,
-    }
-
-
-def _valid_readiness_device(device: Any) -> bool:
-    """校验单个设备是否足以证明 Local Edge 可接受动作。
-
-    参数：``device`` 是注册快照中的一个设备声明。返回：本地身份、物料 UUID
-    及至少一个具名动作均合法时为 ``True``，否则为 ``False``。异常：无；未知
-    字段被忽略，动作参数既不读取也不返回。
-    """
-
-    if not isinstance(device, Mapping):
-        return False
-    local_id = device.get("local_id")
-    material_uuid = device.get("material_uuid")
-    actions = device.get("actions")
-    return bool(
-        isinstance(local_id, str)
-        and local_id.strip()
-        and _is_canonical_uuid(material_uuid)
-        and isinstance(actions, list)
-        and actions
-        and all(
-            isinstance(action, Mapping)
-            and isinstance(action.get("name"), str)
-            and bool(action["name"].strip())
-            and isinstance(action.get("type"), str)
-            and bool(action["type"].strip())
-            for action in actions
-        )
-    )
-
-
-def _is_canonical_uuid(value: Any) -> bool:
-    """判断值是否为小写连字符形式的规范 UUID 字符串。
-
-    参数：``value`` 是待校验身份。返回：仅当字符串可解析且等于规范 UUID 文本
-    时为 ``True``。异常：无；类型或格式错误均返回 ``False``。
-    """
-
-    if not isinstance(value, str):
-        return False
-    try:
-        return value == str(uuid.UUID(value))
-    except ValueError:
-        return False
 
 
 async def _handle_edge_event(
