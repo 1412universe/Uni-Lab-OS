@@ -112,7 +112,9 @@ def resolve_backend_launch(
         if domain_mode == "local"
         else None
     )
-    validated_graph = runtime_directory / "selected-graph.json"
+    # 资源图文件名是本地库存启动来源的稳定业务身份；运行代次只能改变目录，
+    # 不能把它重命名为 selected-graph.json，否则既有库存会正确拒绝接管。
+    validated_graph = runtime_directory / graph.name
     shutil.copyfile(graph, validated_graph)
     os.chmod(validated_graph, 0o600)
     backend_port = _configured_service_port(
@@ -301,7 +303,8 @@ def resolve_edge_launch(
     )
     edge_graph = Path(str(metadata["validatedGraphPath"]))
     if mode == "dry-run":
-        edge_graph = runtime_directory / "selected-graph.json"
+        # Edge 使用独立副本关闭自动连接，但保留与 Backend 相同的来源文件名。
+        edge_graph = runtime_directory / edge_graph.name
         _write_dry_run_edge_graph(
             Path(str(metadata["validatedGraphPath"])), edge_graph
         )

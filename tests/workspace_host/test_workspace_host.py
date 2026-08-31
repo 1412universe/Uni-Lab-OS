@@ -342,6 +342,33 @@ def test_backend_launch_keeps_local_domain_store_across_process_generations(
     assert first.metadata["runtimeDirectory"] != second.metadata["runtimeDirectory"]
 
 
+def test_managed_graph_copy_preserves_inventory_source_identity(
+    workspace: Path,
+) -> None:
+    """受管代次副本必须保留图文件名，避免伪造库存来源变更。"""
+
+    paths = WorkspacePaths.resolve(workspace)
+    ensure_local_token(paths)
+
+    backend = resolve_backend_launch(
+        paths,
+        graph_path="deployment/graphs/graph.json",
+        runtime_mode="dry-run",
+        backend_port=48_127,
+        hostlink_port=48_128,
+    )
+    edge = resolve_edge_launch(
+        paths,
+        {"address": backend.address, "metadata": backend.metadata},
+    )
+
+    backend_graph = Path(_argument_value(backend.command, "--graph"))
+    edge_graph = Path(_argument_value(edge.command, "--graph"))
+    assert backend_graph.name == "graph.json"
+    assert edge_graph.name == "graph.json"
+    assert backend_graph.parent != edge_graph.parent
+
+
 def test_backend_launch_migrates_the_last_generation_into_stable_local_domain(
     workspace: Path,
 ) -> None:
