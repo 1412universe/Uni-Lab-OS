@@ -1,4 +1,4 @@
-"""已发布子工作流更新后的父工作流组合调用替换。"""
+"""已发布实验操作更新后的引用方组合调用替换。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from unilabos.workflow.json_codec import strict_json_equal
 
 
 class CompositeContractRefreshPending(ValueError):
-    """父工作流暂不能安全采用新的子工作流发布合同。"""
+    """引用方暂不能安全采用新的实验操作发布合同。"""
 
     def __init__(self, code: str, message: str) -> None:
         """保存稳定诊断码和可直接展示的中文说明。
@@ -59,9 +59,9 @@ def graph_references_composite_child(
     child_workflow_uuid: str,
     except_contract_uuid: str | None = None,
 ) -> bool:
-    """判断工作流图是否引用指定子工作流的旧组合调用。
+    """判断工作流图是否引用指定实验操作的旧组合调用。
 
-    参数：``graph`` 是完整父图，``child_workflow_uuid`` 是子工作流稳定身份；
+    参数：``graph`` 是完整引用方图，``child_workflow_uuid`` 是实验操作稳定身份；
     ``except_contract_uuid`` 可指定当前最新发布合同，匹配它的调用不算待刷新。
     返回：至少一个组合调用满足条件时为真。异常：无；普通节点和损坏的非对象
     元数据会被忽略，不能因此把无关工作流加入刷新集合。
@@ -107,13 +107,13 @@ def _descriptors(
     ):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "子工作流发布合同的输入输出定义不完整",
+            "实验操作发布合同的输入输出定义不完整",
         )
     names = [str(item["name"]) for item in values]
     if len(set(names)) != len(names):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "子工作流发布合同包含重复参数名",
+            "实验操作发布合同包含重复参数名",
         )
     return values
 
@@ -124,7 +124,7 @@ def _assert_boundary_compatible(
 ) -> None:
     """确认新合同能继续使用父工作流原有的参数连接。
 
-    参数：``previous`` 是父图当前引用的旧合同，``current`` 是子工作流最新合同。
+    参数：``previous`` 是引用方当前使用的旧合同，``current`` 是实验操作最新合同。
     返回：无。异常：参数被删除、改名、类型变化或新增必填参数时抛出待处理诊断，
     防止自动替换后把父工作流已有连线传给错误的参数。
     """
@@ -132,7 +132,7 @@ def _assert_boundary_compatible(
     if previous.get("workflow_uuid") != current.get("workflow_uuid"):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "父工作流引用的前后发布合同不属于同一个子工作流",
+            "引用方使用的前后发布合同不属于同一个实验操作",
         )
 
     previous_inputs = _descriptors(
@@ -165,12 +165,12 @@ def _assert_boundary_compatible(
         ):
             raise CompositeContractRefreshPending(
                 "composite_input_incompatible",
-                f"子工作流输入参数 {name} 已删除、改名或类型不兼容",
+                f"实验操作输入参数 {name} 已删除、改名或类型不兼容",
             )
         if descriptor.get("required") is False and replacement.get("required") is True:
             raise CompositeContractRefreshPending(
                 "composite_input_incompatible",
-                f"子工作流输入参数 {name} 已改为必填",
+                f"实验操作输入参数 {name} 已改为必填",
             )
     previous_input_names = {str(item["name"]) for item in previous_inputs}
     for descriptor in current_inputs:
@@ -180,7 +180,7 @@ def _assert_boundary_compatible(
         ):
             raise CompositeContractRefreshPending(
                 "composite_input_required",
-                f"子工作流新增必填参数 {descriptor['name']}，需要补充父工作流传参",
+                f"实验操作新增必填参数 {descriptor['name']}，需要补充引用方传参",
             )
     for descriptor in previous_outputs:
         name = str(descriptor["name"])
@@ -190,7 +190,7 @@ def _assert_boundary_compatible(
         ):
             raise CompositeContractRefreshPending(
                 "composite_output_incompatible",
-                f"子工作流输出参数 {name} 已删除、改名或类型不兼容",
+                f"实验操作输出参数 {name} 已删除、改名或类型不兼容",
             )
 
 
@@ -214,7 +214,7 @@ def _assert_executor_compatible(
     ):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "子工作流发布合同的设备要求不完整",
+            "实验操作发布合同的设备要求不完整",
         )
     previous_by_key = {
         str(item.get("key")): item
@@ -231,7 +231,7 @@ def _assert_executor_compatible(
     ):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "子工作流发布合同包含重复或无效的设备要求",
+            "实验操作发布合同包含重复或无效的设备要求",
         )
     normalized: dict[str, str] = {}
     for key, requirement in current_by_key.items():
@@ -245,13 +245,13 @@ def _assert_executor_compatible(
         ):
             raise CompositeContractRefreshPending(
                 "composite_executor_incompatible",
-                "子工作流的执行设备要求已变化，需要重新选择设备",
+                "实验操作的执行设备要求已变化，需要重新选择设备",
             )
         normalized[key] = material_uuid
     if not validate_bindings(current_requirements, normalized):
         raise CompositeContractRefreshPending(
             "composite_executor_unavailable",
-            "父工作流原来选择的设备已不满足子工作流要求",
+            "引用方原来选择的设备已不满足实验操作要求",
         )
     return normalized
 
@@ -295,7 +295,7 @@ def _handle_uuid(contract: Mapping[str, Any], io_type: str, name: str) -> str:
     except (KeyError, TypeError, ValueError):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "子工作流发布合同缺少有效模板身份",
+            "实验操作发布合同缺少有效模板身份",
         ) from None
     return str(uuid5(template_uuid, f"published-handle:{io_type}:{name}"))
 
@@ -305,7 +305,7 @@ def _boundary_handle_remap(
 ) -> dict[str, str]:
     """按参数名建立旧发布模板连接点到新模板连接点的映射。
 
-    参数：``previous``/``current`` 是同一子工作流前后两版发布合同。返回：旧
+    参数：``previous``/``current`` 是同一实验操作前后两版发布合同。返回：旧
     连接点（Handle）UUID 到新连接点 UUID 的完整映射，包含业务参数和
     ``ready``。异常：合同描述符或模板身份无效时抛出待处理诊断。
     """
@@ -353,7 +353,7 @@ def _replace_invocation(
     if not isinstance(raw_bindings, Mapping):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "父工作流缺少子工作流设备绑定",
+            "引用方缺少实验操作设备绑定",
         )
     bindings = _assert_executor_compatible(
         previous_contract,
@@ -378,14 +378,14 @@ def _replace_invocation(
         if source_uuid in descendants or target_uuid in descendants:
             raise CompositeContractRefreshPending(
                 "composite_private_edge_invalid",
-                "父工作流存在直接连接子工作流内部节点的连线，不能自动替换",
+                "引用方存在直接连接实验操作内部节点的连线，不能自动替换",
             )
         if source_uuid == invocation_uuid:
             old_handle = str(edge.get("source_handle_uuid"))
             if old_handle not in handle_remap:
                 raise CompositeContractRefreshPending(
                     "composite_boundary_invalid",
-                    "父工作流存在无法按参数名迁移的子工作流输出连线",
+                    "引用方存在无法按参数名迁移的实验操作输出连线",
                 )
             edge["source_handle_uuid"] = handle_remap[old_handle]
         if target_uuid == invocation_uuid:
@@ -393,7 +393,7 @@ def _replace_invocation(
             if old_handle not in handle_remap:
                 raise CompositeContractRefreshPending(
                     "composite_boundary_invalid",
-                    "父工作流存在无法按参数名迁移的子工作流输入连线",
+                    "引用方存在无法按参数名迁移的实验操作输入连线",
                 )
             edge["target_handle_uuid"] = handle_remap[old_handle]
         if source_uuid == invocation_uuid or target_uuid == invocation_uuid:
@@ -455,21 +455,21 @@ def refresh_published_composite_invocations(
     load_contract: Callable[[str], Mapping[str, Any]],
     validate_bindings: Callable[[Sequence[Mapping[str, Any]], Mapping[str, str]], bool],
 ) -> CompositeContractRefreshResult:
-    """把父图中指向同一子工作流的旧调用替换为最新发布合同。
+    """把引用方图中指向同一实验操作的旧调用替换为最新发布合同。
 
     参数：``parent_graph`` 是父工作流当前完整图，``current_contract`` 是刚发布的
-    子工作流合同；``load_contract`` 读取旧合同，``validate_bindings`` 验证现有设备
+    实验操作合同；``load_contract`` 读取旧合同，``validate_bindings`` 验证现有设备
     是否仍可使用。返回独立新图和替换的调用 UUID。任一调用不兼容时整个父图保持
     不变并抛 ``CompositeContractRefreshPending``，调用方可把原因返回给前端。
     """
 
-    # ``child_workflow_uuid`` 是新合同所属子工作流的稳定身份；刷新按它查找所有
+    # ``child_workflow_uuid`` 是新合同所属实验操作的稳定身份；刷新按它查找所有
     # 旧合同调用，而不是按某一个易变化的发布合同 UUID 查找。
     child_workflow_uuid = current_contract.get("workflow_uuid")
     if not isinstance(child_workflow_uuid, str):
         raise CompositeContractRefreshPending(
             "composite_contract_invalid",
-            "子工作流发布合同缺少工作流身份",
+            "实验操作发布合同缺少工作流身份",
         )
     graph = deepcopy(dict(parent_graph))
     # ``invocation_uuids`` 收集本父图实际替换的稳定调用身份，供服务层形成诊断
@@ -498,14 +498,14 @@ def refresh_published_composite_invocations(
         if not isinstance(contract_uuid, str):
             raise CompositeContractRefreshPending(
                 "composite_contract_invalid",
-                "父工作流缺少原有子工作流发布合同身份",
+                "引用方缺少原有实验操作发布合同身份",
             )
         try:
             previous_contract = load_contract(contract_uuid)
         except KeyError:
             raise CompositeContractRefreshPending(
                 "composite_contract_missing",
-                "父工作流引用的旧子工作流发布合同不存在",
+                "引用方使用的旧实验操作发布合同不存在",
             ) from None
         graph = _replace_invocation(
             parent_graph=graph,

@@ -91,7 +91,7 @@ class _CompositeFailure(RuntimeError):
 
 
 class CompositeAuthoring:
-    """通过一个只读入口把已发布子工作流展开为父候选图。"""
+    """通过一个只读入口把已发布实验操作展开为引用方候选图。"""
 
     def __init__(
         self,
@@ -130,7 +130,7 @@ class CompositeAuthoring:
     ) -> CompositeExpansion:
         """只读编译一个组合工作流调用并把失败转换为零写诊断。
 
-        参数：父工作流/调用 UUID 决定身份；模块和符号选择已发布子工作流；关键字
+        参数：引用方/调用 UUID 决定身份；模块和符号选择已发布实验操作；关键字
         参数绑定其输入边界；``parent_input_contract`` 预留给 R3 有效约束传播。
         返回：成功时包含调用节点、平面内部图、映射和 pin，失败时只含一个稳定
         诊断。异常：非领域编程错误不吞并；该接口没有写端口。
@@ -157,7 +157,9 @@ class CompositeAuthoring:
             try:
                 source = self._resolver.resolve(module, symbol)
             except (LookupError, PublishedSourceCatalogError):
-                raise _CompositeFailure("composite_child_not_found", "/source") from None
+                raise _CompositeFailure(
+                    "composite_child_not_found", "/source"
+                ) from None
             if not isinstance(source, PublishedWorkflowSource):
                 raise _CompositeFailure("composite_catalog_mismatch", "/source")
             if source.workflow_uuid == parent_uuid:
@@ -201,7 +203,7 @@ class CompositeAuthoring:
         base_node: Mapping[str, Any] | None,
         parent_input_contract: Mapping[str, object] | None,
     ) -> CompositeExpansion:
-        """验证一个快照并构造直接子工作流的平面展开结果。
+        """验证一个快照并构造实验操作的平面展开结果。
 
         参数：父/调用/父层级身份决定展开命名空间，``source`` 与 ``snapshot``
         是同一发布来源，关键字参数、工作流栈、基础节点和父输入合同提供递归上下文。
@@ -217,7 +219,9 @@ class CompositeAuthoring:
 
         workflow = _mapping(snapshot.get("workflow"), "/child/workflow")
         if workflow.get("uuid") != source.workflow_uuid:
-            raise _CompositeFailure("composite_catalog_mismatch", "/child/workflow/uuid")
+            raise _CompositeFailure(
+                "composite_catalog_mismatch", "/child/workflow/uuid"
+            )
         revision = workflow.get("revision")
         applied_source = snapshot.get("applied_source")
         if (
@@ -227,7 +231,9 @@ class CompositeAuthoring:
             or not isinstance(applied_source, Mapping)
             or applied_source.get("workflow_revision") != revision
         ):
-            raise _CompositeFailure("composite_child_unapplied", "/child/applied_source")
+            raise _CompositeFailure(
+                "composite_child_unapplied", "/child/applied_source"
+            )
         template_action, extension = _published_template(
             self._catalog,
             source,
@@ -262,12 +268,12 @@ class CompositeAuthoring:
         )
         nodes, edges, node_uuid_map, effective_child_input_contract = (
             self._expand_graph(
-            graph,
-            source=source,
-            invocation_uuid=invocation_uuid,
-            parent_workflow_uuid=parent_workflow_uuid,
-            workflow_stack=workflow_stack,
-            input_contract=input_contract,
+                graph,
+                source=source,
+                invocation_uuid=invocation_uuid,
+                parent_workflow_uuid=parent_workflow_uuid,
+                workflow_stack=workflow_stack,
+                input_contract=input_contract,
             )
         )
         boundary_handles = template_action.handles
@@ -347,9 +353,13 @@ class CompositeAuthoring:
             invocation_node=invocation_node,
             nodes=tuple(nodes),
             edges=tuple(edges),
-            target_mappings={key: tuple(value) for key, value in target_mappings.items()},
+            target_mappings={
+                key: tuple(value) for key, value in target_mappings.items()
+            },
             source_mappings=source_mappings,
-            structural_mappings={key: tuple(value) for key, value in structural.items()},
+            structural_mappings={
+                key: tuple(value) for key, value in structural.items()
+            },
             node_templates=tuple(referenced_nodes),
             handle_templates=tuple(referenced_handles),
             contract_pin=contract_pin,
@@ -476,9 +486,7 @@ class CompositeAuthoring:
             nodes.append(_plain(nested.invocation_node))
             nodes.extend(_plain(nested.nodes))
             nested_edges.extend(_plain(nested.edges))
-            effective_input_contract = _plain(
-                nested.effective_parent_input_contract
-            )
+            effective_input_contract = _plain(nested.effective_parent_input_contract)
         direct_edges = _expand_edges(
             graph["edges"],
             node_uuid_map=node_uuid_map,
@@ -516,9 +524,7 @@ def _published_template(
     template = action.template
     meta_data = template.get("meta_data")
     unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
-    provenance = (
-        unilab.get("workflow_source") if isinstance(unilab, Mapping) else None
-    )
+    provenance = unilab.get("workflow_source") if isinstance(unilab, Mapping) else None
     expected_provenance = {
         "kind": "package",
         "definition_fqid": source.definition_fqid,
@@ -885,18 +891,13 @@ def _structural_mappings(
     node_ids: set[str] = set()
     for node_uuid, node in by_uuid.items():
         try:
-            action = catalog.require_template(
-                str(node["workflow_node_template_uuid"])
-            )
+            action = catalog.require_template(str(node["workflow_node_template_uuid"]))
         except (AuthoringCatalogError, KeyError):
             raise _CompositeFailure(
                 "composite_catalog_mismatch",
                 "/catalog/structural",
             ) from None
-        if (
-            node.get("type") == "group"
-            or action.template.get("node_type") == "group"
-        ):
+        if node.get("type") == "group" or action.template.get("node_type") == "group":
             continue
         node_ids.add(node_uuid)
     incoming = {str(edge["target_node_uuid"]) for edge in edges}
@@ -941,7 +942,9 @@ def _ready_handle_uuid(
     try:
         action = catalog.require_template(str(node["workflow_node_template_uuid"]))
     except (AuthoringCatalogError, KeyError):
-        raise _CompositeFailure("composite_catalog_mismatch", "/catalog/ready") from None
+        raise _CompositeFailure(
+            "composite_catalog_mismatch", "/catalog/ready"
+        ) from None
     matches = [
         handle
         for handle in action.handles
@@ -1013,21 +1016,23 @@ def _invocation_node(
     unilab = _plain(unilab) if isinstance(unilab, Mapping) else {}
     unilab["composite"] = composite
     meta_data["unilab"] = unilab
-    result.update({
-        "uuid": invocation_uuid,
-        "workflow_uuid": parent_workflow_uuid,
-        "workflow_node_template_uuid": template_uuid,
-        "parent_uuid": parent_uuid,
-        "name": str(result.get("name") or symbol),
-        "status": "idle",
-        "type": "workflow",
-        "pose": _plain(result.get("pose") or {}),
-        "param": _plain(keyword_arguments),
-        "execution_policy": _plain(result.get("execution_policy") or {}),
-        "disabled": bool(result.get("disabled", False)),
-        "minimized": bool(result.get("minimized", False)),
-        "meta_data": meta_data,
-    })
+    result.update(
+        {
+            "uuid": invocation_uuid,
+            "workflow_uuid": parent_workflow_uuid,
+            "workflow_node_template_uuid": template_uuid,
+            "parent_uuid": parent_uuid,
+            "name": str(result.get("name") or symbol),
+            "status": "idle",
+            "type": "workflow",
+            "pose": _plain(result.get("pose") or {}),
+            "param": _plain(keyword_arguments),
+            "execution_policy": _plain(result.get("execution_policy") or {}),
+            "disabled": bool(result.get("disabled", False)),
+            "minimized": bool(result.get("minimized", False)),
+            "meta_data": meta_data,
+        }
+    )
     return result
 
 
@@ -1050,8 +1055,7 @@ def _materialize_boundary_arguments(
     boundary_by_name = {
         str(handle["handle_key"]): str(handle["uuid"])
         for handle in boundary_handles
-        if handle.get("io_type") == "target"
-        and handle.get("handle_key") != "ready"
+        if handle.get("io_type") == "target" and handle.get("handle_key") != "ready"
     }
     for name, value in keyword_arguments.items():
         boundary_uuid = boundary_by_name.get(name)
@@ -1140,13 +1144,9 @@ def _referenced_templates(
         except (AuthoringCatalogError, KeyError):
             raise _CompositeFailure("composite_catalog_mismatch", "/catalog/templates")
         actions[str(action.template["uuid"])] = action
-    node_templates = [
-        actions[key].detached_template() for key in sorted(actions)
-    ]
+    node_templates = [actions[key].detached_template() for key in sorted(actions)]
     handles = [
-        handle
-        for key in sorted(actions)
-        for handle in actions[key].detached_handles()
+        handle for key in sorted(actions) for handle in actions[key].detached_handles()
     ]
     return node_templates, handles
 
@@ -1209,9 +1209,13 @@ def _effective_parent_input_contract(
         child_slot = resource_slot_schema(child_schema)
         if parent_slot is None and child_slot is None:
             continue
-        if parent_slot is None or child_slot is None or not schema_is_assignable(
-            _replace_slot_allowlist(parent_schema, None),
-            _replace_slot_allowlist(child_schema, None),
+        if (
+            parent_slot is None
+            or child_slot is None
+            or not schema_is_assignable(
+                _replace_slot_allowlist(parent_schema, None),
+                _replace_slot_allowlist(child_schema, None),
+            )
         ):
             raise _CompositeFailure(
                 "composite_boundary_mapping_invalid",
@@ -1248,8 +1252,10 @@ def _slot_allowlist(slot_schema: Mapping[str, Any]) -> list[str] | None:
     raw = slot_schema.get("allowed_resource_template_uuids")
     if raw is None:
         return None
-    if not isinstance(raw, list) or not raw or any(
-        not isinstance(item, str) for item in raw
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or any(not isinstance(item, str) for item in raw)
     ):
         raise _CompositeFailure(
             "composite_catalog_mismatch",
@@ -1296,8 +1302,7 @@ def _replace_slot_allowlist(
     if isinstance(members, list):
         result["anyOf"] = [
             _replace_slot_allowlist(member, allowlist)
-            if isinstance(member, Mapping)
-            and resource_slot_schema(member) is not None
+            if isinstance(member, Mapping) and resource_slot_schema(member) is not None
             else _plain(member)
             for member in members
         ]

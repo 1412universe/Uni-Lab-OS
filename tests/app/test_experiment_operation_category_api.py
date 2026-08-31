@@ -22,9 +22,9 @@ def _client(
 ) -> tuple[TestClient, WorkflowService, WorkflowStore, WorkflowStore, Path]:
     """建立带唯一领域包的隔离工作流应用。
 
-    参数：``tmp_path`` 是 pytest 临时目录；可选 ``compiler`` 用于真实 Python
-    导入与冷启动激活。返回：公共客户端、服务、运行事实库、内存定义目录和类别
-    配置文件路径。异常：目录发现或应用装配失败时原样抛出。
+    参数：``tmp_path`` 是 pytest 临时目录；可选 ``compiler`` 可替换默认真实
+    AST 编译器。返回：公共客户端、服务、运行事实库、内存定义目录和类别配置
+    文件路径。异常：目录发现或应用装配失败时原样抛出。
     """
 
     selected_root = tmp_path / "domain"
@@ -42,16 +42,16 @@ def _client(
         persist_workflow_definitions=False,
     )
     definition_store = WorkflowStore(":memory:")
+    effective_compiler = compiler if compiler is not None else _engine()
     service = WorkflowService(
         runtime_store,
         definition_store=definition_store,
-        compiler=compiler,
+        compiler=effective_compiler,
         source_target=DomainWorkflowSourceTarget.from_discovery_plan(plan),
     )
-    if compiler is not None:
-        service.replace_discovered_source_authorizations(plan)
-        if plan.registrations:
-            service.activate_registered_sources_to_fixed_point()
+    service.replace_discovered_source_authorizations(plan)
+    if plan.registrations:
+        service.activate_registered_sources_to_fixed_point()
     return (
         TestClient(create_workflow_app(service)),
         service,
@@ -86,13 +86,11 @@ def test_default_categories_support_create_rename_delete_and_restart(
     回归时由断言暴露。
     """
 
-    client, service, runtime_store, definition_store, category_file = _client(
-        tmp_path
-    )
+    client, service, runtime_store, definition_store, category_file = _client(tmp_path)
     try:
-        defaults = client.get(
-            "/api/v1/experiment-operation-categories"
-        ).json()["data"]["items"]
+        defaults = client.get("/api/v1/experiment-operation-categories").json()["data"][
+            "items"
+        ]
         assert [item["name"] for item in defaults] == [
             "设备操作",
             "集成操作",
@@ -122,7 +120,7 @@ def test_default_categories_support_create_rename_delete_and_restart(
             "/api/v1/workflows",
             json={
                 "name": "已删除类别的旧前端请求",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "tags": ["manual_operation"],
                 "meta_data": {},
             },
@@ -135,9 +133,9 @@ def test_default_categories_support_create_rename_delete_and_restart(
 
     reopened, service, runtime_store, definition_store, _ = _client(tmp_path)
     try:
-        persisted = reopened.get(
-            "/api/v1/experiment-operation-categories"
-        ).json()["data"]["items"]
+        persisted = reopened.get("/api/v1/experiment-operation-categories").json()[
+            "data"
+        ]["items"]
         assert [item["name"] for item in persisted] == [
             "设备操作",
             "数据集成",
@@ -147,10 +145,10 @@ def test_default_categories_support_create_rename_delete_and_restart(
         _close(service, runtime_store, definition_store)
 
 
-def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
+def test_experiment_operation_category_round_trips_and_filters_legacy_tags(
     tmp_path: Path,
 ) -> None:
-    """子工作流保存类别并可筛选，旧类别标签仍映射到默认类别。
+    """实验操作保存类别并可筛选，旧类别标签仍映射到默认类别。
 
     参数：``tmp_path`` 隔离领域包和内存定义。返回：无。异常：类别引用、列表筛选
     或旧标签兼容回归时由断言暴露。
@@ -158,9 +156,9 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
 
     client, service, runtime_store, definition_store, _ = _client(tmp_path)
     try:
-        categories = client.get(
-            "/api/v1/experiment-operation-categories"
-        ).json()["data"]["items"]
+        categories = client.get("/api/v1/experiment-operation-categories").json()[
+            "data"
+        ]["items"]
         device_category = next(
             item for item in categories if item["name"] == "设备操作"
         )
@@ -168,7 +166,7 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
             "/api/v1/workflows",
             json={
                 "name": "显式设备操作",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "operation_category_uuid": device_category["uuid"],
                 "tags": [],
                 "meta_data": {},
@@ -178,7 +176,7 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
             "/api/v1/workflows",
             json={
                 "name": "旧标签设备操作",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "tags": ["device_operation"],
                 "meta_data": {},
             },
@@ -189,30 +187,32 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
         )
 
         assert explicit.status_code == 201
-        assert explicit.json()["data"]["operation_category_uuid"] == (
-            device_category["uuid"]
+        assert (
+            explicit.json()["data"]["operation_category_uuid"]
+            == (device_category["uuid"])
         )
-        assert legacy.json()["data"]["operation_category_uuid"] == (
-            device_category["uuid"]
+        assert (
+            legacy.json()["data"]["operation_category_uuid"]
+            == (device_category["uuid"])
         )
         renamed_category = client.put(
-            (
-                "/api/v1/experiment-operation-categories/"
-                f"{device_category['uuid']}"
-            ),
+            (f"/api/v1/experiment-operation-categories/{device_category['uuid']}"),
             json={"name": "仪器操作"},
         ).json()["data"]
         assert renamed_category == {
             **device_category,
             "name": "仪器操作",
         }
-        assert client.get(
-            f"/api/v1/workflows/{explicit.json()['data']['uuid']}"
-        ).json()["data"]["operation_category_uuid"] == device_category["uuid"]
+        assert (
+            client.get(f"/api/v1/workflows/{explicit.json()['data']['uuid']}").json()[
+                "data"
+            ]["operation_category_uuid"]
+            == device_category["uuid"]
+        )
         filtered = client.get(
             "/api/v1/workflows",
             params={
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "operation_category_uuid": device_category["uuid"],
             },
         ).json()["data"]["items"]
@@ -220,12 +220,22 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
             explicit.json()["data"]["uuid"],
             legacy.json()["data"]["uuid"],
         }
+        combined = client.get(
+            "/api/v1/workflows",
+            params={
+                "workflow_type": "experiment_operation",
+                "status": "source",
+                "name": "显式设备",
+                "operation_category_uuid": device_category["uuid"],
+            },
+        ).json()["data"]["items"]
+        assert [item["uuid"] for item in combined] == [explicit.json()["data"]["uuid"]]
 
         cleared_legacy = client.put(
             f"/api/v1/workflows/{legacy.json()['data']['uuid']}",
             json={
                 "name": "旧标签设备操作",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "operation_category_uuid": None,
                 "tags": ["device_operation"],
                 "meta_data": {},
@@ -236,14 +246,12 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
             f"/api/v1/workflows/{legacy.json()['data']['uuid']}",
             json={
                 "name": "旧标签设备操作（改名）",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "tags": ["device_operation"],
                 "meta_data": {},
             },
         )
-        assert renamed_after_clear.json()["data"][
-            "operation_category_uuid"
-        ] is None
+        assert renamed_after_clear.json()["data"]["operation_category_uuid"] is None
         filtered_after_clear = client.get(
             "/api/v1/workflows",
             params={"operation_category_uuid": device_category["uuid"]},
@@ -252,9 +260,7 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
             explicit.json()["data"]["uuid"]
         ]
         all_items = client.get("/api/v1/workflows").json()["data"]["items"]
-        assert normal.json()["data"]["uuid"] in {
-            item["uuid"] for item in all_items
-        }
+        assert normal.json()["data"]["uuid"] in {item["uuid"] for item in all_items}
     finally:
         _close(service, runtime_store, definition_store)
 
@@ -262,7 +268,7 @@ def test_subworkflow_category_round_trips_and_filters_without_breaking_old_tags(
 def test_category_rejects_normal_workflow_and_delete_while_referenced(
     tmp_path: Path,
 ) -> None:
-    """普通工作流不能挂类别，被子工作流引用的类别不能静默删除。
+    """普通工作流不能挂类别，被实验操作引用的类别不能静默删除。
 
     参数：``tmp_path`` 隔离领域包。返回：无。异常：分类边界或引用保护失效时由
     断言暴露。
@@ -290,7 +296,7 @@ def test_category_rejects_normal_workflow_and_delete_while_referenced(
             "/api/v1/workflows",
             json={
                 "name": "引用类别",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "operation_category_uuid": created_category["uuid"],
                 "tags": [],
                 "meta_data": {},
@@ -305,16 +311,19 @@ def test_category_rejects_normal_workflow_and_delete_while_referenced(
             f"/api/v1/workflows/{child['uuid']}",
             json={
                 "name": child["name"],
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "operation_category_uuid": None,
                 "tags": [],
                 "meta_data": {},
             },
         )
         assert cleared.json()["data"]["operation_category_uuid"] is None
-        assert client.delete(
-            f"/api/v1/experiment-operation-categories/{created_category['uuid']}"
-        ).json()["code"] == 0
+        assert (
+            client.delete(
+                f"/api/v1/experiment-operation-categories/{created_category['uuid']}"
+            ).json()["code"]
+            == 0
+        )
     finally:
         _close(service, runtime_store, definition_store)
 
@@ -333,16 +342,16 @@ def test_category_survives_python_source_round_trip_and_cold_start(
         tmp_path,
         compiler=compiler,
     )
-    device_category_uuid = client.get(
-        "/api/v1/experiment-operation-categories"
-    ).json()["data"]["items"][0]["uuid"]
+    device_category_uuid = client.get("/api/v1/experiment-operation-categories").json()[
+        "data"
+    ]["items"][0]["uuid"]
     python_source = _source().replace(
         '    description="Prepare and analyze one sample.",',
         (
             '    description="Prepare and analyze one sample.",\n'
-            '    workflow_type="subworkflow",\n'
-            "    meta_data={\"operation_category_uuid\": "
-            f'\"{device_category_uuid}\"}},'
+            '    workflow_type="experiment_operation",\n'
+            '    meta_data={"operation_category_uuid": '
+            f'"{device_category_uuid}"}},'
         ),
     )
     try:
@@ -355,9 +364,10 @@ def test_category_survives_python_source_round_trip_and_cold_start(
             },
         )
         assert imported.status_code == 201
-        assert imported.json()["data"]["workflow"][
-            "operation_category_uuid"
-        ] == device_category_uuid
+        assert (
+            imported.json()["data"]["workflow"]["operation_category_uuid"]
+            == device_category_uuid
+        )
     finally:
         _close(service, runtime_store, definition_store)
 
@@ -366,16 +376,10 @@ def test_category_survives_python_source_round_trip_and_cold_start(
         compiler=_engine(),
     )
     try:
-        workflow = reopened.get(f"/api/v1/workflows/{WORKFLOW_UUID}").json()[
-            "data"
-        ]
-        graph = reopened.get(
-            f"/api/v1/workflows/{WORKFLOW_UUID}/graph"
-        ).json()["data"]
+        workflow = reopened.get(f"/api/v1/workflows/{WORKFLOW_UUID}").json()["data"]
+        graph = reopened.get(f"/api/v1/workflows/{WORKFLOW_UUID}/graph").json()["data"]
         assert workflow["operation_category_uuid"] == device_category_uuid
-        assert graph["workflow"]["operation_category_uuid"] == (
-            device_category_uuid
-        )
+        assert graph["workflow"]["operation_category_uuid"] == (device_category_uuid)
         assert "operation_category_uuid" not in graph["workflow"]["meta_data"]
     finally:
         _close(service, runtime_store, definition_store)
@@ -387,7 +391,7 @@ def test_python_and_json_imports_cannot_bypass_category_rules(
     """Python 与旧 JSON 导入必须复用公开创建接口的类别约束。
 
     参数：``tmp_path`` 隔离领域包、源码和内存定义。返回：无。异常：普通工作流
-    能挂类别、子工作流能引用不存在类别，或失败后留下部分定义时由断言暴露。
+    能挂类别、实验操作能引用不存在类别，或失败后留下部分定义时由断言暴露。
     """
 
     client, service, runtime_store, definition_store, _ = _client(
@@ -401,7 +405,7 @@ def test_python_and_json_imports_cannot_bypass_category_rules(
         '    description="Prepare and analyze one sample.",',
         (
             '    description="Prepare and analyze one sample.",\n'
-            "    meta_data={\"operation_category_uuid\": "
+            '    meta_data={"operation_category_uuid": '
             f'"{default_category_uuid}"}},'
         ),
     )
@@ -421,14 +425,12 @@ def test_python_and_json_imports_cannot_bypass_category_rules(
             "/api/v1/workflows/import",
             json={
                 "name": "错误类别实验操作",
-                "workflow_type": "subworkflow",
+                "workflow_type": "experiment_operation",
                 "tags": [],
                 "meta_data": {
                     # 固定身份代表类别目录中明确不存在的类别，用于证明旧 JSON
                     # 导入不会绕过类别存在性校验。
-                    "operation_category_uuid": (
-                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-                    )
+                    "operation_category_uuid": ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
                 },
                 "nodes": [
                     {

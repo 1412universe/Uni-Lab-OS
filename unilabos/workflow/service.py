@@ -93,6 +93,10 @@ from unilabos.workflow.published_contract import (
     PublishedContractInvalid,
     PublishedWorkflowContractStore,
 )
+from unilabos.workflow.publication_catalog import (
+    WorkflowPublicationCatalog,
+    WorkflowPublicationCatalogError,
+)
 from unilabos.workflow.python_workflow_import import (
     PythonWorkflowImportError,
     validate_python_workflow_import,
@@ -133,7 +137,10 @@ from unilabos.workflow.task_input import (
     prepare_task_input,
 )
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridgeError
-from unilabos.workflow.workflow_type import normalize_workflow_type
+from unilabos.workflow.workflow_type import (
+    WORKFLOW_TYPE_EXPERIMENT_OPERATION,
+    normalize_workflow_type,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -464,9 +471,9 @@ class WorkflowService:
         工作流定义目录，省略时仅为兼容隔离测试而复用 ``store``；``compiler``
         负责编译可信工作流源码；
         ``compiler_rebuilder`` 在成功应用后重建包含已发布工作流的完整目录代际；
-        ``source_target`` 是用户 JSON/Python 导入默认写入的唯一领域包，导入后
-        的图、元数据和实验操作类别编辑也回写该目标；省略时仅保留无领域工作区
-        的遗留内存行为和三个只读默认类别；
+        ``source_target`` 是接口创建及 JSON/Python 导入默认写入的唯一领域包，
+        后续图、元数据和实验操作类别编辑也回写该目标；省略时仅保留无领域
+        工作区的遗留内存行为和三个只读默认类别；
         ``material_resolver`` 按物料 UUID 读取活动物料身份，供设备单动作运行
         （DeviceActionRun）关闭式校验；``task_scheduler_bridge`` 把普通工作流任务
         （WorkflowTask）与首次创建的设备单动作聚合交给同一本地调度器。返回无。
@@ -496,6 +503,14 @@ class WorkflowService:
             None
             if source_target is None
             else OperationCategoryCatalog(
+                package_root=source_target.package_root,
+                package_root_identity=source_target.package_root_identity,
+            )
+        )
+        self._publication_catalog = (
+            None
+            if source_target is None
+            else WorkflowPublicationCatalog(
                 package_root=source_target.package_root,
                 package_root_identity=source_target.package_root_identity,
             )
@@ -569,17 +584,27 @@ class WorkflowService:
         category_uuid = meta_data.pop(_OPERATION_CATEGORY_META_KEY, None)
         if (
             not category_was_explicit
-            and projected.get("workflow_type") == "subworkflow"
+            and projected.get("workflow_type") == WORKFLOW_TYPE_EXPERIMENT_OPERATION
         ):
             category_uuid = legacy_operation_category_uuid(projected.get("tags"))
         projected["meta_data"] = meta_data
         projected["operation_category_uuid"] = category_uuid
-        latest_contract = self._published_contract_store().latest_for_workflow(
-            str(projected["uuid"])
-        )
-        is_currently_published = latest_contract is not None and int(
-            latest_contract["workflow_revision"]
-        ) == int(projected["revision"])
+        identity = str(projected["uuid"])
+        latest_contract = self._published_contract_store().latest_for_workflow(identity)
+        if self._publication_catalog is None or not self._has_active_source(identity):
+            is_currently_published = latest_contract is not None and int(
+                latest_contract["workflow_revision"]
+            ) == int(projected["revision"])
+        else:
+            publication = self._publication_catalog.latest_for_workflow(identity)
+            source = self._read_source(self._registration(identity))
+            is_currently_published = (
+                latest_contract is not None
+                and publication is not None
+                and source is not None
+                and publication["contract"]["uuid"] == latest_contract["uuid"]
+                and publication["source_draft_hash"] == source["draft_hash"]
+            )
         projected["status"] = (
             _WORKFLOW_STATUS_PUBLISHED
             if is_currently_published
@@ -714,7 +739,7 @@ class WorkflowService:
             self._raise_operation_category_error(error)
 
     def delete_operation_category(self, category_uuid: str) -> None:
-        """删除没有被任何子工作流引用的实验操作类别。
+        """删除没有被任何实验操作引用的类别。
 
         参数：``category_uuid`` 是稳定类别身份。返回：无。异常：仍被显式类别或
         兼容标签引用时返回冲突；身份、目录或并发错误按公共合同返回。
@@ -778,7 +803,9 @@ class WorkflowService:
 
         if category_uuid is None:
             return None
-        if workflow_type != "subworkflow" or not isinstance(category_uuid, str):
+        if workflow_type != WORKFLOW_TYPE_EXPERIMENT_OPERATION or not isinstance(
+            category_uuid, str
+        ):
             raise WorkflowError("invalid_input")
         return self.get_operation_category(category_uuid)["uuid"]
 
@@ -794,13 +821,13 @@ class WorkflowService:
         参数：``workflow_type`` 是已规范化的工作流类型，``meta_data`` 是候选
         工作流根元数据，``tags`` 用于兼容旧前端的类别标签。返回：保留其他字段
         并规范类别 UUID 的新字典；显式 ``null`` 会作为“已清空”标记保留，避免
-        旧标签再次回填；未显式提供类别的子工作流会把仍存在的旧标签类别固化为
+        旧标签再次回填；未显式提供类别的实验操作会把仍存在的旧标签类别固化为
         UUID。异常：普通工作流挂类别、类别已删除或身份非法时关闭候选写入。
         """
 
         normalized = dict(meta_data)
         if _OPERATION_CATEGORY_META_KEY not in normalized:
-            if workflow_type != "subworkflow":
+            if workflow_type != WORKFLOW_TYPE_EXPERIMENT_OPERATION:
                 return normalized
             legacy_uuid = legacy_operation_category_uuid(tags)
             if legacy_uuid is None:
@@ -828,12 +855,10 @@ class WorkflowService:
             batch = self._definition_store.list_workflows(
                 page=page,
                 page_size=100,
-                workflow_type="subworkflow",
+                workflow_type=WORKFLOW_TYPE_EXPERIMENT_OPERATION,
             )
             if any(
-                self._public_workflow_with_status(item).get(
-                    "operation_category_uuid"
-                )
+                self._public_workflow_with_status(item).get("operation_category_uuid")
                 == category_uuid
                 for item in batch["items"]
             ):
@@ -895,7 +920,7 @@ class WorkflowService:
         operation_category_uuid: str | None | object = _OPERATION_CATEGORY_UNSET,
         workflow_uuid: str | None = None,
     ) -> dict[str, Any]:
-        """创建普通工作流或子工作流定义。
+        """创建普通工作流或实验操作定义。
 
         参数：名称、标签、描述和公开元数据沿用既有合同；``workflow_type`` 省略
         时为普通工作流；实验操作可通过 ``operation_category_uuid`` 归类，省略
@@ -920,15 +945,36 @@ class WorkflowService:
                 operation_category_uuid is not _OPERATION_CATEGORY_UNSET
             )
             if category_was_provided:
-                public_meta_data[_OPERATION_CATEGORY_META_KEY] = (
-                    operation_category_uuid
-                )
+                public_meta_data[_OPERATION_CATEGORY_META_KEY] = operation_category_uuid
             with self._operation_category_lock:
                 public_meta_data = self._validated_operation_category_meta_data(
                     workflow_type=workflow_type,
                     meta_data=public_meta_data,
                     tags=tags,
                 )
+                if self._source_target is not None:
+                    if self.compiler is None:
+                        raise WorkflowError("template_catalog_unavailable")
+                    # ``registration`` 由请求中的工作流类型选择普通工作流或实验操作
+                    # 源码目录；UUID 仍是唯一身份，目录不参与身份计算。
+                    registration = self._source_target.registration(
+                        workflow_uuid=identity,
+                        file_name=DomainWorkflowSourceTarget.default_file_name(
+                            identity
+                        ),
+                        workflow_type=workflow_type,
+                    )
+                    created_graph = self._commit_domain_workflow_creation(
+                        registration=registration,
+                        name=name,
+                        tags=tags,
+                        description=self._optional_text(description),
+                        meta_data=public_meta_data,
+                        nodes=[],
+                        edges=[],
+                        workflow_type=workflow_type,
+                    )
+                    return self._public_workflow_with_status(created_graph["workflow"])
                 workflow = self._definition_store.create_workflow(
                     workflow_uuid=identity,
                     name=name,
@@ -967,7 +1013,7 @@ class WorkflowService:
     ) -> dict[str, Any]:
         """分页查询工作流并支持类型、当前发布状态组合筛选。
 
-        参数：页码、页长和名称沿用旧合同；可选类型为普通或子工作流，可选状态为
+        参数：页码、页长和名称沿用旧合同；可选类型为普通工作流或实验操作，可选状态为
         源码或已发布；类别筛选同时兼容旧标签分类。返回：筛选后当前页及总数，
         调用方省略新增条件时仍读取全部。异常：未知类型、状态或类别映射为稳定
         公共错误。
@@ -1010,6 +1056,67 @@ class WorkflowService:
         ]
         return result
 
+    def list_referencing_workflows(
+        self,
+        workflow_uuid: str,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """分页返回当前已应用图中引用指定工作流的父工作流。
+
+        参数：``workflow_uuid`` 是被引用工作流（通常为实验操作）的稳定身份；
+        ``page`` 和 ``page_size`` 遵循工作流列表分页规则。返回：按名称和 UUID
+        稳定排序的父工作流公开读模型、总数及分页信息。异常：被引用工作流身份
+        非法或不存在时沿用工作流详情接口错误；并发删除的父工作流不会形成幽灵
+        引用。引用事实只来自当前已应用图中的组合工作流调用元数据，不建立第二份
+        持久索引。
+        """
+
+        child_uuid = self.get_workflow(workflow_uuid)["uuid"]
+        page, page_size = self._normalize_page(page, page_size)
+        referencing_workflows: list[dict[str, Any]] = []
+        source_page = 1
+        while True:
+            batch = self._definition_store.list_workflows(
+                page=source_page,
+                page_size=100,
+            )
+            for workflow in batch["items"]:
+                # ``parent_uuid`` 是候选父工作流身份；引用由该父图中组合调用节点
+                # 的 child_workflow_uuid 证明，名称和标签不参与关系判断。
+                parent_uuid = str(workflow["uuid"])
+                if parent_uuid == child_uuid:
+                    continue
+                try:
+                    parent_graph = self._definition_store.get_graph(parent_uuid)
+                except StoreNotFound:
+                    continue
+                if graph_references_composite_child(
+                    parent_graph,
+                    child_workflow_uuid=child_uuid,
+                ):
+                    referencing_workflows.append(
+                        self._public_workflow_with_status(workflow)
+                    )
+            if source_page * 100 >= int(batch["total"]):
+                break
+            source_page += 1
+
+        referencing_workflows.sort(
+            key=lambda item: (
+                str(item.get("name") or "").casefold(),
+                str(item["uuid"]),
+            )
+        )
+        start = (page - 1) * page_size
+        return {
+            "items": referencing_workflows[start : start + page_size],
+            "total": len(referencing_workflows),
+            "page": page,
+            "page_size": page_size,
+        }
+
     def update_workflow(
         self,
         workflow_uuid: str,
@@ -1024,10 +1131,11 @@ class WorkflowService:
         """更新工作流根字段并保持旧调用的类型兼容。
 
         参数：名称、标签、描述和元数据是既有完整更新值；``workflow_type`` 省略
-        时沿用当前分类；类别字段省略时保持原值，显式 ``null`` 时清空。返回：含
-        类型、类别和派生状态的最新定义。异常：字段、源码写回、修订或身份错误
-        映射为稳定工作流错误；领域包来源的修改只有在 Python 固定点验证及 CAS
-        写回成功后才推进内存定义。
+        时沿用当前分类，显式提供时只能重复当前值，避免源码跨目录迁移；类别字段
+        省略时保持原值，显式 ``null`` 时清空。返回：含类型、类别和派生状态的
+        最新定义。异常：字段、类型转换、源码写回、修订或身份错误映射为稳定
+        工作流错误；领域包来源的修改只有在 Python 固定点验证及 CAS 写回成功后
+        才推进内存定义。
         """
 
         current = self.get_workflow(workflow_uuid)
@@ -1049,6 +1157,8 @@ class WorkflowService:
                     workflow_type,
                     default=current["workflow_type"],
                 )
+                if normalized_workflow_type != current["workflow_type"]:
+                    raise ValueError("workflow_type is immutable")
             except (AttributeError, TypeError, ValueError):
                 raise WorkflowError("invalid_input") from None
             public_meta_data.pop("unilab", None)
@@ -1072,9 +1182,7 @@ class WorkflowService:
                         and not current_category_was_explicit
                         and requested_category_uuid is None
                     ):
-                        requested_category_uuid = legacy_operation_category_uuid(
-                            tags
-                        )
+                        requested_category_uuid = legacy_operation_category_uuid(tags)
                     normalized_category_uuid = (
                         self._validate_workflow_operation_category(
                             workflow_type=normalized_workflow_type,
@@ -1083,7 +1191,7 @@ class WorkflowService:
                     )
                 if normalized_category_uuid is not None or (
                     (category_was_provided or current_category_was_explicit)
-                    and normalized_workflow_type == "subworkflow"
+                    and normalized_workflow_type == WORKFLOW_TYPE_EXPERIMENT_OPERATION
                 ):
                     # 显式 null 是持久的“已清空”事实；否则旧分类标签会在读路径
                     # 再次映射成类别，使前端无法真正解除分类。
@@ -1128,14 +1236,38 @@ class WorkflowService:
                 )
 
     def delete_workflow(self, workflow_uuid: str) -> None:
-        identity = self.get_workflow(workflow_uuid)["uuid"]
+        """删除工作流定义并注销其领域包来源和发布合同。
+
+        参数：``workflow_uuid`` 是待删除工作流稳定身份。返回：无；未知身份抛
+        ``not_found``。异常：manifest 注销或内存定义删除失败时返回稳定工作流
+        错误。跨文件删除没有伪造单一事务：manifest 注销是撤销定义权威的提交点；
+        发布目录清理失败只保留不可见的孤儿历史并记录日志，不能让接口报失败却又
+        留下“定义已删除、合同仍可见”的撕裂状态。
+        """
+
+        try:
+            identity = validate_uuid(workflow_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
         with self._authoring_lock(identity):
-            self.get_workflow(identity)
+            try:
+                self._definition_store.get_workflow(identity)
+            except StoreNotFound:
+                raise WorkflowError("not_found") from None
             if self._has_active_source(identity):
                 registration = self._registered_domain_source(identity)
                 self._unregister_domain_source(registration)
             self._definition_store.delete_workflow(identity)
             self._remove_active_source_authorization(identity)
+            contract_store = self._published_contract_store()
+            contract_store.discard_workflow(identity)
+            if self._publication_catalog is not None:
+                try:
+                    self._publication_catalog.delete_workflow(identity)
+                except WorkflowPublicationCatalogError:
+                    # 领域来源已撤销后，残留发布记录不会在本进程或下次启动恢复；
+                    # 清理失败属于可重试维护问题，不得把已完成删除伪装成失败。
+                    logger.exception("工作流 %s 的孤儿发布记录清理失败", identity)
 
     def get_graph(self, workflow_uuid: str) -> dict[str, Any]:
         try:
@@ -1166,8 +1298,10 @@ class WorkflowService:
         identity = self.get_workflow(workflow_uuid)["uuid"]
         with self._authoring_lock(identity):
             graph = self.get_graph(identity)
+            contract_store = self._published_contract_store()
+            previous = contract_store.latest_for_workflow(identity)
             try:
-                contract = self._published_contract_store().publish(
+                contract = contract_store.publish(
                     graph=graph,
                     expected_revision=revision,
                 )
@@ -1175,11 +1309,55 @@ class WorkflowService:
                 raise WorkflowError("invalid_input", message=str(error)) from None
             except PublishedContractConflict:
                 raise WorkflowConflict("workflow_revision_conflict") from None
-        public_contract = self._published_contract_store().public(contract)
+            if self._publication_catalog is not None and self._has_active_source(
+                identity
+            ):
+                source = self._read_source(self._registration(identity))
+                if source is None:
+                    if previous is None or previous["uuid"] != contract["uuid"]:
+                        contract_store.discard(contract["uuid"])
+                    raise WorkflowError("source_publication_failed")
+                try:
+                    self._publication_catalog.save(
+                        source_draft_hash=source["draft_hash"],
+                        contract=contract,
+                    )
+                except WorkflowPublicationCatalogError as error:
+                    if previous is None or previous["uuid"] != contract["uuid"]:
+                        contract_store.discard(contract["uuid"])
+                    raise WorkflowError("source_publication_failed") from error
+        public_contract = contract_store.public(contract)
         dependent_refresh = self._refresh_published_contract_dependents(contract)
         if dependent_refresh["updated_workflow_uuids"] or dependent_refresh["pending"]:
             public_contract["dependent_refresh"] = dependent_refresh
         return public_contract
+
+    def restore_published_workflow_contracts(self) -> None:
+        """从领域包文件恢复全部不可变发布合同到内存目录。
+
+        参数：无。返回：无。只有当前 manifest 仍授权且已完成激活的工作流合同
+        才恢复；文件损坏、合同摘要不一致或稳定身份冲突时关闭启动，不能把已发布
+        实验操作静默降级为普通源码。
+        """
+
+        if self._publication_catalog is None:
+            return
+        # ``contract_store`` 是本次进程内发布合同投影；领域包 JSON 才负责跨
+        # 重启持久化，恢复过程不会触碰运行事实 SQLite。
+        contract_store = self._published_contract_store()
+        for entry in self._publication_catalog.list_entries():
+            # ``workflow_uuid`` 是合同来源定义稳定身份；只有同代 manifest 已授权
+            # 且 Python 定义已激活时才允许恢复，防止孤儿合同重新暴露已撤权定义。
+            workflow_uuid = str(entry["contract"]["workflow_uuid"])
+            if not self._has_active_source(workflow_uuid):
+                continue
+            try:
+                self._definition_store.get_workflow(workflow_uuid)
+                contract_store.restore(entry["contract"])
+            except StoreNotFound:
+                continue
+            except (PublishedContractConflict, PublishedContractInvalid) as error:
+                raise WorkflowError("source_publication_failed") from error
 
     def list_published_workflow_contracts(
         self,
@@ -1205,11 +1383,11 @@ class WorkflowService:
         self,
         contract: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """在子工作流发布后自动更新仍兼容的父工作流定义。
+        """在实验操作发布后自动更新仍兼容的引用方定义。
 
         参数：``contract`` 是已经成功持久化的新发布合同。返回：已更新父工作流
         UUID 和待人工处理诊断；没有引用者时两个集合均为空。异常：单个父工作流
-        的刷新失败只记入 ``pending``，不能把已经提交的子工作流发布伪装成失败。
+        的刷新失败只记入 ``pending``，不能把已经提交的实验操作发布伪装成失败。
         已经创建的工作流任务使用各自冻结快照，不在此处读取或修改。
         """
 
@@ -1245,7 +1423,7 @@ class WorkflowService:
                         ):
                             raise CompositeContractRefreshPending(
                                 "composite_parent_dirty",
-                                "父工作流存在尚未应用的编辑，本次未自动替换子工作流",
+                                "引用方存在尚未应用的编辑，本次未自动替换实验操作",
                             )
                         graph = self.get_graph(parent_uuid)
                         refreshed = refresh_published_composite_invocations(
@@ -1988,9 +2166,7 @@ class WorkflowService:
                 meta_data=dict(source["workflow"].get("meta_data", {})),
                 nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
                 edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
-                workflow_type=str(
-                    source["workflow"].get("workflow_type", "normal")
-                ),
+                workflow_type=str(source["workflow"].get("workflow_type", "normal")),
             )
         except ValidationError:
             raise WorkflowError("invalid_input") from None
@@ -2076,9 +2252,7 @@ class WorkflowService:
                 edges.append(build_workflow_edge(edge_payload))
             tags = normalize_json_array(definition.get("tags"))
             meta_data = normalize_json_object(definition.get("meta_data"))
-            workflow_type = normalize_workflow_type(
-                definition.get("workflow_type")
-            )
+            workflow_type = normalize_workflow_type(definition.get("workflow_type"))
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
         except (
@@ -2099,8 +2273,9 @@ class WorkflowService:
         registration = self._source_target.registration(
             workflow_uuid=identity,
             file_name=DomainWorkflowSourceTarget.default_file_name(identity),
+            workflow_type=workflow_type,
         )
-        return self._commit_legacy_domain_import(
+        return self._commit_domain_workflow_creation(
             registration=registration,
             name=name_value.strip(),
             tags=tags,
@@ -2111,7 +2286,7 @@ class WorkflowService:
             workflow_type=workflow_type,
         )
 
-    def _commit_legacy_domain_import(
+    def _commit_domain_workflow_creation(
         self,
         *,
         registration: EditableSourceRegistration,
@@ -2123,12 +2298,12 @@ class WorkflowService:
         edges: list[dict[str, Any]],
         workflow_type: str,
     ) -> dict[str, Any]:
-        """在工作流锁内把旧 JSON 规范化为首版领域 Python 定义。
+        """在工作流锁内把新定义规范化为首版领域 Python 源码。
 
-        参数：``registration`` 固定目标领域包身份和文件；其余字段是已规范的根
-        字段、节点、连线与工作流类型。返回：已发布到领域包并应用的首版完整图。
-        异常：类别引用、模板、编译、来源发布或内存定义提交失败时回滚本次定义、
-        源码和清单，既有领域包内容不受影响。
+        参数：``registration`` 固定目标领域包身份和类型目录；其余字段是已规范
+        的根字段、可为空的节点、连线与工作流类型。返回：已发布到领域包并应用
+        的首版完整图。异常：类别引用、模板、编译、来源发布或内存定义提交失败
+        时回滚本次定义、源码和清单，既有领域包内容不受影响。
         """
 
         identity = registration.workflow_uuid
@@ -2137,12 +2312,10 @@ class WorkflowService:
         with self._authoring_lock(identity):
             try:
                 with self._operation_category_lock:
-                    validated_meta_data = (
-                        self._validated_operation_category_meta_data(
-                            workflow_type=workflow_type,
-                            meta_data=meta_data,
-                            tags=tags,
-                        )
+                    validated_meta_data = self._validated_operation_category_meta_data(
+                        workflow_type=workflow_type,
+                        meta_data=meta_data,
+                        tags=tags,
                     )
                     created = self._definition_store.create_workflow_with_graph(
                         workflow_uuid=identity,
@@ -2197,8 +2370,8 @@ class WorkflowService:
                 ):
                     raise WorkflowError("candidate_invalid")
 
-                # 旧 JSON 图先经过公共图校验，再以生成的规范 Python 重编译。
-                # 重新创建首版图以带齐作者源码映射，同时保持 revision=1。
+                # 接口创建或旧 JSON 图先经过公共图校验，再以生成的规范 Python
+                # 重编译；重新创建首版图以带齐作者源码映射，同时保持 revision=1。
                 try:
                     canonical = CandidateCompilation.model_validate(
                         self.compiler.compile(
@@ -2221,14 +2394,10 @@ class WorkflowService:
                 # 覆盖“校验、移除空投影、创建最终图”，避免类别删除恰好落在两次
                 # 定义写入之间，留下指向已删除类别的工作流。
                 with self._operation_category_lock:
-                    canonical_meta_data = (
-                        self._validated_operation_category_meta_data(
-                            workflow_type=canonical_workflow_type,
-                            meta_data=dict(
-                                canonical_workflow.get("meta_data") or {}
-                            ),
-                            tags=canonical_workflow.get("tags"),
-                        )
+                    canonical_meta_data = self._validated_operation_category_meta_data(
+                        workflow_type=canonical_workflow_type,
+                        meta_data=dict(canonical_workflow.get("meta_data") or {}),
+                        tags=canonical_workflow.get("tags"),
                     )
                     self._definition_store.discard_uncommitted_workflow(identity)
                     workflow_created = False
@@ -2315,6 +2484,7 @@ class WorkflowService:
         registration = self._source_target.registration(
             workflow_uuid=imported.workflow_uuid,
             file_name=imported.file_name,
+            workflow_type=imported.workflow_type,
         )
 
         # ``initial_graph`` 是修订 1 的空基线，``compilation`` 只代表同一内存模板
@@ -2431,9 +2601,7 @@ class WorkflowService:
                                 for edge in graph["edges"]
                             ],
                             node_templates=list(graph.get("node_templates") or []),
-                            handle_templates=list(
-                                graph.get("handle_templates") or []
-                            ),
+                            handle_templates=list(graph.get("handle_templates") or []),
                             template_catalog_fingerprint=str(
                                 candidate["template_catalog_fingerprint"]
                             ),
@@ -4112,17 +4280,17 @@ class WorkflowService:
         self,
         child_workflow_uuid: str,
     ) -> tuple[str, ...]:
-        """返回直接引用指定子工作流的活动父工作流。
+        """返回直接引用指定实验操作的活动工作流。
 
-        参数：``child_workflow_uuid`` 是刚应用新版本的子工作流稳定身份。返回：
+        参数：``child_workflow_uuid`` 是刚应用新版本的实验操作稳定身份。返回：
         按 UUID 稳定排序且去重的直接父工作流集合；优先使用领域包 AST 扫描得到的
         import 依赖，并以已应用图中的 ``child_workflow_uuid`` 补偿旧包缺失依赖
         元数据的情况。异常：单个父图暂不可读时仍把它列为待刷新对象，由提交后
-        刷新器把真实失败收敛为 warning，不能让已提交的子工作流伪装回滚。
+        刷新器把真实失败收敛为 warning，不能让已提交的实验操作伪装回滚。
         """
 
         # ``child_workflow_uuid`` 来自刚提交的子定义，不是某一修订或调用节点；
-        # 因此父源码依赖可跨修订稳定命中同一个子工作流。
+        # 因此引用方源码依赖可跨修订稳定命中同一个实验操作。
         with self._active_sources_lock:
             active_workflow_uuids = tuple(self._active_source_workflow_uuids)
             dependencies = dict(self._active_source_dependencies)
@@ -4264,7 +4432,7 @@ class WorkflowService:
         稳定业务失败只隔离对应来源，基础设施或目录发布失败继续关闭式失败。
 
         领域包旧声明可能没有显式 ``dependency_workflow_uuids``，但 Python import
-        已形成真实子工作流依赖。本补偿循环只解决这类缺失元数据，不替代有向依赖
+        已形成真实实验操作依赖。本补偿循环只解决这类缺失元数据，不替代有向依赖
         分层，也不会执行源码或猜测替代工作流。
         """
 
@@ -5012,9 +5180,7 @@ class WorkflowService:
                 candidate_workflow_type = normalize_workflow_type(
                     candidate_workflow.get("workflow_type")
                 )
-                candidate_meta_data = dict(
-                    candidate_workflow.get("meta_data") or {}
-                )
+                candidate_meta_data = dict(candidate_workflow.get("meta_data") or {})
             except (KeyError, TypeError, ValueError):
                 raise WorkflowError("candidate_invalid") from None
 
@@ -5050,9 +5216,7 @@ class WorkflowService:
                     ) = self._definition_store.apply_authoring_candidate(
                         workflow_uuid=workflow_uuid,
                         candidate_hash=candidate_hash,
-                        authoring_authority_validator=(
-                            validate_authoring_authorities
-                        ),
+                        authoring_authority_validator=(validate_authoring_authorities),
                     )
                 except StoreAuthoringConflict as error:
                     raise WorkflowConflict(error.code) from None

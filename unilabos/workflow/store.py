@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS workflow (
     name TEXT NOT NULL,
     tags TEXT NOT NULL,
     workflow_type TEXT NOT NULL DEFAULT 'normal'
-        CHECK (workflow_type IN ('normal', 'subworkflow')),
+        CHECK (workflow_type IN ('normal', 'experiment_operation')),
     revision INTEGER NOT NULL DEFAULT 1
 );
 
@@ -506,22 +506,26 @@ class WorkflowStore:
                     deadline=initialization_deadline,
                 )
                 try:
-                    workflow_columns = {
-                        row["name"]
-                        for row in self._conn.execute(
-                            "PRAGMA table_info(workflow)"
-                        ).fetchall()
-                    }
-                    if "workflow_type" not in workflow_columns:
-                        self._conn.execute(
-                            """
-                            ALTER TABLE workflow
-                            ADD COLUMN workflow_type TEXT NOT NULL DEFAULT 'normal'
-                                CHECK (
-                                    workflow_type IN ('normal', 'subworkflow')
-                                )
-                            """
-                        )
+                    if self._persist_workflow_definitions:
+                        workflow_columns = {
+                            row["name"]
+                            for row in self._conn.execute(
+                                "PRAGMA table_info(workflow)"
+                            ).fetchall()
+                        }
+                        if "workflow_type" not in workflow_columns:
+                            self._conn.execute(
+                                """
+                                ALTER TABLE workflow
+                                ADD COLUMN workflow_type TEXT NOT NULL DEFAULT 'normal'
+                                    CHECK (
+                                        workflow_type IN (
+                                            'normal',
+                                            'experiment_operation'
+                                        )
+                                    )
+                                """
+                            )
                     ensure_device_action_run_schema(self._conn)
                     ensure_station_task_submission_schema(self._conn)
                     from unilabos.workflow.station_event_outbox import (
@@ -1080,9 +1084,7 @@ class WorkflowStore:
                     ) from error
         node_templates = [action.detached_template() for action in actions]
         handle_templates = [
-            handle
-            for action in actions
-            for handle in action.detached_handles()
+            handle for action in actions for handle in action.detached_handles()
         ]
         node_templates.sort(key=lambda item: str(item["uuid"]))
         handle_templates.sort(key=lambda item: str(item["uuid"]))
@@ -1135,8 +1137,7 @@ class WorkflowStore:
         with self._lock:
             graph = self.get_graph(workflow_uuid, conn=self._conn)
             row = self._conn.execute(
-                "SELECT applied_source FROM workflow_authoring "
-                "WHERE workflow_uuid = ?",
+                "SELECT applied_source FROM workflow_authoring WHERE workflow_uuid = ?",
                 (workflow_uuid,),
             ).fetchone()
             applied_source = (
@@ -1323,8 +1324,7 @@ class WorkflowStore:
                     template_uuids,
                 ).fetchall()
                 templates = {
-                    row["uuid"]: self._node_template_row(row)
-                    for row in template_rows
+                    row["uuid"]: self._node_template_row(row) for row in template_rows
                 }
                 handle_rows = conn.execute(
                     f"""
@@ -1335,8 +1335,7 @@ class WorkflowStore:
                     template_uuids,
                 ).fetchall()
                 handles = {
-                    row["uuid"]: self._handle_template_row(row)
-                    for row in handle_rows
+                    row["uuid"]: self._handle_template_row(row) for row in handle_rows
                 }
         effective_params = {
             node.uuid: self._graph_node_param(
@@ -1530,7 +1529,9 @@ class WorkflowStore:
             and self._template_snapshot_provider is not None
         ):
             try:
-                snapshot = catalog_snapshot or self._template_snapshot_provider.snapshot()
+                snapshot = (
+                    catalog_snapshot or self._template_snapshot_provider.snapshot()
+                )
                 template_reference = snapshot.template_key_for_uuid(template_reference)
             except AuthoringCatalogError as error:
                 raise StoreNotFound(
@@ -1788,7 +1789,10 @@ class WorkflowStore:
                     (backend_task_uuid, invocation_key),
                 ).fetchone()
                 if existing is not None:
-                    if str(existing["request_fingerprint"] or "") != request_fingerprint:
+                    if (
+                        str(existing["request_fingerprint"] or "")
+                        != request_fingerprint
+                    ):
                         raise StoreConflict("同一工站调用键对应的请求内容已变化")
                     result = self._task_row(existing)
                     result["_station_submission_created"] = False
@@ -2383,8 +2387,10 @@ class WorkflowStore:
                 ).fetchone()
                 if hold is None:
                     raise StoreConflict("debug command hold missing")
-                return self._debug_command_row(existing), False, str(
-                    hold["workflow_node_uuid"]
+                return (
+                    self._debug_command_row(existing),
+                    False,
+                    str(hold["workflow_node_uuid"]),
                 )
             hold = conn.execute(
                 """
@@ -2524,8 +2530,7 @@ class WorkflowStore:
             breakpoints = set(_load(configuration["breakpoint_node_uuids"], []))
             node_uuid = str(pending["workflow_node_uuid"])
             should_hold = (
-                configuration["execution_policy"] == "step"
-                or node_uuid in breakpoints
+                configuration["execution_policy"] == "step" or node_uuid in breakpoints
             )
             if not should_hold:
                 return {"type": "step", "workflow_node_uuid": node_uuid}
@@ -2898,9 +2903,7 @@ class WorkflowStore:
                         (identity,),
                     ).fetchone()
                     if owner is not None and owner["workflow_uuid"] != workflow_uuid:
-                        raise StoreAuthoringConflict(
-                            "candidate_identity_conflict"
-                        )
+                        raise StoreAuthoringConflict("candidate_identity_conflict")
 
     def record_draft_compilation(
         self,
@@ -3314,9 +3317,7 @@ class WorkflowStore:
             snapshot=snapshot,
         )
         expected_node_by_uuid = {str(item["uuid"]): item for item in expected_nodes}
-        expected_handle_by_uuid = {
-            str(item["uuid"]): item for item in expected_handles
-        }
+        expected_handle_by_uuid = {str(item["uuid"]): item for item in expected_handles}
         for template_uuid, candidate in candidate_node_by_uuid.items():
             expected = expected_node_by_uuid.get(template_uuid)
             if expected is None or not self._catalog_entity_matches(

@@ -173,14 +173,14 @@ class WorkflowWriteRequest(_BackendModel):
 class WorkflowCreateRequest(WorkflowWriteRequest):
     """创建工作流；旧调用省略类型时默认创建普通工作流。"""
 
-    workflow_type: Literal["normal", "subworkflow"] = "normal"
+    workflow_type: Literal["normal", "experiment_operation"] = "normal"
     operation_category_uuid: Optional[str] = None
 
 
 class WorkflowUpdateRequest(WorkflowWriteRequest):
-    """更新工作流；省略类型时保持当前分类。"""
+    """更新工作流；类型可省略或重复当前值，但不能在两类之间转换。"""
 
-    workflow_type: Optional[Literal["normal", "subworkflow"]] = None
+    workflow_type: Optional[Literal["normal", "experiment_operation"]] = None
     operation_category_uuid: Optional[str] = None
 
 
@@ -271,7 +271,7 @@ class LegacyWorkflowImportRequest(_BackendModel):
     tags: List[Any] = Field(default_factory=list)
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
-    workflow_type: Literal["normal", "subworkflow"] = "normal"
+    workflow_type: Literal["normal", "experiment_operation"] = "normal"
     nodes: List[Dict[str, Any]] = Field(default_factory=list)
     edges: List[Dict[str, Any]] = Field(default_factory=list)
     inventory_requirements: List[Dict[str, Any]] = Field(default_factory=list)
@@ -640,16 +640,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         projected["workflow"] = {
             **workflow,
             "meta_data": public_workflow["meta_data"],
-            "operation_category_uuid": public_workflow[
-                "operation_category_uuid"
-            ],
+            "operation_category_uuid": public_workflow["operation_category_uuid"],
             "status": public_workflow["status"],
         }
         return projected
 
     @router.post("/workflows")
     def create_workflow(body: WorkflowCreateRequest) -> JSONResponse:
-        """创建普通工作流或带可选类别的子工作流。
+        """创建普通工作流或带可选类别的实验操作。
 
         参数：``body`` 是保持旧默认值的完整根字段。返回：新工作流，HTTP 201。
         异常：类型、类别或字段组合非法时由服务层映射为统一业务响应。
@@ -705,7 +703,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         page_size: int = Query(default=20),
         keyword: str = Query(default=""),
         name: Optional[str] = Query(default=None),
-        workflow_type: Optional[Literal["normal", "subworkflow"]] = Query(
+        workflow_type: Optional[Literal["normal", "experiment_operation"]] = Query(
             default=None
         ),
         status: Optional[Literal["source", "published"]] = Query(default=None),
@@ -756,6 +754,33 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 page_size=page_size,
                 keyword=keyword,
             )
+        )
+
+    @router.get("/workflows/{workflow_uuid}/referenced-by")
+    def list_referencing_workflows(
+        workflow_uuid: str,
+        page: int = Query(default=1),
+        page_size: int = Query(default=20),
+    ) -> JSONResponse:
+        """返回当前引用指定实验操作或工作流的父工作流。
+
+        参数：``workflow_uuid`` 是被引用定义的稳定身份；页码与页长沿用工作流
+        列表规则。返回：父工作流公开摘要和 ``has_more``。异常：目标身份非法或
+        不存在时由公共错误适配器处理；没有引用时返回空数组。
+        """
+
+        result = service.list_referencing_workflows(
+            workflow_uuid,
+            page=page,
+            page_size=page_size,
+        )
+        return _success(
+            {
+                "items": result["items"],
+                "has_more": result["page"] * result["page_size"] < result["total"],
+                "page": result["page"],
+                "page_size": result["page_size"],
+            }
         )
 
     @router.get("/workflows/{workflow_uuid}")

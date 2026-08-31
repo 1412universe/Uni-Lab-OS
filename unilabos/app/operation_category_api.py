@@ -59,9 +59,7 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
         公共工作流错误适配器，避免前端使用半份分类数据。
         """
 
-        return workflow_success_response(
-            {"items": service.list_operation_categories()}
-        )
+        return workflow_success_response({"items": service.list_operation_categories()})
 
     @router.post("")
     def create_experiment_operation_category(
@@ -88,9 +86,7 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
         身份由服务层映射为统一业务响应。
         """
 
-        return workflow_success_response(
-            service.get_operation_category(category_uuid)
-        )
+        return workflow_success_response(service.get_operation_category(category_uuid))
 
     @router.put("/{category_uuid}")
     def update_experiment_operation_category(
@@ -114,7 +110,7 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
     def delete_experiment_operation_category(
         category_uuid: str,
     ) -> BackendJSONResponse:
-        """删除未被任何子工作流引用的实验操作类别。
+        """删除未被任何实验操作引用的类别。
 
         参数：``category_uuid`` 是路径身份。返回：统一空成功响应。异常：仍被引用
         时返回冲突，防止现有实验操作静默失去分类。

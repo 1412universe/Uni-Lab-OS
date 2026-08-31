@@ -317,17 +317,14 @@ def compose_workflow_runtime(
                 # 工站调度组合根把动作执行端的异常决策端口接入持久工作流干预；
                 # 纯创作组合不传 Scheduler，也不会意外建立运行权威。
                 intervention_delivery = getattr(scheduler, "_dispatcher", None)
-                if (
-                    callable(
-                        getattr(
-                            intervention_delivery,
-                            "add_error_decision_required_listener",
-                            None,
-                        )
+                if callable(
+                    getattr(
+                        intervention_delivery,
+                        "add_error_decision_required_listener",
+                        None,
                     )
-                    and callable(
-                        getattr(intervention_delivery, "resolve_error_decision", None)
-                    )
+                ) and callable(
+                    getattr(intervention_delivery, "resolve_error_decision", None)
                 ):
                     new_service.bind_intervention_delivery(intervention_delivery)
             # ``discovery_plan`` 是全量文件预校验结果；服务在单事务中注册后，
@@ -348,6 +345,9 @@ def compose_workflow_runtime(
             else:
                 # 遗留显式目录入口继续保留候选/人工应用语义。
                 new_service.recover_registered_sources()
+            # 工作流定义由领域包 Python 恢复后，再把同一领域包中的不可变发布
+            # 合同恢复到进程内目录。运行事实 SQLite 不持有工作流定义或发布权威。
+            new_service.restore_published_workflow_contracts()
             if task_scheduler_bridge is not None:
                 # 只恢复没有结果不明作业的运行中任务；已成功动作
                 # 仅重建 DAG 状态，不越过物理派发边界重放。
@@ -513,9 +513,7 @@ def compose_local_workflow_template_runtime(
 
         configured_roots = _configured_package_roots(editable_package_roots)
         if configured_roots and editable_source_discovery_plan is not None:
-            raise TypeError(
-                "工作流源码授权目录与预编译发现计划不能同时提供"
-            )
+            raise TypeError("工作流源码授权目录与预编译发现计划不能同时提供")
         publication_plan = (
             editable_source_discovery_plan
             if editable_source_discovery_plan is not None
@@ -616,8 +614,8 @@ def compose_local_workflow_template_runtime(
         try:
             # ``resource_reference_resolver`` 只读取 C3 已提交的本地资源图物料事实，
             # 让物料来源（MaterialSource）和普通动作共享同一业务 ID→UUID 规则。
-            resource_reference_resolver = (
-                build_inventory_resource_reference_resolver(inventory_store)
+            resource_reference_resolver = build_inventory_resource_reference_resolver(
+                inventory_store
             )
 
             def rebuild_compiler() -> AuthoringCompiler:
@@ -636,9 +634,7 @@ def compose_local_workflow_template_runtime(
                     raise
                 publication_template_provider.replace(snapshot)
                 if published_generation is None:
-                    raise RegistryTemplateProjectionError(
-                        "已发布工作流目录扩展未执行"
-                    )
+                    raise RegistryTemplateProjectionError("已发布工作流目录扩展未执行")
                 return WorkflowAuthoringEngine(
                     catalog=snapshot,
                     resource_reference_resolver=resource_reference_resolver,
@@ -689,14 +685,10 @@ def _assign_published_template_identity(
     template = dict(raw_template)
     meta_data = template.get("meta_data")
     resource_template = (
-        meta_data.get("resource_template")
-        if isinstance(meta_data, dict)
-        else None
+        meta_data.get("resource_template") if isinstance(meta_data, dict) else None
     )
     device_name = (
-        resource_template.get("name")
-        if isinstance(resource_template, dict)
-        else None
+        resource_template.get("name") if isinstance(resource_template, dict) else None
     )
     action_name = template.get("name")
     if not isinstance(device_name, str) or not device_name:
@@ -738,7 +730,10 @@ def shutdown_workflow_runtime() -> None:
     global _compiler, _compiler_rebuilder, _database_path
     global _editable_package_roots, _editable_source_discovery_plan, _failed_runtime
     global _monitor, _runtime_template_snapshot_provider, _service
-    global _fixed_point_activation_enabled, _source_monitor_enabled, _template_projection
+    global \
+        _fixed_point_activation_enabled, \
+        _source_monitor_enabled, \
+        _template_projection
     with _lock:
         from unilabos.workflow.station_event_http import (
             shutdown_station_event_projection,

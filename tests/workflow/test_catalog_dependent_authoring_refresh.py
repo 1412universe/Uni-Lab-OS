@@ -78,7 +78,7 @@ def test_clean_parent_is_applied_while_dirty_parent_remains_for_user() -> None:
         {
             "code": "dependent_authoring_refresh_pending",
             "message": (
-                f"子工作流已更新，但父工作流 {dirty_workflow_uuid} 仍需处理兼容问题"
+                f"实验操作已更新，但引用方 {dirty_workflow_uuid} 仍需处理兼容问题"
             ),
         }
     ]
@@ -87,7 +87,7 @@ def test_clean_parent_is_applied_while_dirty_parent_remains_for_user() -> None:
 def test_refresh_failure_becomes_post_commit_warning() -> None:
     """父工作流重编译失败只形成可观察警告。
 
-    参数：无。返回：无；断言异常不越过已经完成的子工作流提交边界，且警告携带
+    参数：无。返回：无；断言异常不越过已经完成的实验操作提交边界，且警告携带
     具体父工作流身份。异常：故障隔离合同漂移时由 pytest 报告。
     """
 
@@ -110,6 +110,6 @@ def test_refresh_failure_becomes_post_commit_warning() -> None:
     assert warnings == [
         {
             "code": "dependent_authoring_refresh_pending",
-            "message": (f"子工作流已更新，但父工作流 {parent_uuid} 仍需处理兼容问题"),
+            "message": (f"实验操作已更新，但引用方 {parent_uuid} 仍需处理兼容问题"),
         }
     ]

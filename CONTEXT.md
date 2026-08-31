@@ -54,6 +54,13 @@ authorized domain-package Python source. JSON and Python imports are normalized
 to that Python source before they become Local definitions.
 _Avoid_: One execution, runtime snapshot, Run
 
+**实验操作（ExperimentOperation）**:
+中文定义：具有明确实验语义、可分类，并可在发布后供其他工作流复用的一类工作流定义。
+中文避免：子工作流、可复用节点。
+English: A classified Workflow definition with explicit experimental meaning
+that other Workflows may reuse after publication.
+_Avoid_: Subworkflow, reusable node
+
 **Workspace Workflow Source**:
 Authorized domain-package Python source that is AST-scanned, compiled, and
 validated into the Local Workflow Catalog on every OS start; it has no implicit
@@ -67,12 +74,20 @@ rebuilt at startup; API edits to an imported Workflow are written back to the
 same registered Python source before the in-memory revision advances.
 _Avoid_: SQLite definition authority, temporary upload, Backend replica
 
+**Local Workflow Publication Catalog**:
+The domain-package `workflow_publications.json` file that stores immutable
+published Workflow contracts and their source hashes. Local Authority restores
+these contracts into the process-local catalog after Python sources are
+activated, so published status and ExperimentOperation reuse survive restart.
+It is definition-side file authority, not runtime SQLite state.
+_Avoid_: SQLite publication authority, derived status without restart recovery
+
 **组合工作流调用（CompositeWorkflowInvocation）**:
-中文定义：父工作流中静态展开一个已发布子工作流的稳定调用节点。子工作流产生兼容的新应用
+中文定义：父工作流中静态展开一个已发布实验操作的稳定调用节点。实验操作产生兼容的新应用
 定义或发布合同时，本地权威（Local Authority）自动刷新没有待应用编辑的父工作流，
 并保持调用 UUID、布局、参数值和外部连线；不兼容时保留父工作流上一个有效定义并
 返回诊断，已经创建的工作流任务（WorkflowTask）始终不变。
-中文避免：运行时动态读取子工作流、要求前端点击重新编译、静默重映射参数。
+中文避免：运行时动态读取实验操作、要求前端点击重新编译、静默重映射参数。
 English: A stable parent node that statically expands one published child and is
 automatically refreshed only when the new child contract is compatible.
 _Avoid_: Runtime child lookup, frontend recompile button, silent parameter remap

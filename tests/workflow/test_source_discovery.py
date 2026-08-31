@@ -110,6 +110,32 @@ def test_discovery_returns_only_sources_from_explicit_authorized_roots(
     )
 
 
+def test_discovery_accepts_experiment_operation_source_directory(
+    tmp_path: Path,
+) -> None:
+    """证明实验操作源码可从 ``experiment_operations/*.py`` 目录安全发现。
+
+    参数：``tmp_path`` 隔离已授权领域包。返回：无。异常：实验操作目录未进入
+    同一 manifest、路径或文件安全校验边界时由断言暴露。
+    """
+
+    selected_root = tmp_path / "selected"
+    declared_source = "demo_package/experiment_operations/demo.py"
+    _write_editable_package(
+        selected_root,
+        entries=((WORKFLOW_UUID, declared_source),),
+    )
+
+    plan = discover_editable_sources((selected_root,))
+
+    assert len(plan.registrations) == 1
+    registration = plan.registrations[0]
+    assert registration.relative_path == "experiment_operations/demo.py"
+    assert registration.source_uri == (
+        "package://demo_package/experiment_operations/demo.py"
+    )
+
+
 @pytest.mark.parametrize(
     "declared_source",
     (
@@ -118,6 +144,7 @@ def test_discovery_returns_only_sources_from_explicit_authorized_roots(
         "demo_package/../workflows/demo.py",
         r"demo_package\workflows\demo.py",
         "other_package/workflows/demo.py",
+        "demo_package/other/demo.py",
         "demo_package/workflows/nested/demo.py",
         "demo_package/demo.py",
         "demo_package/workflows/demo.txt",
@@ -127,7 +154,7 @@ def test_discovery_rejects_paths_outside_exact_package_workflow_shape(
     tmp_path: Path,
     declared_source: str,
 ) -> None:
-    """证明源码路径只能是当前包下的一层 ``workflows/*.py``。
+    """证明源码路径只能位于当前包下受支持的一层 Python 源码目录。
 
     参数：``tmp_path`` 是隔离授权目录；``declared_source`` 是待拒绝路径。
     返回：无；测试断言路径错误稳定归类为工作流源码声明错误。

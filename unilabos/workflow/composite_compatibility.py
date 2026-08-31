@@ -354,7 +354,7 @@ def classify_pinned_published_workflow_invocation(
 def _stored_projection_is_canonical(projection: Mapping[str, Any]) -> bool:
     """认证调用节点里受保护的冻结兼容性投影。
 
-    参数：``projection`` 是父工作流应用图保存的旧子工作流输入、输出和摘要。
+    参数：``projection`` 是引用方应用图保存的旧实验操作输入、输出和摘要。
     返回：字段集合、稳定身份、连接点身份与按内容重算的摘要全部自洽时为
     ``True``，否则为 ``False``。异常：无；任何缺失或非法形状都关闭失败。
     """

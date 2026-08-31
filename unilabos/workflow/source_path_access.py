@@ -166,27 +166,39 @@ def validate_declared_sources(
     assert_directory_identity(selected_root, expected_selected_identity)
     package_root = selected_root / package_id
     package_identity = directory_identity(package_root)
-    workflows_root = package_root / "workflows"
-    try:
-        workflows_identity = directory_identity(workflows_root)
-    except StableFileAccessError:
-        if workflows_root.exists() or workflows_root.is_symlink():
-            raise
-        workflows_identity = None
-    if workflows_identity is not None:
-        for relative_path in tuple(relative_paths):
-            filename = PurePosixPath(relative_path).name
-            snapshot = read_regular_path(
-                workflows_root / filename,
-                byte_limit=source_byte_limit,
-                missing_ok=True,
-            )
-            if snapshot is not None:
-                try:
-                    snapshot.content.decode("utf-8")
-                except UnicodeError:
-                    raise StableFileAccessError("invalid_utf8_source") from None
-        assert_directory_identity(workflows_root, workflows_identity)
+    # ``source_roots`` 为 manifest 已验证的一层源码目录保存物理身份；普通与
+    # 实验操作可以分目录，但都必须经过相同的普通文件和 UTF-8 安全校验。
+    source_roots: dict[str, tuple[Path, tuple[int, int] | None]] = {}
+    for relative_path in tuple(relative_paths):
+        source_path = PurePosixPath(relative_path)
+        source_directory = source_path.parts[0]
+        source_root, source_identity = source_roots.get(
+            source_directory,
+            (package_root / source_directory, None),
+        )
+        if source_directory not in source_roots:
+            try:
+                source_identity = directory_identity(source_root)
+            except StableFileAccessError:
+                if source_root.exists() or source_root.is_symlink():
+                    raise
+                source_identity = None
+            source_roots[source_directory] = (source_root, source_identity)
+        if source_identity is None:
+            continue
+        snapshot = read_regular_path(
+            source_root / source_path.name,
+            byte_limit=source_byte_limit,
+            missing_ok=True,
+        )
+        if snapshot is not None:
+            try:
+                snapshot.content.decode("utf-8")
+            except UnicodeError:
+                raise StableFileAccessError("invalid_utf8_source") from None
+    for source_root, source_identity in source_roots.values():
+        if source_identity is not None:
+            assert_directory_identity(source_root, source_identity)
     assert_directory_identity(package_root, package_identity)
     assert_directory_identity(selected_root, expected_selected_identity)
     return package_root, package_identity

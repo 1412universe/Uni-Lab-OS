@@ -75,6 +75,12 @@ def test_precompiled_source_plan_skips_manifest_rediscovery(
             参数：无。返回：无。异常：无。
             """
 
+        def restore_published_workflow_contracts(self) -> None:
+            """模拟在源码激活后恢复领域包发布合同。
+
+            参数：无。返回：无。异常：无；空计划没有需要恢复的合同。
+            """
+
         def close(self) -> None:
             """关闭替身服务。
 

@@ -83,7 +83,7 @@ def default_operation_categories() -> list[dict[str, Any]]:
 
 
 def legacy_operation_category_uuid(tags: Any) -> str | None:
-    """把旧子工作流类别标签映射到稳定类别身份。
+    """把旧版实验操作类别标签映射到稳定类别身份。
 
     参数：``tags`` 是旧工作流公开标签值。返回：命中首个已知类别时返回稳定
     UUID，否则返回 ``None``。异常：无；非列表或非字符串项直接忽略。
@@ -212,9 +212,7 @@ class OperationCategoryCatalog:
         identity = _category_uuid(category_uuid)
         with self._lock:
             categories, expected_hash = self._read()
-            remaining = [
-                item for item in categories if item["uuid"] != identity
-            ]
+            remaining = [item for item in categories if item["uuid"] != identity]
             if len(remaining) == len(categories):
                 raise OperationCategoryError("not_found")
             self._write(remaining, expected_hash=expected_hash)
@@ -312,7 +310,13 @@ def _decode_categories(raw: bytes) -> list[dict[str, Any]]:
             object_pairs_hook=object_pairs,
             parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
         )
-    except (MemoryError, RecursionError, UnicodeError, ValueError, json.JSONDecodeError):
+    except (
+        MemoryError,
+        RecursionError,
+        UnicodeError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         raise OperationCategoryError("unavailable") from None
     if not isinstance(document, dict) or set(document) != {"version", "categories"}:
         raise OperationCategoryError("unavailable")
@@ -347,9 +351,7 @@ def _validate_categories(values: list[Any]) -> list[dict[str, Any]]:
             raise OperationCategoryError("invalid_input")
         identities.add(identity)
         names.add(folded_name)
-        categories.append(
-            {"uuid": identity, "name": name, "sort_order": sort_order}
-        )
+        categories.append({"uuid": identity, "name": name, "sort_order": sort_order})
     return _sorted_categories(categories)
 
 
@@ -397,7 +399,11 @@ def _sort_order(value: Any) -> int:
     或越界时抛 ``invalid_input``。
     """
 
-    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 10_000:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= 10_000
+    ):
         raise OperationCategoryError("invalid_input")
     return value
 

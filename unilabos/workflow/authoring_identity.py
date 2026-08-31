@@ -7,6 +7,11 @@ from collections.abc import Mapping
 from uuid import UUID, uuid5
 
 from unilabos.workflow.models import validate_uuid
+from unilabos.workflow.workflow_type import (
+    WORKFLOW_TYPE_NORMAL,
+    WorkflowType,
+    normalize_workflow_type,
+)
 
 _COMPOSITE_NODE_PREFIX = "unilabos:c1:node:v1:"
 _WORKFLOW_DECORATOR_PATHS = {
@@ -95,11 +100,55 @@ def declared_workflow_uuid(python_source: str) -> str | None:
     return declarations[0] if len(declarations) == 1 else None
 
 
+def declared_workflow_type(python_source: str) -> WorkflowType | None:
+    """只读提取源码唯一工作流声明中的类型。
+
+    参数：``python_source`` 是尚未执行的完整 Python 工作流源码。返回：声明
+    ``workflow_type`` 时返回规范值，省略时返回兼容默认 ``normal``；语法错误、
+    工作流声明缺失/歧义、重复字段或非法字面量返回 ``None``。异常：无；本函数
+    只解析 AST，用于选择领域包源码目录，不能取代后续完整编译与图校验。
+    """
+
+    try:
+        module = ast.parse(python_source)
+    except (SyntaxError, TypeError, ValueError):
+        return None
+    imports = _import_map(module)
+    declarations: list[WorkflowType] = []
+    for statement in module.body:
+        if not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in statement.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            decorator_path = _expression_path(decorator.func, imports)
+            if decorator_path not in _WORKFLOW_DECORATOR_PATHS:
+                continue
+            workflow_type_keywords = [
+                keyword
+                for keyword in decorator.keywords
+                if keyword.arg == "workflow_type"
+            ]
+            if len(workflow_type_keywords) > 1:
+                return None
+            if not workflow_type_keywords:
+                declarations.append(WORKFLOW_TYPE_NORMAL)
+                continue
+            value = workflow_type_keywords[0].value
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                return None
+            try:
+                declarations.append(normalize_workflow_type(value.value))
+            except ValueError:
+                return None
+    return declarations[0] if len(declarations) == 1 else None
+
+
 def expanded_node_uuid(invocation_uuid: str, child_node_uuid: str) -> str:
     """把子节点身份确定性派生到一次组合工作流调用命名空间。
 
     参数：``invocation_uuid`` 是真实调用节点 UUID，``child_node_uuid`` 是已应用
-    子工作流中的规范节点 UUID。返回：C1 v1 固定 UUIDv5；非法身份抛出
+    实验操作中的规范节点 UUID。返回：C1 v1 固定 UUIDv5；非法身份抛出
     ``ValueError``。
     异常：任一身份非规范或为 nil UUID 时抛出 ``ValueError``。
     """
@@ -137,6 +186,7 @@ def authoring_edge_uuid(
 
 __all__ = [
     "authoring_edge_uuid",
+    "declared_workflow_type",
     "declared_workflow_uuid",
     "expanded_node_uuid",
 ]

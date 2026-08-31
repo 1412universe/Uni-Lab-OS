@@ -38,6 +38,7 @@ from unilabos.workflow.source_file_access import (
     is_reparse_point,
     read_stable_descriptor,
 )
+from unilabos.workflow.source_layout import is_workflow_source_directory
 from unilabos.workflow.source_path_access import (
     assert_package_root as assert_package_root_by_path,
 )
@@ -196,7 +197,7 @@ def validate_source_registration(
     package_root: str | Path,
     relative_path: str,
 ) -> tuple[Path, str]:
-    """验证单项来源注册指向受限的 ``workflows/*.py`` 路径。
+    """验证单项来源注册指向受限的一级 ``*.py`` 源码路径。
 
     参数：``package_root`` 是实际 Python 包目录；``relative_path`` 是包内源码路径。
     返回：规范绝对包目录和规范 POSIX 相对路径。
@@ -492,7 +493,7 @@ def validate_declared_sources(
 
     参数：``root_snapshot`` 是 manifest 读取时固定的授权目录身份；
     ``package_id`` 是已验证的包目录名；``relative_paths`` 是规范
-    ``workflows/*.py`` 路径集合。
+    ``workflows/*.py`` 或 ``experiment_operations/*.py`` 路径集合。
     返回：实际 Python 包目录路径及其设备/索引节点身份。
     异常：目录身份变化、符号链接、非普通文件、超限或非 UTF-8 时抛出
     ``SourceWorkspaceError``；缺失源码保持合法且不会被创建。
@@ -521,7 +522,7 @@ def validate_declared_sources(
 
     selected_descriptor = -1
     package_descriptor = -1
-    workflows_descriptor = -1
+    source_descriptors: dict[str, int] = {}
     try:
         selected_descriptor = _open_directory_chain(
             root_snapshot.selected_root,
@@ -540,33 +541,43 @@ def validate_declared_sources(
         )
         assert package_descriptor is not None
         package_metadata = os.fstat(package_descriptor)
-        workflows_descriptor = _open_child_directory(
-            package_descriptor,
-            "workflows",
-            missing_ok=True,
-        )
-        if workflows_descriptor is not None:
-            for relative_path in tuple(relative_paths):
-                # 路径结构已由 manifest 模块验证；这里只用最终文件名做 dir_fd 读取。
-                filename = PurePosixPath(relative_path).name
-                source_bytes = _read_optional_regular_at(
-                    workflows_descriptor,
-                    filename,
-                    byte_limit=WORKFLOW_SOURCE_BYTE_LIMIT,
-                    error_code="invalid_workflow_source",
+        for relative_path in tuple(relative_paths):
+            # ``source_directory`` 来自 manifest 已验证的受限一级目录；各目录分别
+            # 固定描述符，避免把实验操作文件误读到普通工作流目录。
+            source_path = PurePosixPath(relative_path)
+            source_directory = source_path.parts[0]
+            source_descriptor = source_descriptors.get(source_directory)
+            if source_descriptor is None:
+                opened_descriptor = _open_child_directory(
+                    package_descriptor,
+                    source_directory,
+                    missing_ok=True,
                 )
-                if source_bytes is not None:
-                    try:
-                        source_bytes.decode("utf-8")
-                    except UnicodeError:
-                        raise SourceWorkspaceError("invalid_workflow_source") from None
+                source_descriptor = (
+                    -1 if opened_descriptor is None else opened_descriptor
+                )
+                source_descriptors[source_directory] = source_descriptor
+            if source_descriptor < 0:
+                continue
+            source_bytes = _read_optional_regular_at(
+                source_descriptor,
+                source_path.name,
+                byte_limit=WORKFLOW_SOURCE_BYTE_LIMIT,
+                error_code="invalid_workflow_source",
+            )
+            if source_bytes is not None:
+                try:
+                    source_bytes.decode("utf-8")
+                except UnicodeError:
+                    raise SourceWorkspaceError("invalid_workflow_source") from None
     except SourceWorkspaceError:
         raise
     except (OSError, TypeError, ValueError):
         raise SourceWorkspaceError("invalid_package_root") from None
     finally:
-        if workflows_descriptor is not None and workflows_descriptor >= 0:
-            os.close(workflows_descriptor)
+        for source_descriptor in source_descriptors.values():
+            if source_descriptor >= 0:
+                os.close(source_descriptor)
         if package_descriptor >= 0:
             os.close(package_descriptor)
         if selected_descriptor >= 0:
@@ -600,7 +611,7 @@ def _source_location(
     """规范并验证一项持久来源注册的目录与相对路径。
 
     参数：``registration`` 必须含 ``package_root`` 和 ``relative_path``。
-    返回：无符号链接的绝对包目录、规范 ``workflows/*.py`` 路径和目录身份。
+    返回：无符号链接的绝对包目录、规范一级源码路径和目录身份。
     异常：字段、目录或路径不合法时抛出 ``SourceWorkspaceError``。
     """
 
@@ -632,7 +643,7 @@ def _source_location(
     if (
         relative.is_absolute()
         or len(relative.parts) != 2
-        or relative.parts[0] != "workflows"
+        or not is_workflow_source_directory(relative.parts[0])
         or any(part in {"", ".", ".."} for part in relative.parts)
         or relative.suffix != ".py"
         or not relative.stem

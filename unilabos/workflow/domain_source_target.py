@@ -13,6 +13,7 @@ from unilabos.workflow.source_discovery import (
     EditableSourceDiscoveryPlan,
     EditableSourceRegistration,
 )
+from unilabos.workflow.source_layout import workflow_source_directory
 from unilabos.workflow.source_manifest import (
     EditablePackageManifest,
     SourceManifestError,
@@ -105,11 +106,19 @@ class DomainWorkflowSourceTarget:
         *,
         workflow_uuid: str,
         file_name: str,
+        workflow_type: str = "normal",
     ) -> EditableSourceRegistration:
-        """构造尚未写盘的规范来源身份。"""
+        """构造尚未写盘的规范来源身份。
+
+        参数：``workflow_uuid`` 是工作流（Workflow）稳定身份，``file_name`` 是
+        不含路径的 Python 文件名，``workflow_type`` 决定普通工作流或实验操作
+        的独立源码目录。返回：尚未写文件或修改 manifest 的来源注册。异常：
+        文件名或工作流类型非法时关闭式失败，不创建目录。
+        """
 
         normalized_name = _file_name(file_name)
-        relative_path = PurePosixPath("workflows", normalized_name).as_posix()
+        source_directory = workflow_source_directory(workflow_type)
+        relative_path = PurePosixPath(source_directory, normalized_name).as_posix()
         return EditableSourceRegistration(
             workflow_uuid=workflow_uuid,
             package_id=self.package_id,
@@ -138,9 +147,7 @@ class DomainWorkflowSourceTarget:
         self._require_registration(registration)
         with self._lock:
             manifest, manifest_bytes = self._current_manifest()
-            expected_entry = (
-                f"{self.package_id}/{registration.relative_path}"
-            )
+            expected_entry = f"{self.package_id}/{registration.relative_path}"
             by_uuid = {
                 item.workflow_uuid: item.relative_path for item in manifest.workflows
             }
@@ -245,9 +252,7 @@ class DomainWorkflowSourceTarget:
                     "workflows": [
                         {
                             "workflow_uuid": item.workflow_uuid,
-                            "source": (
-                                f"{manifest.package_id}/{item.relative_path}"
-                            ),
+                            "source": (f"{manifest.package_id}/{item.relative_path}"),
                         }
                         for item in manifest.workflows
                         if item.workflow_uuid != registration.workflow_uuid
