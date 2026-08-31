@@ -109,6 +109,230 @@ def test_latest_registration_returns_detached_edge_capabilities(
         authority.stop()
 
 
+def test_readiness_tracks_live_edge_connection_state(tmp_path: Path) -> None:
+    """验证就绪探针随 Local Edge 注册和连接事实实时开闭。
+
+    参数：``tmp_path`` 隔离本地 Edge 事实库。返回无。异常：未注册、只注册或
+    断线状态未返回 503，连接且设备能力完整时未返回 200，或响应泄漏设备动作
+    详情时由断言失败。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+    client = TestClient(application)
+    material_uuid = str(uuid.uuid4())
+    instance_uuid = str(uuid.uuid4())
+    try:
+        unregistered = client.get("/api/v1/edge/readiness")
+        assert unregistered.status_code == 503
+        assert unregistered.json() == {
+            "status": "not_ready",
+            "edge_key": "",
+            "instance_uuid": "",
+            "connected": False,
+            "device_count": 0,
+        }
+
+        registration = authority.store.register_session(
+            {
+                "edge_key": "workspace-edge",
+                "instance_uuid": instance_uuid,
+                "devices": [
+                    {
+                        "local_id": "robot-01",
+                        "material_uuid": material_uuid,
+                        "actions": [
+                            {"name": "transfer", "type": "UniLabJsonCommand"}
+                        ],
+                    }
+                ],
+            }
+        )
+        registered = client.get("/api/v1/edge/readiness")
+        assert registered.status_code == 503
+        assert registered.json() == {
+            "status": "not_ready",
+            "edge_key": "workspace-edge",
+            "instance_uuid": instance_uuid,
+            "connected": False,
+            "device_count": 1,
+        }
+
+        authority.store.set_session_connected(registration["session_uuid"], True)
+        connected = client.get("/api/v1/edge/readiness")
+        assert connected.status_code == 200
+        assert connected.json() == {
+            "status": "ready",
+            "edge_key": "workspace-edge",
+            "instance_uuid": instance_uuid,
+            "connected": True,
+            "device_count": 1,
+        }
+        assert "devices" not in connected.json()
+        assert "actions" not in connected.json()
+        assert "token" not in connected.json()
+
+        authority.store.set_session_connected(registration["session_uuid"], False)
+        disconnected = client.get("/api/v1/edge/readiness")
+        assert disconnected.status_code == 503
+        assert disconnected.json()["status"] == "not_ready"
+        assert disconnected.json()["connected"] is False
+    finally:
+        authority.stop()
+
+
+def test_new_connection_retires_stale_connected_session(tmp_path: Path) -> None:
+    """新 Edge hello 必须清除 Backend 重启遗留的旧连接事实。
+
+    参数：``tmp_path`` 隔离本地事实库。返回无。异常：第二个会话断开后仍能从
+    第一个陈旧会话得到 connected=true 时由断言失败，防止实时探针误报 READY。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    try:
+        payload = {
+            "edge_key": "workspace-edge",
+            "instance_uuid": str(uuid.uuid4()),
+            "devices": [
+                {
+                    "local_id": "robot-01",
+                    "material_uuid": str(uuid.uuid4()),
+                    "actions": [{"name": "transfer", "type": "command"}],
+                }
+            ],
+        }
+        first = authority.store.register_session(payload)
+        authority.store.set_session_connected(first["session_uuid"], True)
+        second = authority.store.register_session(
+            {**payload, "instance_uuid": str(uuid.uuid4())}
+        )
+
+        authority.store.set_session_connected(second["session_uuid"], True)
+        authority.store.set_session_connected(second["session_uuid"], False)
+
+        latest = authority.store.latest_registration()
+        assert latest is not None
+        assert latest["instance_uuid"] != payload["instance_uuid"]
+        assert latest["connected"] is False
+    finally:
+        authority.stop()
+
+
+def test_backend_restart_clears_non_durable_connection_fact(tmp_path: Path) -> None:
+    """Backend 新进程不得沿用上一进程的 WebSocket 在线状态。
+
+    参数：``tmp_path`` 隔离持久事实库。返回无。异常：重新打开 Authority Store
+    后最新注册仍显示 connected=true 时由断言失败；注册能力本身必须继续保留。
+    """
+
+    database = tmp_path / "authority.db"
+    first = _authority(database)
+    instance_uuid = str(uuid.uuid4())
+    try:
+        registration = first.store.register_session(
+            {
+                "edge_key": "workspace-edge",
+                "instance_uuid": instance_uuid,
+                "devices": [
+                    {
+                        "local_id": "robot-01",
+                        "material_uuid": str(uuid.uuid4()),
+                        "actions": [{"name": "transfer", "type": "command"}],
+                    }
+                ],
+            }
+        )
+        first.store.set_session_connected(registration["session_uuid"], True)
+        assert first.store.latest_registration()["connected"] is True  # type: ignore[index]
+    finally:
+        first.stop()
+
+    restarted = _authority(database)
+    try:
+        latest = restarted.store.latest_registration()
+        assert latest is not None
+        assert latest["instance_uuid"] == instance_uuid
+        assert latest["connected"] is False
+        assert len(latest["devices"]) == 1
+    finally:
+        restarted.stop()
+
+
+@pytest.mark.parametrize(
+    "devices",
+    [
+        [],
+        [
+            {
+                "local_id": "",
+                "material_uuid": "00000000-0000-4000-8000-000000000001",
+                "actions": [{"name": "transfer", "type": "UniLabJsonCommand"}],
+            }
+        ],
+        [
+            {
+                "local_id": "robot-01",
+                "material_uuid": "not-a-uuid",
+                "actions": [{"name": "transfer", "type": "UniLabJsonCommand"}],
+            }
+        ],
+        [
+            {
+                "local_id": "robot-01",
+                "material_uuid": "00000000-0000-4000-8000-000000000001",
+                "actions": [],
+            }
+        ],
+        [
+            {
+                "local_id": "robot-01",
+                "material_uuid": "00000000-0000-4000-8000-000000000001",
+                "actions": [{"name": "", "type": "UniLabJsonCommand"}],
+            }
+        ],
+    ],
+    ids=[
+        "empty",
+        "missing-local-id",
+        "invalid-material",
+        "empty-actions",
+        "invalid-action",
+    ],
+)
+def test_readiness_rejects_incomplete_device_capabilities(
+    tmp_path: Path,
+    devices: list[dict[str, object]],
+) -> None:
+    """连接状态不能掩盖空设备集或损坏的设备动作声明。
+
+    参数：``tmp_path`` 隔离事实库；``devices`` 是一种不完整能力声明。返回无。
+    异常：任一非法能力声明被公开就绪合同接受时由断言失败。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+    client = TestClient(application)
+    try:
+        registration = authority.store.register_session(
+            {
+                "edge_key": "workspace-edge",
+                "instance_uuid": str(uuid.uuid4()),
+                "devices": devices,
+            }
+        )
+        authority.store.set_session_connected(registration["session_uuid"], True)
+
+        response = client.get("/api/v1/edge/readiness")
+
+        assert response.status_code == 503
+        assert response.json()["status"] == "not_ready"
+        assert response.json()["connected"] is True
+    finally:
+        authority.stop()
+
+
 def test_dispatch_is_idempotent_and_rejects_changed_identity(tmp_path: Path) -> None:
     authority = _authority(tmp_path / "authority.db")
     payload = _payload()

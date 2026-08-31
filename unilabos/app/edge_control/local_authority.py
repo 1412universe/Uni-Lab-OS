@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -43,7 +43,8 @@ class LocalEdgeAuthorityStore:
         """打开工站调度进程独占的动作协议权威账本。
 
         参数：``path`` 是本地 SQLite 路径。返回无。异常：目录、连接或迁移失败
-        原样传播；初始化启用 WAL 与同步提交，确保命令先落盘再通知动作进程。
+        原样传播；初始化启用 WAL 与同步提交，确保命令先落盘再通知动作进程，并
+        清除不可能跨 Backend 进程存活的旧 WebSocket 连接事实。
         """
 
         target = Path(path).expanduser().resolve()
@@ -131,6 +132,13 @@ class LocalEdgeAuthorityStore:
                     self._connection.execute(
                         f"ALTER TABLE local_edge_job ADD COLUMN {name} {declaration}"
                     )
+            self._connection.execute(
+                """
+                UPDATE local_edge_session SET connected = 0, updated_at = ?
+                WHERE connected != 0
+                """,
+                (time.time(),),
+            )
             self._connection.commit()
 
     def close(self) -> None:
@@ -170,17 +178,39 @@ class LocalEdgeAuthorityStore:
         return {"edge_uuid": edge_uuid, "session_uuid": session_uuid}
 
     def set_session_connected(self, session_uuid: str, connected: bool) -> None:
+        """原子切换唯一当前 Edge 会话的连接状态。
+
+        参数：``session_uuid`` 是已注册会话，``connected`` 表示 WebSocket 当前
+        是否已完成 hello。返回无。异常：会话不存在时抛 ``ValueError``；数据库
+        错误回滚。连接新会话时先关闭所有旧连接事实，避免 Backend 非正常重启
+        留下的陈旧 ``connected=1`` 使实时就绪探针误报。
+        """
+
         with self._lock:
-            changed = self._connection.execute(
-                """
-                UPDATE local_edge_session SET connected = ?, updated_at = ?
-                WHERE session_uuid = ?
-                """,
-                (1 if connected else 0, time.time(), session_uuid),
-            ).rowcount
-            self._connection.commit()
-        if changed != 1:
-            raise ValueError("unknown Edge session")
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                now = time.time()
+                if connected:
+                    self._connection.execute(
+                        """
+                        UPDATE local_edge_session SET connected = 0, updated_at = ?
+                        WHERE session_uuid != ? AND connected != 0
+                        """,
+                        (now, session_uuid),
+                    )
+                changed = self._connection.execute(
+                    """
+                    UPDATE local_edge_session SET connected = ?, updated_at = ?
+                    WHERE session_uuid = ?
+                    """,
+                    (1 if connected else 0, now, session_uuid),
+                ).rowcount
+                if changed != 1:
+                    raise ValueError("unknown Edge session")
+                self._connection.commit()
+            except BaseException:
+                self._connection.rollback()
+                raise
 
     def reconcile_hello(self, payload: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
         """对账动作进程身份与持久游标，并识别真实进程重启。
@@ -1436,6 +1466,18 @@ def create_local_edge_control_router(
         if value is None or not hmac.compare_digest(value, expected):
             raise HTTPException(status_code=401, detail="Edge token invalid")
 
+    @router.get("/readiness")
+    def readiness() -> JSONResponse:
+        """实时读取动作进程注册事实并返回 Kubernetes 就绪合同。
+
+        参数：无。返回：仅含状态、Edge/实例身份、连接状态和设备数量的非敏感
+        摘要；注册完整且当前已连接时为 HTTP 200，否则为 HTTP 503。异常：持久
+        存储读取错误原样传播；响应不包含令牌、设备清单或动作参数。
+        """
+
+        ready, summary = _local_edge_readiness(authority.store.latest_registration())
+        return JSONResponse(status_code=200 if ready else 503, content=summary)
+
     @router.post("/sessions")
     def register_session(
         payload: dict[str, Any],
@@ -1598,6 +1640,95 @@ def create_local_edge_control_router(
                     pass
 
     return router
+
+
+def _local_edge_readiness(
+    registration: Mapping[str, Any] | None,
+) -> tuple[bool, dict[str, Any]]:
+    """从最近注册快照生成关闭式实时就绪摘要。
+
+    参数：``registration`` 是 ``latest_registration`` 返回的脱离副本或 ``None``。
+    返回：就绪布尔值与不含令牌、完整设备清单及动作参数的摘要。异常：无；缺失、
+    非规范身份、空设备集或非法动作声明均转换为 ``not_ready``，不伪造目录指纹。
+    """
+
+    edge_key = ""
+    instance_uuid = ""
+    connected = False
+    devices: Any = None
+    if isinstance(registration, Mapping):
+        raw_edge_key = registration.get("edge_key")
+        edge_key = raw_edge_key.strip() if isinstance(raw_edge_key, str) else ""
+        raw_instance_uuid = registration.get("instance_uuid")
+        instance_uuid = (
+            raw_instance_uuid.strip() if isinstance(raw_instance_uuid, str) else ""
+        )
+        connected = registration.get("connected") is True
+        devices = registration.get("devices")
+
+    valid_devices = (
+        isinstance(devices, list)
+        and bool(devices)
+        and all(_valid_readiness_device(device) for device in devices)
+    )
+    ready = bool(
+        connected
+        and edge_key
+        and _is_canonical_uuid(instance_uuid)
+        and valid_devices
+    )
+    return ready, {
+        "status": "ready" if ready else "not_ready",
+        "edge_key": edge_key,
+        "instance_uuid": instance_uuid,
+        "connected": connected,
+        "device_count": len(devices) if isinstance(devices, list) else 0,
+    }
+
+
+def _valid_readiness_device(device: Any) -> bool:
+    """校验单个设备是否足以证明 Local Edge 可接受动作。
+
+    参数：``device`` 是注册快照中的一个设备声明。返回：本地身份、物料 UUID
+    及至少一个具名动作均合法时为 ``True``，否则为 ``False``。异常：无；未知
+    字段被忽略，动作参数既不读取也不返回。
+    """
+
+    if not isinstance(device, Mapping):
+        return False
+    local_id = device.get("local_id")
+    material_uuid = device.get("material_uuid")
+    actions = device.get("actions")
+    return bool(
+        isinstance(local_id, str)
+        and local_id.strip()
+        and _is_canonical_uuid(material_uuid)
+        and isinstance(actions, list)
+        and actions
+        and all(
+            isinstance(action, Mapping)
+            and isinstance(action.get("name"), str)
+            and bool(action["name"].strip())
+            and isinstance(action.get("type"), str)
+            and bool(action["type"].strip())
+            for action in actions
+        )
+    )
+
+
+def _is_canonical_uuid(value: Any) -> bool:
+    """判断值是否为小写连字符形式的规范 UUID 字符串。
+
+    参数：``value`` 是待校验身份。返回：仅当字符串可解析且等于规范 UUID 文本
+    时为 ``True``。异常：无；类型或格式错误均返回 ``False``。
+    """
+
+    if not isinstance(value, str):
+        return False
+    try:
+        return value == str(uuid.UUID(value))
+    except ValueError:
+        return False
 
 
 async def _handle_edge_event(
