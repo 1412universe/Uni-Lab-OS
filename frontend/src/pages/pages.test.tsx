@@ -240,14 +240,20 @@ describe('WorkflowsPage', () => {
       outputContract: [],
     }
     const nodes = [
-      { uuid: 'source-a', name: '样品物料', type: 'material_source' },
-      { uuid: 'source-b', name: '试剂物料', type: 'material_source' },
+      { uuid: 'source-b', name: '试剂物料', type: 'material_source', meta_data: { unilab: { authoring_source_order: 1 } } },
+      { uuid: 'source-a', name: '样品物料', type: 'material_source', meta_data: { unilab: { authoring_source_order: 0 } } },
       {
         uuid: 'move',
-        name: '搬运',
+        name: '原子物料搬运',
         type: 'ILab',
         parent_uuid: 'transfer-group',
-        meta_data: { unilab: { executor_binding: { device_id: 'robot' } } },
+        meta_data: {
+          unilab: {
+            authoring_source_order: 8,
+            authoring_result_name: 'beaker_at_s07',
+            executor_binding: { device_id: 'robot' },
+          },
+        },
       },
       { uuid: 'transfer-group', name: '原子转运组', type: 'group' },
       { uuid: 'photo', name: '拍照', type: 'ILab' },
@@ -255,7 +261,12 @@ describe('WorkflowsPage', () => {
       { uuid: 'join', name: '汇合倒液', type: 'ILab' },
       { uuid: 'stir', name: '搅拌', type: 'ILab' },
       { uuid: 'density', name: '测密度', type: 'ILab' },
-      { uuid: 'finish', name: '封装', type: 'ILab' },
+      {
+        uuid: 'finish',
+        name: '原子物料搬运',
+        type: 'ILab',
+        meta_data: { unilab: { authoring_source_order: 9, authoring_result_name: 'product_at_s11' } },
+      },
       { uuid: 'archive', name: '归档', type: 'ILab' },
     ]
     const edges = [
@@ -304,14 +315,33 @@ describe('WorkflowsPage', () => {
 
     const topology = await screen.findByRole('region', { name: '发布修订拓扑' })
     expect(await within(topology).findAllByRole('article')).toHaveLength(10)
+    const materialInputs = within(topology).getByRole('region', { name: '物料输入' })
+    expect(within(materialInputs).getAllByRole('article')).toHaveLength(2)
+    expect(within(materialInputs).getAllByRole('article').map((item) => item.getAttribute('aria-label'))).toEqual([
+      '样品物料，物料源',
+      '试剂物料，物料源',
+    ])
+    expect(within(topology).getByText('8 条流程依赖 · 2 条物料输入')).toBeInTheDocument()
+    expect(within(topology.querySelector('.workflow-dag-stage') as HTMLElement).getAllByRole('article')).toHaveLength(8)
     expect(within(topology).getByRole('article', { name: /归档/ })).toBeInTheDocument()
     expect(within(topology).getByRole('group', { name: '分组：原子转运组' })).toHaveTextContent('搬运')
     expect(within(topology).getAllByRole('img', { name: /^依赖：/ })).toHaveLength(edges.length)
-    expect(within(topology).getByRole('img', { name: '依赖：搬运 → 拍照' })).toBeInTheDocument()
-    expect(within(topology).getByRole('img', { name: '依赖：搬运 → 开盖' })).toBeInTheDocument()
+    expect(within(topology).getByRole('img', { name: '依赖：原子物料搬运 → 拍照' })).toBeInTheDocument()
+    expect(within(topology).getByRole('img', { name: '依赖：原子物料搬运 → 开盖' })).toBeInTheDocument()
     expect(within(topology).queryByRole('img', { name: '依赖：拍照 → 开盖' })).not.toBeInTheDocument()
     expect(within(topology).getByRole('article', { name: '样品物料，物料源' })).toHaveTextContent('物料源')
+    expect(within(topology).getByRole('article', {
+      name: '原子物料搬运，beaker_at_s07，robot，物料输入：样品物料',
+    })).toHaveTextContent('#09 · beaker_at_s07')
+    expect(within(topology).getByRole('article', {
+      name: '原子物料搬运，product_at_s11，ILab',
+    })).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: /r2 · 11 节点/ })).toBeInTheDocument()
+
+    fireEvent.click(within(topology).getByRole('button', { name: '查看完整 DAG' }))
+    expect(within(topology).getByRole('button', { name: '查看主流程' })).toBeInTheDocument()
+    expect(within(topology).queryByRole('region', { name: '物料输入' })).not.toBeInTheDocument()
+    expect(within(topology.querySelector('.workflow-dag-stage') as HTMLElement).getAllByRole('article')).toHaveLength(10)
   })
 })
 

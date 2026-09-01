@@ -303,6 +303,7 @@ export function WorkflowsPage({
               {workspaceView === 'topology' ? <div className="workflow-canvas">
                 <div className="canvas-toolbar"><span><GitBranch size={15} />发布修订拓扑</span><small>{graphQuery.isFetching ? '正在读取图…' : graphQuery.isError ? '图接口不可用，显示定义摘要' : 'Edge 权威图'}</small></div>
                 <WorkflowDag
+                  key={`${detail.uuid}:${detail.revision}`}
                   nodes={graphNodes}
                   edges={graphEdges}
                   loading={graphQuery.isFetching}

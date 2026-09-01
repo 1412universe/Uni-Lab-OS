@@ -696,10 +696,26 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .canvas-toolbar small { color: var(--subtle); font-size: 8px; }
 .workflow-dag-region { min-width: 0; outline: 0; }
 .workflow-dag-region:focus-visible { box-shadow: inset 0 0 0 2px #84adff; }
-.workflow-dag-summary { display: flex; align-items: center; gap: 15px; min-height: 38px; padding: 0 14px; color: #667085; background: rgba(255,255,255,.72); border-bottom: 1px solid #edf0f4; font-size: 8px; }
+.workflow-dag-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-height: 42px; padding: 7px 14px; color: #667085; background: rgba(255,255,255,.72); border-bottom: 1px solid #edf0f4; font-size: 8px; }
 .workflow-dag-summary span { white-space: nowrap; }
 .workflow-dag-summary strong { color: #344054; font-size: 9px; }
 .workflow-dag-summary em { margin-left: auto; color: #6941c6; font-style: normal; white-space: nowrap; }
+.workflow-dag-view-toggle { display: inline-flex; align-items: center; gap: 5px; height: 27px; padding: 0 8px; color: #294ebd; background: #eef3ff; border: 1px solid #cfd9ff; border-radius: 7px; font-size: 8px; font-weight: 700; white-space: nowrap; }
+.workflow-dag-view-toggle:hover { background: #dfe7ff; }
+.workflow-dag-materials { padding: 10px 14px 12px; background: rgba(244,252,249,.94); border-bottom: 1px solid #cceadf; }
+.workflow-dag-materials-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; color: #087f6f; }
+.workflow-dag-materials-heading > span { display: inline-flex; align-items: center; gap: 6px; }
+.workflow-dag-materials-heading strong { font-size: 9px; }
+.workflow-dag-materials-heading small { color: #4f7f75; font-size: 8px; }
+.workflow-dag-material-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(190px,1fr)); gap: 6px; }
+.workflow-dag-material { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 7px; align-items: center; min-width: 0; min-height: 46px; padding: 7px 8px; color: #087f6f; background: rgba(255,255,255,.92); border: 1px solid #b7e4d6; border-radius: 9px; }
+.workflow-dag-material > svg { grid-row: 1 / span 2; place-self: center; }
+.workflow-dag-material > div { min-width: 0; }
+.workflow-dag-material strong, .workflow-dag-material small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-dag-material strong { color: #285c53; font-size: 8px; }
+.workflow-dag-material small { margin-top: 2px; color: #6a9189; font-size: 7px; }
+.workflow-dag-material-targets { grid-column: 2; display: flex; gap: 4px; margin-top: -2px; overflow: hidden; }
+.workflow-dag-material-targets span { max-width: 100%; padding: 2px 4px; overflow: hidden; color: #2f6b61; background: #e6f7f1; border-radius: 4px; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-dag-scroll { min-height: 360px; max-height: 680px; overflow: auto; overscroll-behavior: contain; }
 .workflow-dag-stage { position: relative; min-width: 100%; }
 .workflow-dag-edges { position: absolute; inset: 0; z-index: 1; overflow: visible; pointer-events: none; }
@@ -716,6 +732,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .workflow-dag-node strong, .workflow-dag-node small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-dag-node strong { font-size: 9px; }
 .workflow-dag-node small { margin-top: 5px; color: var(--subtle); font-size: 8px; }
+.workflow-dag-node-materials { position: absolute; right: 6px; bottom: 5px; display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; color: #087f6f; background: #e2f7f0; border-radius: 5px; font-size: 7px; font-weight: 700; }
 .workflow-dag-node.material-source { border-color: #9bdcc8; background: rgba(247,255,252,.98); }
 .workflow-dag-node.material-source .workflow-dag-node-icon { color: #087f6f; background: #dff8f0; }
 .workflow-dag-node.disabled { opacity: .62; filter: grayscale(.35); }
