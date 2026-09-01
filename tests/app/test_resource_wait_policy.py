@@ -1,9 +1,21 @@
 """工站资源条件等待/失败分类的合同测试。"""
 
+from typing import Never
+
+import pytest
+
+from unilabos.app.scheduler.inventory.station_resource import (
+    StationResourceError,
+    TransferResourceRequest,
+)
 from unilabos.app.scheduler.resource_wait_policy import (
     is_temporary_resource_condition,
 )
-from unilabos.app.scheduler.transfer_resource_set import TransferResourceSetError
+from unilabos.app.scheduler.site_target import ResolvedSiteTarget
+from unilabos.app.scheduler.transfer_resource_set import (
+    TransferResourceSetError,
+    resolve_transfer_resource_set,
+)
 
 
 def test_runtime_resource_conditions_remain_waiting() -> None:
@@ -45,3 +57,35 @@ def test_transfer_resource_error_preserves_inventory_condition_code() -> None:
     assert error.code == "gripper_site_occupied"
     assert error.message == "机械臂夹爪库位已有物料"
     assert is_temporary_resource_condition(error.code)
+
+
+def test_transfer_resource_adapter_preserves_authoritative_wait_resources() -> None:
+    """转运适配层不得丢弃库存权威给出的实际阻塞资源。"""
+
+    class WaitingInventory:
+        def resolve_transfer_resources(
+            self,
+            _request: TransferResourceRequest,
+        ) -> Never:
+            raise StationResourceError(
+                "transfer_source_site_missing",
+                "待搬物料没有来源库位",
+                resources=(
+                    {"scope": "material", "material_uuid": "material-1"},
+                ),
+            )
+
+    with pytest.raises(TransferResourceSetError) as raised:
+        resolve_transfer_resource_set(
+            WaitingInventory(),  # type: ignore[arg-type]
+            resource_material_uuid="material-1",
+            target=ResolvedSiteTarget(
+                uuid="site-target",
+                name="IN",
+                owner_material_uuid="device-target",
+            ),
+        )
+
+    assert raised.value.resources == (
+        {"scope": "material", "material_uuid": "material-1"},
+    )

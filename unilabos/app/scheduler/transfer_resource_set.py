@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from unilabos.app.scheduler.inventory.station_resource import (
@@ -16,16 +17,24 @@ from unilabos.app.scheduler.site_target import ResolvedSiteTarget
 class TransferResourceSetError(ValueError):
     """转运动作完整资源集无法由库存事实证明。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        resources: Sequence[Mapping[str, str]] = (),
+    ) -> None:
         """保存库存条件的稳定错误码和中文原因。
 
         参数：``code`` 是调度器用于等待/失败分类的错误码；``message`` 是展示
-        原因。返回：无。异常：无；调用点必须明确区分临时条件和永久合同错误。
+        原因；``resources`` 是库存权威给出的实际阻塞资源。返回：无。异常：无；
+        调用点必须明确区分临时条件和永久合同错误。
         """
 
         super().__init__(message)
         self.code = code
         self.message = message
+        self.resources = tuple(dict(resource) for resource in resources)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +81,11 @@ def resolve_transfer_resource_set(
             )
         )
     except StationResourceError as error:
-        raise TransferResourceSetError(error.code, error.message) from error
+        raise TransferResourceSetError(
+            error.code,
+            error.message,
+            resources=error.resources,
+        ) from error
     keys = {
         material_lock_key(resource_material_uuid),
         site_lock_key(

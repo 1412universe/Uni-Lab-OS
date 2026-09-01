@@ -74,6 +74,14 @@ function nodes(activeIndex: number, taskStatus: WorkflowTask['status']): TaskNod
     if (index === activeIndex && taskStatus === 'running') status = 'running'
     if (index === activeIndex && taskStatus === 'admission_blocked') status = 'waiting'
     if (index === activeIndex && taskStatus === 'failed') status = 'failed'
+    const waitReason = index === activeIndex && taskStatus === 'admission_blocked'
+      ? {
+          code: 'material_site_unavailable',
+          title: '等待库位',
+          message: '样品瓶目标库位当前不可用',
+          details: ['目标库位：S08 样品瓶位'],
+        }
+      : undefined
     return {
       uuid: `demo-node-${index}`,
       name,
@@ -81,6 +89,7 @@ function nodes(activeIndex: number, taskStatus: WorkflowTask['status']): TaskNod
       index,
       status,
       device: index > 1 && index < 9 ? name.split(' ')[0] : undefined,
+      waitReason,
     }
   })
 }

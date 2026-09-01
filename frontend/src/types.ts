@@ -29,6 +29,15 @@ export type NodePresentationStatus =
   | 'canceled'
   | 'attention'
 
+/** 已归类为界面语言的节点等待原因，避免视图依赖 Edge 内部锁键或状态码。 */
+export interface TaskNodeWaitReason {
+  code: string
+  title: string
+  message: string
+  details: string[]
+  waitingSince?: string
+}
+
 export interface WorkflowDefinition {
   uuid: string
   name: string
@@ -92,6 +101,7 @@ export interface TaskNode {
   status: NodePresentationStatus
   device?: string
   materialUuid?: string
+  waitReason?: TaskNodeWaitReason
 }
 
 export interface WorkflowTask {

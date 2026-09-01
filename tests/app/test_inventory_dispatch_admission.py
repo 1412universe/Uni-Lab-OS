@@ -14,7 +14,10 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
     TransferDispatchCondition,
 )
 from unilabos.app.scheduler.inventory.service import InventoryService
-from unilabos.app.scheduler.inventory.station_resource import StationResourceError
+from unilabos.app.scheduler.inventory.station_resource import (
+    StationResourceError,
+    TransferResourceRequest,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
 
 SOURCE_SITE = "10000000-0000-4000-8000-000000000101"
@@ -255,6 +258,13 @@ def test_changed_target_fact_rolls_back_whole_claim(
         service.station_resources.acquire_dispatch_permit(request)
 
     assert raised.value.code == "site_occupied"
+    assert raised.value.resources == (
+        {
+            "scope": "material_site",
+            "material_uuid": identities["target_device"],
+            "site_uuid": TARGET_SITE,
+        },
+    )
     assert store.query_all("SELECT * FROM station_execution_claim") == []
     assert store.query_all("SELECT * FROM station_execution_lock_lease") == []
 
@@ -279,6 +289,70 @@ def test_changed_target_fact_rolls_back_whole_claim(
 
     assert third.acquired is True
     assert len(store.query_all("SELECT * FROM station_execution_claim")) == 1
+
+
+def test_missing_transfer_source_reports_the_blocked_material(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """来源库位消失时，等待事实应指向待搬物料而不是目标库位。"""
+
+    store, service, identities = station_inventory
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE site SET occupied_material_uuid=NULL WHERE uuid=?",
+            (SOURCE_SITE,),
+        )
+
+    with pytest.raises(StationResourceError) as raised:
+        service.station_resources.resolve_transfer_resources(
+            TransferResourceRequest(
+                resource_material_uuid=identities["vessel"],
+                target_site_uuid=TARGET_SITE,
+                target_owner_material_uuid=identities["target_device"],
+                executor_material_uuid=identities["robot"],
+                gripper_site_role="robot.gripper",
+                require_device_owners=True,
+            )
+        )
+
+    assert raised.value.code == "transfer_source_site_missing"
+    assert raised.value.resources == (
+        {"scope": "material", "material_uuid": identities["vessel"]},
+    )
+
+
+def test_occupied_gripper_reports_the_actual_gripper_site(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """夹爪被占用时，等待事实应指向夹爪库位而不是转运目标库位。"""
+
+    store, service, identities = station_inventory
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE site SET occupied_material_uuid=? WHERE uuid=?",
+            (identities["target_device"], GRIPPER_SITE),
+        )
+
+    with pytest.raises(StationResourceError) as raised:
+        service.station_resources.resolve_transfer_resources(
+            TransferResourceRequest(
+                resource_material_uuid=identities["vessel"],
+                target_site_uuid=TARGET_SITE,
+                target_owner_material_uuid=identities["target_device"],
+                executor_material_uuid=identities["robot"],
+                gripper_site_role="robot.gripper",
+                require_device_owners=True,
+            )
+        )
+
+    assert raised.value.code == "gripper_site_occupied"
+    assert raised.value.resources == (
+        {
+            "scope": "material_site",
+            "material_uuid": identities["robot"],
+            "site_uuid": GRIPPER_SITE,
+        },
+    )
 
 
 def test_competing_job_cannot_claim_any_member_of_an_active_resource_set(

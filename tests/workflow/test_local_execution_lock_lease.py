@@ -294,6 +294,14 @@ def test_material_parent_lock_blocks_child_site_until_explicit_result(
     assert blocked_job["status"] == "pending"
     assert blocked_job["wait_reason"]["code"] == "operation_lease"
     assert blocked_job["wait_reason"]["blocking_job_uuid"] == JOB_UUID
+    assert blocked_job["wait_reason"]["resources"] == [
+        {"scope": "device", "device_id": "reactor-b"},
+        {
+            "scope": "material_site",
+            "material_uuid": MATERIAL_UUID,
+            "site_uuid": SITE_UUID,
+        },
+    ]
     with store.transaction() as connection:
         waiting_count = connection.execute(
             "SELECT COUNT(*) FROM execution_lock_waiter WHERE state = 'waiting'"

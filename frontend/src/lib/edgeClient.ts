@@ -6,6 +6,7 @@ import type {
   NodePresentationStatus,
   RunPreflightReport,
   TaskNode,
+  TaskNodeWaitReason,
   TaskPresentationStatus,
   WorkflowDefinition,
   WorkflowGraph,
@@ -304,6 +305,86 @@ function jobNodeStatus(
   return 'pending'
 }
 
+const waitReasonDefaults: Record<string, { title: string; message: string }> = {
+  material_unavailable: { title: '等待物料', message: '任务所需物料暂不可用' },
+  device_busy: { title: '等待设备', message: '匹配设备当前正在被其他作业使用' },
+  global_task_capacity: { title: '等待调度容量', message: '全局运行任务容量已满' },
+  workflow_task_capacity: { title: '等待调度容量', message: '该工作流的运行任务容量已满' },
+  job_dispatch_capacity: { title: '等待调度容量', message: '当前并行 Job 派发容量已满' },
+  operation_lease: { title: '等待执行资源', message: '执行资源正在被其他作业使用' },
+  resource_claimed: { title: '等待执行资源', message: '执行资源已被其他作业占用' },
+  manual_intervention: { title: '等待人工操作', message: '节点需要人工处理后才能继续' },
+  gripper_site_occupied: { title: '等待库位', message: '机械臂夹爪库位当前被占用' },
+  site_claimed: { title: '等待库位', message: '目标库位已被其他作业预留' },
+  site_group_unavailable: { title: '等待库位', message: '候选库位当前均不可用' },
+  site_ingress_reserved: { title: '等待库位', message: '目标库位正在等待其他物料进入' },
+  site_occupied: { title: '等待库位', message: '目标库位当前已有物料' },
+  transfer_source_site_missing: { title: '等待物料', message: '待转运物料尚未进入可用来源库位' },
+}
+
+type WaitResourceScope = 'device' | 'material' | 'material_site'
+
+function waitResourceScope(value: unknown): WaitResourceScope | undefined {
+  const scope = String(value || '')
+  return scope === 'device' || scope === 'material' || scope === 'material_site'
+    ? scope
+    : undefined
+}
+
+function waitResourceDetails(resources: unknown): { details: string[]; scopes: Set<WaitResourceScope> } {
+  const details: string[] = []
+  const scopes = new Set<WaitResourceScope>()
+  if (!Array.isArray(resources)) return { details, scopes }
+  resources.forEach((value) => {
+    if (!value || typeof value !== 'object') return
+    const resource = value as RawRecord
+    const scope = waitResourceScope(resource.scope)
+    if (!scope) return
+    scopes.add(scope)
+    if (scope === 'device' && resource.device_id) {
+      details.push(`设备：${String(resource.device_id)}`)
+      return
+    }
+    if (scope === 'material_site' && resource.site_uuid) {
+      const material = resource.material_uuid ? `（物料 ${String(resource.material_uuid)}）` : ''
+      details.push(`库位：${String(resource.site_uuid)}${material}`)
+      return
+    }
+    if (scope === 'material' && resource.material_uuid) {
+      details.push(`物料：${String(resource.material_uuid)}`)
+    }
+  })
+  return { details, scopes }
+}
+
+function waitTitleFromResources(scopes: Set<WaitResourceScope>, fallback: string): string {
+  if (scopes.size > 1) return '等待执行资源'
+  if (scopes.has('device')) return '等待设备'
+  if (scopes.has('material_site')) return '等待库位'
+  if (scopes.has('material')) return '等待物料'
+  return fallback
+}
+
+function presentWaitReason(waitReason: unknown, node: RawRecord): TaskNodeWaitReason | undefined {
+  if (!waitReason || typeof waitReason !== 'object') return undefined
+  const reason = waitReason as RawRecord
+  const code = String(reason.code || 'waiting_condition')
+  const fallback = waitReasonDefaults[code] || { title: '等待条件', message: '节点的运行条件尚未满足' }
+  const { details, scopes } = waitResourceDetails(reason.resources)
+  if (!details.length && scopes.has('device') && node.device_id) {
+    details.push(`设备：${String(node.device_id)}`)
+  }
+  if (reason.blocking_task_uuid) details.push(`阻塞任务：${String(reason.blocking_task_uuid)}`)
+  if (reason.blocking_job_uuid) details.push(`阻塞 Job：${String(reason.blocking_job_uuid)}`)
+  return {
+    code,
+    title: waitTitleFromResources(scopes, fallback.title),
+    message: String(reason.message || fallback.message),
+    details,
+    waitingSince: reason.waiting_since ? String(reason.waiting_since) : undefined,
+  }
+}
+
 function timeLabel(value: unknown): string {
   if (!value) return '—'
   const date = new Date(String(value))
@@ -492,16 +573,82 @@ export function adaptTask(
     (left, right) => Number(left.topological_index || 0) - Number(right.topological_index || 0),
   )
   const jobByNode = new Map(jobs.map((job) => [String(job.workflow_node_uuid), job]))
-  const nodes: TaskNode[] = sortedNodes.map((node, index) => {
+  let nodes: TaskNode[] = sortedNodes.map((node, index) => {
     const uuid = String(node.uuid || `node-${index}`)
+    const job = jobByNode.get(uuid)
     return {
       uuid,
       name: nodeName(node),
       kind: String(node.kind || node.action_type || 'device_action'),
       index: Number(node.topological_index ?? index),
-      status: jobNodeStatus(jobByNode.get(uuid), status, node),
+      status: jobNodeStatus(job, status, node),
       device: node.device_id ? String(node.device_id) : undefined,
       materialUuid: node.material_uuid ? String(node.material_uuid) : undefined,
+      waitReason: presentWaitReason(job?.wait_reason, node),
+    }
+  })
+  const incomingNodeUuids = new Map<string, string[]>()
+  const planEdges = Array.isArray(raw.execution_plan?.edges) ? raw.execution_plan.edges : []
+  planEdges.forEach((edge: RawRecord) => {
+    const sourceUuid = String(edge.source_node_uuid || '')
+    const targetUuid = String(edge.target_node_uuid || '')
+    if (!sourceUuid || !targetUuid) return
+    incomingNodeUuids.set(targetUuid, [...(incomingNodeUuids.get(targetUuid) || []), sourceUuid])
+  })
+  const rawNodeByUuid = new Map(sortedNodes.map((node) => [String(node.uuid), node]))
+  const taskWaitReason = status === 'admission_blocked'
+    ? presentWaitReason(raw.wait_reason, {})
+    : undefined
+  if (taskWaitReason) {
+    const pendingNodes = nodes.filter((node) => (
+      !node.waitReason && ['pending', 'waiting'].includes(node.status)
+    ))
+    const materialSourceNodes = taskWaitReason.code === 'material_unavailable'
+      ? pendingNodes.filter((node) => node.kind === 'material_source')
+      : []
+    const rootNodes = pendingNodes.filter((node) => !(incomingNodeUuids.get(node.uuid) || []).length)
+    const waitingNodes = materialSourceNodes.length
+      ? materialSourceNodes
+      : rootNodes.length
+        ? rootNodes
+        : pendingNodes.slice(0, 1)
+    const waitingNodeUuids = new Set(waitingNodes.map((node) => node.uuid))
+    nodes = nodes.map((node) => waitingNodeUuids.has(node.uuid)
+      ? {
+          ...node,
+          status: 'waiting',
+          waitReason: presentWaitReason(raw.wait_reason, rawNodeByUuid.get(node.uuid) || {}) || taskWaitReason,
+        }
+      : node)
+  }
+  const nodeByUuid = new Map(nodes.map((node) => [node.uuid, node]))
+  const canDeriveWaitReason = ['running', 'pending', 'admission_blocked'].includes(status)
+  nodes = nodes.map((node) => {
+    if (node.waitReason || !['pending', 'waiting'].includes(node.status) || !canDeriveWaitReason) return node
+    const unresolved = (incomingNodeUuids.get(node.uuid) || [])
+      .map((uuid) => nodeByUuid.get(uuid))
+      .filter((upstream): upstream is TaskNode => Boolean(
+        upstream && !['succeeded', 'skipped'].includes(upstream.status),
+      ))
+    if (unresolved.length) {
+      return {
+        ...node,
+        waitReason: {
+          code: 'upstream_dependency',
+          title: '等待前置节点',
+          message: '以下节点完成后才能运行',
+          details: unresolved.map((upstream) => upstream.name),
+        },
+      }
+    }
+    return {
+      ...node,
+      waitReason: {
+        code: 'dispatch_pending',
+        title: '等待调度',
+        message: '前置条件已满足，等待调度器进行下一次派发判定',
+        details: [],
+      },
     }
   })
 

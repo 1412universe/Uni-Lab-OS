@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -45,8 +46,56 @@ function matchesFilter(task: WorkflowTask, filter: TaskFilter) {
 
 function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
   const status = node?.status || 'pending'
+  const waitReason = node?.waitReason
+  const markerRef = useRef<HTMLDivElement>(null)
+  const tooltipId = useId()
+  const [tooltipVisible, setTooltipVisible] = useState(false)
+  const [tooltipPosition, setTooltipPosition] = useState({ left: 0, top: 0, above: false })
+  const showTooltip = useCallback(() => {
+    if (!waitReason || !markerRef.current) return
+    const rect = markerRef.current.getBoundingClientRect()
+    const above = rect.top > 190
+    const halfWidth = 142
+    setTooltipPosition({
+      left: Math.min(Math.max(rect.left + rect.width / 2, halfWidth + 10), window.innerWidth - halfWidth - 10),
+      top: above ? rect.top - 10 : rect.bottom + 10,
+      above,
+    })
+    setTooltipVisible(true)
+  }, [waitReason])
+
+  useEffect(() => {
+    if (!tooltipVisible) return undefined
+    const hideTooltip = () => setTooltipVisible(false)
+    document.addEventListener('scroll', hideTooltip, true)
+    window.addEventListener('resize', hideTooltip)
+    return () => {
+      document.removeEventListener('scroll', hideTooltip, true)
+      window.removeEventListener('resize', hideTooltip)
+    }
+  }, [tooltipVisible])
+
+  useEffect(() => {
+    if (!waitReason) setTooltipVisible(false)
+  }, [waitReason])
+
+  const label = `${node?.name || `节点 ${index + 1}`}，${nodeStatusLabels[status]}`
   return (
-    <div className={`matrix-node matrix-node-${status}`} title={`${node?.name || `节点 ${index + 1}`} · ${nodeStatusLabels[status]}`}>
+    <div
+      ref={markerRef}
+      className={`matrix-node matrix-node-${status}`}
+      title={waitReason ? undefined : label}
+      tabIndex={waitReason ? 0 : undefined}
+      aria-label={label}
+      aria-describedby={waitReason && tooltipVisible ? tooltipId : undefined}
+      onMouseEnter={showTooltip}
+      onMouseLeave={() => setTooltipVisible(false)}
+      onFocus={showTooltip}
+      onBlur={() => setTooltipVisible(false)}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') setTooltipVisible(false)
+      }}
+    >
       <span>
         {status === 'succeeded' || status === 'skipped'
           ? <Check size={13} />
@@ -56,6 +105,22 @@ function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
               ? <X size={13} />
               : index + 1}
       </span>
+      {waitReason && tooltipVisible && typeof document !== 'undefined' && createPortal(
+        <div
+          id={tooltipId}
+          role="tooltip"
+          className={`node-wait-tooltip ${tooltipPosition.above ? 'node-wait-tooltip-above' : 'node-wait-tooltip-below'}`}
+          style={{ left: tooltipPosition.left, top: tooltipPosition.top }}
+        >
+          <strong>{waitReason.title}</strong>
+          <p>{waitReason.message}</p>
+          {waitReason.details.length > 0 && (
+            <ul>{waitReason.details.map((detail) => <li key={detail}>{detail}</li>)}</ul>
+          )}
+          {waitReason.waitingSince && <small>等待开始：{waitReason.waitingSince}</small>}
+        </div>,
+        document.body,
+      )}
     </div>
   )
 }
@@ -86,22 +151,21 @@ function TaskMatrixGroup({
         </div>
         <div className="matrix-body">
           {tasks.map((task) => (
-            <button
-              type="button"
+            <div
               key={task.uuid}
               className={`matrix-row ${selectedId === task.uuid ? 'selected' : ''}`}
               style={{ gridTemplateColumns: columns }}
               onClick={() => onSelect(task.uuid)}
             >
-              <div className="matrix-task-cell">
+              <button type="button" className="matrix-task-cell" onClick={() => onSelect(task.uuid)}>
                 <span className={`task-state-dot task-state-${task.status}`} />
                 <div><strong>{task.uuid}</strong><small>{task.sample} · {task.updatedAt}</small></div>
-              </div>
+              </button>
               {(stages.length ? stages : [{ uuid: 'empty' } as TaskNode]).map((stage, index) => (
                 <NodeMarker key={stage.uuid} node={task.nodes.find((node) => node.uuid === stage.uuid)} index={index} />
               ))}
               <div className="matrix-progress-cell"><strong>{task.progress}%</strong><span><i style={{ width: `${task.progress}%` }} /></span></div>
-            </button>
+            </div>
           ))}
         </div>
       </div>

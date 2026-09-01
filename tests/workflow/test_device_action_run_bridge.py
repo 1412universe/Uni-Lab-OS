@@ -12,6 +12,7 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
     DispatchFence,
     DispatchPermit,
 )
+from unilabos.app.scheduler.inventory.station_resource import StationResourceError
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.device_action_run_store import DeviceActionRunStore
 from unilabos.workflow.store import WorkflowStore
@@ -156,6 +157,58 @@ def test_bridge_commits_standard_job_before_physical_dispatch(tmp_path: Any) -> 
         bridge.submit(aggregate["task"])
 
         assert observed_states == [("running", "dispatched")]
+    finally:
+        bridge.close()
+        store.close()
+
+
+def test_atomic_inventory_condition_preserves_specific_wait_reason(tmp_path: Any) -> None:
+    """原子门禁竞态必须保留实际原因，不能降级成通用执行锁等待。"""
+
+    class _WaitingInventory:
+        def acquire_dispatch_permit(self, _request: Any) -> DispatchAdmissionDecision:
+            raise StationResourceError(
+                "site_occupied",
+                "目标库位当前已有物料",
+                resources=(
+                    {
+                        "scope": "material_site",
+                        "material_uuid": DEVICE_B_UUID,
+                        "site_uuid": "site-target",
+                    },
+                ),
+            )
+
+    store = WorkflowStore(tmp_path / "workflow_history.db")
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        station_resources=_WaitingInventory(),  # type: ignore[arg-type]
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        aggregate = _insert_run(
+            store,
+            task_uuid=TASK_A_UUID,
+            job_uuid=JOB_A_UUID,
+            node_uuid=NODE_A_UUID,
+            device_material_uuid=DEVICE_A_UUID,
+        )
+
+        bridge.submit(aggregate["task"])
+
+        wait_reason = store.get_job(JOB_A_UUID)["wait_reason"]
+        assert dispatcher.dispatched == []
+        assert wait_reason["code"] == "site_occupied"
+        assert wait_reason["message"] == "目标库位当前已有物料"
+        assert wait_reason["resources"] == [
+            {
+                "scope": "material_site",
+                "material_uuid": DEVICE_B_UUID,
+                "site_uuid": "site-target",
+            }
+        ]
+        assert TaskRuntimeProjection(store).list_execution_locks(JOB_A_UUID) == []
     finally:
         bridge.close()
         store.close()

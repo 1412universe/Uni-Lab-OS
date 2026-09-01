@@ -1674,7 +1674,6 @@ class EdgeScheduler:
                     }
             except SiteTargetResolutionError as error:
                 if is_temporary_resource_condition(error.code):
-                    selector_uuids = resource_policy.target_site_uuids
                     self._notify_job_execution_wait(
                         {
                             "job_id": job_id,
@@ -1686,7 +1685,9 @@ class EdgeScheduler:
                             "blocking_workflow_id": None,
                             "wait_code": error.code,
                             "wait_message": error.message,
-                            "candidate_site_uuids": list(selector_uuids),
+                            "wait_resources": [
+                                dict(resource) for resource in error.resources
+                            ],
                         }
                     )
                     continue
@@ -1712,9 +1713,9 @@ class EdgeScheduler:
                             "blocking_workflow_id": None,
                             "wait_code": error.code,
                             "wait_message": error.message,
-                            "candidate_site_uuids": list(
-                                resource_policy.target_site_uuids
-                            ),
+                            "wait_resources": [
+                                dict(resource) for resource in error.resources
+                            ],
                         }
                     )
                     continue

@@ -19,10 +19,13 @@ from unilabos.app.scheduler.inventory.ingress import (
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.app.scheduler.inventory.station_resource import (
     SqliteStationResourceInventory,
-    StationResourceError,
     TargetSiteRequest,
 )
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.site_target import (
+    SiteTargetResolutionError,
+    resolve_site_target,
+)
 
 
 @pytest.fixture
@@ -197,14 +200,20 @@ def test_normal_job_target_selection_never_steals_ingress_reservation(
     assert selected.uuid != first["site_uuid"]
 
     _reserve(authority, identities, index=1, key="reserve-second")
-    with pytest.raises(StationResourceError, match="没有可接收"):
-        inventory.resolve_target_site(
-            TargetSiteRequest(
-                owner_material_uuid=identities["rack"],
-                equivalent_site_uuids=identities["sites"],
-                occupant_material_uuid=identities["carriers"][0],
-            )
+    with pytest.raises(SiteTargetResolutionError, match="没有可接收") as raised:
+        resolve_site_target(
+            inventory,
+            owner_material_uuid=identities["rack"],
+            site_uuids=identities["sites"],
+            occupant_material_uuid=identities["carriers"][0],
         )
+    assert {
+        (resource["scope"], resource["material_uuid"], resource["site_uuid"])
+        for resource in raised.value.resources
+    } == {
+        ("material_site", identities["rack"], site_uuid)
+        for site_uuid in identities["sites"]
+    }
 
 
 def test_in_transit_never_expires_and_receive_commits_site_occupancy(

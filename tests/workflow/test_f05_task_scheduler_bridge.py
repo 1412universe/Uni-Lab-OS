@@ -400,6 +400,45 @@ def test_persisted_task_compiles_and_dispatches_with_stable_identities(
     assert aggregate["task"]["status"] == "running"
 
 
+def test_scheduler_wait_projects_authoritative_structured_resources(
+    store: WorkflowStore,
+) -> None:
+    """桥必须把调度器给出的实际阻塞资源写入标准 Job 等待原因。"""
+
+    _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    wait_resources = [
+        {
+            "scope": "material",
+            "material_uuid": "72000000-0000-4000-8000-000000000001",
+        },
+        {
+            "scope": "material_site",
+            "material_uuid": "73000000-0000-4000-8000-000000000001",
+            "site_uuid": "71000000-0000-4000-8000-000000000001",
+        },
+    ]
+    try:
+        bridge._task_by_job[JOB_UUID] = TASK_UUID
+        bridge._on_job_execution_wait(
+            {
+                "job_id": JOB_UUID,
+                "workflow_id": TASK_UUID,
+                "execution_locks": [],
+                "blocking_job_id": None,
+                "blocking_workflow_id": None,
+                "wait_code": "transfer_source_site_missing",
+                "wait_message": "待搬物料尚无来源库位",
+                "wait_resources": wait_resources,
+            }
+        )
+    finally:
+        bridge.close()
+
+    assert store.get_job(JOB_UUID)["wait_reason"]["resources"] == wait_resources
+
+
 def test_step_task_stays_paused_until_bridge_step_dispatches_one_job(
     store: WorkflowStore,
 ) -> None:

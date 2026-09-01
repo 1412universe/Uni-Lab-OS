@@ -395,6 +395,54 @@ describe('TasksPage', () => {
     expect(container.querySelectorAll('.matrix-node-running')).toHaveLength(3)
   })
 
+  it('shows a waiting reason only while its node is hovered or keyboard-focused', () => {
+    const task = {
+      ...demoTasks[0],
+      nodes: demoTasks[0].nodes.map((node, index) => index === 4
+        ? {
+            ...node,
+            status: 'waiting' as const,
+            waitReason: {
+              code: 'operation_lease',
+              title: '等待库位',
+              message: '目标库位正在被其他作业使用',
+              details: ['库位：S0722（物料 material-1）'],
+              waitingSince: '2026-09-01T09:00:00Z',
+            },
+          }
+        : node),
+    }
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    const marker = screen.getByLabelText('转运至 S09，等待资源')
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    fireEvent.mouseEnter(marker)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('等待库位')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('库位：S0722（物料 material-1）')
+
+    fireEvent.mouseLeave(marker)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    fireEvent.focus(marker)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('目标库位正在被其他作业使用')
+    fireEvent.keyDown(marker, { key: 'Escape' })
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+
+    fireEvent.focus(marker)
+    fireEvent.blur(marker)
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
+  })
+
   it('filters the matrix to failed tasks', () => {
     const { container } = renderWithQuery(
       <TasksPage

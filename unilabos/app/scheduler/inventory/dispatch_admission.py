@@ -528,6 +528,9 @@ def _validate_transfer_conditions(
         raise TemporaryDispatchCondition(
             "transfer_source_site_missing",
             "待搬物料已经不在准入时确认的来源库位",
+            resources=(
+                {"scope": "material", "material_uuid": condition.material_uuid},
+            ),
         )
     target = connection.execute(
         "SELECT material_uuid,occupied_material_uuid FROM site "
@@ -537,7 +540,17 @@ def _validate_transfer_conditions(
     if target is None or str(target["material_uuid"]) != condition.target_owner_material_uuid:
         raise DispatchAdmissionConflict("目标库位不存在或归属已经改变")
     if str(target["occupied_material_uuid"] or ""):
-        raise TemporaryDispatchCondition("site_occupied", "目标库位当前已有物料")
+        raise TemporaryDispatchCondition(
+            "site_occupied",
+            "目标库位当前已有物料",
+            resources=(
+                {
+                    "scope": "material_site",
+                    "material_uuid": condition.target_owner_material_uuid,
+                    "site_uuid": condition.target_site_uuid,
+                },
+            ),
+        )
     ingress = connection.execute(
         "SELECT 1 FROM station_ingress_reservation_site "
         "WHERE site_uuid=? AND active=1 LIMIT 1",
@@ -547,6 +560,13 @@ def _validate_transfer_conditions(
         raise TemporaryDispatchCondition(
             "site_ingress_reserved",
             "目标库位已为运输中的入口载体预留",
+            resources=(
+                {
+                    "scope": "material_site",
+                    "material_uuid": condition.target_owner_material_uuid,
+                    "site_uuid": condition.target_site_uuid,
+                },
+            ),
         )
     gripper = connection.execute(
         "SELECT material_uuid,occupied_material_uuid FROM site "
@@ -559,6 +579,13 @@ def _validate_transfer_conditions(
         raise TemporaryDispatchCondition(
             "gripper_site_occupied",
             "机械臂夹爪库位当前已有物料",
+            resources=(
+                {
+                    "scope": "material_site",
+                    "material_uuid": condition.executor_material_uuid,
+                    "site_uuid": condition.gripper_site_uuid,
+                },
+            ),
         )
 
     required_keys = {
@@ -599,16 +626,24 @@ def _validate_transfer_conditions(
 class TemporaryDispatchCondition(ValueError):
     """库存原子门禁观察到可由其他任务改变的运行条件。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        resources: Sequence[Mapping[str, str]] = (),
+    ) -> None:
         """保存稳定等待码和中文原因。
 
-        参数：``code`` 是调度等待原因；``message`` 是展示文本。返回：无。异常：
-        无；该内部异常由工站库存适配器转换为统一 ``StationResourceError``。
+        参数：``code`` 是调度等待原因；``message`` 是展示文本；``resources`` 是
+        同一库存事务确认的实际阻塞资源。返回：无。异常：无；该内部异常由工站
+        库存适配器转换为统一 ``StationResourceError``。
         """
 
         super().__init__(message)
         self.code = code
         self.message = message
+        self.resources = tuple(dict(resource) for resource in resources)
 
 
 def _replay_permit(

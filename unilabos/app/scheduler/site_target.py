@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from unilabos.app.scheduler.inventory.station_resource import (
@@ -19,16 +19,24 @@ class SiteTargetResolutionError(ValueError):
     异常：构造过程不再抛出其他异常。
     """
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        resources: Sequence[Mapping[str, str]] = (),
+    ) -> None:
         """保存稳定错误码和中文诊断。
 
-        参数：``code`` 用于日志和测试判断，``message`` 供调用方展示。返回：无。
-        异常：不主动抛出其他异常。
+        参数：``code`` 用于日志和测试判断，``message`` 供调用方展示；
+        ``resources`` 是库存权威给出的实际阻塞资源。返回：无。异常：不主动抛出
+        其他异常。
         """
 
         super().__init__(message)
         self.code = code
         self.message = message
+        self.resources = tuple(dict(resource) for resource in resources)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +88,11 @@ def resolve_site_target(
             )
         )
     except StationResourceError as error:
-        raise SiteTargetResolutionError(error.code, error.message) from error
+        raise SiteTargetResolutionError(
+            error.code,
+            error.message,
+            resources=error.resources,
+        ) from error
     return ResolvedSiteTarget(
         uuid=target.uuid,
         name=target.name,

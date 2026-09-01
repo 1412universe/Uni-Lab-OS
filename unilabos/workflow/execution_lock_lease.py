@@ -687,6 +687,7 @@ def _record_wait(
         "code": "operation_lease",
         "message": "执行资源正在被其他作业使用",
         "scopes": sorted({request.scope for request in requests}),
+        "resources": [_wait_resource(request) for request in requests],
         "waiting_since": waiting_since,
     }
     if blocking_task_uuid is not None:
@@ -708,6 +709,22 @@ def _record_wait(
         blocking_task_uuid=blocking_task_uuid,
         blocking_job_uuid=blocking_job_uuid,
     )
+
+
+def _wait_resource(request: ExecutionLockRequest) -> dict[str, str]:
+    """把内部锁键转换为可展示但不依赖锁键语法的等待资源。"""
+
+    resource = {"scope": request.scope}
+    if request.scope == "device":
+        device_prefix = "/devices/"
+        if request.lock_key.startswith(device_prefix):
+            resource["device_id"] = request.lock_key.removeprefix(device_prefix)
+        return resource
+    if request.material_uuid is not None:
+        resource["material_uuid"] = request.material_uuid
+    if request.scope == "material_site" and request.site_uuid is not None:
+        resource["site_uuid"] = request.site_uuid
+    return resource
 
 
 def _lease_metadata(row: sqlite3.Row) -> dict[str, Any]:

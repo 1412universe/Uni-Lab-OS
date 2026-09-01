@@ -250,6 +250,150 @@ describe('Edge view model adapters', () => {
     expect(task.nodes[0].status).toBe('waiting')
   })
 
+  it('presents structured resource waits and derives unresolved upstream dependencies', () => {
+    const task = adaptTask({
+      uuid: 'task-wait-reasons',
+      workflow_uuid: 'wf-1',
+      status: 'running',
+      execution_plan: {
+        nodes: [
+          { uuid: 'node-ready', name: '准备烧杯', topological_index: 0 },
+          { uuid: 'node-site', name: '转运烧杯', device_id: 'robot-1', topological_index: 1 },
+          { uuid: 'node-dependent', name: '加液', topological_index: 2 },
+        ],
+        edges: [
+          { source_node_uuid: 'node-site', target_node_uuid: 'node-dependent' },
+        ],
+      },
+    }, [
+      { workflow_node_uuid: 'node-ready', status: 'succeeded' },
+      {
+        workflow_node_uuid: 'node-site',
+        status: 'pending',
+        wait_reason: {
+          code: 'operation_lease',
+          message: '执行资源正在被其他作业使用',
+          waiting_since: '2026-09-01T09:00:00Z',
+          resources: [
+            { scope: 'device', device_id: 'robot-1' },
+            { scope: 'material_site', material_uuid: 'material-1', site_uuid: 'S0722' },
+          ],
+          blocking_task_uuid: 'task-other',
+          blocking_job_uuid: 'job-other',
+        },
+      },
+      { workflow_node_uuid: 'node-dependent', status: 'ready' },
+    ])
+
+    expect(task.nodes[1].waitReason).toEqual({
+      code: 'operation_lease',
+      title: '等待执行资源',
+      message: '执行资源正在被其他作业使用',
+      details: [
+        '设备：robot-1',
+        '库位：S0722（物料 material-1）',
+        '阻塞任务：task-other',
+        '阻塞 Job：job-other',
+      ],
+      waitingSince: '2026-09-01T09:00:00Z',
+    })
+    expect(task.nodes[2].waitReason).toEqual({
+      code: 'upstream_dependency',
+      title: '等待前置节点',
+      message: '以下节点完成后才能运行',
+      details: ['转运烧杯'],
+    })
+  })
+
+  it('projects a task-level material admission wait onto its material-source nodes', () => {
+    const task = adaptTask({
+      uuid: 'task-material-admission',
+      workflow_uuid: 'wf-1',
+      status: 'pending',
+      wait_reason: {
+        code: 'material_unavailable',
+        message: '样品瓶尚未进入目标库位',
+        waiting_since: '2026-09-01T10:00:00Z',
+      },
+      execution_plan: {
+        nodes: [
+          { uuid: 'node-source', name: '样品瓶准入', kind: 'material_source', topological_index: 0 },
+          { uuid: 'node-action', name: '开盖', kind: 'device_action', topological_index: 1 },
+        ],
+        edges: [{ source_node_uuid: 'node-source', target_node_uuid: 'node-action' }],
+      },
+    }, [
+      { workflow_node_uuid: 'node-source', status: 'pending', executor_kind: 'material_source' },
+      { workflow_node_uuid: 'node-action', status: 'pending' },
+    ])
+
+    expect(task.nodes[0]).toMatchObject({
+      status: 'waiting',
+      waitReason: {
+        code: 'material_unavailable',
+        title: '等待物料',
+        message: '样品瓶尚未进入目标库位',
+        waitingSince: '2026-09-01T10:00:00Z',
+      },
+    })
+    expect(task.nodes[1].waitReason).toMatchObject({
+      code: 'upstream_dependency',
+      details: ['样品瓶准入'],
+    })
+  })
+
+  it('classifies temporary site candidate failures as library waits', () => {
+    const task = adaptTask({
+      uuid: 'task-site-wait',
+      status: 'running',
+      execution_plan: {
+        nodes: [
+          { uuid: 'node-site', name: '转运', topological_index: 0 },
+          { uuid: 'node-site-legacy', name: '回库', topological_index: 1 },
+        ],
+      },
+    }, [
+      {
+        workflow_node_uuid: 'node-site',
+        status: 'pending',
+        wait_reason: {
+          code: 'site_group_unavailable',
+          message: '候选库位当前均不可用',
+          resources: [
+            { scope: 'material_site', site_uuid: 'S081' },
+            { scope: 'material_site', site_uuid: 'S082' },
+          ],
+        },
+      },
+      {
+        workflow_node_uuid: 'node-site-legacy',
+        status: 'pending',
+        wait_reason: { code: 'site_occupied', message: '目标库位当前已有物料' },
+      },
+    ])
+
+    expect(task.nodes[0].waitReason).toMatchObject({
+      code: 'site_group_unavailable',
+      title: '等待库位',
+      details: ['库位：S081', '库位：S082'],
+    })
+    expect(task.nodes[1].waitReason?.title).toBe('等待库位')
+  })
+
+  it('does not describe paused nodes as waiting for scheduler dispatch', () => {
+    const task = adaptTask({
+      uuid: 'task-paused',
+      status: 'pending',
+      control_status: 'paused',
+      execution_plan: {
+        nodes: [{ uuid: 'node-paused', name: '暂停节点', topological_index: 0 }],
+        edges: [],
+      },
+    }, [{ workflow_node_uuid: 'node-paused', status: 'pending' }])
+
+    expect(task.nodes[0].waitReason).toBeUndefined()
+  })
+
   it('groups only identical frozen task matrix definitions', () => {
     const snapshot = {
       workflow: { uuid: 'wf-1', name: '冻结流程', revision: 3, create_time: '2026-01-01', update_time: '2026-01-01' },

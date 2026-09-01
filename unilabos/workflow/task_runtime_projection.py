@@ -116,6 +116,46 @@ def _decode_json_field(value: str | None, *, fallback: Any) -> Any:
     return decode_json_bytes(value.encode("utf-8"))
 
 
+def _normalize_wait_reason_resources(
+    values: Sequence[Mapping[str, Any]] | None,
+) -> list[dict[str, str]]:
+    """规范仅用于解释门禁等待的设备、物料或库位身份。"""
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    required_identity = {
+        "device": "device_id",
+        "material": "material_uuid",
+        "material_site": "site_uuid",
+    }
+    allowed = {"scope", "device_id", "material_uuid", "site_uuid"}
+    for value in values or ():
+        if not isinstance(value, Mapping):
+            raise StoreConflict("等待资源必须是对象")
+        if set(value) - allowed:
+            raise StoreConflict("等待资源包含未知字段")
+        scope = str(value.get("scope") or "").strip()
+        identity_field = required_identity.get(scope)
+        if identity_field is None:
+            raise StoreConflict("等待资源 scope 不合法")
+        identity = value.get(identity_field)
+        if not isinstance(identity, str) or not identity.strip():
+            raise StoreConflict(f"等待资源缺少 {identity_field}")
+        resource = {"scope": scope, identity_field: identity.strip()}
+        for field in ("device_id", "material_uuid", "site_uuid"):
+            extra = value.get(field)
+            if field == identity_field or extra in (None, ""):
+                continue
+            if not isinstance(extra, str):
+                raise StoreConflict(f"等待资源 {field} 必须是字符串")
+            resource[field] = extra.strip()
+        key = tuple(sorted(resource.items()))
+        if key not in seen:
+            normalized.append(resource)
+            seen.add(key)
+    return normalized
+
+
 def _normalize_actual_executor(
     value: Mapping[str, Any] | None,
 ) -> dict[str, str]:
@@ -1385,6 +1425,7 @@ class TaskRuntimeProjection:
         blocking_job_uuid: str | None = None,
         wait_code: str | None = None,
         wait_message: str | None = None,
+        wait_resources: Sequence[Mapping[str, Any]] | None = None,
         max_active_tasks: int = 500,
         max_tasks_per_workflow: int = 100,
     ) -> dict[str, Any]:
@@ -1393,8 +1434,9 @@ class TaskRuntimeProjection:
         参数：``task_uuid``、``job_uuid`` 是等待任务和作业身份；
         ``execution_locks`` 是已经解析为具体设备/物料/库位的请求；两个阻塞身份
         指向当前持有者；``wait_code``、``wait_message`` 用于没有具体 Claim 的设备
-        容量或库位候选等待；三项容量限制沿用本地调度门禁。返回：提交后的任务
-        聚合。异常：身份、状态或等待合同冲突时抛 ``StoreConflict``。
+        容量或库位候选等待；``wait_resources`` 是这类等待已知的候选设备、物料
+        或库位身份；三项容量限制沿用本地调度门禁。返回：提交后的任务聚合。
+        异常：身份、状态或等待合同冲突时抛 ``StoreConflict``。
         """
 
         with self._store.transaction() as connection:
@@ -1456,6 +1498,9 @@ class TaskRuntimeProjection:
                     "message": normalized_wait_message,
                     "waiting_since": waiting_since,
                 }
+                resources = _normalize_wait_reason_resources(wait_resources)
+                if resources:
+                    reason["resources"] = resources
                 encoded_reason = _encode_json_field(
                     reason,
                     field_name="wait_reason",

@@ -1239,9 +1239,10 @@ class TaskSchedulerBridge:
                 self._projection.project_execution_lock_wait(
                     task_uuid=task_uuid,
                     job_uuid=job_uuid,
-                    execution_locks=execution_locks,
+                    execution_locks=[],
                     wait_code=error.code,
                     wait_message=error.message,
+                    wait_resources=error.resources,
                     max_active_tasks=self._max_active_tasks,
                     max_tasks_per_workflow=self._max_tasks_per_workflow,
                 )
@@ -1453,6 +1454,27 @@ class TaskSchedulerBridge:
         execution_locks = waiting.get("execution_locks")
         if not isinstance(execution_locks, list):
             raise StoreConflict(f"等待作业缺少执行锁集合：{job_uuid}")
+        candidate_site_uuids = waiting.get("candidate_site_uuids")
+        if candidate_site_uuids is not None and not isinstance(
+            candidate_site_uuids, list
+        ):
+            raise StoreConflict(f"等待作业候选库位集合不是数组：{job_uuid}")
+        raw_wait_resources = waiting.get("wait_resources")
+        if raw_wait_resources is not None and not isinstance(
+            raw_wait_resources, list
+        ):
+            raise StoreConflict(f"等待作业资源集合不是数组：{job_uuid}")
+        wait_resources = list(raw_wait_resources or [])
+        wait_resources.extend(
+            {
+                "scope": "material_site",
+                "site_uuid": self._required_text(
+                    site_uuid,
+                    field="waiting.candidate_site_uuids",
+                ),
+            }
+            for site_uuid in candidate_site_uuids or []
+        )
         self._projection.project_execution_lock_wait(
             task_uuid=task_uuid,
             job_uuid=job_uuid,
@@ -1471,6 +1493,7 @@ class TaskSchedulerBridge:
             wait_message=(
                 str(waiting["wait_message"]) if waiting.get("wait_message") else None
             ),
+            wait_resources=wait_resources,
             max_active_tasks=self._max_active_tasks,
             max_tasks_per_workflow=self._max_tasks_per_workflow,
         )

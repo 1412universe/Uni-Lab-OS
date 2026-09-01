@@ -22,16 +22,24 @@ from unilabos.app.scheduler.inventory.store import InventoryStore
 class StationResourceError(ValueError):
     """库存权威无法证明调度所需工站资源事实。"""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        resources: Sequence[Mapping[str, str]] = (),
+    ) -> None:
         """保存稳定诊断码和中文原因。
 
         参数：``code`` 是调度可判断的稳定错误码；``message`` 是供日志和界面
-        展示的中文原因。返回：无。异常：构造过程不访问外部状态。
+        展示的中文原因；``resources`` 是库存权威已经确认的实际阻塞设备、物料
+        或库位。返回：无。异常：构造过程不访问外部状态。
         """
 
         super().__init__(message)
         self.code = code
         self.message = message
+        self.resources = tuple(dict(resource) for resource in resources)
 
 
 @dataclass(frozen=True, slots=True)
@@ -318,7 +326,7 @@ class SqliteStationResourceInventory:
             break
         if selected is None:
             self._raise_unavailable_site(
-                candidate=first_candidate,
+                candidates=candidate_rows,
                 requested_group=requested_group,
                 unavailable_site_uuids=unavailable,
                 active_ingress_site_uuids=active_ingress_sites,
@@ -353,6 +361,12 @@ class SqliteStationResourceInventory:
             raise StationResourceError(
                 "transfer_source_site_missing",
                 "被搬运物料没有可证明的来源库位",
+                resources=(
+                    {
+                        "scope": "material",
+                        "material_uuid": request.resource_material_uuid,
+                    },
+                ),
             )
         source_site_uuid = str(source["uuid"])
         source_owner_uuid = str(source["material_uuid"])
@@ -430,7 +444,11 @@ class SqliteStationResourceInventory:
             with self._store.transaction() as connection:
                 return acquire_dispatch_permit(connection, request)
         except TemporaryDispatchCondition as error:
-            raise StationResourceError(error.code, error.message) from error
+            raise StationResourceError(
+                error.code,
+                error.message,
+                resources=error.resources,
+            ) from error
 
     def transition_dispatch_permit(
         self,
@@ -637,13 +655,20 @@ class SqliteStationResourceInventory:
             raise StationResourceError(
                 "gripper_site_occupied",
                 f"机械臂夹爪库位已有物料 {occupied}，不能开始新的转运",
+                resources=(
+                    {
+                        "scope": "material_site",
+                        "material_uuid": owner_material_uuid,
+                        "site_uuid": str(matches[0]["uuid"]),
+                    },
+                ),
             )
         return str(matches[0]["uuid"])
 
     @staticmethod
     def _raise_unavailable_site(
         *,
-        candidate: Mapping[str, Any],
+        candidates: Sequence[Mapping[str, Any]],
         requested_group: Sequence[str],
         unavailable_site_uuids: set[str],
         active_ingress_site_uuids: set[str],
@@ -651,14 +676,25 @@ class SqliteStationResourceInventory:
     ) -> None:
         """把候选不可用原因收敛为稳定调度错误。
 
-        参数：首个候选、是否为等价组、本轮已申领集合和待放物料身份用于判定
-        最具体原因。返回：无。异常：始终抛 ``StationResourceError``。
+        参数：实际候选、是否为等价组、本轮已申领集合和待放物料身份用于判定
+        最具体原因。返回：无。异常：始终抛 ``StationResourceError``，并携带
+        库存权威确认的实际候选库位身份。
         """
 
+        candidate = candidates[0]
+        resources = tuple(
+            {
+                "scope": "material_site",
+                "material_uuid": str(item["material_uuid"]),
+                "site_uuid": str(item["uuid"]),
+            }
+            for item in candidates
+        )
         if requested_group:
             raise StationResourceError(
                 "site_group_unavailable",
                 "等价库位组当前没有可接收目标物料的位置",
+                resources=resources,
             )
         site_uuid = str(candidate["uuid"])
         site_name = str(candidate["name"])
@@ -666,21 +702,25 @@ class SqliteStationResourceInventory:
             raise StationResourceError(
                 "site_ingress_reserved",
                 f"目标库位 {site_name} 已为运输中的入口载体预留",
+                resources=resources,
             )
         if site_uuid in unavailable_site_uuids:
             raise StationResourceError(
                 "site_claimed",
                 f"目标库位 {site_name} 已由其他作业申领",
+                resources=resources,
             )
         occupied_by = str(candidate.get("occupied_material_uuid") or "").strip()
         if occupied_by and occupied_by != occupant_material_uuid:
             raise StationResourceError(
                 "site_occupied",
                 f"目标库位 {site_name} 已被物料 {occupied_by} 占用",
+                resources=resources,
             )
         raise StationResourceError(
             "site_template_not_allowed",
             f"物料 {occupant_material_uuid} 的模板不允许放入目标库位 {site_name}",
+            resources=resources,
         )
 
 
