@@ -10,6 +10,7 @@ from typing import Any
 
 from unilabos.workflow.json_codec import encode_json
 from unilabos.workflow.models import validate_uuid
+from unilabos.workflow.source_layout import is_workflow_source_directory
 
 _REGISTRATION_FIELDS = (
     "workflow_uuid",
@@ -181,7 +182,7 @@ def _validate_package_root(package_root: str) -> None:
 
 
 def _validate_relative_source_path(relative_path: str) -> None:
-    """验证持久源码路径严格位于 ``workflows/*.py``。
+    """验证持久源码路径严格位于受支持的一级 ``*.py`` 目录。
 
     参数：``relative_path`` 是包根内的工作流源码（Workflow Source）位置。返回：
     合法时无返回值。异常：绝对路径、穿越、嵌套、反斜线、控制字符或非 Python
@@ -196,7 +197,7 @@ def _validate_relative_source_path(relative_path: str) -> None:
         or source_path.is_absolute()
         or relative_path != source_path.as_posix()
         or len(source_path.parts) != 2
-        or source_path.parts[0] != "workflows"
+        or not is_workflow_source_directory(source_path.parts[0])
         or source_path.suffix != ".py"
         or not source_path.stem
     ):

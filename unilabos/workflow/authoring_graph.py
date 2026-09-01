@@ -323,6 +323,11 @@ def build_candidate_graph(
     workflow["uuid"] = program.workflow_uuid
     workflow["name"] = program.display_name
     workflow["description"] = program.description
+    workflow["workflow_type"] = (
+        program.workflow_type
+        if program.workflow_type is not None
+        else workflow.get("workflow_type", "normal")
+    )
     existing_meta = dict(workflow.get("meta_data") or {})
     unilab_meta = dict(existing_meta.get("unilab") or {})
     root_fields = set(unilab_meta.get("authoring_root_fields") or [])
@@ -338,6 +343,8 @@ def build_candidate_graph(
     else:
         workflow_meta = deepcopy(program.meta_data)
         root_fields.add("meta_data")
+    if program.workflow_type is not None:
+        root_fields.add("workflow_type")
     if root_fields:
         unilab_meta["authoring_root_fields"] = sorted(root_fields)
     unilab_meta.update(

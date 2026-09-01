@@ -204,7 +204,7 @@ def expand_composite_invocation(
         "execution_policy": {},
         "disabled": False,
         "minimized": False,
-        "description": "引用已发布子工作流；兼容的新发布版本由 OS 自动替换。",
+        "description": "引用已发布实验操作；兼容的新发布版本由 OS 自动替换。",
         "meta_data": {
             "unilab": {
                 "composite": {

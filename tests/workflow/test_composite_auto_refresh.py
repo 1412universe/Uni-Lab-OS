@@ -1,4 +1,4 @@
-"""子工作流应用后自动刷新父工作流的公开行为合同。"""
+"""实验操作应用后自动刷新引用方工作流的公开行为合同。"""
 
 from __future__ import annotations
 
@@ -49,10 +49,10 @@ def _apply_source(
     )
 
 
-def test_compatible_child_apply_automatically_refreshes_clean_parent(
+def test_compatible_operation_apply_automatically_refreshes_clean_parent(
     tmp_path: Path,
 ) -> None:
-    """子工作流兼容更新后，干净父工作流自动采用新展开图。
+    """实验操作兼容更新后，干净引用方工作流自动采用新展开图。
 
     参数：``tmp_path`` 隔离真实领域包、工作流定义目录和库存库。返回：无；断言
     父修订自动推进、调用节点身份不变、子修订 pin 更新且父源码保持已应用。
@@ -144,7 +144,7 @@ def test_child_updates_never_apply_parent_file_changed_before_watcher(
     """父 Python 文件已变但 watcher 未同步时不得自动应用该用户编辑。
 
     参数：``tmp_path`` 隔离真实领域包、内存定义和库存库。返回：无；断言刷新前
-    直接修改的父文件会被识别为未应用源码，子工作流更新只留下警告，父修订和
+    直接修改的引用方文件会被识别为未应用源码，实验操作更新只留下警告，父修订和
     已应用图均保持不变。异常：真实源码 CAS、编译或断言失败时由 pytest 报告。
     """
 
@@ -180,8 +180,7 @@ def test_child_updates_never_apply_parent_file_changed_before_watcher(
             {
                 "code": "dependent_authoring_refresh_pending",
                 "message": (
-                    "子工作流已更新，但父工作流 "
-                    f"{PARENT_WORKFLOW_UUID} 仍需处理兼容问题"
+                    f"实验操作已更新，但引用方 {PARENT_WORKFLOW_UUID} 仍需处理兼容问题"
                 ),
             }
         ]

@@ -48,8 +48,8 @@ def source_parent_descriptor(
     """固定注册源码的直接父目录描述符。
 
     参数：根目录、规范相对路径和预期身份固定来源；``create`` 决定是否创建
-    ``workflows``。返回：父目录描述符与文件名或允许缺失；异常映射为稳定工作区
-    错误，退出总会关闭描述符。
+    工作流类型对应的一级源码目录。返回：父目录描述符与文件名或允许缺失；
+    异常映射为稳定工作区错误，退出总会关闭描述符。
     """
 
     root_descriptor = open_directory_chain(root, flags=directory_flags())

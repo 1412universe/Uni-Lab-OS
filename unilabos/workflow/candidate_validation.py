@@ -26,6 +26,7 @@ from unilabos.workflow.models import (
     normalize_json_object,
     validate_uuid,
 )
+from unilabos.workflow.workflow_type import normalize_workflow_type
 
 _GRAPH_FIELDS = {
     "workflow",
@@ -176,6 +177,9 @@ def _workflow(
         _fail("候选工作流描述无效")
     normalize_json_array(workflow["tags"])
     normalize_json_object(workflow["meta_data"])
+    workflow["workflow_type"] = normalize_workflow_type(
+        workflow.get("workflow_type")
+    )
     return workflow
 
 

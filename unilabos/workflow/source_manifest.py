@@ -20,6 +20,7 @@ from yaml.events import (
 from yaml.nodes import MappingNode
 
 from unilabos.workflow.models import validate_uuid
+from unilabos.workflow.source_layout import is_workflow_source_directory
 
 YAML_DEPTH_LIMIT = 32
 WORKFLOW_ENTRY_LIMIT = 1024
@@ -123,10 +124,7 @@ def parse_editable_package_manifest(raw: bytes) -> EditablePackageManifest:
         raise SourceManifestError("invalid_package")
     # ``workflow_rows`` 允许显式空列表，使新建可编辑包先形成合法身份，再逐步加入
     # 工作流源码（Workflow Source）；null 或缺失字段仍不是空声明。
-    if (
-        not isinstance(workflow_rows, list)
-        or len(workflow_rows) > WORKFLOW_ENTRY_LIMIT
-    ):
+    if not isinstance(workflow_rows, list) or len(workflow_rows) > WORKFLOW_ENTRY_LIMIT:
         raise SourceManifestError("invalid_manifest")
 
     # 工作流身份与相对路径共同决定后续来源注册，必须保持声明顺序稳定。
@@ -193,7 +191,7 @@ def _parse_workflow_source(raw: Any, *, package_id: str) -> WorkflowSourceEntry:
     """校验一项工作流源码（Workflow Source）声明。
 
     参数：``raw`` 是单项 YAML 值；``package_id`` 是已验证的稳定包身份。
-    返回：规范 UUID 和 ``workflows/*.py`` 相对路径。
+    返回：规范 UUID 和一级工作流源码目录下的 ``*.py`` 相对路径。
     异常：字段、UUID 或路径不符合合同时抛出 ``SourceManifestError``。
     """
 
@@ -216,7 +214,7 @@ def _parse_workflow_source(raw: Any, *, package_id: str) -> WorkflowSourceEntry:
         or len(source_path.parts) != 3
         or any(part in {"", ".", ".."} for part in source_path.parts)
         or source_path.parts[0] != package_id
-        or source_path.parts[1] != "workflows"
+        or not is_workflow_source_directory(source_path.parts[1])
         or source_path.suffix != ".py"
         or not source_path.stem
     ):

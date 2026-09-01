@@ -324,7 +324,11 @@ def _published_template_projection(
 
 
 class PublishedWorkflowContractStore:
-    """在 ``WorkflowStore`` 同一 SQLite 权威内持久化不可变发布记录。"""
+    """在定义目录中维护不可变发布合同的当前进程投影。
+
+    Local 模式的定义目录位于内存；领域包文件中的发布目录负责跨重启恢复。
+    使用持久定义库的兼容装配仍可直接把本仓储作为持久权威。
+    """
 
     def __init__(self, store: WorkflowStore) -> None:
         """创建发布仓储并幂等补齐独立表。
@@ -571,6 +575,295 @@ class PublishedWorkflowContractStore:
             ).fetchone()
             assert row is not None
             return self._row(row)
+
+    def restore(self, contract: Mapping[str, Any]) -> dict[str, Any]:
+        """把领域包文件中的不可变合同恢复到当前进程定义目录。
+
+        参数：``contract`` 是此前发布后完整落盘的私有合同。返回：恢复后的独立
+        合同。异常：身份、摘要、边界或来源工作流不一致时关闭启动；同一合同重复
+        恢复幂等成功，不重新生成 UUID、版本或时间。
+        """
+
+        required = {
+            "uuid",
+            "create_time",
+            "update_time",
+            "meta_data",
+            "workflow_uuid",
+            "workflow_revision",
+            "version",
+            "name",
+            "tags",
+            "node_template_uuid",
+            "input_contract",
+            "output_contract",
+            "executor_requirements",
+            "executor_binding_mapping",
+            "boundary_mapping",
+            "graph_snapshot",
+            "source_hash",
+            "contract_digest",
+            "node_count",
+            "edge_count",
+        }
+        if not isinstance(contract, Mapping) or not required.issubset(contract):
+            raise PublishedContractInvalid("发布合同字段不完整")
+        # ``snapshot`` 是合同冻结的完整图；``workflow_uuid`` 是其来源定义稳定
+        # 身份，必须与合同顶层身份一致，不能按名称或当前修订猜测来源。
+        snapshot = _canonical_graph(contract["graph_snapshot"])
+        workflow = snapshot["workflow"]
+        workflow_uuid = str(workflow["uuid"])
+        if (
+            workflow_uuid != str(contract["workflow_uuid"])
+            or int(workflow["revision"]) != int(contract["workflow_revision"])
+            or len(snapshot["nodes"]) != int(contract["node_count"])
+            or len(snapshot["edges"]) != int(contract["edge_count"])
+        ):
+            raise PublishedContractInvalid("发布合同与冻结图不一致")
+        input_contract, output_contract, workflow_io = _boundary_contracts(snapshot)
+        if (
+            input_contract != contract["input_contract"]
+            or output_contract != contract["output_contract"]
+        ):
+            raise PublishedContractInvalid("发布合同输入输出不一致")
+        executor_requirements = list(contract["executor_requirements"])
+        executor_binding_mapping = dict(contract["executor_binding_mapping"])
+        # 两个 expected 摘要均从冻结图重新计算：前者证明执行器抽象后的完整来源
+        # 未被改写，后者证明前端可见参数、输出和执行器要求仍是发布时合同。
+        expected_source_hash = _digest(
+            {
+                "graph": snapshot,
+                "executor_requirements": executor_requirements,
+                "executor_binding_mapping": executor_binding_mapping,
+            }
+            if executor_requirements or executor_binding_mapping
+            else snapshot
+        )
+        expected_contract_digest = _digest(
+            {
+                "version": 1,
+                "parameters": input_contract["parameters"],
+                "outputs": output_contract["outputs"],
+                "executor_requirements": executor_requirements,
+            }
+        )
+        if (
+            expected_source_hash != contract["source_hash"]
+            or expected_contract_digest != contract["contract_digest"]
+        ):
+            raise PublishedContractInvalid("发布合同摘要不一致")
+
+        # ``contract_uuid`` 固定不可变发布版本身份，``node_template_uuid`` 固定
+        # 前端拖入引用方图时使用的实验操作节点模板身份；恢复绝不重新生成。
+        contract_uuid = str(UUID(str(contract["uuid"])))
+        node_template_uuid = str(UUID(str(contract["node_template_uuid"])))
+        template, handles, boundary_mapping = _published_template_projection(
+            contract_uuid=contract_uuid,
+            node_template_uuid=node_template_uuid,
+            graph=snapshot,
+            input_contract=input_contract,
+            output_contract=output_contract,
+            workflow_io=workflow_io,
+            source_hash=str(contract["source_hash"]),
+            contract_digest=str(contract["contract_digest"]),
+        )
+        if boundary_mapping != contract["boundary_mapping"]:
+            raise PublishedContractInvalid("发布合同边界映射不一致")
+        # ``authority_id`` 把恢复出的节点模板与连接点归到同一发布合同，供失败
+        # 补偿精确删除，不能复用工作流 UUID 造成多版本互相覆盖。
+        authority_id = f"published-workflow-contract:{contract_uuid}"
+        with self._store.transaction() as connection:
+            source = connection.execute(
+                "SELECT 1 FROM workflow WHERE uuid = ? AND deleted_at IS NULL",
+                (workflow_uuid,),
+            ).fetchone()
+            if source is None:
+                raise PublishedContractInvalid("发布合同来源工作流不存在")
+            existing = connection.execute(
+                "SELECT * FROM published_workflow_contract WHERE uuid = ?",
+                (contract_uuid,),
+            ).fetchone()
+            if existing is not None:
+                restored = self._row(existing)
+                if restored != dict(contract):
+                    raise PublishedContractConflict("发布合同身份内容冲突")
+                return restored
+            now = str(contract["create_time"])
+            update_time = str(contract["update_time"])
+            connection.execute(
+                """
+                INSERT INTO workflow_node_template(
+                    uuid, create_time, update_time, deleted_at, description,
+                    meta_data, authority_id, resource_template_uuid, name,
+                    display_name, class, goal, goal_default, feedback, result,
+                    schema, type, icon, header, footer, node_type
+                ) VALUES (
+                    ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    NULL, NULL, NULL, ?
+                )
+                """,
+                (
+                    node_template_uuid,
+                    now,
+                    update_time,
+                    template["description"],
+                    _json(template["meta_data"]),
+                    authority_id,
+                    template["resource_template_uuid"],
+                    template["name"],
+                    template["display_name"],
+                    template["class"],
+                    _json(template["goal"]),
+                    _json(template["goal_default"]),
+                    _json(template["feedback"]),
+                    _json(template["result"]),
+                    _json(template["schema"]),
+                    template["type"],
+                    template["node_type"],
+                ),
+            )
+            for handle in handles:
+                connection.execute(
+                    """
+                    INSERT INTO workflow_handle_template(
+                        uuid, create_time, update_time, deleted_at, description,
+                        meta_data, authority_id, workflow_node_template_uuid,
+                        handle_key, io_type, display_name, type, required,
+                        data_source, data_key
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        handle["uuid"],
+                        now,
+                        update_time,
+                        handle["description"],
+                        _json(handle["meta_data"]),
+                        authority_id,
+                        node_template_uuid,
+                        handle["handle_key"],
+                        handle["io_type"],
+                        handle["display_name"],
+                        handle["type"],
+                        int(handle["required"]),
+                        handle["data_source"],
+                        handle["data_key"],
+                    ),
+                )
+            connection.execute(
+                """
+                INSERT INTO published_workflow_contract(
+                    uuid, create_time, update_time, deleted_at, description,
+                    meta_data, workflow_uuid, workflow_revision, version, name,
+                    tags, node_template_uuid, input_contract, output_contract,
+                    executor_requirements, executor_binding_mapping,
+                    boundary_mapping, graph_snapshot, source_hash,
+                    contract_digest, node_count, edge_count
+                ) VALUES (
+                    ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    contract_uuid,
+                    now,
+                    update_time,
+                    contract.get("description"),
+                    _json(contract["meta_data"]),
+                    workflow_uuid,
+                    int(contract["workflow_revision"]),
+                    int(contract["version"]),
+                    str(contract["name"]),
+                    _json(contract["tags"]),
+                    node_template_uuid,
+                    _json(input_contract),
+                    _json(output_contract),
+                    _json(executor_requirements),
+                    _json(executor_binding_mapping),
+                    _json(boundary_mapping),
+                    _json(snapshot),
+                    str(contract["source_hash"]),
+                    str(contract["contract_digest"]),
+                    int(contract["node_count"]),
+                    int(contract["edge_count"]),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM published_workflow_contract WHERE uuid = ?",
+                (contract_uuid,),
+            ).fetchone()
+            assert row is not None
+            return self._row(row)
+
+    def discard(self, contract_uuid: str) -> None:
+        """撤销尚未对外发布成功的新进程内合同投影。
+
+        参数：``contract_uuid`` 是本次刚生成的合同身份。返回：无；不存在时幂等
+        成功。异常：数据库错误原样传播。调用方只可在领域包文件发布失败且尚未
+        刷新引用方时调用。
+        """
+
+        # ``identity`` 是待补偿合同的规范 UUID；``authority_id`` 只匹配该合同
+        # 投影出的模板与连接点，避免删除同一工作流的旧发布版本。
+        identity = str(UUID(contract_uuid))
+        authority_id = f"published-workflow-contract:{identity}"
+        with self._store.transaction() as connection:
+            row = connection.execute(
+                """
+                SELECT node_template_uuid FROM published_workflow_contract
+                WHERE uuid = ?
+                """,
+                (identity,),
+            ).fetchone()
+            if row is None:
+                return
+            connection.execute(
+                "DELETE FROM workflow_handle_template WHERE authority_id = ?",
+                (authority_id,),
+            )
+            connection.execute(
+                "DELETE FROM published_workflow_contract WHERE uuid = ?",
+                (identity,),
+            )
+            connection.execute(
+                "DELETE FROM workflow_node_template WHERE uuid = ? AND authority_id = ?",
+                (row["node_template_uuid"], authority_id),
+            )
+
+    def discard_workflow(self, workflow_uuid: str) -> None:
+        """移除已删除工作流在当前进程中的全部发布合同投影。
+
+        参数：``workflow_uuid`` 是已经失去活动领域来源的工作流稳定身份。返回：
+        无；没有发布版本时幂等成功。异常：UUID 或数据库错误原样传播。此方法只
+        清理可重建的进程内投影，不删除领域包发布文件中的持久记录。
+        """
+
+        # ``identity`` 是来源工作流稳定 UUID；每个 ``authority_id`` 精确对应
+        # 一个不可变发布版本，先删连接点和合同再删节点模板，避免跨版本误删。
+        identity = str(UUID(workflow_uuid))
+        with self._store.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT uuid, node_template_uuid FROM published_workflow_contract
+                WHERE workflow_uuid = ?
+                """,
+                (identity,),
+            ).fetchall()
+            for row in rows:
+                authority_id = f"published-workflow-contract:{row['uuid']}"
+                connection.execute(
+                    "DELETE FROM workflow_handle_template WHERE authority_id = ?",
+                    (authority_id,),
+                )
+                connection.execute(
+                    "DELETE FROM published_workflow_contract WHERE uuid = ?",
+                    (row["uuid"],),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM workflow_node_template
+                    WHERE uuid = ? AND authority_id = ?
+                    """,
+                    (row["node_template_uuid"], authority_id),
+                )
 
     def get(self, contract_uuid: str) -> dict[str, Any]:
         """读取含冻结图的单个合同；合同不存在时抛 ``KeyError``。"""

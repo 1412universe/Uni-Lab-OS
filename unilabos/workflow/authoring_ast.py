@@ -29,9 +29,10 @@ from unilabos.workflow.models import (
 from unilabos.workflow.source_coordinates import (
     codepoint_offset_to_utf16_column,
     source_lines,
-    utf16_length,
     utf8_offset_to_utf16_column,
+    utf16_length,
 )
+from unilabos.workflow.workflow_type import normalize_workflow_type
 
 _NODE_ANCHOR = re.compile(
     r"^[ \t]*#[ \t]*unilab:node_uuid=([0-9a-fA-F-]{36})"
@@ -140,6 +141,7 @@ class WorkflowProgram:
     description: str | None
     tags: list[Any] | None
     meta_data: dict[str, Any] | None
+    workflow_type: str | None
     imports: tuple[tuple[str, str], ...]
     devices: tuple[DeviceDeclaration, ...]
     input_contract: dict[str, Any]
@@ -177,9 +179,7 @@ class _BodyState:
     input_names: set[str]
     anchors: dict[int, str]
     node_metadata: dict[int, tuple[str, str]]
-    actions: list[
-        ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration
-    ]
+    actions: list[ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration]
     groups: list[GroupDeclaration]
     parent_by_node: dict[str, str]
     order_dependencies: list[tuple[str, str]]
@@ -228,10 +228,14 @@ def parse_authoring_source(
     # ``function_docstring`` 只由 Python AST 的规范函数文档语义读取；普通首表达式
     # 不会成为文档，且整个过程不 import、compile 或执行作者代码。
     function_docstring = ast.get_docstring(function, clean=True)
-    workflow_uuid, display_name, description, tags, meta_data = _workflow_declaration(
-        function,
-        imports,
-    )
+    (
+        workflow_uuid,
+        display_name,
+        description,
+        tags,
+        meta_data,
+        workflow_type,
+    ) = _workflow_declaration(function, imports)
     if workflow_uuid != validate_uuid(expected_workflow_uuid):
         _fail(
             "invalid_workflow_declaration",
@@ -276,8 +280,7 @@ def parse_authoring_source(
         node_metadata=node_metadata,
     )
     used_anchor_lines = {
-        declaration.source_node.lineno - 1
-        for declaration in (*actions, *groups)
+        declaration.source_node.lineno - 1 for declaration in (*actions, *groups)
     }
     if set(anchors) != used_anchor_lines:
         _fail("invalid_node_anchor", "节点 UUID 锚点必须紧邻一个动作声明")
@@ -289,6 +292,7 @@ def parse_authoring_source(
         description=description,
         tags=tags,
         meta_data=meta_data,
+        workflow_type=workflow_type,
         imports=tuple(sorted(imports.items())),
         devices=tuple(devices),
         input_contract=input_contract,
@@ -394,9 +398,7 @@ def author_source_map(
     for node_uuid in program.source_order:
         declaration = declarations[node_uuid]
         source_node = declaration.source_node
-        start_line = source_node.lineno - (
-            2 if declaration.title is not None else 1
-        )
+        start_line = source_node.lineno - (2 if declaration.title is not None else 1)
         if start_line < 1:
             raise ValueError("节点源码范围缺少 UUID 锚点")
         start_column = utf8_offset_to_utf16_column(
@@ -448,7 +450,9 @@ def _module_imports(
                 if alias.name == "*":
                     _fail("unsupported_authoring_syntax", "不允许星号导入", statement)
                 local_name = alias.asname or alias.name
-                _add_import(imports, local_name, f"{statement.module}:{alias.name}", statement)
+                _add_import(
+                    imports, local_name, f"{statement.module}:{alias.name}", statement
+                )
         elif isinstance(statement, ast.Import):
             for alias in statement.names:
                 local_name = alias.asname or alias.name.split(".", 1)[0]
@@ -485,8 +489,12 @@ def _device_declaration(
     提供静态类身份；返回设备声明，动态参数或空固定身份失败关闭。
     """
 
-    if not isinstance(statement.target, ast.Name) or not isinstance(statement.annotation, ast.Name):
-        _fail("invalid_device_selector", "设备声明必须使用简单名称和导入类型", statement)
+    if not isinstance(statement.target, ast.Name) or not isinstance(
+        statement.annotation, ast.Name
+    ):
+        _fail(
+            "invalid_device_selector", "设备声明必须使用简单名称和导入类型", statement
+        )
     class_identity = imports.get(statement.annotation.id)
     if not isinstance(class_identity, str) or ":" not in class_identity:
         _fail("invalid_device_selector", "设备类型必须来自显式导入", statement)
@@ -509,12 +517,19 @@ def _device_declaration(
 def _workflow_declaration(
     function: ast.FunctionDef,
     imports: dict[str, str],
-) -> tuple[str, str, str | None, list[Any] | None, dict[str, Any] | None]:
+) -> tuple[
+    str,
+    str,
+    str | None,
+    list[Any] | None,
+    dict[str, Any] | None,
+    str | None,
+]:
     """读取工作流定义装饰器的稳定元数据。
 
     参数说明：``function`` 是唯一函数，``imports`` 用于识别装饰器；返回工作流
-    UUID、展示名、可选描述、标签和公开元数据。位置参数、动态值或重复字段
-    失败关闭；标签和元数据只接受有限 JSON 字面量。
+    UUID、展示名、可选描述、标签、公开元数据和可选工作流类型。位置参数、动态
+    值或重复字段失败关闭；标签和元数据只接受有限 JSON 字面量。
     """
 
     declarations = [
@@ -527,7 +542,11 @@ def _workflow_declaration(
         )
     ]
     if len(declarations) != 1 or len(function.decorator_list) != 1:
-        _fail("invalid_workflow_declaration", "工作流函数必须只有 workflow 装饰器", function)
+        _fail(
+            "invalid_workflow_declaration",
+            "工作流函数必须只有 workflow 装饰器",
+            function,
+        )
     declaration = declarations[0]
     if declaration.args:
         _fail("invalid_workflow_declaration", "工作流声明不接受位置参数", declaration)
@@ -538,6 +557,7 @@ def _workflow_declaration(
         "description",
         "tags",
         "meta_data",
+        "workflow_type",
     }:
         _fail("invalid_workflow_declaration", "工作流声明包含未知字段", declaration)
     try:
@@ -551,11 +571,7 @@ def _workflow_declaration(
     if description is not None and not isinstance(description, str):
         _fail("invalid_workflow_declaration", "工作流描述必须是字符串", declaration)
     try:
-        tags = (
-            normalize_json_array(values["tags"])
-            if "tags" in values
-            else None
-        )
+        tags = normalize_json_array(values["tags"]) if "tags" in values else None
         meta_data = (
             normalize_json_object(values["meta_data"])
             if "meta_data" in values
@@ -573,7 +589,26 @@ def _workflow_declaration(
             "工作流公开元数据不能覆盖系统保留的 unilab 字段",
             declaration,
         )
-    return workflow_uuid, display_name.strip(), description, tags, meta_data
+    try:
+        workflow_type = (
+            normalize_workflow_type(values["workflow_type"])
+            if "workflow_type" in values
+            else None
+        )
+    except ValueError:
+        _fail(
+            "invalid_workflow_declaration",
+            "工作流类型只能是 normal 或 experiment_operation",
+            declaration,
+        )
+    return (
+        workflow_uuid,
+        display_name.strip(),
+        description,
+        tags,
+        meta_data,
+        workflow_type,
+    )
 
 
 def _workflow_parameters(
@@ -593,9 +628,13 @@ def _workflow_parameters(
     parameters: list[dict[str, Any]] = []
     resource_templates: list[tuple[str, tuple[str, ...]]] = []
     try:
-        for argument, default in zip(arguments.kwonlyargs, arguments.kw_defaults, strict=True):
+        for argument, default in zip(
+            arguments.kwonlyargs, arguments.kw_defaults, strict=True
+        ):
             if argument.annotation is None:
-                _fail("invalid_workflow_parameters", "工作流输入必须带类型注解", argument)
+                _fail(
+                    "invalid_workflow_parameters", "工作流输入必须带类型注解", argument
+                )
             parsed = parse_parameter_annotation(
                 argument.arg,
                 argument.annotation,
@@ -643,7 +682,11 @@ def _result_record(
 
     if not result_records:
         if not _is_none_return_annotation(function.returns):
-            _fail("invalid_workflow_output", "工作流返回注解必须引用 TypedDict 结果记录", function)
+            _fail(
+                "invalid_workflow_output",
+                "工作流返回注解必须引用 TypedDict 结果记录",
+                function,
+            )
         return None, {}, ()
     if len(result_records) != 1:
         _fail("invalid_workflow_output", "只能声明一个工作流结果记录", function)
@@ -667,7 +710,9 @@ def _result_record(
                 or not isinstance(statement.target, ast.Name)
                 or statement.value is not None
             ):
-                _fail("invalid_workflow_output", "结果记录只允许带类型的字段", statement)
+                _fail(
+                    "invalid_workflow_output", "结果记录只允许带类型的字段", statement
+                )
             name = statement.target.id
             if name in fields:
                 _fail("invalid_workflow_output", "结果记录字段重复", statement)
@@ -787,7 +832,9 @@ def _source_node_metadata(
         if anchor_line not in anchors:
             _fail("invalid_node_metadata", "节点展示注释必须紧邻节点 UUID 锚点")
         anchor_source = lines[anchor_line - 1]
-        anchor_indent = anchor_source[: len(anchor_source) - len(anchor_source.lstrip())]
+        anchor_indent = anchor_source[
+            : len(anchor_source) - len(anchor_source.lstrip())
+        ]
         if match.group("indent") != anchor_indent:
             _fail("invalid_node_metadata", "节点展示注释必须与节点 UUID 锚点同级")
         title = match.group("title").strip()
@@ -823,9 +870,12 @@ def _workflow_body(
     """
 
     statements = list(function.body)
-    if statements and isinstance(statements[0], ast.Expr) and isinstance(
-        statements[0].value, ast.Constant
-    ) and isinstance(statements[0].value.value, str):
+    if (
+        statements
+        and isinstance(statements[0], ast.Expr)
+        and isinstance(statements[0].value, ast.Constant)
+        and isinstance(statements[0].value.value, str)
+    ):
         statements.pop(0)
     if statements and isinstance(statements[-1], ast.Return):
         # ``return_statement`` 是显式工作流输出，继续接受结果字典或 workflow_output。
@@ -1029,13 +1079,17 @@ def _parse_group(
     if len(keyword_names) != len(set(keyword_names)) or set(keyword_names) != {"name"}:
         _fail("invalid_group", "group 必须且只能声明唯一 name", context)
     name_expression = context.keywords[0].value
-    if not isinstance(name_expression, ast.Constant) or not isinstance(
-        name_expression.value, str
-    ) or not name_expression.value.strip():
+    if (
+        not isinstance(name_expression, ast.Constant)
+        or not isinstance(name_expression.value, str)
+        or not name_expression.value.strip()
+    ):
         _fail("invalid_group", "group name 必须是非空字符串字面量", name_expression)
     node_uuid = state.anchors.get(statement.lineno - 1)
     if node_uuid is None:
-        _fail("invalid_node_anchor", "每个展示分组前必须有相邻节点 UUID 锚点", statement)
+        _fail(
+            "invalid_node_anchor", "每个展示分组前必须有相邻节点 UUID 锚点", statement
+        )
     metadata = state.node_metadata.get(statement.lineno - 1)
     declaration = GroupDeclaration(
         node_uuid=node_uuid,
@@ -1166,13 +1220,19 @@ def _action_declaration(
             )
         node_uuid = anchors.get(statement.lineno - 1)
         if node_uuid is None:
-            _fail("invalid_node_anchor", "每个工作流调用前必须有相邻节点 UUID 锚点", statement)
+            _fail(
+                "invalid_node_anchor",
+                "每个工作流调用前必须有相邻节点 UUID 锚点",
+                statement,
+            )
         metadata = node_metadata.get(statement.lineno - 1)
         arguments: list[tuple[str, ValueBinding]] = []
         names: set[str] = set()
         for item in call.keywords:
             if item.arg is None or item.arg in names:
-                _fail("invalid_action_arguments", "工作流调用参数重复或包含 ** 展开", call)
+                _fail(
+                    "invalid_action_arguments", "工作流调用参数重复或包含 ** 展开", call
+                )
             names.add(item.arg)
             # ``resource_binding`` 让组合工作流（Composite Workflow）与普通
             # 动作共享同一部署资源引用语法；此处只保存静态业务身份，实际物料
@@ -1206,7 +1266,11 @@ def _action_declaration(
         or not isinstance(call.func, ast.Attribute)
         or not isinstance(call.func.value, ast.Name)
     ):
-        _fail("unsupported_authoring_syntax", "动作只接受命名参数和静态设备选择器", statement)
+        _fail(
+            "unsupported_authoring_syntax",
+            "动作只接受命名参数和静态设备选择器",
+            statement,
+        )
     device_symbol = call.func.value.id
     if device_symbol not in devices:
         _fail("invalid_device_selector", "动作引用了未知设备选择器", statement)
@@ -1316,7 +1380,11 @@ def _workflow_outputs(
         names: set[str] = set()
         for key, value in zip(expression.keys, expression.values, strict=True):
             if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
-                _fail("invalid_workflow_output", "结果记录键必须是字符串字面量", expression)
+                _fail(
+                    "invalid_workflow_output",
+                    "结果记录键必须是字符串字面量",
+                    expression,
+                )
             if key.value in names:
                 _fail("invalid_workflow_output", "工作流输出名称重复", expression)
             names.add(key.value)
@@ -1334,8 +1402,14 @@ def _workflow_outputs(
             )
         return outputs
     call = expression
-    if not isinstance(call, ast.Call) or not _is_marker(call.func, imports, "workflow_output"):
-        _fail("invalid_workflow_output", "工作流必须返回结果字典或 workflow_output(...) ", statement)
+    if not isinstance(call, ast.Call) or not _is_marker(
+        call.func, imports, "workflow_output"
+    ):
+        _fail(
+            "invalid_workflow_output",
+            "工作流必须返回结果字典或 workflow_output(...) ",
+            statement,
+        )
     if call.args:
         _fail("invalid_workflow_output", "workflow_output 只接受命名参数", call)
     outputs: list[tuple[str, ValueBinding]] = []
@@ -1383,7 +1457,11 @@ def _value_binding(
             return ValueBinding("literal", ast.literal_eval(expression))
         except (ValueError, TypeError):
             pass
-    _fail("unsupported_authoring_syntax", "值必须是 JSON 字面量、工作流输入或前序节点输出", expression)
+    _fail(
+        "unsupported_authoring_syntax",
+        "值必须是 JSON 字面量、工作流输入或前序节点输出",
+        expression,
+    )
 
 
 def _literal_keywords(call: ast.Call, code: str) -> dict[str, Any]:

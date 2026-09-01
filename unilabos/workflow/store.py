@@ -121,6 +121,8 @@ CREATE TABLE IF NOT EXISTS workflow (
     meta_data TEXT NOT NULL,
     name TEXT NOT NULL,
     tags TEXT NOT NULL,
+    workflow_type TEXT NOT NULL DEFAULT 'normal'
+        CHECK (workflow_type IN ('normal', 'experiment_operation')),
     revision INTEGER NOT NULL DEFAULT 1
 );
 
@@ -504,6 +506,26 @@ class WorkflowStore:
                     deadline=initialization_deadline,
                 )
                 try:
+                    if self._persist_workflow_definitions:
+                        workflow_columns = {
+                            row["name"]
+                            for row in self._conn.execute(
+                                "PRAGMA table_info(workflow)"
+                            ).fetchall()
+                        }
+                        if "workflow_type" not in workflow_columns:
+                            self._conn.execute(
+                                """
+                                ALTER TABLE workflow
+                                ADD COLUMN workflow_type TEXT NOT NULL DEFAULT 'normal'
+                                    CHECK (
+                                        workflow_type IN (
+                                            'normal',
+                                            'experiment_operation'
+                                        )
+                                    )
+                                """
+                            )
                     ensure_device_action_run_schema(self._conn)
                     ensure_station_task_submission_schema(self._conn)
                     from unilabos.workflow.workflow_boundary import (
@@ -651,7 +673,15 @@ class WorkflowStore:
         tags: List[Any],
         description: Optional[str],
         meta_data: Dict[str, Any],
+        workflow_type: str = "normal",
     ) -> Dict[str, Any]:
+        """在定义目录创建一个空工作流。
+
+        参数：稳定 UUID、名称、标签、描述、公开元数据和已校验工作流类型构成
+        首版定义。返回：修订为 1 的完整工作流投影。异常：UUID 冲突或类型约束
+        失败时抛出 ``StoreConflict``；事务失败不留下半条定义。
+        """
+
         now = utc_now()
         try:
             with self.transaction() as conn:
@@ -659,8 +689,9 @@ class WorkflowStore:
                     """
                     INSERT INTO workflow(
                         uuid, create_time, update_time, deleted_at,
-                        description, meta_data, name, tags, revision
-                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 1)
+                        description, meta_data, name, tags, workflow_type,
+                        revision
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1)
                     """,
                     (
                         workflow_uuid,
@@ -670,6 +701,7 @@ class WorkflowStore:
                         _json(meta_data),
                         name,
                         _json(tags),
+                        workflow_type,
                     ),
                 )
         except sqlite3.IntegrityError as exc:
@@ -686,6 +718,7 @@ class WorkflowStore:
         meta_data: Dict[str, Any],
         nodes: List[WorkflowNodeWrite],
         edges: List[WorkflowEdgeWrite],
+        workflow_type: str = "normal",
         node_templates: List[Dict[str, Any]] | None = None,
         handle_templates: List[Dict[str, Any]] | None = None,
         template_catalog_fingerprint: str | None = None,
@@ -693,7 +726,8 @@ class WorkflowStore:
     ) -> Dict[str, Any]:
         """在一个事务中创建工作流及其首版完整图。
 
-        参数：工作流字段构成新定义，``nodes``/``edges`` 已使用新身份重建引用；
+        参数：工作流字段及 ``workflow_type`` 构成新定义，``nodes``/``edges``
+        已使用新身份重建引用；
         ``node_templates``/``handle_templates`` 是 AST 编译候选实际引用的目录子集，
         与工作流图在同一事务内校验或投影；``trusted_authoring_graph`` 只允许 AST
         编译器生成的图保留系统创作元数据，普通复制和旧版导入仍禁止提交
@@ -709,8 +743,9 @@ class WorkflowStore:
                     """
                     INSERT INTO workflow(
                         uuid, create_time, update_time, deleted_at,
-                        description, meta_data, name, tags, revision
-                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, 1)
+                        description, meta_data, name, tags, workflow_type,
+                        revision
+                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1)
                     """,
                     (
                         workflow_uuid,
@@ -720,6 +755,7 @@ class WorkflowStore:
                         _json(meta_data),
                         name,
                         _json(tags),
+                        workflow_type,
                     ),
                 )
                 if node_templates is not None or handle_templates is not None:
@@ -771,12 +807,36 @@ class WorkflowStore:
         page: int,
         page_size: int,
         name: str = "",
+        workflow_type: str | None = None,
+        publication_status: str | None = None,
     ) -> Dict[str, Any]:
-        where = "deleted_at IS NULL"
+        """按名称、类型与当前发布状态分页读取工作流。
+
+        参数：页码和页长确定结果窗口；``name`` 模糊匹配名称；两个可选筛选分别
+        约束工作流类型及当前修订是否已有发布合同。返回：筛选后的总数与当前页。
+        异常：发布状态筛选要求发布合同表已由调用方初始化，数据库错误原样传播。
+        """
+
+        where = "workflow.deleted_at IS NULL"
         values: List[Any] = []
         if name:
-            where += " AND name LIKE ?"
+            where += " AND workflow.name LIKE ?"
             values.append(f"%{name}%")
+        if workflow_type is not None:
+            where += " AND workflow.workflow_type = ?"
+            values.append(workflow_type)
+        current_publication = """
+            EXISTS (
+                SELECT 1 FROM published_workflow_contract AS published
+                WHERE published.workflow_uuid = workflow.uuid
+                  AND published.workflow_revision = workflow.revision
+                  AND published.deleted_at IS NULL
+            )
+        """
+        if publication_status == "published":
+            where += f" AND {current_publication}"
+        elif publication_status == "source":
+            where += f" AND NOT {current_publication}"
         offset = (page - 1) * page_size
         with self._lock:
             total = self._conn.execute(
@@ -785,8 +845,8 @@ class WorkflowStore:
             ).fetchone()[0]
             rows = self._conn.execute(
                 f"""
-                SELECT * FROM workflow WHERE {where}
-                ORDER BY create_time DESC, uuid
+                SELECT workflow.* FROM workflow WHERE {where}
+                ORDER BY workflow.create_time DESC, workflow.uuid
                 LIMIT ? OFFSET ?
                 """,
                 (*values, page_size, offset),
@@ -806,14 +866,22 @@ class WorkflowStore:
         tags: List[Any],
         description: Optional[str],
         meta_data: Dict[str, Any],
+        workflow_type: str,
     ) -> Dict[str, Any]:
+        """更新工作流根字段但不改变图修订。
+
+        参数：``workflow_uuid`` 定位定义，其余字段是已校验后的完整替换值；类型
+        只能由服务层传入规范值。返回：更新后的工作流投影。异常：工作流不存在或
+        数据库类型约束失败时原样抛出，事务整体回滚。
+        """
+
         with self.transaction() as conn:
             self.get_workflow(workflow_uuid, conn=conn)
             conn.execute(
                 """
                 UPDATE workflow
                 SET name = ?, tags = ?, description = ?, meta_data = ?,
-                    update_time = ?
+                    workflow_type = ?, update_time = ?
                 WHERE uuid = ? AND deleted_at IS NULL
                 """,
                 (
@@ -821,6 +889,7 @@ class WorkflowStore:
                     _json(tags),
                     description,
                     _json(meta_data),
+                    workflow_type,
                     utc_now(),
                     workflow_uuid,
                 ),
@@ -1020,9 +1089,7 @@ class WorkflowStore:
                     ) from error
         node_templates = [action.detached_template() for action in actions]
         handle_templates = [
-            handle
-            for action in actions
-            for handle in action.detached_handles()
+            handle for action in actions for handle in action.detached_handles()
         ]
         node_templates.sort(key=lambda item: str(item["uuid"]))
         handle_templates.sort(key=lambda item: str(item["uuid"]))
@@ -1075,8 +1142,7 @@ class WorkflowStore:
         with self._lock:
             graph = self.get_graph(workflow_uuid, conn=self._conn)
             row = self._conn.execute(
-                "SELECT applied_source FROM workflow_authoring "
-                "WHERE workflow_uuid = ?",
+                "SELECT applied_source FROM workflow_authoring WHERE workflow_uuid = ?",
                 (workflow_uuid,),
             ).fetchone()
             applied_source = (
@@ -1263,8 +1329,7 @@ class WorkflowStore:
                     template_uuids,
                 ).fetchall()
                 templates = {
-                    row["uuid"]: self._node_template_row(row)
-                    for row in template_rows
+                    row["uuid"]: self._node_template_row(row) for row in template_rows
                 }
                 handle_rows = conn.execute(
                     f"""
@@ -1275,8 +1340,7 @@ class WorkflowStore:
                     template_uuids,
                 ).fetchall()
                 handles = {
-                    row["uuid"]: self._handle_template_row(row)
-                    for row in handle_rows
+                    row["uuid"]: self._handle_template_row(row) for row in handle_rows
                 }
         effective_params = {
             node.uuid: self._graph_node_param(
@@ -1470,7 +1534,9 @@ class WorkflowStore:
             and self._template_snapshot_provider is not None
         ):
             try:
-                snapshot = catalog_snapshot or self._template_snapshot_provider.snapshot()
+                snapshot = (
+                    catalog_snapshot or self._template_snapshot_provider.snapshot()
+                )
                 template_reference = snapshot.template_key_for_uuid(template_reference)
             except AuthoringCatalogError as error:
                 raise StoreNotFound(
@@ -1730,7 +1796,10 @@ class WorkflowStore:
                     (backend_task_uuid, invocation_key),
                 ).fetchone()
                 if existing is not None:
-                    if str(existing["request_fingerprint"] or "") != request_fingerprint:
+                    if (
+                        str(existing["request_fingerprint"] or "")
+                        != request_fingerprint
+                    ):
                         raise StoreConflict("同一工站调用键对应的请求内容已变化")
                     result = self._task_row(existing)
                     result["_station_submission_created"] = False
@@ -2411,8 +2480,10 @@ class WorkflowStore:
                 ).fetchone()
                 if hold is None:
                     raise StoreConflict("debug command hold missing")
-                return self._debug_command_row(existing), False, str(
-                    hold["workflow_node_uuid"]
+                return (
+                    self._debug_command_row(existing),
+                    False,
+                    str(hold["workflow_node_uuid"]),
                 )
             hold = conn.execute(
                 """
@@ -2552,8 +2623,7 @@ class WorkflowStore:
             breakpoints = set(_load(configuration["breakpoint_node_uuids"], []))
             node_uuid = str(pending["workflow_node_uuid"])
             should_hold = (
-                configuration["execution_policy"] == "step"
-                or node_uuid in breakpoints
+                configuration["execution_policy"] == "step" or node_uuid in breakpoints
             )
             if not should_hold:
                 return {"type": "step", "workflow_node_uuid": node_uuid}
@@ -2926,9 +2996,7 @@ class WorkflowStore:
                         (identity,),
                     ).fetchone()
                     if owner is not None and owner["workflow_uuid"] != workflow_uuid:
-                        raise StoreAuthoringConflict(
-                            "candidate_identity_conflict"
-                        )
+                        raise StoreAuthoringConflict("candidate_identity_conflict")
 
     def record_draft_compilation(
         self,
@@ -3119,7 +3187,7 @@ class WorkflowStore:
                     """
                     UPDATE workflow
                     SET meta_data = ?, name = ?, tags = ?, description = ?,
-                        update_time = ?
+                        workflow_type = ?, update_time = ?
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
                     (
@@ -3127,6 +3195,7 @@ class WorkflowStore:
                         graph_workflow["name"],
                         _json(graph_workflow.get("tags") or []),
                         graph_workflow.get("description"),
+                        graph_workflow.get("workflow_type", "normal"),
                         now,
                         workflow_uuid,
                     ),
@@ -3341,9 +3410,7 @@ class WorkflowStore:
             snapshot=snapshot,
         )
         expected_node_by_uuid = {str(item["uuid"]): item for item in expected_nodes}
-        expected_handle_by_uuid = {
-            str(item["uuid"]): item for item in expected_handles
-        }
+        expected_handle_by_uuid = {str(item["uuid"]): item for item in expected_handles}
         for template_uuid, candidate in candidate_node_by_uuid.items():
             expected = expected_node_by_uuid.get(template_uuid)
             if expected is None or not self._catalog_entity_matches(
@@ -3655,10 +3722,18 @@ class WorkflowStore:
 
     @classmethod
     def _workflow_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """把工作流 SQLite 行恢复为包含稳定类型的定义字典。
+
+        参数：``row`` 是已包含工作流列的 SQLite 行。返回：基础字段、名称、标签、
+        ``workflow_type`` 与修订组成的新字典。异常：查询投影缺列或 JSON 损坏时
+        原样暴露给仓储调用方，禁止用猜测值掩盖迁移错误。
+        """
+
         return {
             **cls._base(row),
             "name": row["name"],
             "tags": _load(row["tags"], []),
+            "workflow_type": row["workflow_type"],
             "revision": row["revision"],
         }
 

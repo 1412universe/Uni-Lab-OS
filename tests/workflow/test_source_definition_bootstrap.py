@@ -110,6 +110,7 @@ def test_missing_definition_is_created_with_stable_manifest_provenance(
         },
         "name": "alpha_lab.demo",
         "tags": [],
+        "workflow_type": "normal",
         "revision": 1,
     }
     # ``authoring_record`` 证明同一事务已经创建空创作事实，但没有编译候选。

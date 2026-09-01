@@ -98,9 +98,7 @@ def test_python_file_import_compiles_and_creates_complete_graph_atomically(
         ]
         assert store.count_rows("workflow") == 1
         assert store.count_rows("workflow_node") == 2
-        provenance = graph["workflow"]["meta_data"]["unilab"][
-            "source_bootstrap"
-        ]
+        provenance = graph["workflow"]["meta_data"]["unilab"]["source_bootstrap"]
         assert provenance["relative_path"] == "workflows/sample_workflow.py"
         assert provenance["source_uri"] == (
             "package://demo_domain/workflows/sample_workflow.py"
@@ -120,6 +118,58 @@ def test_python_file_import_compiles_and_creates_complete_graph_atomically(
         assert published.status_code == 201
         assert published.json()["data"]["node_count"] == 2
         assert published.json()["data"]["edge_count"] == 1
+    finally:
+        service.close()
+
+
+def test_python_experiment_operation_import_uses_matching_directory(
+    tmp_path: Any,
+) -> None:
+    """证明 Python 实验操作导入写入专用目录并保持规范源码格式。
+
+    参数：``tmp_path`` 隔离领域包、manifest 和进程内定义目录。返回：无。异常：
+    类型没有参与路径选择、规范装饰器字段丢失或 manifest 登记错误时由断言暴露。
+    """
+
+    client, service, store = _client(tmp_path)
+    # ``operation_source`` 只在既有装饰器中增加工作流类型；导入后仍由现有
+    # AST 生成器规范化，目录分类不得另造第二套 Python 序列化格式。
+    operation_source = _source().replace(
+        '    displayname="Sample preparation",\n',
+        '    displayname="Sample preparation",\n'
+        '    workflow_type="experiment_operation",\n',
+        1,
+    )
+    try:
+        response = _upload(
+            client,
+            operation_source,
+            file_name="sample_operation.py",
+        )
+        assert response.status_code == 201, response.text
+        graph = response.json()["data"]
+        provenance = graph["workflow"]["meta_data"]["unilab"]["source_bootstrap"]
+        source_path = (
+            tmp_path
+            / "domain"
+            / "demo_domain"
+            / "experiment_operations"
+            / "sample_operation.py"
+        )
+        assert graph["workflow"]["workflow_type"] == "experiment_operation"
+        assert provenance["relative_path"] == (
+            "experiment_operations/sample_operation.py"
+        )
+        assert provenance["source_uri"] == (
+            "package://demo_domain/experiment_operations/sample_operation.py"
+        )
+        persisted_source = source_path.read_text(encoding="utf-8")
+        assert "@workflow(" in persisted_source
+        assert f'workflow_uuid="{WORKFLOW_UUID}"' in persisted_source
+        assert "displayname='Sample preparation'" in persisted_source
+        assert "workflow_type='experiment_operation'" in persisted_source
+        assert "# unilab:node_uuid=" in persisted_source
+        assert store.count_rows("workflow") == 1
     finally:
         service.close()
 

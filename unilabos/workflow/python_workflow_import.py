@@ -7,8 +7,12 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from urllib.parse import quote
 
-from unilabos.workflow.authoring_identity import declared_workflow_uuid
+from unilabos.workflow.authoring_identity import (
+    declared_workflow_type,
+    declared_workflow_uuid,
+)
 from unilabos.workflow.store import utc_now
+from unilabos.workflow.workflow_type import WorkflowType
 
 _SHA256_TOKEN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -24,6 +28,7 @@ class PythonWorkflowImportSource:
     file_name: str
     python_source: str
     workflow_uuid: str
+    workflow_type: WorkflowType
     source_uri: str
     source_hash: str
 
@@ -42,6 +47,7 @@ class PythonWorkflowImportSource:
                 "update_time": timestamp,
                 "name": PurePosixPath(self.file_name).stem,
                 "tags": [],
+                "workflow_type": self.workflow_type,
                 "description": None,
                 "meta_data": {
                     "unilab": {
@@ -107,12 +113,18 @@ def validate_python_workflow_import(
         raise PythonWorkflowImportError(
             "Python 工作流必须包含唯一且显式的 @workflow(workflow_uuid=...) 声明"
         )
+    workflow_type = declared_workflow_type(python_source)
+    if workflow_type is None:
+        raise PythonWorkflowImportError(
+            "Python 工作流的 workflow_type 必须是 normal 或 experiment_operation"
+        )
     if not isinstance(source_hash, str) or _SHA256_TOKEN.fullmatch(source_hash) is None:
         raise PythonWorkflowImportError("源码摘要无效")
     return PythonWorkflowImportSource(
         file_name=normalized_name,
         python_source=python_source,
         workflow_uuid=workflow_uuid,
+        workflow_type=workflow_type,
         source_uri=f"upload://workflows/{quote(normalized_name, safe='._-')}",
         source_hash=source_hash,
     )

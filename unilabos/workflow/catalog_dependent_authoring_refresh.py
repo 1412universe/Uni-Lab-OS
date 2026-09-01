@@ -98,16 +98,16 @@ def refresh_catalog_dependent_authoring(
     warnings: list[dict[str, str]],
     mutated_workflow_uuid: str,
 ) -> None:
-    """重新编译并安全应用依赖刚更新子工作流的父工作流。
+    """重新编译并安全应用依赖刚更新实验操作的工作流。
 
     参数：``dependent_workflow_uuids`` 是直接引用新子版本的父工作流稳定身份；
     ``load_authoring`` 在刷新前读取当前 Python 文件与持久记录合成的创作状态，
     ``reconcile_source`` 用当前目录重新编译父源码；``apply_candidate`` 通过公共
     Apply 入口应用服务端候选；
-    ``warnings`` 收集子工作流提交后不可回滚的刷新问题；
-    ``mutated_workflow_uuid`` 是刚应用的子工作流身份。返回：无；干净父源码的
+    ``warnings`` 收集实验操作提交后不可回滚的刷新问题；
+    ``mutated_workflow_uuid`` 是刚应用的实验操作身份。返回：无；干净引用方源码的
     兼容候选会自动应用，已有未应用草稿只重新编译而不代替用户确认。异常：单项
-    读取、编译或应用异常会被隔离成警告，绝不把已经提交的子工作流伪装成失败。
+    读取、编译或应用异常会被隔离成警告，绝不把已经提交的实验操作伪装成失败。
     """
 
     refreshed: set[str] = set()
@@ -163,14 +163,14 @@ def _append_refresh_warning(
 ) -> None:
     """追加一条去重的父工作流待处理警告。
 
-    参数：``warnings`` 是子工作流 Apply 结果中的可变警告集合；
+    参数：``warnings`` 是实验操作 Apply 结果中的可变警告集合；
     ``workflow_uuid`` 是未完成自动刷新的父工作流身份。返回：无；同一父工作流
     已存在相同警告时保持集合不变。异常：无。
     """
 
     warning = {
         "code": "dependent_authoring_refresh_pending",
-        "message": f"子工作流已更新，但父工作流 {workflow_uuid} 仍需处理兼容问题",
+        "message": f"实验操作已更新，但引用方 {workflow_uuid} 仍需处理兼容问题",
     }
     if warning not in warnings:
         warnings.append(warning)

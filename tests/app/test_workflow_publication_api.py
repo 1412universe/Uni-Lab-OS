@@ -18,12 +18,26 @@ def _client(tmp_path):
     return TestClient(create_workflow_app(service)), store
 
 
-def _create_workflow_with_one_node(client: TestClient) -> tuple[str, int]:
-    """创建一张可发布的单节点工作流图并返回身份与修订。"""
+def _create_workflow_with_one_node(
+    client: TestClient,
+    *,
+    workflow_type: str = "normal",
+) -> tuple[str, int]:
+    """创建一张可发布的单节点工作流图并返回身份与修订。
+
+    参数：``client`` 通过公开 HTTP 接口操作本地权威；``workflow_type`` 选择普通
+    工作流或实验操作。返回：工作流稳定 UUID 与当前修订。异常：创建或图保存
+    失败时由断言暴露，测试不绕过服务公开边界。
+    """
 
     created = client.post(
         "/api/v1/workflows",
-        json={"name": "样品审核", "tags": ["published"], "meta_data": {}},
+        json={
+            "name": "样品审核",
+            "tags": ["published"],
+            "meta_data": {},
+            "workflow_type": workflow_type,
+        },
     )
     assert created.status_code == 201
     workflow_uuid = created.json()["data"]["uuid"]
@@ -268,12 +282,15 @@ def test_publication_rejects_stale_revision_and_empty_graph(tmp_path) -> None:
 def test_composite_invocation_expands_one_frozen_contract_into_parent(tmp_path) -> None:
     """组合调用须把不可变子合同确定性展开为父图的真实层级节点。
 
-    参数：``tmp_path`` 隔离父子工作流。返回：无。异常：调用根身份、私有子树、
+    参数：``tmp_path`` 隔离引用方与实验操作。返回：无。异常：调用根身份、私有展开图、
     修订推进或冻结合同 pin 偏离 Backend 公共接口时由断言暴露。
     """
 
     client, store = _client(tmp_path)
-    child_uuid, child_revision = _create_workflow_with_one_node(client)
+    child_uuid, child_revision = _create_workflow_with_one_node(
+        client,
+        workflow_type="experiment_operation",
+    )
     contract = client.post(
         f"/api/v1/workflows/{child_uuid}/publications",
         json={"revision": child_revision},
@@ -312,19 +329,98 @@ def test_composite_invocation_expands_one_frozen_contract_into_parent(tmp_path) 
     store.close()
 
 
-def test_new_child_publication_refreshes_parent_and_nested_grandparent(
+def test_referenced_by_lists_workflows_using_experiment_operation(tmp_path) -> None:
+    """反向引用接口须分页返回真正包含实验操作调用的父工作流。
+
+    参数：``tmp_path`` 隔离工作流定义和发布合同。返回：无。异常：接口依赖名称
+    或标签猜测、漏掉组合调用、混入无关工作流、分页顺序不稳定或未知目标未关闭
+    失败时由断言暴露；全部准备和查询均经过公开 HTTP 接口。
+    """
+
+    client, store = _client(tmp_path)
+    operation_uuid, operation_revision = _create_workflow_with_one_node(
+        client,
+        workflow_type="experiment_operation",
+    )
+    contract = client.post(
+        f"/api/v1/workflows/{operation_uuid}/publications",
+        json={"revision": operation_revision},
+    ).json()["data"]
+    empty = client.get(f"/api/v1/workflows/{operation_uuid}/referenced-by").json()[
+        "data"
+    ]
+    assert empty["items"] == []
+    assert empty["has_more"] is False
+    # 两个固定 UUID 分别表示两张引用方画布中的稳定调用节点身份；它们只用于
+    # 证明反向引用按工作流去重，不是实验操作或发布合同身份。
+    for name, invocation_uuid in (
+        ("A-甲父工作流", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        ("B-乙父工作流", "cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+    ):
+        parent = client.post(
+            "/api/v1/workflows",
+            json={"name": name, "tags": [], "meta_data": {}},
+        ).json()["data"]
+        inserted = client.post(
+            f"/api/v1/workflows/{parent['uuid']}/composite-invocations",
+            json={
+                "revision": parent["revision"],
+                "contract_uuid": contract["uuid"],
+                "invocation_uuid": invocation_uuid,
+                "device_bindings": {},
+                "pose": {"x": 320, "y": 100},
+                "param": {},
+            },
+        )
+        assert inserted.status_code == 200, inserted.text
+    client.post(
+        "/api/v1/workflows",
+        json={"name": "无关工作流", "tags": [], "meta_data": {}},
+    )
+
+    first_page = client.get(
+        f"/api/v1/workflows/{operation_uuid}/referenced-by",
+        params={"page": 1, "page_size": 1},
+    )
+    second_page = client.get(
+        f"/api/v1/workflows/{operation_uuid}/referenced-by",
+        params={"page": 2, "page_size": 1},
+    )
+
+    assert first_page.status_code == 200
+    assert [item["name"] for item in first_page.json()["data"]["items"]] == [
+        "A-甲父工作流"
+    ]
+    assert first_page.json()["data"]["has_more"] is True
+    assert [item["name"] for item in second_page.json()["data"]["items"]] == [
+        "B-乙父工作流"
+    ]
+    assert second_page.json()["data"]["has_more"] is False
+    # 该固定 UUID 表示一个确定不存在的实验操作，用于验证未知目标关闭式失败。
+    missing = client.get(
+        "/api/v1/workflows/00000000-0000-4000-8000-000000000001/referenced-by"
+    )
+    assert missing.status_code == 200
+    assert missing.json()["code"] != 0
+    store.close()
+
+
+def test_new_operation_publication_refreshes_parent_and_nested_grandparent(
     tmp_path,
 ) -> None:
-    """子工作流重新发布后须自动替换父图和上游父图中的兼容调用。
+    """实验操作重新发布后须自动替换引用方和上游图中的兼容调用。
 
-    参数：``tmp_path`` 隔离父子工作流及发布合同。返回：无。异常：父图没有自动
+    参数：``tmp_path`` 隔离实验操作、引用方及发布合同。返回：无。异常：图没有自动
     推进修订、嵌套调用没有向上游传播、调用身份或画布位置变化、合同仍指向旧版
     或内部节点没有更新时由断言暴露；整个流程只使用公开 HTTP 接口，模拟前端
     真实调用方式。
     """
 
     client, store = _client(tmp_path)
-    child_uuid, child_revision = _create_workflow_with_one_node(client)
+    child_uuid, child_revision = _create_workflow_with_one_node(
+        client,
+        workflow_type="experiment_operation",
+    )
     first_contract = client.post(
         f"/api/v1/workflows/{child_uuid}/publications",
         json={"revision": child_revision},
@@ -333,7 +429,7 @@ def test_new_child_publication_refreshes_parent_and_nested_grandparent(
         "/api/v1/workflows",
         json={"name": "自动更新父工作流", "tags": [], "meta_data": {}},
     ).json()["data"]
-    # ``invocation_uuid`` 是父图中对子工作流第一次调用的稳定身份；刷新前后必须
+    # ``invocation_uuid`` 是引用方图中对实验操作第一次调用的稳定身份；刷新前后必须
     # 保持不变，才能证明外部连线和画布布局不会因子版本替换而漂移。
     invocation_uuid = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
     inserted = client.post(
@@ -372,6 +468,14 @@ def test_new_child_publication_refreshes_parent_and_nested_grandparent(
         },
     ).json()["data"]
     assert grandparent_graph["workflow"]["revision"] == 2
+    referenced_by = client.get(
+        f"/api/v1/workflows/{child_uuid}/referenced-by",
+        params={"page_size": 20},
+    ).json()["data"]["items"]
+    assert {item["uuid"] for item in referenced_by} == {
+        parent["uuid"],
+        grandparent["uuid"],
+    }
 
     changed = client.put(
         f"/api/v1/workflows/{child_uuid}/graph",
