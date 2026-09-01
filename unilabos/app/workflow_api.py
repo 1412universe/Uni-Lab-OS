@@ -8,7 +8,16 @@ import json
 import re
 from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, FastAPI, Header, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    FastAPI,
+    Header,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+)
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -19,6 +28,13 @@ from unilabos.app.workflow_template_api import (
     TemplateSnapshotProvider,
     WorkflowTemplateQueryService,
     create_workflow_template_router,
+)
+from unilabos.app.workflow_openapi import (
+    BackendEmptySuccessResponse,
+    BackendErrorResponse,
+    WorkflowListSuccessResponse,
+    WorkflowPublishSuccessResponse,
+    WorkflowSuccessResponse,
 )
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.models import (
@@ -40,6 +56,13 @@ class _BackendModel(BaseModel):
 
 
 HashToken = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+WorkflowUUIDPath = Annotated[
+    str,
+    Path(
+        description="工作流或实验操作的稳定 UUID",
+        examples=["53a80bc4-a648-4d4b-afcc-47b940f93769"],
+    ),
+]
 _SIGNED_DECIMAL = re.compile(r"[+-]?[0-9]+\Z")
 _INT64_MAX = (1 << 63) - 1
 _WORKFLOW_BODY_LIMIT = 8 * 1024 * 1024
@@ -154,10 +177,24 @@ def _parse_positive_decimal(value: str, *, maximum: int) -> int:
 class WorkflowWriteRequest(_BackendModel):
     """创建与更新工作流共用的公开字段。"""
 
-    name: str
-    tags: List[Any] = Field(default_factory=list)
-    description: Optional[str] = None
-    meta_data: Dict[str, Any] = Field(default_factory=dict)
+    name: str = Field(
+        description="工作流或实验操作的显示名称",
+        examples=["样品前处理"],
+    )
+    tags: List[Any] = Field(
+        default_factory=list,
+        description="检索和兼容分类标签；未提供时为空数组",
+        examples=[["chemistry"]],
+    )
+    description: Optional[str] = Field(
+        default=None,
+        description="用途说明；可不填写",
+        examples=["完成称量、溶解和转运"],
+    )
+    meta_data: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="业务扩展元数据；未提供时为空对象",
+    )
 
     @field_validator("tags", mode="before")
     @classmethod
@@ -173,15 +210,31 @@ class WorkflowWriteRequest(_BackendModel):
 class WorkflowCreateRequest(WorkflowWriteRequest):
     """创建工作流；旧调用省略类型时默认创建普通工作流。"""
 
-    workflow_type: Literal["normal", "experiment_operation"] = "normal"
-    operation_category_uuid: Optional[str] = None
+    workflow_type: Literal["normal", "experiment_operation"] = Field(
+        default="normal",
+        description="normal 创建普通工作流；experiment_operation 创建实验操作",
+    )
+    operation_category_uuid: Optional[str] = Field(
+        default=None,
+        description=(
+            "实验操作所属类别 UUID；普通工作流不能填写，实验操作可不分类"
+        ),
+        examples=["1ade6f36-40a9-58fe-a6c8-c7418e651a49"],
+    )
 
 
 class WorkflowUpdateRequest(WorkflowWriteRequest):
     """更新工作流；类型可省略或重复当前值，但不能在两类之间转换。"""
 
-    workflow_type: Optional[Literal["normal", "experiment_operation"]] = None
-    operation_category_uuid: Optional[str] = None
+    workflow_type: Optional[Literal["normal", "experiment_operation"]] = Field(
+        default=None,
+        description="可省略或重复当前类型；不允许在普通工作流和实验操作间转换",
+    )
+    operation_category_uuid: Optional[str] = Field(
+        default=None,
+        description="实验操作类别 UUID；显式传 null 表示清空类别",
+        examples=["1ade6f36-40a9-58fe-a6c8-c7418e651a49"],
+    )
 
 
 class GraphWriteRequest(_BackendModel):
@@ -279,9 +332,15 @@ class LegacyWorkflowImportRequest(_BackendModel):
 
 
 class PublishWorkflowContractRequest(_StrictModel):
-    """冻结指定工作流修订的发布命令。"""
+    """把指定修订的实验操作切换为可复用状态的发布命令。"""
 
-    revision: int = Field(ge=1, le=_INT64_MAX, strict=True)
+    revision: int = Field(
+        ge=1,
+        le=_INT64_MAX,
+        strict=True,
+        description="要发布的当前工作流修订号；必须与服务端当前修订一致",
+        examples=[1],
+    )
 
 
 class InsertCompositeWorkflowRequest(_StrictModel):
@@ -645,7 +704,18 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         }
         return projected
 
-    @router.post("/workflows")
+    @router.post(
+        "/workflows",
+        summary="创建工作流或实验操作",
+        status_code=201,
+        response_model=WorkflowSuccessResponse,
+        responses={
+            200: {
+                "model": BackendErrorResponse,
+                "description": "字段组合、类型或类别校验未通过",
+            }
+        },
+    )
     def create_workflow(body: WorkflowCreateRequest) -> JSONResponse:
         """创建普通工作流或带可选类别的实验操作。
 
@@ -697,17 +767,43 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             status=201,
         )
 
-    @router.get("/workflows")
+    @router.get(
+        "/workflows",
+        summary="查询工作流和实验操作",
+        response_model=WorkflowListSuccessResponse | BackendErrorResponse,
+    )
     def list_workflows(
-        page: int = Query(default=1),
-        page_size: int = Query(default=20),
-        keyword: str = Query(default=""),
-        name: Optional[str] = Query(default=None),
-        workflow_type: Optional[Literal["normal", "experiment_operation"]] = Query(
-            default=None
+        page: int = Query(default=1, description="页码；小于 1 时按第 1 页处理"),
+        page_size: int = Query(
+            default=20,
+            description="每页数量；小于 1 时按 20，超过 100 时按 100 处理",
         ),
-        status: Optional[Literal["source", "published"]] = Query(default=None),
-        operation_category_uuid: Optional[str] = Query(default=None),
+        keyword: str = Query(
+            default="",
+            description="兼容旧前端的名称模糊搜索；name 未传时生效",
+            examples=["前处理"],
+        ),
+        name: Optional[str] = Query(
+            default=None,
+            description="按名称模糊搜索；同时传 keyword 时以本字段为准",
+            examples=["前处理"],
+        ),
+        workflow_type: Optional[Literal["normal", "experiment_operation"]] = Query(
+            default=None,
+            description="按类型筛选；不传时同时返回普通工作流和实验操作",
+        ),
+        status: Optional[Literal["source", "published"]] = Query(
+            default=None,
+            description=(
+                "按当前源码/已发布状态筛选；published 表示可被其他工作流引用；"
+                "不传时返回全部状态"
+            ),
+        ),
+        operation_category_uuid: Optional[str] = Query(
+            default=None,
+            description="按实验操作类别 UUID 筛选",
+            examples=["1ade6f36-40a9-58fe-a6c8-c7418e651a49"],
+        ),
     ) -> JSONResponse:
         """分页读取工作流，可按类型及当前发布状态组合筛选。
 
@@ -740,13 +836,23 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             }
         )
 
-    @router.get("/published-workflow-contracts")
+    @router.get(
+        "/published-workflow-contracts",
+        include_in_schema=False,
+    )
     def list_published_workflow_contracts(
         page: int = Query(default=1),
         page_size: int = Query(default=20),
         keyword: str = Query(default=""),
     ) -> JSONResponse:
-        """返回每个来源工作流最新的不可变发布合同。"""
+        """保留旧客户端查询路径，但不把发布合同作为公开业务模型。
+
+        参数：``page``、``page_size`` 和 ``keyword`` 沿用旧客户端调用形状。返回：
+        旧版发布合同投影。异常：服务层错误按既有 Backend 包络返回。新前端不得
+        使用此兼容路径，应通过工作流列表的 ``workflow_type=experiment_operation``
+        与 ``status=published`` 查询当前可复用实验操作；该路径不进入 Swagger，
+        避免把历史合同误解为实验操作版本记录。
+        """
 
         return _success(
             service.list_published_workflow_contracts(
@@ -756,11 +862,18 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             )
         )
 
-    @router.get("/workflows/{workflow_uuid}/referenced-by")
+    @router.get(
+        "/workflows/{workflow_uuid}/referenced-by",
+        summary="查询引用当前实验操作的工作流",
+        response_model=WorkflowListSuccessResponse | BackendErrorResponse,
+    )
     def list_referencing_workflows(
-        workflow_uuid: str,
-        page: int = Query(default=1),
-        page_size: int = Query(default=20),
+        workflow_uuid: WorkflowUUIDPath,
+        page: int = Query(default=1, description="页码；小于 1 时按第 1 页处理"),
+        page_size: int = Query(
+            default=20,
+            description="每页数量；小于 1 时按 20，超过 100 时按 100 处理",
+        ),
     ) -> JSONResponse:
         """返回当前引用指定实验操作或工作流的父工作流。
 
@@ -783,13 +896,21 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             }
         )
 
-    @router.get("/workflows/{workflow_uuid}")
-    def get_workflow(workflow_uuid: str) -> JSONResponse:
+    @router.get(
+        "/workflows/{workflow_uuid}",
+        summary="查询工作流或实验操作详情",
+        response_model=WorkflowSuccessResponse | BackendErrorResponse,
+    )
+    def get_workflow(workflow_uuid: WorkflowUUIDPath) -> JSONResponse:
         return _success(service.get_workflow(workflow_uuid))
 
-    @router.put("/workflows/{workflow_uuid}")
+    @router.put(
+        "/workflows/{workflow_uuid}",
+        summary="更新工作流或实验操作",
+        response_model=WorkflowSuccessResponse | BackendErrorResponse,
+    )
     def update_workflow(
-        workflow_uuid: str,
+        workflow_uuid: WorkflowUUIDPath,
         body: WorkflowUpdateRequest,
     ) -> JSONResponse:
         """更新工作流根字段，并区分类别省略与显式清空。
@@ -803,8 +924,12 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             payload.pop("operation_category_uuid", None)
         return _success(service.update_workflow(workflow_uuid, **payload))
 
-    @router.delete("/workflows/{workflow_uuid}")
-    def delete_workflow(workflow_uuid: str) -> JSONResponse:
+    @router.delete(
+        "/workflows/{workflow_uuid}",
+        summary="删除工作流或实验操作",
+        response_model=BackendEmptySuccessResponse | BackendErrorResponse,
+    )
+    def delete_workflow(workflow_uuid: WorkflowUUIDPath) -> JSONResponse:
         service.delete_workflow(workflow_uuid)
         return _success()
 
@@ -913,12 +1038,30 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             status=201,
         )
 
-    @router.post("/workflows/{workflow_uuid}/publications")
+    @router.post(
+        "/workflows/{workflow_uuid}/publications",
+        summary="发布实验操作",
+        status_code=201,
+        response_model=WorkflowPublishSuccessResponse,
+        responses={
+            200: {
+                "model": BackendErrorResponse,
+                "description": "工作流修订、图或发布条件校验未通过",
+            }
+        },
+    )
     def publish_workflow_contract(
-        workflow_uuid: str,
+        workflow_uuid: WorkflowUUIDPath,
         body: PublishWorkflowContractRequest,
     ) -> JSONResponse:
-        """幂等冻结与当前修订一致的工作流合同。"""
+        """把当前实验操作修订发布为可复用状态。
+
+        参数：``workflow_uuid`` 是待发布工作流的稳定 UUID，``body.revision`` 是
+        调用方确认的当前修订。返回：发布结果；发布成功后，工作流列表和详情会
+        返回 ``status=published``，其他工作流即可选择它作为子工作流。异常：服务层
+        错误按既有 Backend 包络返回。该接口不是“新增发布记录”操作，返回中的历史
+        扩展字段仅为旧客户端兼容保留，前端不应据此实现版本管理。
+        """
 
         return _success(
             service.publish_workflow_contract(

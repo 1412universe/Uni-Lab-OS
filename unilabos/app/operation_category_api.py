@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from unilabos.app.workflow_api import (
     BackendJSONResponse,
     BackendJSONRoute,
     workflow_success_response,
+)
+from unilabos.app.workflow_openapi import (
+    BackendEmptySuccessResponse,
+    BackendErrorResponse,
+    OperationCategoryListSuccessResponse,
+    OperationCategorySuccessResponse,
 )
 from unilabos.workflow.service import WorkflowService
 
@@ -22,20 +30,49 @@ class _StrictModel(BaseModel):
 class OperationCategoryCreateRequest(_StrictModel):
     """新增实验操作类别的公共 DTO。"""
 
-    name: str = Field(min_length=1, max_length=64)
-    sort_order: int = Field(default=100, ge=0, le=10_000, strict=True)
+    name: str = Field(
+        min_length=1,
+        max_length=64,
+        description="类别显示名称",
+        examples=["数据处理"],
+    )
+    sort_order: int = Field(
+        default=100,
+        ge=0,
+        le=10_000,
+        strict=True,
+        description="类别排序值；数值越小越靠前",
+        examples=[40],
+    )
 
 
 class OperationCategoryUpdateRequest(_StrictModel):
     """修改实验操作类别名称或顺序的公共 DTO。"""
 
-    name: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="新的类别显示名称；不修改时省略",
+        examples=["数据处理"],
+    )
     sort_order: int | None = Field(
         default=None,
         ge=0,
         le=10_000,
         strict=True,
+        description="新的类别排序值；数值越小越靠前",
+        examples=[40],
     )
+
+
+CategoryUUIDPath = Annotated[
+    str,
+    Path(
+        description="实验操作类别的稳定 UUID",
+        examples=["1ade6f36-40a9-58fe-a6c8-c7418e651a49"],
+    ),
+]
 
 
 def create_operation_category_router(service: WorkflowService) -> APIRouter:
@@ -51,7 +88,11 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
         route_class=BackendJSONRoute,
     )
 
-    @router.get("")
+    @router.get(
+        "",
+        summary="查询实验操作类别",
+        response_model=OperationCategoryListSuccessResponse | BackendErrorResponse,
+    )
     def list_experiment_operation_categories() -> BackendJSONResponse:
         """返回领域包当前可用的实验操作类别。
 
@@ -61,7 +102,18 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
 
         return workflow_success_response({"items": service.list_operation_categories()})
 
-    @router.post("")
+    @router.post(
+        "",
+        summary="新增实验操作类别",
+        status_code=201,
+        response_model=OperationCategorySuccessResponse,
+        responses={
+            200: {
+                "model": BackendErrorResponse,
+                "description": "类别名称冲突或领域包不可写",
+            }
+        },
+    )
     def create_experiment_operation_category(
         body: OperationCategoryCreateRequest,
     ) -> BackendJSONResponse:
@@ -76,9 +128,13 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
             status=201,
         )
 
-    @router.get("/{category_uuid}")
+    @router.get(
+        "/{category_uuid}",
+        summary="查询实验操作类别详情",
+        response_model=OperationCategorySuccessResponse | BackendErrorResponse,
+    )
     def get_experiment_operation_category(
-        category_uuid: str,
+        category_uuid: CategoryUUIDPath,
     ) -> BackendJSONResponse:
         """按稳定 UUID 返回一个实验操作类别。
 
@@ -88,9 +144,13 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
 
         return workflow_success_response(service.get_operation_category(category_uuid))
 
-    @router.put("/{category_uuid}")
+    @router.put(
+        "/{category_uuid}",
+        summary="更新实验操作类别",
+        response_model=OperationCategorySuccessResponse | BackendErrorResponse,
+    )
     def update_experiment_operation_category(
-        category_uuid: str,
+        category_uuid: CategoryUUIDPath,
         body: OperationCategoryUpdateRequest,
     ) -> BackendJSONResponse:
         """修改实验操作类别名称或展示顺序。
@@ -106,9 +166,13 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
             )
         )
 
-    @router.delete("/{category_uuid}")
+    @router.delete(
+        "/{category_uuid}",
+        summary="删除实验操作类别",
+        response_model=BackendEmptySuccessResponse | BackendErrorResponse,
+    )
     def delete_experiment_operation_category(
-        category_uuid: str,
+        category_uuid: CategoryUUIDPath,
     ) -> BackendJSONResponse:
         """删除未被任何实验操作引用的类别。
 
