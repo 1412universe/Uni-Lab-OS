@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -48,6 +49,7 @@ from unilabos.workflow.models import (
     WorkflowEdgeWrite,
     WorkflowInventoryRequirementWrite,
     WorkflowNodeWrite,
+    WorkflowTaskPriority,
 )
 from unilabos.workflow.store_migrations import (
     ensure_device_action_run_schema,
@@ -80,6 +82,38 @@ def _load(value: Optional[str], fallback: Any) -> Any:
     if value is None or value == "":
         return fallback
     return decode_json_bytes(value.encode("utf-8"))
+
+
+def _stored_task_priority(value: Any) -> str | float:
+    """规范工作流任务（WorkflowTask）落库值并兼容旧的数值优先级。
+
+    参数：``value`` 是 SQLite 中的 ``workflow_task.priority`` 原始值，或创建
+    任务时传入的字符串枚举、旧数值权重。返回：``normal``/``high`` 字符串，或
+    旧调用方使用的有限浮点数。异常：非法字符串或非有限数值抛出
+    ``StoreConflict``，避免把不可排序的值写入任务事实。
+    """
+
+    if isinstance(value, WorkflowTaskPriority):
+        return value.value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {
+            WorkflowTaskPriority.NORMAL.value,
+            WorkflowTaskPriority.HIGH.value,
+        }:
+            return normalized
+        try:
+            numeric = float(normalized)
+        except (TypeError, ValueError):
+            raise StoreConflict("工作流任务优先级必须是 normal 或 high") from None
+    else:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            raise StoreConflict("工作流任务优先级格式无效") from None
+    if not math.isfinite(numeric):
+        raise StoreConflict("工作流任务优先级必须是有限值")
+    return numeric
 
 
 class StoreNotFound(LookupError):
@@ -1755,15 +1789,16 @@ class WorkflowStore:
         applied_graph: Dict[str, Any] | None = None,
         backend_task_uuid: str | None = None,
         invocation_key: str | None = None,
-        priority: float = 1.0,
+        priority: WorkflowTaskPriority | str | float = WorkflowTaskPriority.NORMAL,
         request_fingerprint: str = "",
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
         参数：工作流、任务、运行模式与目标标识创建意图；说明和元数据是公开
         请求事实；``backend_task_uuid`` 与 ``invocation_key`` 可标识上游同一次
-        工站调用，``priority`` 是冻结调度优先级，``request_fingerprint`` 防止同一
-        调用键重放不同载荷；``applied_graph`` 是进程内定义目录一次读取的不可变应用图，
+        工站调用，``priority`` 是本次任务的 ``normal``/``high`` 字符串枚举（旧
+        工站调用仍可暂存数值权重），``request_fingerprint`` 防止同一调用键重放不同载荷；
+        ``applied_graph`` 是进程内定义目录一次读取的不可变应用图，
         省略时仅为兼容持久定义 Store 从当前事务读取；``plan_builder`` 必须从该
         同一应用图返回已解析输入、冻结快照、执行计划（ExecutionPlan）及作业；可选
         ``inventory_allocation_builder`` 在首次写入前用同一工作流事务锁校验
@@ -1771,6 +1806,7 @@ class WorkflowStore:
         异常：图不存在、计划或输入无效及数据库失败均回滚任务和全部作业写入。
         """
 
+        stored_priority = _stored_task_priority(priority)
         now = utc_now()
         with self.transaction() as conn:
             if backend_task_uuid is not None or invocation_key is not None:
@@ -1841,7 +1877,7 @@ class WorkflowStore:
                     _json(prepared.resolved_input),
                     backend_task_uuid,
                     invocation_key,
-                    float(priority),
+                    stored_priority,
                     request_fingerprint,
                 ),
             )
@@ -1858,7 +1894,7 @@ class WorkflowStore:
                     "backend_task_uuid": backend_task_uuid,
                     "invocation_key": invocation_key,
                     "workflow_uuid": workflow_uuid,
-                    "priority": float(priority),
+                    "priority": stored_priority,
                 },
             )
             self._append_runtime_event(
@@ -3749,7 +3785,7 @@ class WorkflowStore:
             **cls._base(row),
             "workflow_uuid": row["workflow_uuid"],
             "execution_kind": row["execution_kind"],
-            "priority": float(row["priority"]),
+            "priority": _stored_task_priority(row["priority"]),
             "status": row["status"],
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),

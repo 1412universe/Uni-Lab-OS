@@ -111,7 +111,8 @@ def ensure_station_task_submission_schema(connection: sqlite3.Connection) -> Non
 
     参数：``connection`` 是工作流运行库初始化事务的唯一写连接。返回无；幂等
     增加全局任务身份、调用键和优先级，并为同一 Backend 调用建立活动唯一索引。
-    异常由初始化事务回滚，禁止在无法证明调用幂等时开放工站任务接口。
+    新建数据库的优先级默认值为 ``normal``；旧库中的数值优先级继续兼容。异常由
+    初始化事务回滚，禁止在无法证明调用幂等时开放工站任务接口。
     """
 
     task_columns = {
@@ -128,7 +129,7 @@ def ensure_station_task_submission_schema(connection: sqlite3.Connection) -> Non
         )
     if "priority" not in task_columns:
         connection.execute(
-            "ALTER TABLE workflow_task ADD COLUMN priority REAL NOT NULL DEFAULT 1"
+            "ALTER TABLE workflow_task ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'"
         )
     connection.execute(
         """

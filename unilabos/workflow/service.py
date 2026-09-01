@@ -78,6 +78,7 @@ from unilabos.workflow.models import (
     CandidateSourceMapEntry,
     WorkflowEdgeWrite,
     WorkflowNodeWrite,
+    WorkflowTaskPriority,
     normalize_json_array,
     normalize_json_object,
     validate_uuid,
@@ -2850,7 +2851,7 @@ class WorkflowService:
         inventory_bindings: list[dict[str, Any]] | None = None,
         backend_task_uuid: str | None = None,
         invocation_key: str | None = None,
-        priority: float = 1.0,
+        priority: WorkflowTaskPriority | str | float = WorkflowTaskPriority.NORMAL,
         request_fingerprint: str = "",
     ) -> dict[str, Any]:
         """从已应用工作流图创建一次工作流任务（WorkflowTask）及其作业。
@@ -2859,8 +2860,9 @@ class WorkflowService:
         单节点运行模式；``target_node_uuid`` 是单节点运行目标；``input_value``
         是任务输入；``description`` 与 ``meta_data`` 是用户说明和公开元数据；
         ``inventory_bindings`` 把本次执行的逻辑数量需求绑定到具体试剂或当前
-        内容物库存；可选 Backend Task、调用键、优先级和请求指纹用于工站调用
-        幂等，不允许调用方提交任何中间节点参数。
+        内容物库存；``priority`` 接受 ``normal``/``high`` 字符串枚举并随任务
+        持久化，调度顺序由后续调度器实现；可选 Backend Task、调用键和请求指纹
+        仅用于工站调用幂等，不允许调用方提交任何中间节点参数。
         返回：同一事务创建的工作流任务及工作流节点作业（WorkflowNodeJob）投影。
         异常：身份、运行模式、输入或执行计划不合法时抛出稳定工作流错误；输入
         合同解析、默认值填充与计划绑定全部在同一创建事务的首次写入前完成。
@@ -3096,11 +3098,19 @@ class WorkflowService:
         workflow_uuid: str,
         start_node_uuids: list[str],
         breakpoint_node_uuids: list[str],
+        priority: WorkflowTaskPriority | str | float = WorkflowTaskPriority.NORMAL,
         input_value: dict[str, Any],
         description: str | None,
         meta_data: dict[str, Any],
     ) -> dict[str, Any]:
-        """创建带不可变起始点、断点和首个 Admission Hold 的调试任务。"""
+        """创建带不可变起始点、断点和首个 Admission Hold 的调试任务。
+
+        参数：``priority`` 接受 ``normal``/``high`` 字符串枚举并随任务持久化；
+        旧的数值优先级仅为兼容已有内部调用，调度排序由后续调度器负责。其余
+        参数分别定义工作流、起始节点、断点、输入和审计信息。返回：标准
+        WorkflowTask 投影。异常：输入、工作流图或任务写入不合法时抛出稳定
+        ``WorkflowError``，失败不留下半个调试任务。
+        """
 
         workflow_uuid = self.get_workflow(workflow_uuid)["uuid"]
         try:
@@ -3141,6 +3151,7 @@ class WorkflowService:
                     task_uuid=str(uuid4()),
                     run_mode="step",
                     target_node_uuid=None,
+                    priority=priority,
                     description=description,
                     meta_data=meta_data,
                     plan_builder=plan_builder,

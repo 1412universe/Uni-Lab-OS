@@ -40,6 +40,7 @@ from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.models import (
     WorkflowEdgeWrite,
     WorkflowNodeWrite,
+    WorkflowTaskPriority,
     normalize_json_array,
     normalize_json_object,
     validate_uuid,
@@ -392,6 +393,11 @@ class WorkflowTaskCreateRequest(_BackendModel):
     workflow_uuid: str
     run_mode: str = "normal"
     target_node_uuid: Optional[str] = None
+    priority: WorkflowTaskPriority = Field(
+        default=WorkflowTaskPriority.NORMAL,
+        description="任务优先级：normal 普通任务，high 高优先级任务",
+        examples=["normal"],
+    )
     input: Dict[str, Any] = Field(default_factory=dict)
     inventory_bindings: List[WorkflowInventoryBindingRequest] = Field(
         default_factory=list
@@ -473,6 +479,11 @@ class DebugWorkflowTaskCreateRequest(_BackendModel):
     workflow_uuid: str
     start_node_uuids: List[str]
     breakpoint_node_uuids: List[str] = Field(default_factory=list)
+    priority: WorkflowTaskPriority = Field(
+        default=WorkflowTaskPriority.NORMAL,
+        description="任务优先级：normal 普通任务，high 高优先级任务",
+        examples=["normal"],
+    )
     input: Dict[str, Any] = Field(default_factory=dict)
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
@@ -1174,8 +1185,9 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """通过公共接口创建一次工作流任务（WorkflowTask）。
 
-        参数：``body`` 携带工作流身份、运行模式和任务输入。返回：HTTP 201 的
-        标准任务投影，包含已规范化输入与冻结执行计划（ExecutionPlan）。异常：
+        参数：``body`` 携带工作流身份、运行模式、任务优先级和任务输入。返回：
+        HTTP 201 的标准任务投影，包含已规范化输入与冻结执行计划（ExecutionPlan）。
+        异常：
         服务层稳定错误由应用异常处理器转换为后端业务响应。
         """
 
@@ -1184,6 +1196,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 workflow_uuid=body.workflow_uuid,
                 run_mode=body.run_mode,
                 target_node_uuid=body.target_node_uuid,
+                priority=body.priority.value,
                 input_value=body.input,
                 description=body.description,
                 meta_data=body.meta_data,
@@ -1253,13 +1266,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def create_debug_workflow_task(
         body: DebugWorkflowTaskCreateRequest,
     ) -> JSONResponse:
-        """以不可变起始点和断点配置创建标准工作流任务。"""
+        """以不可变起始点、断点和任务优先级创建标准工作流任务。"""
 
         return _success(
             service.create_debug_workflow_task(
                 workflow_uuid=body.workflow_uuid,
                 start_node_uuids=body.start_node_uuids,
                 breakpoint_node_uuids=body.breakpoint_node_uuids,
+                priority=body.priority.value,
                 input_value=body.input,
                 description=body.description,
                 meta_data=body.meta_data,

@@ -14,11 +14,12 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from unilabos.app.scheduler.resource_lock import conflicting_resource_lock_keys
+from unilabos.app.scheduler.models import priority_weight
 from unilabos.app.scheduler.ordering import (
     DEFAULT_AGING_INTERVAL_SECONDS,
     aged_priority,
 )
+from unilabos.app.scheduler.resource_lock import conflicting_resource_lock_keys
 from unilabos.workflow.execution_claim import (
     ensure_execution_claim,
     next_fencing_token,
@@ -241,7 +242,7 @@ def try_acquire_execution_locks(
         current_enqueued_at=enqueued_at,
         current_task_create_time=str(current_task["create_time"]),
         current_task_uuid=task_uuid,
-        current_priority=float(current_task["priority"]),
+        current_priority=priority_weight(current_task["priority"]),
         requested_keys=requested_keys - owned_tenancy_keys,
         aging_interval_seconds=aging_interval_seconds,
     )
@@ -602,7 +603,7 @@ def _older_conflicting_waiter(
             str(row["task_create_time"]),
             str(row["workflow_task_uuid"]),
             str(row["workflow_node_job_uuid"]),
-            float(row["priority"]),
+            priority_weight(row["priority"]),
         )
         grouped[order].add(str(row["lock_key"]))
     now_seconds = _rfc3339_seconds(utc_now())

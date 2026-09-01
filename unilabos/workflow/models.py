@@ -8,6 +8,7 @@ boundary, and never carry legacy Run identifiers.
 from __future__ import annotations
 
 import math
+from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
@@ -17,6 +18,17 @@ from unilabos.workflow.json_codec import MAX_BACKEND_JSON_DEPTH
 
 JsonObject = Dict[str, Any]
 JsonArray = List[Any]
+
+
+class WorkflowTaskPriority(str, Enum):
+    """工作流任务（WorkflowTask）的创建优先级枚举。
+
+    ``normal`` 表示普通任务，``high`` 表示高优先级任务。该枚举只定义并
+    传递任务创建时的业务值；具体调度排序由调度器（Scheduler）另行负责。
+    """
+
+    NORMAL = "normal"
+    HIGH = "high"
 
 
 def validate_json_value(value: Any) -> Any:
@@ -410,6 +422,7 @@ __all__ = [
     "WorkflowEdgeWrite",
     "WorkflowInventoryRequirementWrite",
     "WorkflowNodeWrite",
+    "WorkflowTaskPriority",
     "normalize_json_array",
     "normalize_json_object",
     "validate_json_value",

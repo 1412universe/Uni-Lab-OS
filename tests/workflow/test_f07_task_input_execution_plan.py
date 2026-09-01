@@ -237,6 +237,63 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     assert jobs == original_jobs
 
 
+def test_workflow_task_priority_enum_is_accepted_and_persisted(
+    tmp_path: Path,
+) -> None:
+    """工作流任务接口接受 normal/high，并把默认值和显式值分别写入 SQLite。
+
+    参数：``tmp_path`` 提供隔离运行库。返回：无。异常：公共 HTTP 接口或任务
+    持久化合同不满足时由断言报告；本测试不触碰调度器排序实现。
+    """
+
+    client, store = _client(tmp_path / "task-priority.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        high = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "input": {"count": 1},
+                "priority": "high",
+            },
+        )
+        normal = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "input": {"count": 1},
+            },
+        )
+        invalid = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "input": {"count": 1},
+                "priority": "urgent",
+            },
+        )
+
+        assert high.status_code == 201
+        assert normal.status_code == 201
+        assert invalid.status_code == 200
+        assert invalid.json()["code"] == 1000
+        assert high.json()["data"]["priority"] == "high"
+        assert normal.json()["data"]["priority"] == "normal"
+        high_uuid = high.json()["data"]["uuid"]
+        normal_uuid = normal.json()["data"]["uuid"]
+        assert client.get(f"/api/v1/workflow-tasks/{high_uuid}").json()["data"][
+            "priority"
+        ] == "high"
+        assert client.get(f"/api/v1/workflow-tasks/{normal_uuid}").json()["data"][
+            "priority"
+        ] == "normal"
+        assert client.get(
+            f"/api/v1/workflow-tasks?workflow_uuid={workflow_uuid}"
+        ).json()["data"]["total"] == 2
+    finally:
+        store.close()
+
+
 def test_station_invocation_is_idempotent_and_allows_same_workflow_twice(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
