@@ -276,6 +276,7 @@ def test_split_runtime_launches_share_local_edge_protocol_and_stable_state(
     backend = resolve_backend_launch(
         paths,
         graph_path="deployment/graphs/graph.json",
+        startup_mode="product",
         backend_port=48_101,
         hostlink_port=48_102,
     )
@@ -292,7 +293,11 @@ def test_split_runtime_launches_share_local_edge_protocol_and_stable_state(
     )
     assert "--process_role" in backend.command
     assert "workspace_backend" in backend.command
+    assert _argument_value(backend.command, "--run_mode") == "product"
+    assert backend.metadata["startupMode"] == "product"
     assert "edge_control" in first_edge.command
+    assert _argument_value(first_edge.command, "--run_mode") == "product"
+    assert first_edge.metadata["startupMode"] == "product"
     assert "fastapi" not in first_edge.command
     assert "--is_slave" not in first_edge.command
     assert "--hostlink_addr" not in first_edge.command

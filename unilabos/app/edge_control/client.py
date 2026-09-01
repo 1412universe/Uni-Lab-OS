@@ -1,4 +1,4 @@
-"""后端调度器与 HostNode 之间的生产 Edge 协议桥。"""
+"""本地 Scheduler 与 HostNode 之间的 Edge 协议桥。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,6 @@ from unilabos.app.communication import BaseCommunicationClient
 from unilabos.app.device_action_capabilities import (
     project_device_action_capabilities,
 )
-from unilabos.app.edge_control.addressing import derive_scheduler_address
 from unilabos.app.edge_control.http import (
     BACKEND_UNAUTHORIZED_BUSINESS_CODE,
     EdgeDataPlane,
@@ -153,7 +152,7 @@ class EdgeControlSettings:
 
     @classmethod
     def from_config(cls) -> EdgeControlSettings:
-        """从进程配置冻结动作协议、本地调度与上游 Backend 参数。
+        """从进程配置冻结动作协议与本地调度参数。
 
         参数：无。返回不可变客户端设置。异常：数值配置转换失败时原样传播；
         地址与凭据的完整性在 HTTP/WS 建连边界继续关闭式校验。
@@ -162,11 +161,9 @@ class EdgeControlSettings:
         scheduler_address = str(
             EdgeControlConfig.scheduler_addr
             or HTTPConfig.schedule_addr
-            or derive_scheduler_address(HTTPConfig.remote_addr)
+            or "http://127.0.0.1:8002"
         ).strip()
-        backend_address = str(
-            EdgeControlConfig.backend_addr or HTTPConfig.remote_addr
-        ).strip()
+        backend_address = scheduler_address
         edge_key = str(EdgeControlConfig.edge_key or BasicConfig.machine_name).strip()
         state_db = str(EdgeControlConfig.state_db or "").strip()
         if not state_db:
@@ -185,9 +182,7 @@ class EdgeControlSettings:
             reconnect_interval=float(EdgeControlConfig.reconnect_interval),
             request_timeout=float(EdgeControlConfig.request_timeout),
             event_retry_interval=float(EdgeControlConfig.event_retry_interval),
-            backend_api_key=str(
-                EdgeControlConfig.backend_api_key or EdgeControlConfig.api_key or ""
-            ).strip(),
+            backend_api_key=str(EdgeControlConfig.api_key or "").strip(),
         )
 
 

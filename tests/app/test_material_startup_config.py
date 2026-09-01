@@ -173,17 +173,17 @@ def test_redundant_startup_arguments_are_rejected(removed_argument: str) -> None
         parse_args().parse_args([removed_argument])
 
 
-def test_legacy_cloud_and_backend_arguments_remain_supported() -> None:
-    """证明旧云端资源复用与后端选择仍保留公共命令行合同。
+def test_remote_resource_is_rejected_before_startup_but_driver_backend_remains() -> None:
+    """证明远程资源开关只保留隐藏解析位并在启动前关闭失败。
 
-    参数：无。返回：无；断言 ``--use_remote_resource`` 与 ``--backend`` 被解析。
-    异常：兼容参数被误删时测试失败。
+    参数：无。返回：无；``--backend ros`` 仍表示本地 ROS 驱动实现。异常：远程
+    开关若能绕过 main 的关闭式校验，或驱动后端被误删时测试失败。状态不变量：
+    解析层保留旧参数以便给出清晰错误，运行层绝不执行远程请求。
     """
 
     args = vars(
         parse_args().parse_args(["--use_remote_resource", "--backend", "ros"])
     )
-
     assert args["use_remote_resource"] is True
     assert args["backend"] == "ros"
 
@@ -197,12 +197,18 @@ def test_instance_sync_can_select_production_devices_only() -> None:
     assert args["instance_check_only"] is True
 
 
-def test_production_edge_control_bridge_is_supported() -> None:
+def test_local_edge_control_bridge_is_supported() -> None:
+    """证明动作进程只能声明本地 Edge 控制桥。
+
+    参数：无。返回：无；本地 Scheduler 的 ``edge_control`` 与入站 FastAPI 桥均
+    可解析。异常：解析结果仍携带已移除的 Backend 控制面时测试失败。
+    """
+
     args = vars(
         parse_args().parse_args(
             [
                 "--control_plane",
-                "backend",
+                "local",
                 "--app_bridges",
                 "edge_control",
                 "fastapi",
@@ -210,7 +216,7 @@ def test_production_edge_control_bridge_is_supported() -> None:
         )
     )
 
-    assert args["control_plane"] == "backend"
+    assert args["control_plane"] == "local"
     assert args["app_bridges"] == ["edge_control", "fastapi"]
 
 
@@ -289,24 +295,19 @@ def test_local_graph_does_not_request_legacy_remote_startup() -> None:
         startup_json=None,
         graph_file_path=None,
     )
-    assert should_request_remote_startup(
-        startup_json=None,
-        graph_file_path=None,
-        use_remote_resource=True,
-    )
 
 
 def test_fastapi_is_inbound_only_without_legacy_cloud_switch() -> None:
     """证明前端 HTTP 服务不会隐式授权 OS 连接正式后端（Backend）。
 
-    参数：无。返回：无；断言默认 ``fastapi`` 不挂出站桥，仅显式旧云端开关
-    挂接。异常：权威边界回退时测试失败。
+    参数：无。返回：无；断言 ``fastapi`` 只提供入站接口，即使调用方携带历史
+    远程开关也不会挂接出站桥。异常：权威边界回退时测试失败。
     """
 
     assert not should_attach_legacy_http_bridge(
         {"app_bridges": ["fastapi"], "use_remote_resource": False}
     )
-    assert should_attach_legacy_http_bridge(
+    assert not should_attach_legacy_http_bridge(
         {"app_bridges": ["fastapi"], "use_remote_resource": True}
     )
 

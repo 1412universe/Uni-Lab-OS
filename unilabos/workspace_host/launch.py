@@ -58,23 +58,18 @@ def resolve_backend_launch(
     *,
     graph_path: str | None = None,
     runtime_mode: str | None = None,
+    startup_mode: str | None = None,
     backend_port: int | None = None,
     hostlink_port: int | None = None,
 ) -> LaunchPlan:
-    """解析 Workspace Backend 的可复现启动计划。
+    """解析本地 Scheduler/HTTP 进程的可复现启动计划。
 
-    Args:
-        paths: 当前工作区的标准路径集合。
-        graph_path: 可选的显式工作流图路径。
-        runtime_mode: 可选的显式 OS 运行模式。
-        backend_port: 可选的 Backend 监听端口。
-        hostlink_port: 可选的 HostLink 监听端口。
-
-    Returns:
-        包含命令、环境、身份代次与配置元数据的 Backend 启动计划。
-
-    Raises:
-        WorkspaceHostError: 工作区文件、端口、模式或设备包范围配置无效。
+    参数：``paths`` 是工作区路径；其余参数分别是图路径、执行模式、启动可见范围
+    和端口。``startup_mode`` 取 ``develop`` 或 ``product``，默认 ``develop``。
+    返回：包含命令、环境、身份代次与配置元数据的本地进程启动计划。异常：工作区
+    文件、端口、模式或设备包范围无效时抛出 ``WorkspaceHostError``；配置中的
+    ``domainMode=backend`` 会立即失败，不会发出远端请求。状态不变量：该计划的
+    控制面始终是本站 OS，``backendUrl`` 不参与地址选择。
     """
 
     config = load_environment_configuration(paths)
@@ -91,10 +86,18 @@ def resolve_backend_launch(
         mode = "dry-run"
     if mode not in {"normal", "dry-run"}:
         raise WorkspaceHostError("runtime_mode_invalid", f"无效启动模式：{mode}")
-    domain_mode = _optional_text(config.get("domainMode")) or "local"
-    if domain_mode not in {"local", "backend"}:
+    visibility_mode = (
+        startup_mode or _optional_text(config.get("startupMode")) or "develop"
+    )
+    if visibility_mode not in {"develop", "product"}:
         raise WorkspaceHostError(
-            "domain_mode_invalid", f"无效 Domain Authority：{domain_mode}"
+            "startup_mode_invalid", f"无效启动可见范围：{visibility_mode}"
+        )
+    domain_mode = _optional_text(config.get("domainMode")) or "local"
+    if domain_mode != "local":
+        raise WorkspaceHostError(
+            "backend_mode_removed",
+            "当前 OS 只支持 local 控制面，不再支持 backend 模式",
         )
     external_devices_only = config.get("externalDevicesOnly", True)
     if not isinstance(external_devices_only, bool):
@@ -104,7 +107,7 @@ def resolve_backend_launch(
     generation = str(uuid.uuid4())
     runtime_directory = paths.runtime / "backend" / generation
     runtime_directory.mkdir(parents=True, exist_ok=False)
-    # 工站调度状态不随上游 Backend 连接模式变化；切换上游后仍由本站继续拥有。
+    # 工站调度状态固定由本站拥有，跨进程启动只复用同一份本地状态。
     state_directory = paths.runtime / "backend" / "local-domain"
     state_directory.mkdir(parents=True, exist_ok=True)
     legacy_state = (
@@ -131,18 +134,8 @@ def resolve_backend_launch(
     edge_token = _workspace_host_token(paths)
     edge_key = _workspace_edge_key(paths)
     backend_address = f"http://127.0.0.1:{backend_port}"
-    upstream_backend_address = (
-        str(config.get("backendUrl") or "").rstrip("/")
-        if domain_mode == "backend"
-        else backend_address
-    )
-    if not upstream_backend_address:
-        raise WorkspaceHostError(
-            "backend_url_missing", "Backend 上游模式未配置服务地址"
-        )
-    upstream_backend_token = (
-        os.environ.get("UNILAB_BACKEND_API_KEY") or edge_token
-    )
+    upstream_backend_address = backend_address
+    upstream_backend_token = edge_token
     environment.update(
         {
             "UNILABOS_EDGECONTROLCONFIG_API_KEY": edge_token,
@@ -152,6 +145,7 @@ def resolve_backend_launch(
             "UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR": backend_address,
             "UNILABOS_HOSTLINKCONFIG_PORT": str(hostlink_port),
             "UNILABOS_WORKBENCH_RUNTIME_MODE": mode,
+            "UNILABOS_WORKBENCH_STARTUP_MODE": visibility_mode,
             "UNILABOS_WORKBENCH_GRAPH_FINGERPRINT": _sha256(graph),
             "ROS_DOMAIN_ID": str(2 + (uuid.uuid4().int % 98)),
         }
@@ -173,6 +167,8 @@ def resolve_backend_launch(
         "workspace_backend",
         "--control_plane",
         domain_mode,
+        "--run_mode",
+        visibility_mode,
         "--backend",
         "ros",
         "--app_bridges",
@@ -199,9 +195,10 @@ def resolve_backend_launch(
             "graphPath": str(graph),
             "graphFingerprint": _sha256(graph),
             "runtimeMode": mode,
+            "startupMode": visibility_mode,
             "externalDevicesOnly": external_devices_only,
             "domainMode": domain_mode,
-            "backendUrl": _optional_text(config.get("backendUrl")),
+            "backendUrl": None,
             "schedulerUrl": _optional_text(config.get("schedulerUrl")),
             "hostLinkPort": hostlink_port,
             "runtimeDirectory": str(runtime_directory),
@@ -220,17 +217,12 @@ def resolve_backend_launch(
 def resolve_edge_launch(
     paths: WorkspacePaths, backend: dict[str, object]
 ) -> LaunchPlan:
-    """从 Backend 元数据解析共享配置的 Edge 启动计划。
+    """解析连接本站 Scheduler 的 Edge 启动计划。
 
-    Args:
-        paths: 当前工作区的标准路径集合。
-        backend: 已就绪 Backend 的地址与启动元数据投影。
-
-    Returns:
-        与 Backend 使用相同设备包范围和领域权威的 Edge 启动计划。
-
-    Raises:
-        WorkspaceHostError: Backend 地址、元数据、领域权威或设备包范围无效。
+    参数：``paths`` 是工作区路径，``backend`` 是本站 Scheduler 的地址和元数据。
+    返回：与本站控制面共享设备包范围的 Edge 启动计划。异常：元数据、地址或设备
+    包范围无效时抛出 ``WorkspaceHostError``；遇到 ``domainMode=backend`` 立即
+    失败。状态不变量：Edge 只连接同一工作区的本地 Scheduler。
     """
 
     metadata = backend.get("metadata")
@@ -241,6 +233,11 @@ def resolve_edge_launch(
     runtime_directory.mkdir(parents=True, exist_ok=False)
     ready_file = runtime_directory / "ready.json"
     mode = str(metadata.get("runtimeMode") or "normal")
+    visibility_mode = str(metadata.get("startupMode") or "develop")
+    if visibility_mode not in {"develop", "product"}:
+        raise WorkspaceHostError(
+            "backend_not_ready", "Backend 启动可见范围元数据无效"
+        )
     external_devices_only = metadata.get("externalDevicesOnly", True)
     if not isinstance(external_devices_only, bool):
         raise WorkspaceHostError(
@@ -250,29 +247,18 @@ def resolve_edge_launch(
     if not local_backend_address:
         raise WorkspaceHostError("backend_not_ready", "Backend 缺少服务地址")
     domain_mode = str(metadata.get("domainMode") or "local")
-    if domain_mode not in {"local", "backend"}:
+    if domain_mode != "local":
         raise WorkspaceHostError(
-            "domain_mode_invalid", f"无效 Domain Authority：{domain_mode}"
+            "backend_mode_removed",
+            "当前 OS 只支持 local 控制面，不再支持 backend 模式",
         )
-    authority_address = (
-        str(metadata.get("backendUrl") or "").rstrip("/")
-        if domain_mode == "backend"
-        else local_backend_address
-    )
-    if not authority_address:
-        raise WorkspaceHostError(
-            "backend_url_missing", "Backend Authority 未配置服务地址"
-        )
-    # 动作执行进程永远连接同工作区的工站调度进程；远端 Backend 不再派发节点。
+    authority_address = local_backend_address
+    # 动作执行进程永远连接同工作区的工站调度进程，不连接远端服务。
     scheduler_address = local_backend_address
-    authority_token = (
-        os.environ.get("UNILAB_BACKEND_API_KEY") or _workspace_host_token(paths)
-        if domain_mode == "backend"
-        else _workspace_host_token(paths)
-    )
+    authority_token = _workspace_host_token(paths)
     edge_state_directory = paths.runtime / "edge"
     edge_state_directory.mkdir(parents=True, exist_ok=True)
-    # 命令序列和待提交结果始终属于本地工站调度权威，因此跨上游切换复用同一账本。
+    # 命令序列和待提交结果始终属于本地工站调度权威，两个进程复用同一账本。
     state_db = edge_state_directory / "edge_control.db"
     local_scheduler_token = _workspace_host_token(paths)
     environment = _runtime_environment(paths, generation)
@@ -285,6 +271,7 @@ def resolve_edge_launch(
             "UNILABOS_EDGECONTROLCONFIG_SCHEDULER_ADDR": scheduler_address,
             "UNILABOS_EDGECONTROLCONFIG_STATE_DB": str(state_db),
             "UNILABOS_WORKBENCH_RUNTIME_MODE": mode,
+            "UNILABOS_WORKBENCH_STARTUP_MODE": visibility_mode,
             "UNILABOS_WORKBENCH_PROCESS_ROLE": "edge_runtime",
             "UNILABOS_EDGE_READY_FILE": str(ready_file),
             # Isolate DDS discovery per Workspace.  Leaving Edge on domain 0
@@ -324,6 +311,8 @@ def resolve_edge_launch(
         "edge_runtime",
         "--control_plane",
         domain_mode,
+        "--run_mode",
+        visibility_mode,
         "--backend",
         "ros",
         "--app_bridges",
@@ -349,6 +338,7 @@ def resolve_edge_launch(
         metadata={
             "graphPath": metadata["graphPath"],
             "runtimeMode": mode,
+            "startupMode": visibility_mode,
             "externalDevicesOnly": external_devices_only,
             "domainMode": domain_mode,
             "authorityAddress": authority_address,

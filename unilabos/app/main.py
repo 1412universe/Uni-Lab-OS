@@ -42,6 +42,7 @@ from unilabos.app.workspace_package_bootstrap import (
     prepare_startup_community_packages,
     resolve_graph_file_path as _resolve_graph_file_path,
 )
+from unilabos.app.startup_mode import OSStartupMode, set_startup_mode
 from unilabos.config.config import (
     BasicConfig,
     HTTPConfig,
@@ -102,6 +103,27 @@ def convert_argv_dashes_to_underscores(args: argparse.ArgumentParser):
                 break
 
 
+def normalize_startup_mode_argv(
+    argv: Optional[List[str]] = None,
+) -> List[str]:
+    """把 ``unilab develop/product`` 转成统一的内部启动参数。
+
+    参数：``argv`` 是待规范化的命令行；省略时读取当前进程的 ``sys.argv``。
+    返回：新的参数列表，首个位置命令为 ``develop`` 或 ``product`` 时会被转换
+    为 ``--run_mode <mode>``，其余参数保持原顺序。异常：无；函数不解析其他
+    参数，也不启动设备。状态不变量：对非目标命令返回等价副本，避免修改调用方
+    的列表。
+    """
+
+    values = list(sys.argv if argv is None else argv)
+    if len(values) < 2 or values[1] not in {
+        OSStartupMode.DEVELOP.value,
+        OSStartupMode.PRODUCT.value,
+    }:
+        return values
+    return [values[0], "--run_mode", values[1], *values[2:]]
+
+
 def configure_workflow_editable_package_roots(
     args_dict: Dict[str, Any],
 ) -> tuple[str, ...]:
@@ -146,14 +168,14 @@ def should_bootstrap_local_resource_graph(
 
 
 def should_attach_legacy_http_bridge(args_dict: Dict[str, Any]) -> bool:
-    """判断是否挂接显式启用的旧云端 HTTP 桥。
+    """判断是否挂接旧云端 HTTP 桥。
 
-    参数：``args_dict`` 是规范化启动参数。返回：仅显式启用
-    ``--use_remote_resource`` 时为 ``True``。异常：无；``fastapi`` 只表示 OS
-    对前端提供入站 HTTP 服务，不授权任何后端（Backend）出站连接。
+    参数：``args_dict`` 是规范化启动参数。返回：始终为 ``False``；旧云端桥已随
+    Backend 控制面一起移除。异常：无。状态不变量：OS 的 HTTP 服务只作为前端
+    入站接口，不向 Backend 发起物料或工作流请求。
     """
 
-    return bool(args_dict.get("use_remote_resource", False))
+    return False
 
 
 def should_request_remote_startup(
@@ -162,18 +184,14 @@ def should_request_remote_startup(
     graph_file_path: Optional[str],
     use_remote_resource: bool = False,
 ) -> bool:
-    """只在显式旧云端模式且没有本地图时请求遗留启动图。
+    """判断是否请求远端启动图。
 
-    参数：``startup_json`` 与 ``graph_file_path`` 是已有启动图来源，
-    ``use_remote_resource`` 是旧云端兼容开关。返回：是否允许发出远端请求。
-    异常：无；普通 OS 启动始终关闭失败，不隐式连接后端（Backend）。
+    参数：保留历史调用签名以便上层逐步删除旧参数。返回：始终为 ``False``；
+    OS 现在必须从本地图或领域包加载资源图，不再向 Backend 请求启动数据。
+    异常：无。状态不变量：本地控制面是唯一资源图来源。
     """
 
-    return (
-        use_remote_resource
-        and startup_json is None
-        and graph_file_path is None
-    )
+    return False
 
 
 def should_prepare_workspace_product_runtime(args_dict: dict[str, Any]) -> bool:
@@ -259,9 +277,13 @@ def parse_args():
     """构建 UniLab-OS 主进程命令行解析器。
 
     参数：无。返回：包含产品启动和子命令参数的 ``ArgumentParser``；本函数只
-    定义合同，不读取或修改进程参数。
+    定义合同，并在当前进程以 ``unilab develop/product`` 启动时把简洁命令转换为
+    内部 ``--run_mode`` 参数。
     异常：无；参数错误只会在调用者后续执行 ``parse_args`` 时产生 ``SystemExit``。
     """
+    normalized_argv = normalize_startup_mode_argv()
+    if normalized_argv != sys.argv:
+        sys.argv[:] = normalized_argv
     parser = argparse.ArgumentParser(description="Start Uni-Lab Edge server.")
     subparsers = parser.add_subparsers(title="Valid subcommands", dest="command")
 
@@ -304,11 +326,20 @@ def parse_args():
     )
     parser.add_argument(
         "--control_plane",
-        choices=["local", "backend"],
+        choices=["local"],
         default="local",
         help=(
-            "上游模式：local 使用本站服务；backend 连接正式 Backend。"
-            "workspace_backend 在两种模式下都拥有本地工站调度与运行数据库。"
+            "控制面固定为 local；Backend 上游模式已移除。新启动请使用 "
+            "unilab develop 或 unilab product。"
+        ),
+    )
+    parser.add_argument(
+        "--run_mode",
+        choices=["develop", "product"],
+        default=OSStartupMode.DEVELOP.value,
+        help=(
+            "OS 启动可见范围；develop 展示已发布和未发布工作流/实验操作，"
+            "product 仅展示已发布普通工作流。通常使用同名启动命令。"
         ),
     )
     parser.add_argument(
@@ -329,11 +360,11 @@ def parse_args():
     parser.add_argument(
         "--app_bridges",
         nargs="+",
-        choices=["websocket", "edge_control", "fastapi"],
-        default=["websocket", "fastapi"],
+        choices=["edge_control", "fastapi"],
+        default=["fastapi"],
         help=(
-            "连接桥：websocket 是遗留云端通知，edge_control 是动作进程与本地"
-            "工站调度器的生产协议，fastapi 提供入站 HTTP 服务。"
+            "连接桥：edge_control 是动作进程与本地工站调度器的协议，"
+            "fastapi 提供入站 HTTP 服务。"
         ),
     )
     parser.add_argument(
@@ -380,7 +411,7 @@ def parse_args():
     parser.add_argument(
         "--use_remote_resource",
         action="store_true",
-        help="Use remote resources when starting unilab",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--config",
@@ -456,6 +487,18 @@ def parse_args():
         default=False,
         help="Load extra lab_ prefixed labware resources (529 auto-generated definitions from lab_resources.py)",
     )
+    # 这两个子命令主要用于帮助信息和直接使用 ArgumentParser 的调用方；main 在
+    # 真实命令行中会先把它们规范化为 --run_mode，从而允许后续全局参数自然跟随。
+    develop_parser = subparsers.add_parser(
+        "develop",
+        help="调试模式：展示已发布和未发布的工作流及实验操作",
+    )
+    develop_parser.set_defaults(run_mode=OSStartupMode.DEVELOP.value)
+    product_parser = subparsers.add_parser(
+        "product",
+        help="生产模式：仅展示已发布普通工作流",
+    )
+    product_parser.set_defaults(run_mode=OSStartupMode.PRODUCT.value)
     subparsers.add_parser(
         "template-sync",
         aliases=["template_sync"],
@@ -718,6 +761,21 @@ def main():
     args = parser.parse_args()
     args_dict = vars(args)
 
+    # 控制面已收敛为本地模式。即使调用方绕过命令包装器直接传入参数，
+    # 这里也再次校验，避免未来新增入口时意外恢复 Backend 出站连接。
+    if args_dict.get("control_plane") != "local":
+        parser.error("当前 OS 仅支持 local 控制面，不再支持 backend 模式")
+    if args_dict.get("use_remote_resource"):
+        parser.error("当前 OS 只支持本地资源，不再支持远程 Backend 资源")
+    try:
+        startup_mode = set_startup_mode(
+            args_dict.get("run_mode") or OSStartupMode.DEVELOP.value
+        )
+    except ValueError as error:
+        parser.error(str(error))
+    args_dict["control_plane"] = "local"
+    BasicConfig.startup_mode = startup_mode.value
+
     # Workspace Host commands are deliberately dispatched before runtime topology
     # validation and before any device/package product composition.
     if dispatch_workspace_host_command(args_dict):
@@ -977,6 +1035,10 @@ def main():
     print_status(f"当前工作目录为 {working_dir}", "info")
     if not check_mode:
         load_config_from_file(config_path)
+    # 配置文件只提供通用参数，启动命令对可见范围拥有最终决定权；重新写回全局
+    # 配置，防止旧 local_config.py 中同名字段覆盖 develop/product 选择。
+    BasicConfig.startup_mode = startup_mode.value
+    set_startup_mode(startup_mode)
 
     # 根据配置重新设置日志级别
     from unilabos.utils.log import configure_logger, configure_comm_logger, logger
@@ -1166,7 +1228,9 @@ def main():
     BasicConfig.extra_resource = args_dict.get("extra_resource", False)
     if BasicConfig.extra_resource:
         print_status("启用额外资源加载：将加载lab_开头的labware资源定义", "info")
-    BasicConfig.communication_protocol = "websocket"
+    # 本地控制面不创建遗留云端 WebSocket；Edge Runtime 只通过显式
+    # ``edge_control`` 桥连接同一工作区的 Scheduler。
+    BasicConfig.communication_protocol = "local"
     # HostLink：--hostlink_addr "addr[:port]"；slave 填 host 地址，host 填监听地址
     hostlink_addr = (args_dict.get("hostlink_addr") or "").strip()
     if hostlink_addr:

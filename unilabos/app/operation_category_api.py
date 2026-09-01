@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Path
 from pydantic import BaseModel, ConfigDict, Field
 
+from unilabos.app.startup_mode import allows_experiment_operations
 from unilabos.app.workflow_api import (
     BackendJSONResponse,
     BackendJSONRoute,
@@ -18,7 +19,7 @@ from unilabos.app.workflow_openapi import (
     OperationCategoryListSuccessResponse,
     OperationCategorySuccessResponse,
 )
-from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.service import WorkflowError, WorkflowService
 
 
 class _StrictModel(BaseModel):
@@ -97,9 +98,12 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
         """返回领域包当前可用的实验操作类别。
 
         参数：无。返回：按展示顺序排列的类别集合。异常：领域包配置损坏时交给
-        公共工作流错误适配器，避免前端使用半份分类数据。
+        公共工作流错误适配器，避免前端使用半份分类数据。生产模式不展示实验操作，
+        因此返回空列表；调试模式读取本地分类目录。
         """
 
+        if not allows_experiment_operations():
+            return workflow_success_response({"items": []})
         return workflow_success_response({"items": service.list_operation_categories()})
 
     @router.post(
@@ -138,10 +142,13 @@ def create_operation_category_router(service: WorkflowService) -> APIRouter:
     ) -> BackendJSONResponse:
         """按稳定 UUID 返回一个实验操作类别。
 
-        参数：``category_uuid`` 是路径身份。返回：类别读模型。异常：非法或缺失
-        身份由服务层映射为统一业务响应。
+        参数：``category_uuid`` 是路径身份。返回：类别读模型。异常：生产模式或
+        分类不存在时按统一 not_found 错误返回。状态不变量：生产模式不暴露实验
+        操作分类。
         """
 
+        if not allows_experiment_operations():
+            raise WorkflowError("not_found")
         return workflow_success_response(service.get_operation_category(category_uuid))
 
     @router.put(

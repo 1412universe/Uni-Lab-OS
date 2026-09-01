@@ -45,6 +45,16 @@ def register_workspace_subcommands(subparsers: Any) -> None:
             leaf.add_argument(
                 "--runtime-mode", choices=["normal", "dry-run"], default=None
             )
+        if action in {"start", "restart"}:
+            leaf.add_argument(
+                "--startup-mode",
+                choices=["develop", "product"],
+                default=None,
+                help=(
+                    "OS 可见范围：develop 展示已发布和未发布定义，"
+                    "product 仅展示已发布普通工作流。默认 develop。"
+                ),
+            )
         if action == "reset-local":
             leaf.add_argument(
                 "--yes",
@@ -60,20 +70,6 @@ def register_workspace_subcommands(subparsers: Any) -> None:
     operation.add_argument("operation_id")
     operation.add_argument("--workspace", dest="workspace_cli_path", default=None)
     operation.add_argument("--json", action="store_true", dest="workspace_json")
-    authority = actions.add_parser("authority")
-    authority.add_argument("mode", choices=["local", "backend"])
-    authority.add_argument("--backend-url", default=None)
-    authority.add_argument("--workspace", dest="workspace_cli_path", default=None)
-    authority.add_argument("--operation-id", default=None)
-    authority.add_argument("--wait", type=float, default=120.0)
-    authority.add_argument("--json", action="store_true", dest="workspace_json")
-    publish = actions.add_parser("publish")
-    publish.add_argument("--backend-url", required=True)
-    publish.add_argument("--workspace", dest="workspace_cli_path", default=None)
-    publish.add_argument("--operation-id", default=None)
-    publish.add_argument("--wait", type=float, default=300.0)
-    publish.add_argument("--activate", action="store_true")
-    publish.add_argument("--json", action="store_true", dest="workspace_json")
 
 
 def dispatch_workspace_command(args: dict[str, Any]) -> bool:
@@ -93,29 +89,6 @@ def dispatch_workspace_command(args: dict[str, Any]) -> bool:
         elif action == "operation":
             client = WorkspaceHostClient.discover(workspace)
             result = client.operation(str(args["operation_id"]))
-        elif action == "authority":
-            client = ensure_workspace_host(workspace)
-            result = client.execute(
-                "authority.switch",
-                parameters={
-                    "mode": args.get("mode"),
-                    "backendUrl": args.get("backend_url"),
-                },
-                operation_id=args.get("operation_id"),
-                timeout=float(args.get("wait") or 120.0),
-            )
-        elif action == "publish":
-            client = ensure_workspace_host(workspace)
-            result = client.execute(
-                "release.publish",
-                parameters={
-                    "backendUrl": args.get("backend_url"),
-                    "activate": bool(args.get("activate")),
-                    "verify": True,
-                },
-                operation_id=args.get("operation_id"),
-                timeout=float(args.get("wait") or 300.0),
-            )
         elif action == "reset-local":
             if not args.get("yes"):
                 raise WorkspaceHostError(
@@ -128,6 +101,7 @@ def dispatch_workspace_command(args: dict[str, Any]) -> bool:
                 for key, value in {
                     "graphPath": args.get("graph"),
                     "runtimeMode": args.get("runtime_mode"),
+                    "startupMode": args.get("startup_mode"),
                 }.items()
                 if value is not None
             }
@@ -144,6 +118,7 @@ def dispatch_workspace_command(args: dict[str, Any]) -> bool:
                 for key, value in {
                     "graphPath": args.get("graph"),
                     "runtimeMode": args.get("runtime_mode"),
+                    "startupMode": args.get("startup_mode"),
                 }.items()
                 if value is not None
             }

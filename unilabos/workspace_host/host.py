@@ -329,17 +329,20 @@ class WorkspaceHost:
         if command == "configuration.update":
             return self._update_configuration(parameters)
         if command == "authority.switch":
-            bootstrap = parameters.pop("bootstrap", True)
-            if not isinstance(bootstrap, bool):
-                raise WorkspaceHostError(
-                    "authority_parameters_invalid",
-                    "Authority bootstrap 必须是 boolean",
-                )
-            return self._switch_authority(parameters, bootstrap=bootstrap)
+            raise WorkspaceHostError(
+                "backend_mode_removed",
+                "当前 OS 固定使用 local 控制面，不能切换到 backend",
+            )
         if command == "release.publish":
-            return self._publish_release(parameters)
+            raise WorkspaceHostError(
+                "backend_mode_removed",
+                "当前 OS 不再向 Backend 发布或同步数据",
+            )
         if command == "release.inspect":
-            return self._inspect_release_target(parameters)
+            raise WorkspaceHostError(
+                "backend_mode_removed",
+                "当前 OS 不再检查远端 Backend 发布目标",
+            )
         if command == "renderer.attach":
             return self._attach_renderer(parameters)
         if command == "renderer.detach":
@@ -755,8 +758,9 @@ class WorkspaceHost:
     def _start_backend(self, parameters: dict[str, object]) -> dict[str, object]:
         """启动拥有工站调度权威的工作区后端进程。
 
-        参数：``parameters`` 可覆盖图和运行模式。返回工作区状态快照。异常：启动
-        或就绪探测失败时原样转为 ``WorkspaceHostError``，不启动动作执行进程。
+        参数：``parameters`` 可覆盖图、执行模式和启动可见范围。返回工作区状态
+        快照。异常：启动或就绪探测失败时原样转为 ``WorkspaceHostError``，不启动
+        动作执行进程。
         """
 
         with self._lock:
@@ -769,6 +773,8 @@ class WorkspaceHost:
             or _optional_text(configuration.get("graphPath")),
             runtime_mode=_optional_text(parameters.get("runtimeMode"))
             or _optional_text(configuration.get("runtimeMode")),
+            startup_mode=_optional_text(parameters.get("startupMode"))
+            or _optional_text(configuration.get("startupMode")),
             backend_port=self._backend_port,
         )
         self._spawn(plan)
@@ -1266,7 +1272,6 @@ class WorkspaceHost:
             "plcHandshakeProfile",
             "plcHandshakeWorkflow",
             "domainMode",
-            "backendUrl",
             "schedulerUrl",
         }
         unknown = sorted(set(parameters) - allowed)
@@ -1282,6 +1287,11 @@ class WorkspaceHost:
             raise WorkspaceHostError(
                 "configuration_invalid",
                 "externalDevicesOnly 必须是布尔值",
+            )
+        if parameters.get("domainMode", "local") != "local":
+            raise WorkspaceHostError(
+                "backend_mode_removed",
+                "当前 OS 只支持 local 控制面，不再支持 backend 模式",
             )
         normalized = dict(parameters)
         if "schedulerUrl" in normalized:
@@ -1309,101 +1319,17 @@ class WorkspaceHost:
         *,
         bootstrap: bool = True,
     ) -> dict[str, object]:
-        """Atomically move Canvas/Runtime and Edge to one Domain Authority."""
+        """拒绝已移除的远端控制面切换请求。
 
-        mode = _optional_text(parameters.get("mode"))
-        if mode not in {"local", "backend"}:
-            raise WorkspaceHostError(
-                "domain_mode_invalid", "Authority mode 必须是 local 或 backend"
-            )
-        backend_url = _optional_text(parameters.get("backendUrl"))
-        with self._lock:
-            previous = dict(self._configuration)
-            current_mode = str(previous.get("domainMode") or "local")
-            current_url = _optional_text(previous.get("backendUrl"))
-            current_scheduler_url = _optional_text(previous.get("schedulerUrl"))
-            backend_ready = self._components["backend"]["phase"] == "ready"
-            edge_ready = self._components["edge"]["phase"] == "ready"
-        if mode == "backend":
-            backend_url = self._normalize_backend_url(backend_url)
-            scheduler_url = self._normalize_scheduler_url(
-                parameters.get("schedulerUrl", current_scheduler_url)
-            )
-            if scheduler_url:
-                self._preflight_backend_authority(
-                    backend_url,
-                    scheduler_url,
-                )
-            else:
-                self._preflight_backend_authority(backend_url)
-        else:
-            # Authority mode and publication target are separate concerns.  A
-            # user must be able to return to Local, keep authoring against the
-            # workspace database, and publish a later release to the same
-            # centralized Backend without re-entering its address.
-            backend_url = current_url
-            scheduler_url = current_scheduler_url
-        if (
-            current_mode == mode
-            and current_url == backend_url
-            and current_scheduler_url == scheduler_url
-        ):
-            return self.snapshot()
-        if current_mode == "backend" and mode == "backend":
-            raise WorkspaceHostError(
-                "authority_transition_invalid",
-                "更换 Backend Authority 前必须先切回 local，以确定唯一同步源",
-            )
+        参数：``parameters`` 是历史 Authority 切换参数，``bootstrap`` 保留用于
+        旧调用方的签名兼容。返回：无；该功能已关闭。异常：始终抛出
+        ``WorkspaceHostError``，确保不会连接或写入 Backend。
+        """
 
-        # Local -> Backend 切换先用用户此刻正在查看的 Local Backend
-        # Projection 初始化目标。模板或实例失败时尚未停止任何
-        # 本地进程，所以当前 Authority 与画布保持完整。
-        if current_mode == "local" and mode == "backend" and bootstrap:
-            temporary_backend = not backend_ready
-            if temporary_backend:
-                self._start_backend({})
-            try:
-                self._bootstrap_backend_authority(backend_url)
-            finally:
-                if temporary_backend:
-                    self._stop_component("backend")
-
-        updated = dict(previous)
-        updated["domainMode"] = mode
-        updated["backendUrl"] = backend_url
-        updated["schedulerUrl"] = scheduler_url
-        try:
-            if edge_ready:
-                self._stop_component("edge")
-            if backend_ready:
-                self._stop_component("backend")
-            self._replace_configuration(updated, "authority.switching")
-            if backend_ready:
-                self._start_backend({})
-            if edge_ready:
-                self._start_edge()
-        except BaseException as error:  # noqa: BLE001 - rollback is the boundary.
-            rollback_failures: list[str] = []
-            try:
-                self._stop_component("edge")
-                self._stop_component("backend")
-                self._replace_configuration(previous, "authority.rollback")
-                if backend_ready:
-                    self._start_backend({})
-                if edge_ready:
-                    self._start_edge()
-            except BaseException as rollback_error:  # noqa: BLE001
-                rollback_failures.append(str(rollback_error))
-            detail = f"Authority 切换失败：{error}"
-            if rollback_failures:
-                detail += f"；回滚失败：{'；'.join(rollback_failures)}"
-            raise WorkspaceHostError("authority_switch_failed", detail) from error
-        with self._lock:
-            self._publish_locked(
-                "authority.switched",
-                {"mode": mode, "backendUrl": backend_url},
-            )
-            return self._snapshot_locked()
+        raise WorkspaceHostError(
+            "backend_mode_removed",
+            "当前 OS 固定使用 local 控制面，Authority 切换功能已移除",
+        )
 
     def _publish_release(self, parameters: dict[str, object]) -> dict[str, object]:
         """Publish the visible Local generation and optionally activate Backend Authority."""
@@ -2104,13 +2030,12 @@ class WorkspaceHost:
                 self._recovery_pending.setdefault(name, time.monotonic())
 
     def _initial_configuration(self) -> dict[str, object]:
-        """读取持久化配置并补齐安全默认值，返回 Host 的初始配置状态。
+        """读取持久化配置并补齐本地模式默认值。
 
-        Returns:
-            不含 schemaVersion、且外部设备包范围始终为布尔值的配置字典。
-
-        Raises:
-            WorkspaceHostError: 已持久化的 externalDevicesOnly 不是布尔值。
+        参数：无。返回：不含 ``schemaVersion``、且控制面固定为 ``local`` 的配置
+        字典。异常：持久化的外部设备包范围不是布尔值，或旧配置仍声明
+        ``domainMode=backend`` 时抛出 ``WorkspaceHostError``；不会启动远端连接。
+        状态不变量：Host 创建后所有组件都只能使用本工作区的本地 Scheduler。
         """
 
         try:
@@ -2143,6 +2068,11 @@ class WorkspaceHost:
                 "externalDevicesOnly 必须是布尔值",
             )
         configuration.setdefault("domainMode", "local")
+        if configuration["domainMode"] != "local":
+            raise WorkspaceHostError(
+                "backend_mode_removed",
+                "当前 OS 只支持 local 控制面，请删除旧配置中的 backend 模式",
+            )
         configuration.setdefault("backendUrl", None)
         configuration["schedulerUrl"] = self._normalize_scheduler_url(
             configuration.get("schedulerUrl")

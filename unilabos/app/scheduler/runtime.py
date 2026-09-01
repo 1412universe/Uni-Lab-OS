@@ -17,10 +17,6 @@ def start_embedded_scheduler_runtime(
 ) -> ControlPlaneRuntimeHandle:
     """启动工站库存、DAG 调度器、历史存储和可选 HostLink。"""
 
-    from unilabos.app.communication import (
-        CommunicationClientFactory,
-        get_communication_client,
-    )
     from unilabos.app.runtime_storage import prepare_runtime_storage_session
     from unilabos.app.scheduler.host_network import setup_host_network_service
     from unilabos.app.scheduler.integration import (
@@ -39,12 +35,6 @@ def start_embedded_scheduler_runtime(
     communication_clients = []
     bridges = []
     legacy_client = None
-    if "websocket" in arguments.get("app_bridges", ()):
-        CommunicationClientFactory.reset_client()
-        legacy_client = get_communication_client("websocket")
-        legacy_client.start()
-        communication_clients.append(legacy_client)
-        bridges.append(legacy_client)
 
     inventory_db = os.path.abspath(os.path.expanduser(paths.inventory_db))
     setup_edge_inventory(

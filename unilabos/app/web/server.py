@@ -391,6 +391,9 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
         should_mount_workspace_authoring_routes,
     )
 
+    if BasicConfig.control_plane != "local":
+        raise RuntimeError("当前 OS 仅支持 local 控制面，不再支持 backend 模式")
+
     embedded_scheduler_enabled = should_mount_embedded_scheduler_routes()
     workspace_authoring_enabled = should_mount_workspace_authoring_routes()
 

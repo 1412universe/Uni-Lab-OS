@@ -133,16 +133,9 @@ def prepare_startup_community_packages(
         graph_preview = load_graph_json_preview(graph_file_path)
     arguments["_graph_file_path"] = graph_file_path
 
-    # ``community_http_client`` 只在已有产品鉴权时允许解析远端社区包。
+    # 本地模式只读取工作区和领域包，不因旧鉴权配置向云端请求启动图或社区包。
+    # 因此即使历史 local_config.py 仍保留 ak/sk，也不会产生 Backend 出站请求。
     community_http_client = None
-    if BasicConfig.ak and BasicConfig.sk:
-        from unilabos.app.web import http_client
-
-        community_http_client = http_client
-        if graph_preview is None and graph_file_path is None:
-            startup_json_preview = community_http_client.request_startup_json()
-            arguments["_startup_json"] = startup_json_preview
-            graph_preview = startup_json_preview
     if not graph_preview:
         return
 

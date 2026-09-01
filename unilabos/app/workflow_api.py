@@ -24,6 +24,12 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from unilabos.app.startup_mode import (
+    allows_experiment_operations,
+    get_startup_mode,
+    is_workflow_visible,
+    visible_workflow_filter,
+)
 from unilabos.app.workflow_template_api import (
     TemplateSnapshotProvider,
     WorkflowTemplateQueryService,
@@ -770,6 +776,38 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         }
         return projected
 
+    def _visible_workflow(workflow_uuid: str) -> dict[str, Any]:
+        """读取当前模式允许公开的工作流，否则按不存在处理。
+
+        参数：``workflow_uuid`` 是工作流或实验操作的稳定身份。返回：带派生状态
+        的公开工作流读模型。异常：工作流不存在、身份非法或生产模式下不可见时
+        抛出 ``WorkflowError('not_found')``；这样不会让生产模式通过详情接口泄露
+        未发布定义或实验操作。
+        """
+
+        workflow = service.get_workflow(workflow_uuid)
+        if not is_workflow_visible(workflow):
+            raise WorkflowError("not_found")
+        return workflow
+
+    def _empty_workflow_page(page: int, page_size: int) -> dict[str, Any]:
+        """构造生产模式下隐藏筛选条件对应的空工作流页。
+
+        参数：``page`` 和 ``page_size`` 是调用方的分页请求。返回：与工作流列表
+        相同形状的空页；页码至少为 1，页长沿用服务层的 20/100 约束。异常：无。
+        状态不变量：隐藏的实验操作、源码状态和类别筛选不会触发一次无关的定义
+        查询，也不会把其他普通工作流混入结果。
+        """
+
+        normalized_page = max(page, 1)
+        normalized_page_size = 20 if page_size < 1 else min(page_size, 100)
+        return {
+            "items": [],
+            "has_more": False,
+            "page": normalized_page,
+            "page_size": normalized_page_size,
+        }
+
     @router.post(
         "/workflows",
         summary="创建工作流或实验操作",
@@ -874,9 +912,11 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """分页读取工作流，可按类型及当前发布状态组合筛选。
 
         参数：页码、页长和旧 ``keyword`` 保持兼容；新 ``name`` 是同义名称
-        筛选且优先于 ``keyword``；类型、状态和实验操作类别筛选均可省略。返回：
-        统一 Backend 响应中的工作流列表与 ``has_more``。异常：非法枚举由请求
-        校验拒绝，服务错误交给公共适配器。
+        筛选且优先于 ``keyword``；类型、状态和实验操作类别筛选均可省略。调试
+        模式返回全部类型和状态；生产模式固定只返回已发布普通工作流，且对实验
+        操作、源码状态或类别筛选返回空页。返回：统一 Backend 响应中的工作流
+        列表与 ``has_more``。异常：非法枚举由请求校验拒绝，服务错误交给公共
+        适配器。
         """
 
         list_options: Dict[str, Any] = {
@@ -892,6 +932,21 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             list_options["status"] = status
         if operation_category_uuid is not None:
             list_options["operation_category_uuid"] = operation_category_uuid
+        effective_type, effective_status, effective_category, always_empty = (
+            visible_workflow_filter(
+                workflow_type,
+                status,
+                operation_category_uuid,
+            )
+        )
+        if always_empty:
+            return _success(_empty_workflow_page(page, page_size))
+        if effective_type is not None:
+            list_options["workflow_type"] = effective_type
+        if effective_status is not None:
+            list_options["status"] = effective_status
+        if effective_category is not None:
+            list_options["operation_category_uuid"] = effective_category
         result = service.list_workflows(**list_options)
         return _success(
             {
@@ -920,6 +975,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         避免把历史合同误解为实验操作版本记录。
         """
 
+        if not allows_experiment_operations():
+            return _success(_empty_workflow_page(page, page_size))
         return _success(
             service.list_published_workflow_contracts(
                 page=page,
@@ -948,11 +1005,31 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         不存在时由公共错误适配器处理；没有引用时返回空数组。
         """
 
-        result = service.list_referencing_workflows(
-            workflow_uuid,
-            page=page,
-            page_size=page_size,
-        )
+        _visible_workflow(workflow_uuid)
+        if get_startup_mode().value == "product":
+            result = service.list_referencing_workflows(
+                workflow_uuid,
+                page=1,
+                page_size=100,
+            )
+            visible_items = [
+                item for item in result["items"] if is_workflow_visible(item)
+            ]
+            normalized_page = max(page, 1)
+            normalized_page_size = min(max(page_size, 1), 100)
+            offset = (normalized_page - 1) * normalized_page_size
+            result = {
+                "items": visible_items[offset : offset + normalized_page_size],
+                "total": len(visible_items),
+                "page": normalized_page,
+                "page_size": normalized_page_size,
+            }
+        else:
+            result = service.list_referencing_workflows(
+                workflow_uuid,
+                page=page,
+                page_size=page_size,
+            )
         return _success(
             {
                 "items": result["items"],
@@ -968,7 +1045,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         response_model=WorkflowSuccessResponse | BackendErrorResponse,
     )
     def get_workflow(workflow_uuid: WorkflowUUIDPath) -> JSONResponse:
-        return _success(service.get_workflow(workflow_uuid))
+        """返回当前启动模式允许展示的工作流详情。
+
+        参数：``workflow_uuid`` 是工作流或实验操作 UUID。返回：公开工作流读模型。
+        异常：生产模式下访问未发布或实验操作时按不存在处理。状态不变量：返回
+        结果一定通过当前启动模式的可见性校验。
+        """
+
+        return _success(_visible_workflow(workflow_uuid))
 
     @router.put(
         "/workflows/{workflow_uuid}",
@@ -1001,6 +1085,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.get("/workflows/{workflow_uuid}/graph")
     def get_graph(workflow_uuid: str) -> JSONResponse:
+        """返回当前模式允许展示的工作流图。
+
+        参数：``workflow_uuid`` 是工作流 UUID。返回：工作流图及派生状态。异常：
+        工作流不存在或生产模式下不可见时按统一工作流错误返回。状态不变量：先
+        校验工作流可见性，再读取图内容。
+        """
+
+        _visible_workflow(workflow_uuid)
         return _success(_with_workflow_status(service.get_graph(workflow_uuid)))
 
     @router.put("/workflows/{workflow_uuid}/graph")
@@ -1046,6 +1138,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """分页查询指定工作流的节点。"""
 
+        _visible_workflow(workflow_uuid)
         return _success(
             service.list_workflow_nodes(
                 workflow_uuid,
@@ -1166,6 +1259,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """返回不创建任务、不占用资源的候选运行检查报告。"""
 
+        _visible_workflow(workflow_uuid)
         response = _success(
             service.get_workflow_run_preflight(
                 workflow_uuid,
@@ -1183,6 +1277,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """按候选入口参数与共享数量绑定执行零写入预检。"""
 
+        _visible_workflow(workflow_uuid)
         response = _success(
             service.get_workflow_run_preflight(
                 workflow_uuid,
@@ -1200,6 +1295,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.get("/workflow-nodes/{node_uuid}")
     def get_workflow_node(node_uuid: str) -> JSONResponse:
+        """返回当前模式允许展示的节点。
+
+        参数：``node_uuid`` 是节点全局 UUID。返回：节点读模型。异常：节点不存在
+        或所属工作流在生产模式下不可见时按统一工作流错误返回。状态不变量：节点
+        只能在所属工作流通过可见性校验后返回。
+        """
+
+        _visible_workflow(service.get_workflow_node_owner(node_uuid))
         return _success(service.get_workflow_node(node_uuid))
 
     @router.patch("/workflow-nodes/{node_uuid}")
@@ -1563,6 +1666,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.get("/workflows/{workflow_uuid}/authoring")
     def get_authoring(workflow_uuid: str) -> JSONResponse:
+        _visible_workflow(workflow_uuid)
         return _success(service.get_authoring(workflow_uuid))
 
     @router.put("/workflows/{workflow_uuid}/authoring/draft")

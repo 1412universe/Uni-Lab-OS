@@ -92,12 +92,12 @@ def test_workspace_restart_uses_the_shared_client_operation(
     ]
 
 
-def test_workspace_start_defaults_to_scheduler_and_edge_processes(
+def test_workspace_start_passes_one_mode_to_scheduler_and_edge_processes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """不指定组件时，一条 start 命令请求 Host 启动两个业务进程。
+    """一条 start 命令把启动模式交给 Scheduler 与 Edge 两个进程。
 
     参数：``tmp_path`` 隔离工作区，``monkeypatch`` 替换外部 Host 客户端，
     ``capsys`` 捕获 CLI 输出。返回：无。异常：默认命令或参数发生回归时失败。
@@ -128,7 +128,9 @@ def test_workspace_start_defaults_to_scheduler_and_edge_processes(
             "--workspace",
             str(workspace),
             "--runtime-mode",
-            "dry-run",
+            "normal",
+            "--startup-mode",
+            "product",
             "--operation-id",
             "stack-start",
             "--wait",
@@ -144,7 +146,10 @@ def test_workspace_start_defaults_to_scheduler_and_edge_processes(
         (
             "workspace.start",
             {
-                "parameters": {"runtimeMode": "dry-run"},
+                "parameters": {
+                    "runtimeMode": "normal",
+                    "startupMode": "product",
+                },
                 "operation_id": "stack-start",
                 "timeout": 30.0,
             },

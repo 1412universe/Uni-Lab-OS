@@ -224,7 +224,7 @@ def test_workspace_startup_defaults_remove_redundant_graph_config_and_bridges(
         "workflow_editable_package_root": None,
         "graph": None,
         "config": None,
-        "app_bridges": ["websocket", "fastapi"],
+        "app_bridges": ["fastapi"],
     }
 
     startup_plan = workspace_api.prepare_workspace_startup(startup_arguments)
@@ -317,7 +317,7 @@ def test_workspace_dependency_policy_rejects_non_boolean_value(
                 "devices": None,
                 "graph": None,
                 "config": None,
-                "app_bridges": ["websocket", "fastapi"],
+                "app_bridges": ["fastapi"],
             }
         )
 
@@ -347,7 +347,7 @@ def test_workspace_dependency_policy_defaults_to_ensure(
         "devices": None,
         "graph": None,
         "config": None,
-        "app_bridges": ["websocket", "fastapi"],
+        "app_bridges": ["fastapi"],
     }
 
     workspace_api.prepare_workspace_startup(arguments)

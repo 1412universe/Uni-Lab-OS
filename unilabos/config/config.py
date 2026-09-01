@@ -11,8 +11,11 @@ class BasicConfig:
     ak = ""
     sk = ""
     working_dir = ""
-    # local/backend 选择上游模式；workspace_backend 在两种模式下都拥有工站调度。
-    control_plane: Literal["local", "backend"] = "local"
+    # 控制面固定由本站 OS 提供；Backend 上游模式已移除，不再建立远端连接。
+    control_plane: Literal["local"] = "local"
+    # OS 启动可见范围：develop 展示全部工作流定义，product 仅展示已发布普通工作流。
+    # 该字段由 unilab develop/product 启动命令写入，不参与物料或调度权威选择。
+    startup_mode: Literal["develop", "product"] = "develop"
     # combined 保持历史单进程；Workbench 使用 workspace_backend + edge_runtime。
     process_role: Literal["combined", "workspace_backend", "edge_runtime"] = (
         "combined"
@@ -38,7 +41,8 @@ class BasicConfig:
     vis_2d_enable = False
     no_update_feedback = False
     enable_resource_load = True
-    communication_protocol = "websocket"
+    # 本地模式不建立云端 WebSocket；跨进程动作通信由 edge_control 显式创建。
+    communication_protocol = "local"
     startup_json_path = None  # 填写绝对路径
     disable_browser = False  # 禁止浏览器自动打开
     port = 8002  # 本地HTTP服务

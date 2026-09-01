@@ -1978,6 +1978,18 @@ class WorkflowService:
         _workflow_uuid, _graph, node = self._locate_graph_entity("nodes", node_uuid)
         return node
 
+    def get_workflow_node_owner(self, node_uuid: str) -> str:
+        """返回节点所属工作流 UUID，供接口层执行可见性校验。
+
+        参数：``node_uuid`` 是节点的全局稳定身份。返回：节点当前所属工作流
+        UUID。异常：节点不存在或身份非法时沿用工作流存储错误；只读定位，不修改
+        工作流图或修订。状态不变量：返回的工作流 UUID 与
+        :meth:`get_workflow_node` 使用同一活动图定位规则。
+        """
+
+        workflow_uuid, _graph, _node = self._locate_graph_entity("nodes", node_uuid)
+        return workflow_uuid
+
     def patch_workflow_node(
         self,
         node_uuid: str,

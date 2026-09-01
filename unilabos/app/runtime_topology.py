@@ -36,14 +36,21 @@ class RuntimeProcessPlan:
 
 
 def resolve_runtime_process_plan(arguments: dict[str, Any]) -> RuntimeProcessPlan:
-    """解析正交的进程角色与 Authority，并关闭式拒绝无效组合。"""
+    """解析本地进程角色，并拒绝已经移除的 Backend 控制面。
 
-    try:
-        control_plane = ControlPlaneMode(
-            str(arguments.get("control_plane") or ControlPlaneMode.LOCAL.value)
-        )
-    except ValueError as error:
-        raise ValueError("control_plane 必须是 local 或 backend") from error
+    参数：``arguments`` 是命令行参数投影；返回：只使用本地事实源的进程计划。
+    异常：传入 ``backend`` 或未知控制面时抛出 ``ValueError``，不会启动任何进程。
+    状态不变量：无论是合并进程还是拆分的 Scheduler/Edge 进程，控制面都固定为
+    ``local``；保留 ``ControlPlaneMode.BACKEND`` 枚举只用于读取旧代码，不能再由
+    运行时计划激活。
+    """
+
+    requested_control_plane = str(
+        arguments.get("control_plane") or ControlPlaneMode.LOCAL.value
+    )
+    if requested_control_plane != ControlPlaneMode.LOCAL.value:
+        raise ValueError("当前 OS 仅支持 local 控制面，不再支持 backend 模式")
+    control_plane = ControlPlaneMode.LOCAL
     try:
         role = RuntimeProcessRole(
             str(arguments.get("process_role") or RuntimeProcessRole.COMBINED.value)
@@ -55,63 +62,22 @@ def resolve_runtime_process_plan(arguments: dict[str, Any]) -> RuntimeProcessPla
 
     is_slave = bool(arguments.get("is_slave", False))
     bridges = {str(value) for value in arguments.get("app_bridges") or ()}
+    if "websocket" in bridges:
+        raise ValueError("当前 OS 已移除云端 websocket bridge，请使用 fastapi 或 edge_control")
 
     if role is RuntimeProcessRole.WORKSPACE_BACKEND:
         if is_slave:
             raise ValueError("workspace_backend 进程不能使用 --is_slave")
     elif role is RuntimeProcessRole.EDGE_RUNTIME:
-        if control_plane is ControlPlaneMode.LOCAL and is_slave:
+        if is_slave:
             raise ValueError(
                 "local Authority 的 edge_runtime 直接拥有设备，不能使用 --is_slave"
             )
-        if control_plane is ControlPlaneMode.BACKEND and is_slave:
-            raise ValueError(
-                "backend Authority 的 edge_runtime 不能使用 --is_slave"
-            )
 
-    if control_plane is ControlPlaneMode.LOCAL:
-        if (
-            "edge_control" in bridges
-            and role is not RuntimeProcessRole.EDGE_RUNTIME
-        ):
-            raise ValueError(
-                "local Authority 仅允许 edge_runtime 使用 edge_control bridge"
-            )
-        if (
-            role is RuntimeProcessRole.EDGE_RUNTIME
-            and "edge_control" not in bridges
-        ):
-            raise ValueError(
-                "local Authority 的 edge_runtime 必须启用 edge_control bridge"
-            )
-    else:
-        if is_slave:
-            raise ValueError("--control_plane backend 不能与 --is_slave 一起使用")
-        if (
-            arguments.get("preserve_runtime_databases", False)
-            and role is not RuntimeProcessRole.WORKSPACE_BACKEND
-        ):
-            raise ValueError(
-                "--preserve_runtime_databases 仅允许 backend 上游模式的 "
-                "workspace_backend 工站调度进程使用"
-            )
-        if (
-            role is not RuntimeProcessRole.WORKSPACE_BACKEND
-            and "edge_control" not in bridges
-        ):
-            raise ValueError("--control_plane backend 必须启用 edge_control bridge")
-        if (
-            role is RuntimeProcessRole.WORKSPACE_BACKEND
-            and "edge_control" in bridges
-        ):
-            raise ValueError(
-                "workspace_backend 是工站调度权威，不能同时启动动作执行端的"
-                " edge_control bridge"
-            )
-        if "websocket" in bridges:
-            raise ValueError(
-                "--control_plane backend 不能同时启用遗留 websocket bridge"
-            )
+    if "edge_control" in bridges and role is not RuntimeProcessRole.EDGE_RUNTIME:
+        raise ValueError("local Authority 仅允许 edge_runtime 使用 edge_control bridge")
+    if role is RuntimeProcessRole.EDGE_RUNTIME and "edge_control" not in bridges:
+        raise ValueError("local Authority 的 edge_runtime 必须启用 edge_control bridge")
 
     return RuntimeProcessPlan(
         role=role,

@@ -1,4 +1,4 @@
-"""验证本地调试与生产 Backend 控制面具有互斥的运行所有权。"""
+"""验证本地 Scheduler 与 Edge 进程的运行所有权。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import types
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from unilabos.app.control_plane import (
     ControlPlaneMode,
@@ -64,7 +63,13 @@ def test_workbench_split_runtime_roles_are_orthogonal_to_local_authority() -> No
     assert edge_plan.initializes_host_devices
 
 
-def test_split_runtime_accepts_backend_workspace_authoring_without_edge() -> None:
+def test_runtime_plan_rejects_removed_backend_control_plane() -> None:
+    """运行计划拒绝已移除的 Backend 控制面。
+
+    参数：无。返回：无。异常：解析或计划层仍接受 ``backend`` 时由断言暴露。
+    状态不变量：拆分进程只共享本地 Scheduler 的事实源。
+    """
+
     local_edge_with_slave = vars(
         parse_args().parse_args(
             [
@@ -76,33 +81,25 @@ def test_split_runtime_accepts_backend_workspace_authoring_without_edge() -> Non
             ]
         )
     )
-    backend_workspace = vars(
-        parse_args().parse_args(
-            [
-                "--process_role",
-                "workspace_backend",
-                "--control_plane",
-                "backend",
-                "--app_bridges",
-                "fastapi",
-            ]
-        )
-    )
 
     with pytest.raises(ValueError, match="不能使用 --is_slave"):
         resolve_runtime_process_plan(local_edge_with_slave)
-    plan = resolve_runtime_process_plan(backend_workspace)
-    assert plan.role is RuntimeProcessRole.WORKSPACE_BACKEND
-    assert plan.control_plane is ControlPlaneMode.BACKEND
-    assert plan.starts_web_server
-    assert not plan.initializes_host_devices
+    with pytest.raises(SystemExit):
+        parse_args().parse_args(["--control_plane", "backend"])
+    with pytest.raises(ValueError, match="仅支持 local"):
+        resolve_runtime_process_plan({"control_plane": "backend"})
 
 
-def test_backend_upstream_workspace_starts_local_station_scheduler(
+def test_workspace_backend_starts_local_station_scheduler(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Backend 上游模式的工作区进程仍启动本地工站调度权威。"""
+    """工作区调度进程启动本地工站 Scheduler。
+
+    参数：``tmp_path`` 提供隔离工作目录，``monkeypatch`` 替换真实启动函数。
+    返回：无；断言控制面入口委托本地 Scheduler。异常：若误走远程控制面或启动
+    其他运行时，断言失败。状态不变量：该进程计划固定为 local。
+    """
 
     from unilabos.app.scheduler import runtime as scheduler_runtime
 
@@ -114,7 +111,7 @@ def test_backend_upstream_workspace_starts_local_station_scheduler(
     )
     context = ControlPlaneRuntimeContext(
         arguments={
-            "control_plane": "backend",
+            "control_plane": "local",
             "process_role": "workspace_backend",
             "app_bridges": ["fastapi"],
             "is_slave": False,
@@ -142,45 +139,15 @@ def test_edge_runtime_ready_signal_is_atomic(tmp_path) -> None:
     assert list(ready_path.parent.glob("*.tmp")) == []
 
 
-def test_backend_control_plane_requires_only_production_bridge() -> None:
-    arguments = vars(
-        parse_args().parse_args(
-            [
-                "--control_plane",
-                "backend",
-                "--app_bridges",
-                "edge_control",
-                "fastapi",
-            ]
-        )
-    )
+def test_backend_control_plane_is_rejected_by_argument_parser() -> None:
+    """命令行不再提供 Backend 控制面选项。
 
-    assert validate_control_plane_arguments(arguments) is ControlPlaneMode.BACKEND
+    参数：无。返回：无；解析 ``backend`` 必须以 ``SystemExit`` 关闭失败。异常：
+    解析器仍接受该值时测试失败。状态不变量：公开命令行只保留 local。
+    """
 
-    arguments["app_bridges"] = ["fastapi"]
-    with pytest.raises(ValueError, match="edge_control"):
-        validate_control_plane_arguments(arguments)
-
-    workspace_arguments = vars(
-        parse_args().parse_args(
-            [
-                "--process_role",
-                "workspace_backend",
-                "--control_plane",
-                "backend",
-                "--app_bridges",
-                "fastapi",
-            ]
-        )
-    )
-    assert (
-        validate_control_plane_arguments(workspace_arguments)
-        is ControlPlaneMode.BACKEND
-    )
-
-    arguments["app_bridges"] = ["edge_control", "websocket", "fastapi"]
-    with pytest.raises(ValueError, match="websocket"):
-        validate_control_plane_arguments(arguments)
+    with pytest.raises(SystemExit):
+        parse_args().parse_args(["--control_plane", "backend"])
 
 
 def test_local_control_plane_rejects_production_bridge() -> None:
@@ -194,50 +161,27 @@ def test_local_control_plane_rejects_production_bridge() -> None:
         validate_control_plane_arguments(arguments)
 
 
-def test_backend_control_plane_rejects_slave_and_local_database_preservation() -> None:
-    arguments = vars(
-        parse_args().parse_args(
-            [
-                "--control_plane",
-                "backend",
-                "--app_bridges",
-                "edge_control",
-                "--is_slave",
-            ]
-        )
-    )
-    with pytest.raises(ValueError, match="is_slave"):
-        validate_control_plane_arguments(arguments)
+def test_backend_control_plane_is_rejected_by_runtime_validator() -> None:
+    """运行时校验不接受手工构造的 Backend 控制面参数。
 
-    arguments["is_slave"] = False
-    arguments["preserve_runtime_databases"] = True
-    with pytest.raises(ValueError, match="preserve_runtime_databases"):
-        validate_control_plane_arguments(arguments)
+    参数：无。返回：无。异常：验证必须抛出 ``ValueError``。状态不变量：运行计划
+    不会产生 Backend 控制面。
+    """
+
+    with pytest.raises(ValueError, match="仅支持 local"):
+        validate_control_plane_arguments({"control_plane": "backend"})
 
 
-class _ProductionClient:
-    def __init__(self) -> None:
-        self.started = False
-        self.stopped = False
-
-    def start(self) -> None:
-        self.started = True
-
-    def stop(self) -> None:
-        self.stopped = True
-
-
-def test_backend_runtime_does_not_start_scheduler_or_local_databases(
+def test_removed_backend_runtime_does_not_start_anything(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from unilabos.app.edge_control import runtime as backend_runtime
+    """手工构造 Backend 计划时直接失败且不启动任何组件。
 
-    client = _ProductionClient()
-    monkeypatch.setattr(backend_runtime, "create_edge_control_client", lambda: client)
-    scheduler_modules_before = {
-        name for name in sys.modules if name.startswith("unilabos.app.scheduler")
-    }
+    参数：``tmp_path`` 提供隔离工作目录。返回：无。异常：控制面验证必须抛出
+    ``ValueError``；若创建运行时或连接远端则测试失败。状态不变量：失败发生在
+    组件装配前。
+    """
+
     context = ControlPlaneRuntimeContext(
         arguments={
             "control_plane": "backend",
@@ -253,26 +197,16 @@ def test_backend_runtime_does_not_start_scheduler_or_local_databases(
         material_model_catalog=None,
     )
 
-    handle = start_control_plane_runtime(context)
-
-    assert client.started
-    assert handle.bridges == (client,)
-    assert handle.communication_clients == (client,)
-    assert {
-        name for name in sys.modules if name.startswith("unilabos.app.scheduler")
-    } == scheduler_modules_before
-    assert not (tmp_path / "inventory.db").exists()
-    assert not (tmp_path / "device_state.db").exists()
-    assert not (tmp_path / "workflow_history.db").exists()
+    with pytest.raises(ValueError, match="仅支持 local"):
+        start_control_plane_runtime(context)
 
 
 @pytest.mark.parametrize(
     ("control_plane", "process_role", "expected"),
     [
         ("local", "combined", True),
-        ("backend", "combined", False),
-        ("backend", "workspace_backend", True),
-        ("backend", "edge_runtime", False),
+        ("local", "workspace_backend", True),
+        ("local", "edge_runtime", False),
     ],
 )
 def test_fastapi_mounts_scheduler_routes_for_station_authority(
@@ -302,55 +236,49 @@ def test_workspace_authoring_routes_follow_process_role_not_authority(
     expected: bool,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """验证本地工作流创作接口只由 Scheduler 进程提供。
+
+    参数：``process_role`` 是进程角色，``expected`` 是路由挂载结果，
+    ``monkeypatch`` 隔离全局配置。返回：无。异常：Edge Runtime 若挂载创作路由
+    或 Scheduler 进程未挂载时测试失败。状态不变量：判断不再依赖远端 Authority。
+    """
+
     monkeypatch.setattr(BasicConfig, "process_role", process_role)
-    monkeypatch.setattr(BasicConfig, "control_plane", "backend")
+    monkeypatch.setattr(BasicConfig, "control_plane", "local")
 
     assert should_mount_workspace_authoring_routes() is expected
 
 
-def test_backend_fastapi_does_not_import_or_mount_embedded_scheduler(
+def test_server_rejects_removed_backend_control_plane(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """验证非工作区的 Backend 进程不会装配工站调度实现。
+    """Web 组合根拒绝使用已移除的 Backend 控制面。
 
-    参数：``tmp_path`` 隔离运行目录，``monkeypatch`` 注入 Backend 组合模式。
-    返回无；导入调度模块、挂载调度路由或创建本地数据库时断言失败。
+    参数：``tmp_path`` 提供隔离目录，``monkeypatch`` 注入非法控制面配置。返回：
+    无。异常：``setup_server`` 必须抛出 ``RuntimeError``。状态不变量：任何路由
+    装配前都不会连接远端 Backend。
     """
 
     monkeypatch.setattr(BasicConfig, "control_plane", "backend")
     monkeypatch.setattr(BasicConfig, "process_role", "combined")
     monkeypatch.setattr(BasicConfig, "working_dir", str(tmp_path))
     monkeypatch.setattr(BasicConfig, "workspace_package_mount_projection", None)
-    scheduler_modules_before = {
-        name for name in sys.modules if name.startswith("unilabos.app.scheduler")
-    }
-
     server = importlib.reload(importlib.import_module("unilabos.app.web.server"))
-    application = server.setup_server()
-
-    assert {
-        name for name in sys.modules if name.startswith("unilabos.app.scheduler")
-    } == scheduler_modules_before
-    assert all(
-        "edge-scheduler" not in (getattr(route, "tags", None) or [])
-        for route in application.routes
-    )
-    assert not any(
-        getattr(route, "path", "").startswith("/api/v1/inventory")
-        for route in application.routes
-    )
-    health_response = TestClient(application).get("/api/v1/health")
-    assert health_response.status_code == 200
-    assert health_response.json() == {"status": "ok", "scheduler": "disabled"}
-    assert {
-        name for name in sys.modules if name.startswith("unilabos.app.scheduler")
-    } == scheduler_modules_before
+    with pytest.raises(RuntimeError, match="仅支持 local"):
+        server.setup_server()
 
 
-def test_backend_ros_runtime_does_not_start_hostlink_microbackend(
+def test_local_split_ros_runtime_does_not_start_hostlink_microbackend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """本地拆分调度进程不再启动遗留 HostLink 微后端服务。
+
+    参数：``monkeypatch`` 注入记录器和 local 进程配置。返回：无。异常：若调用
+    遗留网络服务则断言失败。状态不变量：本地拆分只由 Scheduler 与 Edge 控制面
+    负责进程间通信。
+    """
+
     from unilabos.ros import hostlink_runtime
 
     calls: list[object] = []
@@ -361,7 +289,8 @@ def test_backend_ros_runtime_does_not_start_hostlink_microbackend(
         "unilabos.app.scheduler.host_network",
         fake_host_network,
     )
-    monkeypatch.setattr(BasicConfig, "control_plane", "backend")
+    monkeypatch.setattr(BasicConfig, "control_plane", "local")
+    monkeypatch.setattr(BasicConfig, "process_role", "workspace_backend")
 
     hostlink_runtime.setup_host_network_before_ros()
     hostlink_runtime.attach_hostlink_runtime(object())

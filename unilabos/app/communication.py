@@ -113,6 +113,43 @@ class BaseCommunicationClient(ABC):
         return not self.is_disabled
 
 
+class LocalCommunicationClient(BaseCommunicationClient):
+    """本地单进程模式的空通信适配器，不建立任何云端连接。"""
+
+    def start(self) -> None:
+        """启动本地空适配器；不创建网络连接。"""
+
+        self.is_disabled = True
+
+    def stop(self) -> None:
+        """停止本地空适配器；不执行网络关闭。"""
+
+        self.is_disabled = True
+
+    def publish_device_status(
+        self, device_status: dict, device_id: str, property_name: str
+    ) -> None:
+        """丢弃旧云端设备状态通知；本地状态由 Scheduler 持有。"""
+
+        del device_status, device_id, property_name
+
+    def publish_job_status(
+        self,
+        feedback_data: dict,
+        job_id: str,
+        status: str,
+        return_info: Optional[dict] = None,
+    ) -> None:
+        """丢弃旧云端作业通知；本地结果通过 Scheduler 事务保存。"""
+
+        del feedback_data, job_id, status, return_info
+
+    def send_ping(self, ping_id: str, timestamp: float) -> None:
+        """忽略旧云端延迟探测；本地模式不发送网络 Ping。"""
+
+        del ping_id, timestamp
+
+
 class CommunicationClientFactory:
     """
     通信客户端工厂类
@@ -141,14 +178,14 @@ class CommunicationClientFactory:
 
         protocol = protocol.lower()
 
+        if protocol == "local":
+            return LocalCommunicationClient()
         if protocol == "websocket":
-            return cls._create_websocket_client()
+            raise ValueError("当前 OS 已移除云端 websocket 通信")
         elif protocol == "edge_control":
             return cls._create_edge_control_client()
         else:
-            logger.error(f"[CommunicationFactory] Unsupported protocol: {protocol}")
-            logger.warning(f"[CommunicationFactory] Falling back to WebSocket")
-            return cls._create_websocket_client()
+            raise ValueError(f"当前 OS 不支持通信协议: {protocol}")
 
     @classmethod
     def get_client(cls, protocol: Optional[str] = None) -> BaseCommunicationClient:
@@ -209,7 +246,7 @@ class CommunicationClientFactory:
         Returns:
             支持的协议列表
         """
-        return ["websocket", "edge_control"]
+        return ["local", "edge_control"]
 
 
 def get_communication_client(protocol: Optional[str] = None) -> BaseCommunicationClient:
