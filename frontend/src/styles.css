@@ -736,7 +736,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .workflow-dag-material-targets button:hover, .workflow-dag-material-targets button.selected { color: #fff; background: #16856d; }
 .workflow-dag-material.edge-source, .workflow-dag-material.edge-target { border-color: #16856d; box-shadow: 0 0 0 3px rgba(31,157,122,.18); }
 .workflow-dag-material.material-preview { border-color: #00a878; background: #f2fffa; box-shadow: 0 0 0 4px rgba(0,168,120,.24), 0 8px 20px rgba(0,112,82,.14); }
-.workflow-dag-scroll { min-height: 360px; max-height: 680px; overflow: auto; overscroll-behavior: contain; }
+.workflow-dag-scroll { min-height: 360px; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; }
 .workflow-dag-stage { position: relative; min-width: 100%; }
 .workflow-dag-edges { position: absolute; inset: 0; z-index: 1; overflow: visible; pointer-events: none; }
 .workflow-dag-arrow.dependency path { fill: #6384e8; }
