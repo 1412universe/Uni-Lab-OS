@@ -750,7 +750,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .workflow-dag-edge-control:hover .workflow-dag-edge, .workflow-dag-edge-control:focus-visible .workflow-dag-edge, .workflow-dag-edge-control.selected .workflow-dag-edge { stroke-width: 4; opacity: 1; filter: drop-shadow(0 2px 3px rgba(65,55,120,.25)); }
 .workflow-dag-edge-control:focus-visible .workflow-dag-edge { stroke: #f79009; }
 .workflow-dag-group { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-.workflow-dag-group-frame { position: absolute; pointer-events: none; background: rgba(245,243,255,.66); border: 1px dashed #9b8afb; border-radius: 14px; box-shadow: 0 8px 20px rgba(78,56,146,.08); }
+.workflow-dag-group-frame { position: absolute; pointer-events: auto; background: rgba(245,243,255,.66); border: 1px dashed #9b8afb; border-radius: 14px; box-shadow: 0 8px 20px rgba(78,56,146,.08); }
 .workflow-dag-group-title { position: absolute; top: 0; left: 0; display: flex; align-items: center; gap: 6px; width: 100%; height: 30px; padding: 0 11px; overflow: hidden; color: #6941c6; pointer-events: auto; cursor: grab; touch-action: none; user-select: none; }
 .workflow-dag-group.dragging .workflow-dag-group-title { cursor: grabbing; }
 .workflow-dag-group-title strong { overflow: hidden; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }

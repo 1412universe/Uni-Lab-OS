@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react'
 import {
   Braces,
   CircleDot,
@@ -384,6 +384,13 @@ export function WorkflowDag({
     return undefined
   }
 
+  const clearEdgeSelectionFromBlankSpace = (event: MouseEvent<HTMLElement>) => {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (target.closest('.workflow-dag-edge-control, .workflow-dag-node, .workflow-dag-group-frame')) return
+    setSelectedEdgeUuid(undefined)
+  }
+
   return (
     <section ref={regionRef} className="workflow-dag-region" role="region" aria-label="发布修订拓扑" tabIndex={0}>
       <div className="workflow-dag-summary">
@@ -477,8 +484,11 @@ export function WorkflowDag({
               </div>
             </section>
           ) : null}
-          <div className="workflow-dag-scroll">
-            <div className="workflow-dag-stage" style={{ width: layout.width, height: layout.height }}>
+          <div className="workflow-dag-scroll" onClick={clearEdgeSelectionFromBlankSpace}>
+            <div
+              className="workflow-dag-stage"
+              style={{ width: layout.width, height: layout.height }}
+            >
               <svg className="workflow-dag-edges" width={layout.width} height={layout.height}>
                 <defs>
                   {(['dependency', 'material', 'parallel_entry', 'parallel_join'] as WorkflowEdgeKind[]).map((kind) => (

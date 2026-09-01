@@ -65,7 +65,9 @@ describe('WorkflowDag', () => {
       edge('join-photo', 'photo', 'join'),
       edge('join-cap', 'cap', 'join'),
     ]
-    render(<WorkflowDag nodes={nodes} edges={edges} loading={false} error={false} />)
+    const { container } = render(
+      <WorkflowDag nodes={nodes} edges={edges} loading={false} error={false} />,
+    )
 
     const selectedEdge = screen.getByRole('button', {
       name: '并行入口：样品瓶准备完成 → S05 烧杯拍照检测',
@@ -77,6 +79,22 @@ describe('WorkflowDag', () => {
     expect(screen.getByRole('article', { name: /S05 烧杯拍照检测.*已选连线终点/ })).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('并行入口')
     expect(screen.getByRole('status')).toHaveTextContent('样品瓶准备完成 → S05 烧杯拍照检测')
+
+    fireEvent.click(screen.getByRole('article', { name: /样品瓶准备完成.*已选连线起点/ }))
+    expect(selectedEdge).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(container.querySelector('.workflow-dag-group-frame') as HTMLElement)
+    expect(selectedEdge).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(container.querySelector('.workflow-dag-edges') as SVGElement)
+    expect(selectedEdge).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('article', { name: /^样品瓶准备完成/ })).not.toHaveClass('edge-source')
+    expect(screen.getByRole('article', { name: /^S05 烧杯拍照检测/ })).not.toHaveClass('edge-target')
+
+    fireEvent.click(selectedEdge)
+    fireEvent.click(container.querySelector('.workflow-dag-scroll') as HTMLElement)
+    expect(selectedEdge).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('moves every member with its group and can restore automatic layout', () => {
