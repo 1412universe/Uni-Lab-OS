@@ -42,6 +42,10 @@ class BasicConfig:
     startup_json_path = None  # 填写绝对路径
     disable_browser = False  # 禁止浏览器自动打开
     port = 8002  # 本地HTTP服务
+    # 内置 React 控制台对外暴露时的浏览器边界；空白名单保持历史兼容，不启用
+    # Host 限制。Docker Desktop Edge 部署会显式配置 loopback 与集群服务域名。
+    frontend_allowed_hosts: str = ""
+    frontend_same_origin: bool = False
     check_mode = False  # CI 检查模式，用于验证 registry 导入和文件一致性
     action_mode: Literal["real", "simulate"] = "real"  # 动作派发或模拟成功回执
     extra_resource = False  # 是否加载lab_开头的额外资源

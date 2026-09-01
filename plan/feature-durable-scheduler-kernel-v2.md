@@ -1,8 +1,8 @@
 ---
 goal: 实现工站自治持久调度内核 v2
-version: 2.1
+version: 2.2
 date_created: 2026-08-30
-last_updated: 2026-08-30
+last_updated: 2026-08-31
 owner: Uni-Lab-OS Team
 status: Completed
 tags:
@@ -16,7 +16,7 @@ tags:
 # 工站自治持久调度内核 v2 实施计划
 
 本文档以飞书技术文档
-`Y8uhwSLeui1nLVkZfVXcXpXon8d` revision 665 为规格来源，并以
+`Y8uhwSLeui1nLVkZfVXcXpXon8d` revision 694 为规格来源，并以
 `product/durable-scheduler-kernel-v2` 当前代码为实现基线。历史计划
 `architecture-station-scheduler-unilabos-v1.md` 保留用于追溯，不再作为恢复状态、
 输入输出特殊节点或物料拆分语义的权威。
@@ -48,8 +48,14 @@ tags:
 - **REQ-011**: 调度支持多任务交叉运行、优先级和老化；已开始的物理动作不抢占。
 - **REQ-012**: AST 只编译声明式资源合同，不扫描运行时锁定/释放行为。注册表数据库
   通过 `RegistryCatalog` 接口隔离，当前阶段保留，后续可替换为启动期内存目录。
-- **CON-001**: 输入/输出特殊节点和离心机自适应配平仍是规格 TODO；本阶段不得在
-  未决语义上新增不可逆持久结构。
+- **REQ-013**: Backend 规范调用必须携带全局 `task_uuid`、`invocation_key`、
+  `workflow_id`、`revision_fingerprint`、`normalized_input` 和可选 `deadline`；Edge
+  只运行指纹匹配的不可变发布修订，禁止退回同名当前定义。
+- **REQ-014**: 非空输入/输出合同各编译至多一个正式纯数据节点作业；输入作业在
+  创建事务内成功，输出作业只等待显式数据绑定并幂等写 `WorkflowResultRecord`。
+- **REQ-015**: 任务预检使用 `runnable_now`、`temporarily_unavailable`、`invalid`
+  三态并保留结构化缺口；预检不创建任务、预留或执行权。
+- **CON-001**: 离心机 `batch_run`、跨任务拼批与自适应配平由本次实施明确排除。
 - **CON-002**: 不引入 `source_access_zone` 或 `target_access_zone` 软件锁；PLC 继续
   负责机械碰撞互斥。
 - **CON-003**: `workflow_history.db` 与 `inventory.db` 不伪装跨库原子事务；跨库操作
@@ -120,6 +126,16 @@ tags:
 | **TASK-020** | 增加机械臂转运、装载期间设备托管、静态死锁拒绝和等价库位选择测试。 | ✅ | 2026-08-30 |
 | **TASK-021** | 增加派发前/后崩溃、执行进程重启、结果迟到、Backend 断线和发件箱重放测试。 | ✅ | 2026-08-30 |
 | **TASK-022** | 运行目标 pytest、完整工作流/网络/工作区回归、Ruff、`git diff --check`、文件长度与仓库边界检查。 | ✅ | 2026-08-30 |
+
+### Phase 6 — revision 694 协议与边界作业
+
+- **GOAL-006**: 消除按名称漂移、隐式输入输出和预检状态词汇差异。
+
+| Task | Description | Completed | Date |
+|---|---|---|---|
+| **TASK-023** | 工站调用支持发布修订指纹、规范输入、全局任务身份和 deadline；错误指纹关闭式拒绝，旧名称调用保留兼容入口。 | ✅ | 2026-08-31 |
+| **TASK-024** | 编译并持久化正式 WorkflowInputNode / WorkflowOutputNode Job；新增唯一 WorkflowResultRecord，并按显式输出绑定投影任务结果。 | ✅ | 2026-08-31 |
+| **TASK-025** | 将 TaskPreflight 顶层状态收敛为 `runnable_now`、`temporarily_unavailable`、`invalid`，保留逐项检查与 `can_run`。 | ✅ | 2026-08-31 |
 
 ## 3. Alternatives
 
@@ -249,7 +265,7 @@ tags:
 
 ## 9. Related Specifications / Further Reading
 
-- 飞书技术文档：`Y8uhwSLeui1nLVkZfVXcXpXon8d` revision 665。
+- 飞书技术文档：`Y8uhwSLeui1nLVkZfVXcXpXon8d` revision 694。
 - `CONTEXT.md`：当前仓库规范词汇和权威边界。
 - `plan/architecture-unilabos-dual-process-v1.md`：双进程既有实现与未完成项。
 - `plan/architecture-station-scheduler-unilabos-v1.md`：历史讨论记录，已被本计划取代。

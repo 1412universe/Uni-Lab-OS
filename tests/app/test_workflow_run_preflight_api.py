@@ -16,7 +16,7 @@ def _client(tmp_path):
     return TestClient(create_workflow_app(WorkflowService(store))), store
 
 
-def test_empty_workflow_preflight_is_read_only_and_ready(tmp_path) -> None:
+def test_empty_workflow_preflight_is_read_only_and_runnable_now(tmp_path) -> None:
     """空图预检须返回可展示报告、禁止缓存且不能创建工作流任务。"""
 
     client, store = _client(tmp_path)
@@ -34,7 +34,7 @@ def test_empty_workflow_preflight_is_read_only_and_ready(tmp_path) -> None:
     assert report["workflow_uuid"] == workflow["uuid"]
     assert report["workflow_revision"] == 1
     assert report["run_mode"] == "normal"
-    assert report["status"] == "ready"
+    assert report["status"] == "runnable_now"
     assert report["can_run"] is True
     assert report["summary"]["execution_node_count"] == 0
     assert report["summary"]["blocking_check_count"] == 0
@@ -86,7 +86,7 @@ def test_manual_confirmation_preflight_requires_confirmation(tmp_path) -> None:
     report = client.get(
         f"/api/v1/workflows/{workflow['uuid']}/run-preflight"
     ).json()["data"]
-    assert report["status"] == "requires_confirmation"
+    assert report["status"] == "runnable_now"
     assert report["can_run"] is True
     confirmation = next(
         check for check in report["checks"] if check["type"] == "manual_confirmation"
@@ -110,4 +110,40 @@ def test_single_node_preflight_requires_explicit_target(tmp_path) -> None:
     )
     assert response.status_code == 200
     assert response.json()["code"] == 1000
+    store.close()
+
+
+def test_preflight_reports_temporary_inventory_unavailability(tmp_path) -> None:
+    """当前库存无法准入时必须返回 temporarily_unavailable 而不是 invalid。"""
+
+    client, store = _client(tmp_path)
+    workflow = client.post(
+        "/api/v1/workflows",
+        json={"name": "等待库存", "tags": [], "meta_data": {}},
+    ).json()["data"]
+
+    response = client.post(
+        f"/api/v1/workflows/{workflow['uuid']}/run-preflight",
+        json={
+            "input": {},
+            "inventory_bindings": [
+                {
+                    "requirement_key": "sample",
+                    "inventory_type": "reagent",
+                    "inventory_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "reserved_quantity": 1,
+                    "quantity_unit": "mL",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    report = response.json()["data"]
+    assert report["status"] == "temporarily_unavailable"
+    assert report["can_run"] is False
+    gap = next(
+        check for check in report["checks"] if check["type"] == "quantity_inventory"
+    )
+    assert gap["status"] == "blocked"
     store.close()

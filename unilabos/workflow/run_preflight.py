@@ -39,7 +39,7 @@ def _check(
 
 
 def _finalize(report: dict[str, Any]) -> dict[str, Any]:
-    """根据检查集合计算汇总状态和计数。"""
+    """根据结构化缺口计算文档规定的预检三态与兼容布尔值。"""
 
     checks = report["checks"]
     summary = report["summary"]
@@ -53,15 +53,23 @@ def _finalize(report: dict[str, Any]) -> dict[str, Any]:
     summary["confirmation_required_count"] = sum(
         item["status"] == "confirmation_required" for item in checks
     )
-    report["can_run"] = not any(
-        item["status"] == "blocked" and item["blocking"] for item in checks
+    blocking = [
+        item
+        for item in checks
+        if item["status"] == "blocked" and item["blocking"]
+    ]
+    invalid = any(
+        item["code"] == "execution_plan_invalid"
+        or str(item["code"]).startswith("invalid_")
+        for item in blocking
     )
-    if not report["can_run"]:
-        report["status"] = "blocked"
-    elif summary["confirmation_required_count"]:
-        report["status"] = "requires_confirmation"
+    if invalid:
+        report["status"] = "invalid"
+    elif blocking:
+        report["status"] = "temporarily_unavailable"
     else:
-        report["status"] = "ready"
+        report["status"] = "runnable_now"
+    report["can_run"] = report["status"] == "runnable_now"
     return report
 
 
@@ -122,7 +130,7 @@ def build_run_preflight_report(
         "workflow_uuid": workflow["uuid"],
         "workflow_revision": workflow["revision"],
         "run_mode": run_mode,
-        "status": "ready",
+        "status": "runnable_now",
         "can_run": True,
         "checked_at": utc_now(),
         "summary": {

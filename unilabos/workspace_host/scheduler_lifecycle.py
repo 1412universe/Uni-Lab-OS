@@ -52,19 +52,26 @@ class SchedulerLifecycleClient:
         while status["phase"] != "drained":
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise SchedulerLifecycleError(
-                    "workspace_drain_timeout",
-                    "设备作业未在安全停止预算内结束，工作区保持运行",
-                    details=status,
-                )
+                break
             time.sleep(min(poll_interval, remaining))
+            # sleep 可能正好耗尽总预算。此处必须再次判定，不能把已经过期的
+            # deadline 转回最小 50ms socket timeout，否则稳定的 drain_timeout
+            # 会按调度时序偶发变成 drain_unavailable。
+            if deadline - time.monotonic() <= 0:
+                break
             status = self._request(
                 address,
                 method="GET",
                 path="/api/v1/scheduler/drain",
                 timeout=self._request_timeout(deadline),
             )
-        return status
+        if status["phase"] == "drained":
+            return status
+        raise SchedulerLifecycleError(
+            "workspace_drain_timeout",
+            "设备作业未在安全停止预算内结束，工作区保持运行",
+            details=status,
+        )
 
     def resume(self, address: str, *, timeout: float) -> dict[str, Any]:
         """退出排空状态，使调度器恢复派发。

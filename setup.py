@@ -17,7 +17,7 @@ setup(
     extras_require={
         'mcp': ['mcp>=1.10,<2'],
     },
-    zip_safe=True,
+    zip_safe=False,
     author="The unilabos developers",
     maintainer='Junhan Chang, Xuwznln',
     maintainer_email='Junhan Chang <changjh@pku.edu.cn>, Xuwznln <18435084+Xuwznln@users.noreply.github.com>',

@@ -617,22 +617,24 @@ class WorkflowQuantityInventory:
 
         row = connection.execute(
             """
-            SELECT task.workflow_snapshot,workflow.name AS workflow_name,
-                   job.workflow_node_uuid
+            SELECT task.workflow_snapshot,job.workflow_node_uuid
             FROM workflow_task AS task
-            JOIN workflow ON workflow.uuid=task.workflow_uuid
             JOIN workflow_node_job AS job
               ON job.workflow_task_uuid=task.uuid AND job.uuid=?
             WHERE task.uuid=? AND task.deleted_at IS NULL
-              AND workflow.deleted_at IS NULL AND job.deleted_at IS NULL
+              AND job.deleted_at IS NULL
             """,
             (job_uuid, task_uuid),
         ).fetchone()
         if row is None:
             raise StoreConflict("库存消费所属 Task 或 Job 不存在")
         snapshot = _load(row["workflow_snapshot"], {})
+        workflow_name = ""
         node_name = ""
         if isinstance(snapshot, Mapping):
+            workflow = snapshot.get("workflow")
+            if isinstance(workflow, Mapping):
+                workflow_name = str(workflow.get("name") or "")
             nodes = snapshot.get("nodes")
             if isinstance(nodes, list):
                 for node in nodes:
@@ -643,7 +645,7 @@ class WorkflowQuantityInventory:
                         break
         return {
             "workflow_node_uuid": str(row["workflow_node_uuid"]),
-            "workflow_name": str(row["workflow_name"] or ""),
+            "workflow_name": workflow_name,
             "node_name": node_name,
         }
 

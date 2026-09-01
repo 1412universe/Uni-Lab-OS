@@ -131,6 +131,10 @@ def ensure_station_task_submission_schema(connection: sqlite3.Connection) -> Non
         connection.execute(
             "ALTER TABLE workflow_task ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'"
         )
+    if "revision_fingerprint" not in task_columns:
+        connection.execute(
+            "ALTER TABLE workflow_task ADD COLUMN revision_fingerprint TEXT"
+        )
     connection.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_workflow_task_station_invocation

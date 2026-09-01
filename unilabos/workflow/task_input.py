@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID, uuid4, uuid5
 
 from unilabos.workflow.json_codec import clone_json
 from unilabos.workflow.models import validate_uuid
@@ -14,6 +15,7 @@ from unilabos.workflow.schema import (
     parse_value_schema,
 )
 from unilabos.workflow.workflow_io import (
+    ValidatedWorkflowIO,
     WorkflowIOValidationError,
     validate_workflow_graph_io,
 )
@@ -73,6 +75,13 @@ def prepare_task_input(
             input_bindings=validated.input_bindings,
             resolved_input=resolved,
         )
+        _add_boundary_jobs(
+            snapshot=snapshot,
+            plan=plan,
+            jobs=prepared_jobs,
+            resolved_input=resolved,
+            workflow_io=validated,
+        )
     except TaskInputError:
         raise
     except (
@@ -88,6 +97,118 @@ def prepare_task_input(
         execution_plan=plan,
         jobs=prepared_jobs,
     )
+
+
+def _add_boundary_jobs(
+    *,
+    snapshot: Mapping[str, Any],
+    plan: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    resolved_input: Mapping[str, Any],
+    workflow_io: ValidatedWorkflowIO,
+) -> None:
+    """为非空工作流输入/输出合同编译正式纯数据边界节点作业。
+
+    参数：冻结图、执行计划、作业、规范输入与已验证 I/O 合同属于同一修订；本
+    函数原地增加至多一个输入和一个输出节点。返回无。异常：工作流身份非法时
+    由 UUID 解析抛出并使任务创建整体零写入。
+    """
+
+    namespace = UUID(str(snapshot["workflow"]["uuid"]))
+    input_parameters = workflow_io.input_contract.to_dict()["parameters"]
+    output_descriptors = workflow_io.output_contract.to_dict()["outputs"]
+    input_node_uuid = str(uuid5(namespace, "workflow-input-boundary"))
+    output_node_uuid = str(uuid5(namespace, "workflow-output-boundary"))
+    existing_nodes = list(plan.get("nodes", []))
+    existing_jobs = list(jobs)
+    offset = 1 if input_parameters else 0
+    for index, node in enumerate(existing_nodes, start=offset):
+        node["topological_index"] = index
+    for index, job in enumerate(existing_jobs, start=offset):
+        job["topological_index"] = index
+
+    input_node: dict[str, Any] | None = None
+    input_job: dict[str, Any] | None = None
+    if input_parameters:
+        input_node = {
+            "uuid": input_node_uuid,
+            "topological_index": 0,
+            "kind": "workflow_input",
+            "param": {},
+            "execution_policy": {},
+            "action_resource_contract": {},
+        }
+        input_job = {
+            "uuid": str(uuid4()),
+            "workflow_node_uuid": input_node_uuid,
+            "topological_index": 0,
+            "executor_kind": "workflow_input",
+            "execution_policy": {},
+            "execution_timeout_seconds": 0,
+            "param": {},
+            "status": "succeeded",
+            "return_info": clone_json(dict(resolved_input)),
+        }
+
+    output_node: dict[str, Any] | None = None
+    output_job: dict[str, Any] | None = None
+    if output_descriptors:
+        output_index = len(existing_nodes) + offset
+        output_bindings = {
+            name: dict(binding)
+            for name, binding in workflow_io.output_bindings.items()
+        }
+        output_node = {
+            "uuid": output_node_uuid,
+            "topological_index": output_index,
+            "kind": "workflow_output",
+            "param": {},
+            "execution_policy": {},
+            "action_resource_contract": {},
+            "output_bindings": output_bindings,
+        }
+        output_job = {
+            "uuid": str(uuid4()),
+            "workflow_node_uuid": output_node_uuid,
+            "topological_index": output_index,
+            "executor_kind": "workflow_output",
+            "execution_policy": {},
+            "execution_timeout_seconds": 0,
+            "param": {},
+            "status": "pending",
+            "return_info": {},
+        }
+        for output_name, binding in output_bindings.items():
+            source_node_uuid = (
+                input_node_uuid
+                if binding["kind"] == "workflow_input"
+                else str(binding["workflow_node_uuid"])
+            )
+            plan.setdefault("edges", []).append(
+                {
+                    "uuid": str(
+                        uuid5(
+                            namespace,
+                            f"workflow-output-dependency:{output_name}",
+                        )
+                    ),
+                    "source_node_uuid": source_node_uuid,
+                    "target_node_uuid": output_node_uuid,
+                    "source_handle_uuid": "",
+                    "target_handle_uuid": "",
+                    "dependency_only": True,
+                }
+            )
+    plan["nodes"] = [
+        *([input_node] if input_node is not None else []),
+        *existing_nodes,
+        *([output_node] if output_node is not None else []),
+    ]
+    jobs[:] = [
+        *([input_job] if input_job is not None else []),
+        *existing_jobs,
+        *([output_job] if output_job is not None else []),
+    ]
 
 
 def _resolve_values(

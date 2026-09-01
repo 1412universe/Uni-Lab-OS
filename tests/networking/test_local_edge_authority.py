@@ -633,6 +633,17 @@ def test_transient_disconnect_marks_unknown_and_same_process_can_reconcile(
     """
 
     authority = _authority(tmp_path / "authority.db")
+    registration = authority.store.register_session(
+        {
+            "edge_key": "workspace-edge",
+            "instance_uuid": str(uuid.uuid4()),
+            "devices": [],
+        }
+    )
+    session_identity = {
+        "edge_uuid": registration["edge_uuid"],
+        "session_uuid": registration["session_uuid"],
+    }
     payload = _payload()
     authority.dispatch(payload)
     command = authority.store.pending_commands()[0]
@@ -645,6 +656,7 @@ def test_transient_disconnect_marks_unknown_and_same_process_can_reconcile(
     try:
         restarted, affected = authority.store.reconcile_hello(
             {
+                **session_identity,
                 "process_uuid": process_uuid,
                 "last_ack_command_sequence": command["sequence"],
                 "running_jobs": [],
@@ -661,6 +673,7 @@ def test_transient_disconnect_marks_unknown_and_same_process_can_reconcile(
 
         restarted, affected = authority.store.reconcile_hello(
             {
+                **session_identity,
                 "process_uuid": process_uuid,
                 "last_ack_command_sequence": command["sequence"],
                 "running_jobs": [
@@ -688,6 +701,17 @@ def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
     """
 
     authority = _authority(tmp_path / "authority.db")
+    registration = authority.store.register_session(
+        {
+            "edge_key": "workspace-edge",
+            "instance_uuid": str(uuid.uuid4()),
+            "devices": [],
+        }
+    )
+    session_identity = {
+        "edge_uuid": registration["edge_uuid"],
+        "session_uuid": registration["session_uuid"],
+    }
     payload = _payload()
     authority.dispatch(payload)
     command = authority.store.pending_commands()[0]
@@ -695,6 +719,7 @@ def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
     first_process_uuid = str(uuid.uuid4())
     authority.store.reconcile_hello(
         {
+            **session_identity,
             "process_uuid": first_process_uuid,
             "last_ack_command_sequence": command["sequence"],
             "running_jobs": [],
@@ -706,6 +731,7 @@ def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
     try:
         restarted, affected = authority.store.reconcile_hello(
             {
+                **session_identity,
                 "process_uuid": str(uuid.uuid4()),
                 "last_ack_command_sequence": command["sequence"],
                 "running_jobs": [],

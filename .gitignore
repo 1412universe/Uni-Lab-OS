@@ -152,6 +152,13 @@ venv.bak/
 # mkdocs documentation
 /site
 
+# Uni-Lab-OS React frontend
+/frontend/node_modules/
+/frontend/*.tsbuildinfo
+/frontend/coverage/
+/frontend/.env*
+!/frontend/.env.example
+
 # mypy
 .mypy_cache/
 .dmypy.json
@@ -252,4 +259,6 @@ ros-humble-unilabos-msgs-0.9.13-h6403a04_5.tar.bz2
 *.bz2
 test_config.py
 
-
+# Python/ROS 的通用 ``lib/`` 忽略规则不能吞掉前端 API 客户端源码。
+!/frontend/src/lib/
+!/frontend/src/lib/**

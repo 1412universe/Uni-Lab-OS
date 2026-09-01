@@ -71,6 +71,11 @@ from unilabos.workflow.task_material_admission import (
     record_admitted_materials,
     record_blocked_admission,
 )
+from unilabos.workflow.workflow_boundary import (
+    WorkflowBoundaryError,
+    WorkflowBoundaryProjection,
+    project_ready_workflow_output,
+)
 
 _ACTIVE_JOB_STATES = frozenset({"pending", "dispatched", "running"})
 _TERMINAL_JOB_STATES = frozenset(
@@ -313,6 +318,44 @@ class TaskRuntimeProjection:
         if not job_rows:
             raise StoreConflict(f"工作流任务没有可投影作业：{task_uuid}")
         return list(job_rows)
+
+    @classmethod
+    def _project_ready_output(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        task_uuid: str,
+        now: str,
+    ) -> WorkflowBoundaryProjection:
+        """投影就绪的工作流输出边界并写入统一运行与工站事件。"""
+
+        try:
+            boundary = project_ready_workflow_output(
+                connection,
+                task_uuid=task_uuid,
+                now=now,
+                complete_task=False,
+            )
+        except WorkflowBoundaryError as error:
+            raise StoreConflict(str(error)) from error
+        if not boundary.output_changed or boundary.output_job_uuid is None:
+            return boundary
+        append_runtime_event(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=boundary.output_job_uuid,
+            kind="job_transition",
+            from_status="pending",
+            to_status="succeeded",
+            now=now,
+        )
+        append_job_state_event(
+            connection,
+            job_row=cls._job_row(connection, boundary.output_job_uuid),
+            status="succeeded",
+            details={"return_info": boundary.result or {}},
+        )
+        return boundary
 
     @classmethod
     def _resume_task_after_reconciliation(
@@ -859,10 +902,19 @@ class TaskRuntimeProjection:
                     now=projected_at,
                 )
 
+            self._project_ready_output(
+                connection,
+                task_uuid=task_uuid,
+                now=projected_at,
+            )
+
             # 没有普通动作表示任务业务目标就是完成供料绑定；协调器工作不经历
             # ``running``，也不产生设备执行开始时间。
             ordinary_rows = [
-                row for row in job_rows if row["executor_kind"] != "material_source"
+                row
+                for row in self._job_rows(connection, task_uuid)
+                if row["executor_kind"]
+                not in {"material_source", "workflow_input", "workflow_output"}
             ]
             if not ordinary_rows and task_row["status"] == "pending":
                 updated_tasks = connection.execute(
@@ -2127,6 +2179,12 @@ class TaskRuntimeProjection:
                 kind="job_transition",
                 from_status=str(current_job_status),
                 to_status=target_job_status,
+                now=finished_at,
+            )
+
+            self._project_ready_output(
+                connection,
+                task_uuid=task_uuid,
                 now=finished_at,
             )
 
