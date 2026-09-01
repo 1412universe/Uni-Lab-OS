@@ -92,6 +92,20 @@ def test_console_install_is_idempotent_and_missing_bundle_is_nonfatal(
     }
 
 
+def test_console_install_ignores_composition_routes_without_names(
+    tmp_path: Path,
+) -> None:
+    app = FastAPI()
+    composition_route = object()
+    app.router.routes.append(composition_route)  # type: ignore[arg-type]
+
+    assert install_console_ui(app, _console_dist(tmp_path))
+    assert any(
+        getattr(route, "name", None) == "unilab-console"
+        for route in app.routes
+    )
+
+
 def test_console_security_rejects_cross_site_and_dns_rebinding(
     monkeypatch: MonkeyPatch,
 ) -> None:

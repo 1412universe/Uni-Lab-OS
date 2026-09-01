@@ -152,7 +152,10 @@ def install_console_ui(
     if not (console_directory / "index.html").is_file():
         info(f"[Web] React 控制台构建产物不存在，跳过挂载: {console_directory}")
         return False
-    if any(route.name == _CONSOLE_ROUTE_NAME for route in app.routes):
+    if any(
+        getattr(route, "name", None) == _CONSOLE_ROUTE_NAME
+        for route in app.routes
+    ):
         return False
 
     @app.get("/", include_in_schema=False, name="unilab-console-root")
