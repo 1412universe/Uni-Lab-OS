@@ -103,7 +103,9 @@ function demoTask(
     workflowRevision: demoWorkflows[0].revision,
     description: 'SZLab 单样品全流程运行任务',
     nodes: nodes(activeIndex, status),
-    planSignature: 'single-sample-atomic-v3',
+    materialUuids: [],
+    runMode: 'normal',
+    matrixGroupKey: 'single-sample-atomic-v3',
   }
 }
 
@@ -117,18 +119,29 @@ export const demoTasks: WorkflowTask[] = [
 ]
 
 export const demoMaterials: MaterialRecord[] = [
-  ['MAT-BKR-031', '500 mL 烧杯', 'beaker', 'S06 / S061', 'occupied', 'BKR-2408'],
-  ['MAT-VIAL-088', '250 mL 样品瓶', 'sample_vial', 'S08 / VIAL1', 'reserved', 'VIAL-2408'],
-  ['MAT-PWD-012', '粗粉瓶', 'powder', 'S07 / POWDER1', 'occupied', 'PWD-A19'],
-  ['MAT-PWD-019', '精粉瓶', 'powder', 'S07 / POWDER2', 'occupied', 'PWD-B07'],
-  ['MAT-LIQ-044', '液体试剂瓶', 'liquid_reagent', 'S06 / PUMP1', 'available', 'LIQ-0831'],
-  ['MAT-TIP-006', 'TIP Box', 'consumable', 'S09 / TIP1', 'verify', 'TIP-2408'],
-].map(([uuid, name, category, location, status, barcode]) => ({
+  ['MAT-BKR-031', '500 mL 烧杯', 'beaker', 'S06 / S061', 'BKR-2408'],
+  ['MAT-VIAL-088', '250 mL 样品瓶', 'sample_vial', 'S08 / VIAL1', 'VIAL-2408'],
+  ['MAT-PWD-012', '粗粉瓶', 'powder', 'S07 / POWDER1', 'PWD-A19'],
+  ['MAT-PWD-019', '精粉瓶', 'powder', 'S07 / POWDER2', 'PWD-B07'],
+  ['MAT-LIQ-044', '液体试剂瓶', 'liquid_reagent', 'S06 / PUMP1', 'LIQ-0831'],
+  ['MAT-TIP-006', 'TIP Box', 'consumable', 'S09 / TIP1', 'TIP-2408'],
+].map(([uuid, name, category, location, barcode], index) => ({
   uuid,
   name,
   category,
-  location,
-  status: status as MaterialRecord['status'],
+  currentLocation: {
+    kind: 'site' as const,
+    label: location,
+    siteUuid: `demo-site-${index}`,
+    ownerMaterialUuid: `demo-owner-${index}`,
+  },
+  configuredSource: location,
+  taskReferences: index < 3 ? [{
+    taskUuid: demoTasks[index].uuid,
+    taskStatus: demoTasks[index].status,
+    workflowName: demoTasks[index].workflowName,
+    sample: demoTasks[index].sample,
+  }] : [],
   barcode,
   className: `community.szlab.${category}`,
   sourceGraph: 'szlab-local-debug.json',

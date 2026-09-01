@@ -1,6 +1,6 @@
 import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react'
 import { ArrowRight, RefreshCw } from 'lucide-react'
-import type { TaskStatus } from '../types'
+import type { TaskPresentationStatus } from '../types'
 
 export function Panel({ className = '', children }: PropsWithChildren<{ className?: string }>) {
   return <section className={`panel ${className}`}>{children}</section>
@@ -75,7 +75,7 @@ export function RefreshButton({ onClick }: { onClick?: () => void }) {
   )
 }
 
-const taskStatusLabels: Record<TaskStatus, string> = {
+const taskStatusLabels: Record<TaskPresentationStatus, string> = {
   running: '运行中',
   admission_blocked: '等待资源',
   succeeded: '已完成',
@@ -90,7 +90,7 @@ const taskStatusLabels: Record<TaskStatus, string> = {
   unknown: '状态未知',
 }
 
-export function StatusBadge({ status }: { status: TaskStatus }) {
+export function StatusBadge({ status }: { status: TaskPresentationStatus }) {
   return <span className={`status-badge status-${status}`}>{taskStatusLabels[status]}</span>
 }
 

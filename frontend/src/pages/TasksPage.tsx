@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { createWorkflowTask } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, TaskNode, TaskStatus, WorkflowDefinition, WorkflowTask } from '../types'
+import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTask } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
@@ -75,7 +75,7 @@ function TaskMatrixGroup({
 
   return (
     <section className="matrix-group">
-      <div className="matrix-group-title"><GitBranch size={15} /><strong>{tasks[0]?.workflowName}</strong><span>{tasks[0]?.workflowRevision ? `r${tasks[0].workflowRevision} · ` : ''}{tasks.length} 个任务</span></div>
+      <div className="matrix-group-title"><GitBranch size={15} /><strong>{tasks[0]?.workflowName}</strong><span>{tasks[0]?.workflowRevision ? `r${tasks[0].workflowRevision} · ` : ''}{tasks[0]?.runMode || 'normal'} · {tasks.length} 个任务</span></div>
       <div className="task-matrix-scroll">
         <div className="matrix-header" style={{ gridTemplateColumns: columns }}>
           <div className="matrix-task-heading">Task / 样品</div>
@@ -294,7 +294,7 @@ function CreateTaskDialog({
                   <select required={field.required} value={input[field.name] ?? ''} onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.value }))}>
                     <option value="">{materialOptions.length ? '选择 Edge 物料' : '没有符合模板约束的物料'}</option>
                     {materialOptions.map((material) => (
-                      <option key={material.uuid} value={material.uuid}>{material.name} · {material.location} · {material.status}</option>
+                      <option key={material.uuid} value={material.uuid}>{material.name} · {material.currentLocation.label}</option>
                     ))}
                   </select>
                 ) : schema.type === 'boolean' ? (
@@ -367,7 +367,7 @@ export function TasksPage({
   const groups = useMemo(() => {
     const grouped = new Map<string, WorkflowTask[]>()
     filtered.forEach((task) => {
-      const key = `${task.workflowUuid}:${task.planSignature}`
+      const key = `${task.workflowUuid}:r${task.workflowRevision ?? 'unknown'}:${task.matrixGroupKey}`
       grouped.set(key, [...(grouped.get(key) || []), task])
     })
     return [...grouped.entries()]

@@ -59,7 +59,7 @@ export default function App() {
       ) : page === 'materials' ? (
         <MaterialsPage materials={snapshot.materials} total={snapshot.materialTotal} connected={connection === 'connected'} onNotify={setToast} />
       ) : page === 'workflows' ? (
-        <WorkflowsPage workflows={snapshot.workflows} onNavigate={navigate} onNotify={setToast} />
+        <WorkflowsPage workflows={snapshot.workflows} connected={connection === 'connected'} onNavigate={navigate} onNotify={setToast} />
       ) : (
         <TasksPage tasks={snapshot.tasks} workflows={snapshot.workflows} materials={snapshot.materials} connected={connection === 'connected'} onRefresh={refresh} onNotify={setToast} />
       )}

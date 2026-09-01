@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import type { MaterialRecord } from '../types'
 import { loadMaterialDetail } from '../lib/edgeClient'
-import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
+import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
 const categoryLabels: Record<string, string> = {
   beaker: '烧杯',
@@ -26,11 +26,9 @@ const categoryLabels: Record<string, string> = {
   material: '其他物料',
 }
 
-const materialStatusLabels: Record<MaterialRecord['status'], string> = {
-  available: '可用',
-  occupied: '任务占用',
-  reserved: '已预留',
-  verify: '需核验',
+function materialTaskReferenceLabel(material: MaterialRecord): string {
+  const count = material.taskReferences.length
+  return count ? `${count} 个未结束任务` : '无未结束任务引用'
 }
 
 function MaterialIcon({ category }: { category: string }) {
@@ -69,7 +67,7 @@ export function MaterialsPage({
     const needle = query.trim().toLowerCase()
     return materials.filter((material) => {
       const categoryMatch = category === 'all' || material.category === category
-      const textMatch = !needle || [material.name, material.uuid, material.barcode, material.location]
+      const textMatch = !needle || [material.name, material.uuid, material.barcode, material.currentLocation.label]
         .join(' ')
         .toLowerCase()
         .includes(needle)
@@ -87,7 +85,7 @@ export function MaterialsPage({
   const detail = detailQuery.data
     ? {
         ...detailQuery.data,
-        status: selected && selected.status !== 'available' ? selected.status : detailQuery.data.status,
+        taskReferences: selected?.taskReferences || detailQuery.data.taskReferences,
       }
     : selected
   const detailAuthoritative = Boolean(detailQuery.data)
@@ -97,7 +95,7 @@ export function MaterialsPage({
       <PageHeader
         eyebrow="MATERIAL AUTHORITY"
         title="物料与库存"
-        description="从统一物料账本查看身份、位置、占用状态与来源图，页面数据直接来自 Edge。"
+        description="从统一物料账本查看身份、权威位置、当前任务引用与来源图，页面数据直接来自 Edge。"
         actions={
           <>
             <Button icon={<Download size={16} />} onClick={() => onNotify('盘点导出将在文件服务接入后开放')}>导出盘点</Button>
@@ -108,9 +106,9 @@ export function MaterialsPage({
 
       <section className="materials-stats" aria-label="物料概览">
         <div><span><Archive size={18} /></span><p><small>物料总量</small><strong>{total}</strong></p></div>
-        <div><span><CircleCheck size={18} /></span><p><small>当前可用</small><strong>{materials.filter((item) => item.status === 'available').length}</strong></p></div>
-        <div><span><ShieldCheck size={18} /></span><p><small>任务占用</small><strong>{materials.filter((item) => item.status === 'occupied').length}</strong></p></div>
-        <div><span><PackageSearch size={18} /></span><p><small>需要核验</small><strong>{materials.filter((item) => item.status === 'verify').length}</strong></p></div>
+        <div><span><CircleCheck size={18} /></span><p><small>已分配权威库位</small><strong>{materials.filter((item) => item.currentLocation.kind === 'site').length}</strong></p></div>
+        <div><span><ShieldCheck size={18} /></span><p><small>有未结束任务引用</small><strong>{materials.filter((item) => item.taskReferences.length > 0).length}</strong></p></div>
+        <div><span><PackageSearch size={18} /></span><p><small>未结束任务引用</small><strong>{materials.reduce((sum, item) => sum + item.taskReferences.length, 0)}</strong></p></div>
       </section>
 
       <div className="materials-layout">
@@ -145,7 +143,7 @@ export function MaterialsPage({
           {filtered.length ? (
             <div className="table-scroll">
               <table className="data-table material-table">
-                <thead><tr><th>物料</th><th>类型</th><th>当前位置</th><th>状态</th><th>条码</th><th>更新时间</th></tr></thead>
+                <thead><tr><th>物料</th><th>类型</th><th>权威当前位置</th><th>未结束任务引用</th><th>条码</th><th>更新时间</th></tr></thead>
                 <tbody>
                   {filtered.map((material) => (
                     <tr
@@ -159,8 +157,8 @@ export function MaterialsPage({
                     >
                       <td><span className="entity-icon"><MaterialIcon category={material.category} /></span><div><strong>{material.name}</strong><code>{material.uuid}</code></div></td>
                       <td>{categoryLabels[material.category] || material.category}</td>
-                      <td><span className="location-cell"><MapPin size={13} />{material.location}</span></td>
-                      <td><span className={`material-status material-${material.status}`}>{materialStatusLabels[material.status]}</span></td>
+                      <td><span className="location-cell"><MapPin size={13} />{material.currentLocation.label}</span></td>
+                      <td><span className={`material-status ${material.taskReferences.length ? 'material-referenced' : 'material-not-referenced'}`}>{materialTaskReferenceLabel(material)}</span></td>
                       <td><code>{material.barcode}</code></td>
                       <td>{material.updatedAt}</td>
                     </tr>
@@ -177,34 +175,43 @@ export function MaterialsPage({
               <div className="inspector-heading">
                 <span className="entity-icon large"><MaterialIcon category={detail.category} /></span>
                 <div><small>{categoryLabels[detail.category] || detail.category}</small><h2>{detail.name}</h2><code>{detail.uuid}</code></div>
-                <span className={`material-status material-${detail.status}`}>{materialStatusLabels[detail.status]}</span>
+                <span className={`material-status ${detail.taskReferences.length ? 'material-referenced' : 'material-not-referenced'}`}>{materialTaskReferenceLabel(detail)}</span>
               </div>
               <div className="inspector-block">
                 <h3>
-                  {detailQuery.isError
-                    ? '列表位置（详情降级）'
-                    : detailAuthoritative
-                      ? '权威当前位置'
-                      : connected
-                        ? '正在读取权威位置'
-                        : '列表位置'}
+                  权威当前位置
                   {detailQuery.isFetching ? <small>更新中…</small> : null}
                   {detailQuery.isError ? <small className="detail-error">详情读取失败</small> : null}
                 </h3>
-                <div className="location-path"><span>{detailAuthoritative ? 'Edge Material Aggregate' : 'Material List Projection'}</span><ChevronRight size={15} /><strong>{detail.location}</strong></div>
+                <div className="location-path"><span>{detailAuthoritative ? 'Edge Material Detail' : 'Edge Material Graph'}</span><ChevronRight size={15} /><strong>{detail.currentLocation.label}</strong></div>
                 <dl className="property-list">
                   <div><dt>父物料 UUID</dt><dd>{detail.parentUuid || '根节点'}</dd></div>
                   <div><dt>物料类别</dt><dd>{detail.category}</dd></div>
                   <div><dt>资源类</dt><dd title={detail.className}>{detail.className.split('.').at(-1)}</dd></div>
                   <div><dt>来源图</dt><dd>{detail.sourceGraph || '—'}</dd></div>
+                  <div><dt>配置来源位置</dt><dd>{detail.configuredSource}</dd></div>
                 </dl>
+              </div>
+              <div className="inspector-block">
+                <h3>未结束任务引用（调度投影）</h3>
+                <p className="task-reference-note">这里只表示 Task/Job 载荷引用该 Material UUID，不证明任务物料预留、作业执行占用或库位占用。</p>
+                {detail.taskReferences.length ? (
+                  <div className="material-task-references">
+                    {detail.taskReferences.map((reference) => (
+                      <div key={reference.taskUuid}>
+                        <div><strong>{reference.workflowName}</strong><code>{reference.taskUuid}</code><small>{reference.sample}</small></div>
+                        <StatusBadge status={reference.taskStatus} />
+                      </div>
+                    ))}
+                  </div>
+                ) : <EmptyState title="无未结束任务引用" description="这不代表物料一定可用；正式准入仍由 Scheduler 与 Inventory 原子判断。" />}
               </div>
               <div className="inspector-block">
                 <h3>资源谱系</h3>
                 <div className="lineage">
                   <div className="done"><span><CircleCheck size={14} /></span><p><strong>资源图加载</strong><small>{detail.sourceGraph || 'runtime inventory'}</small></p></div>
                   <div className="done"><span><CircleCheck size={14} /></span><p><strong>物料实例化</strong><small>{detail.barcode}</small></p></div>
-                  <div className="current"><span><MapPin size={14} /></span><p><strong>{detail.location}</strong><small>{detailAuthoritative ? '当前权威位置' : '列表位置投影'}</small></p></div>
+                  <div className="current"><span><MapPin size={14} /></span><p><strong>{detail.currentLocation.label}</strong><small>当前权威位置</small></p></div>
                 </div>
               </div>
             </>

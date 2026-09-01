@@ -3,7 +3,7 @@
 这里是 Uni-Lab-OS 内置的 React + TypeScript 前端源码。页面按四个一级业务项目组织：
 
 - 总监控：实验室态势、活动任务、异常、物料脉搏与运行事件。
-- 物料：身份、类型、批次、库存位置、任务占用、Custody 与流转谱系。
+- 物料：身份、类型、批次、权威库存位置、未结束任务引用与流转谱系。
 - 工作流：定义目录、发布修订、DAG、输入输出合同、Preflight 与版本记录。
 - 任务：创建 Task、运行输入、队列、Job 时间线、资源占用、结果与异常操作。
 
@@ -15,7 +15,7 @@ Workspace Backend 直接从 `/console/` 下发，页面与 `/api/v1` 使用同�
 需要 Node.js 22.13 或更新版本：
 
 ```bash
-cd /Users/xiongyanfei/Desktop/code/dp/sz/Uni-Lab-OS/frontend
+cd frontend
 npm ci
 npm run dev
 ```

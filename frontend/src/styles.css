@@ -532,10 +532,8 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .entity-icon.large { width: 45px; height: 45px; border-radius: 11px; }
 .location-cell { display: inline-flex; align-items: center; gap: 5px; color: #344054; font-weight: 600; }
 .material-status { display: inline-flex; width: max-content; min-height: 23px; align-items: center; padding: 3px 8px; border-radius: 999px; font-size: 9px; font-weight: 700; white-space: nowrap; }
-.material-available { color: #067647; background: var(--green-soft); }
-.material-occupied { color: #294ebd; background: var(--blue-soft); }
-.material-reserved { color: #6941c6; background: #f1edff; }
-.material-verify { color: #975a0c; background: var(--amber-soft); }
+.material-not-referenced { color: #475467; background: #f2f4f7; }
+.material-referenced { color: #294ebd; background: var(--blue-soft); }
 
 .material-inspector { overflow-y: auto; }
 .inspector-heading { display: grid; grid-template-columns: 45px minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 16px; border-bottom: 1px solid var(--line); }
@@ -561,6 +559,13 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .lineage p, .lineage strong, .lineage small { display: block; }
 .lineage strong { font-size: 10px; }
 .lineage small { margin-top: 3px; color: var(--subtle); font-size: 8px; }
+.task-reference-note { margin: -2px 0 10px; color: var(--muted); font-size: 8px; line-height: 1.55; }
+.material-task-references { display: grid; gap: 7px; }
+.material-task-references > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; background: #f8fafc; border: 1px solid #eaecf0; border-radius: 8px; }
+.material-task-references strong, .material-task-references code, .material-task-references small { display: block; }
+.material-task-references strong { font-size: 9px; }
+.material-task-references code { margin-top: 3px; color: var(--muted); font-size: 8px; }
+.material-task-references small { margin-top: 3px; color: var(--subtle); font-size: 8px; }
 
 /* Workflows */
 .workflow-layout {
@@ -630,6 +635,10 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .readiness-row > span { display: grid; place-items: center; width: 20px; height: 20px; color: #067647; background: var(--green-soft); border-radius: 50%; }
 .readiness-row strong { font-size: 9px; }
 .readiness-row small { color: var(--subtle); font-size: 8px; }
+.ready-orb.readiness-neutral, .readiness-row.readiness-neutral > span { color: #667085; background: #f2f4f7; }
+.ready-orb.readiness-loading, .readiness-row.readiness-loading > span { color: #294ebd; background: var(--blue-soft); }
+.ready-orb.readiness-warning, .readiness-row.readiness-warning > span { color: #975a0c; background: var(--amber-soft); }
+.ready-orb.readiness-error, .readiness-row.readiness-error > span { color: #b42318; background: var(--red-soft); }
 .full-button { width: calc(100% - 24px); margin: 12px; }
 .revision-current { display: grid; grid-template-columns: 38px 1fr auto; gap: 9px; align-items: center; padding: 13px; border-bottom: 1px solid var(--line); }
 .revision-current > span { display: grid; place-items: center; width: 38px; height: 38px; color: #294ebd; background: #eef3ff; border-radius: 9px; font: 10px 'JetBrains Mono', monospace; font-weight: 700; }

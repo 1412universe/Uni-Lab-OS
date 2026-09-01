@@ -1,9 +1,16 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
 import { MaterialsPage } from './MaterialsPage'
 import { serialiseTaskInput, TasksPage } from './TasksPage'
+import { WorkflowsPage } from './WorkflowsPage'
+
+afterEach(() => vi.unstubAllGlobals())
+
+function response(body: unknown) {
+  return { ok: true, status: 200, json: async () => body } as Response
+}
 
 function renderWithQuery(ui: React.ReactNode) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -20,6 +27,59 @@ describe('MaterialsPage', () => {
 
     expect(container.querySelector('.inspector-heading h2')).toHaveTextContent('250 mL 样品瓶')
     expect(screen.getByRole('row', { name: /MAT-VIAL-088/ })).toHaveClass('selected')
+    expect(screen.getByText('未结束任务引用（调度投影）')).toBeInTheDocument()
+    expect(screen.getByText(/不证明任务物料预留、作业执行占用或库位占用/)).toBeInTheDocument()
+    expect(screen.queryByText('当前可用')).not.toBeInTheDocument()
+    expect(screen.queryByText('已预留')).not.toBeInTheDocument()
+  })
+})
+
+describe('WorkflowsPage', () => {
+  it('shows a neutral state until it reads the real Edge Preflight report', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/graph')) {
+        return response({ code: 0, data: { workflow: demoWorkflows[0], nodes: [], edges: [] } })
+      }
+      if (url.includes('/run-preflight')) {
+        return response({
+          code: 0,
+          data: {
+            workflow_uuid: demoWorkflows[0].uuid,
+            workflow_revision: demoWorkflows[0].revision,
+            run_mode: 'normal',
+            status: 'temporarily_unavailable',
+            can_run: false,
+            checked_at: '2026-09-01T00:00:00Z',
+            summary: {
+              execution_node_count: 10,
+              passed_check_count: 2,
+              blocking_check_count: 1,
+              deferred_check_count: 1,
+              confirmation_required_count: 0,
+            },
+            checks: [],
+          },
+        })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithQuery(
+      <WorkflowsPage
+        workflows={demoWorkflows}
+        connected
+        onNavigate={vi.fn()}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    expect(screen.getAllByText('尚未检查').length).toBeGreaterThan(0)
+    expect(screen.queryByText('Edge 已就绪')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '运行 Preflight' }))
+
+    expect(await screen.findByText('当前条件暂不可用')).toBeInTheDocument()
+    expect(screen.getByText('1 项延后 · 0 项人工确认')).toBeInTheDocument()
   })
 })
 
@@ -60,7 +120,7 @@ describe('TasksPage', () => {
   it('separates different frozen execution plans even when workflow UUID is shared', () => {
     const tasks = [
       demoTasks[0],
-      { ...demoTasks[1], planSignature: 'single-node-debug-plan', workflowRevision: 4 },
+      { ...demoTasks[1], matrixGroupKey: 'single-node-debug-plan', workflowRevision: 4 },
     ]
     const { container } = renderWithQuery(
       <TasksPage tasks={tasks} workflows={demoWorkflows} materials={demoMaterials} connected={false} onRefresh={vi.fn()} onNotify={vi.fn()} />,

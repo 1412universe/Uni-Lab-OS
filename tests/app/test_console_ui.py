@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
 from unilabos.app.web.console import (
     DEFAULT_CONSOLE_DIRECTORY,
@@ -92,7 +93,7 @@ def test_console_install_is_idempotent_and_missing_bundle_is_nonfatal(
 
 
 def test_console_security_rejects_cross_site_and_dns_rebinding(
-    monkeypatch,
+    monkeypatch: MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         BasicConfig,
