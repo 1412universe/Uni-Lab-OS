@@ -892,6 +892,10 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .selected-task-properties > div { padding: 11px 13px; border-right: 1px solid #f0f2f5; border-bottom: 1px solid #f0f2f5; }
 .selected-task-properties dt { color: var(--subtle); font-size: 8px; }
 .selected-task-properties dd { margin: 4px 0 0; overflow: hidden; color: #344054; font-size: 9px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.selected-task-trace-link { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 11px 13px 13px; padding: 9px 10px; color: #3159c9; text-decoration: none; background: #f2f6ff; border: 1px solid #cbd8ff; border-radius: 9px; transition: 150ms ease; }
+.selected-task-trace-link:hover, .selected-task-trace-link:focus-visible { color: #2448af; background: #eaf0ff; border-color: #8ba6f5; box-shadow: 0 0 0 3px rgba(49, 89, 201, .1); outline: none; }
+.selected-task-trace-link span { display: inline-flex; gap: 6px; align-items: center; font-size: 9px; font-weight: 700; }
+.selected-task-trace-link code { overflow: hidden; color: #667085; font: 8px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
 .running-job-list { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding: 12px; }
 .running-job-list > button { display: grid; grid-template-columns: 10px minmax(0,1fr) auto; gap: 8px; align-items: center; min-width: 0; min-height: 61px; padding: 10px; color: #475467; background: #f4f7ff; border: 1px solid #d6dfff; border-radius: 9px; text-align: left; }
 .running-job-list strong, .running-job-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -400,6 +400,36 @@ def test_persisted_task_compiles_and_dispatches_with_stable_identities(
     assert aggregate["task"]["status"] == "running"
 
 
+def test_bridge_persists_the_scheduler_workflow_trace_context(
+    store: WorkflowStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """调度器接收 Task 后必须把根 Trace 身份写回同一个持久任务。"""
+
+    task = _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    original_submit = scheduler.submit_workflow
+    trace_context = {
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "trace_id": "0123456789abcdef0123456789abcdef",
+        "span_id": "0123456789abcdef",
+    }
+
+    def submit_with_trace(spec: Any) -> dict[str, Any]:
+        result = original_submit(spec)
+        return {**result, "trace_context": trace_context}
+
+    monkeypatch.setattr(scheduler, "submit_workflow", submit_with_trace)
+    bridge = _bridge(store, scheduler)
+    try:
+        aggregate = bridge.submit(task)
+
+        assert aggregate["task"]["trace_context"] == trace_context
+        assert store.get_task(TASK_UUID)["trace_context"] == trace_context
+    finally:
+        bridge.close()
+
+
 def test_scheduler_wait_projects_authoritative_structured_resources(
     store: WorkflowStore,
 ) -> None:

@@ -41,6 +41,12 @@ TRACESTATE = "tracestate"
 TRACE_ID = "trace_id"
 SPAN_ID = "span_id"
 
+_TRACEPARENT_VALUE = re.compile(
+    r"^[0-9a-f]{2}-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$"
+)
+_TRACE_ID_VALUE = re.compile(r"^[0-9a-f]{32}$")
+_SPAN_ID_VALUE = re.compile(r"^[0-9a-f]{16}$")
+
 _WORKFLOW_EXECUTION_IDENTITY: contextvars.ContextVar[Dict[str, str]] = (
     contextvars.ContextVar("unilabos_workflow_execution_identity", default={})
 )
@@ -941,6 +947,81 @@ def extract_trace_context(carrier: Optional[Mapping[str, Any]]) -> Any:
         return None
 
 
+def normalize_trace_context(
+    carrier: Optional[Mapping[str, Any]],
+) -> Dict[str, str]:
+    """把外部 carrier 收窄成可持久化的 W3C Trace Context。
+
+    ``traceparent`` 是恢复父子关系的唯一权威；``trace_id`` / ``span_id`` 只作为
+    查询投影。非法、全零或彼此矛盾的只读字段不会进入任务事实。
+    """
+
+    if not carrier:
+        return {}
+    source: Dict[str, str] = {}
+    nested = carrier.get("trace_context")
+    if isinstance(nested, Mapping):
+        for key in (TRACEPARENT, TRACESTATE, TRACE_ID, SPAN_ID):
+            if nested.get(key) is not None:
+                value = str(nested[key]).strip()
+                source[key] = value if key == TRACESTATE else value.lower()
+    for key in (TRACEPARENT, TRACESTATE, TRACE_ID, SPAN_ID):
+        if carrier.get(key) is not None:
+            value = str(carrier[key]).strip()
+            source[key] = value if key == TRACESTATE else value.lower()
+
+    traceparent = source.get(TRACEPARENT, "")
+    match = _TRACEPARENT_VALUE.fullmatch(traceparent)
+    if match is not None:
+        trace_id, span_id, _flags = match.groups()
+        if trace_id == "0" * 32 or span_id == "0" * 16:
+            return {}
+        result = {
+            TRACEPARENT: traceparent,
+            TRACE_ID: trace_id,
+            SPAN_ID: span_id,
+        }
+        tracestate = source.get(TRACESTATE, "")
+        if tracestate:
+            result[TRACESTATE] = tracestate[:512]
+        return result
+
+    trace_id = source.get(TRACE_ID, "")
+    if not _TRACE_ID_VALUE.fullmatch(trace_id) or trace_id == "0" * 32:
+        return {}
+    result = {TRACE_ID: trace_id}
+    span_id = source.get(SPAN_ID, "")
+    if _SPAN_ID_VALUE.fullmatch(span_id) and span_id != "0" * 16:
+        result[SPAN_ID] = span_id
+    return result
+
+
+def trace_ui_base_url(base_url: Optional[str] = None) -> str:
+    """返回可公开给前端的安全 SigNoz UI 基地址；配置非法时为空。"""
+
+    configured = (
+        base_url
+        if base_url is not None
+        else os.environ.get("UNILABOS_SIGNOZ_UI_URL", "")
+    ).strip()
+    if not configured:
+        return ""
+    try:
+        parts = urlsplit(configured)
+    except ValueError:
+        return ""
+    if (
+        parts.scheme.lower() not in {"http", "https"}
+        or not parts.netloc
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        return ""
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc, parts.path.rstrip("/"), "", "")
+    )
+
+
 def inject_trace_context(
     carrier: MutableMapping[str, Any], context_value: Any = None
 ) -> MutableMapping[str, Any]:
@@ -1159,6 +1240,13 @@ class DetachedSpan:
     def error(self, description: str) -> None:
         set_error(description, span=self.span)
 
+    def trace_context(self) -> Dict[str, str]:
+        """捕获当前 detached span 的可持久化 W3C carrier。"""
+
+        carrier: Dict[str, Any] = {}
+        inject_trace_context(carrier, self.context)
+        return normalize_trace_context(carrier)
+
     def end(self) -> None:
         if self._ended:
             return
@@ -1314,6 +1402,7 @@ __all__ = [
     "initialize_tracing",
     "inject_trace_context",
     "install_http_tracing",
+    "normalize_trace_context",
     "record_exception",
     "run_with_context",
     "set_error",
@@ -1321,6 +1410,7 @@ __all__ = [
     "span",
     "start_detached_span",
     "submit_with_context",
+    "trace_ui_base_url",
     "use_context",
     "wrap_with_current_context",
 ]

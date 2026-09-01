@@ -450,6 +450,42 @@ def test_paused_submission_accepts_succeeded_material_sources(
     }
 
 
+def test_trace_context_is_persisted_without_changing_business_timestamps(
+    store: WorkflowStore,
+) -> None:
+    """调度 Trace 是可恢复关联事实，但不是任务业务状态变化。"""
+
+    _seed_task(store, job_count=1)
+    projection = _projection(store)
+    trace_context = {
+        "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+        "tracestate": "vendor=value",
+        "trace_id": "0123456789abcdef0123456789abcdef",
+        "span_id": "0123456789abcdef",
+        "ignored": "must-not-be-persisted",
+    }
+
+    aggregate = projection.project_trace_context(TASK_UUID, trace_context)
+
+    assert aggregate["task"]["trace_context"] == {
+        "traceparent": trace_context["traceparent"],
+        "tracestate": "vendor=value",
+        "trace_id": trace_context["trace_id"],
+        "span_id": trace_context["span_id"],
+    }
+    assert aggregate["task"]["update_time"] == _CREATED_AT
+
+    with pytest.raises(StoreConflict, match="Trace ID"):
+        projection.project_trace_context(
+            TASK_UUID,
+            {
+                "traceparent": "00-fedcba9876543210fedcba9876543210-fedcba9876543210-01",
+                "trace_id": "fedcba9876543210fedcba9876543210",
+                "span_id": "fedcba9876543210",
+            },
+        )
+
+
 def test_running_admission_replay_repairs_implicit_passthrough_binding(
     store: WorkflowStore,
 ) -> None:

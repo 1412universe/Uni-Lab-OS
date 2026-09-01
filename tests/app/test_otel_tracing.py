@@ -7,6 +7,7 @@ import contextvars
 import itertools
 import json
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, Dict, Mapping
@@ -14,7 +15,11 @@ from typing import Any, Dict, Mapping
 import pytest
 
 from unilabos.app.scheduler.backend import JobExecutionBackend
-from unilabos.app.scheduler.dispatch import RecordingDispatcher, build_job_start_payload
+from unilabos.app.scheduler.dispatch import (
+    DispatchPayload,
+    RecordingDispatcher,
+    build_job_start_payload,
+)
 from unilabos.app.scheduler.inventory.domain import MaterialRequirement
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.app.scheduler.inventory.store import InventoryStore
@@ -347,6 +352,60 @@ def test_context_propagates_across_carrier_and_thread(recorder):
     assert remote_server.parent_span_id == root.span_id
 
 
+def test_scheduler_submission_exposes_a_durable_trace_context_and_reuses_it(
+    recorder,
+):
+    """Task 首次提交和恢复运行必须保留同一 Trace ID。"""
+
+    first_scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    with tracing.span("workflow.create.request") as request_span:
+        submitted = first_scheduler.submit_workflow(
+            WorkflowSpec(workflow_id="workflow-traced", task_id="task-traced", nodes=[])
+        )
+
+    carrier = submitted["trace_context"]
+    assert carrier["trace_id"] == f"{request_span.trace_id:032x}"
+    assert carrier["traceparent"].startswith(
+        f"00-{request_span.trace_id:032x}-"
+    )
+
+    recovered_scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    recovered = recovered_scheduler.restore_workflow(
+        WorkflowSpec(
+            workflow_id="workflow-recovered",
+            task_id="task-recovered",
+            nodes=[],
+            trace_context=carrier,
+        ),
+        {},
+    )
+
+    workflow_spans = _span_by_name(recorder, "workflow.task.run")
+    assert len(workflow_spans) == 2
+    assert workflow_spans[1].trace_id == workflow_spans[0].trace_id
+    assert workflow_spans[1].parent_span_id == workflow_spans[0].span_id
+    assert recovered["trace_context"]["trace_id"] == carrier["trace_id"]
+
+
+def test_signoz_ui_configuration_accepts_only_a_valid_http_base(monkeypatch):
+    monkeypatch.setenv("UNILABOS_SIGNOZ_UI_URL", "http://127.0.0.1:30081/signoz/")
+
+    assert tracing.trace_ui_base_url() == "http://127.0.0.1:30081/signoz"
+    assert tracing.trace_ui_base_url("javascript:alert(1)") == ""
+
+
+def test_readiness_exposes_signoz_as_separate_ui_runtime_configuration(monkeypatch):
+    from unilabos.app.web.server import api_readiness
+
+    monkeypatch.setenv("UNILABOS_SIGNOZ_UI_URL", "http://127.0.0.1:30081/")
+
+    payload = json.loads(api_readiness().body)
+
+    assert payload["observability"] == {
+        "traceUiUrl": "http://127.0.0.1:30081"
+    }
+
+
 def test_workflow_execution_identity_reaches_driver_thread_and_is_restored():
     job_uuid = "6199359e-c8e4-4a86-b709-1c50fc192ff7"
     task_uuid = "89326717-9448-47ce-825a-e679d6556c27"
@@ -560,6 +619,90 @@ def test_edge_websocket_event_injects_send_span_context(recorder, tmp_path):
     assert int(traceparent[1], 16) == receive_span.trace_id
     assert int(traceparent[2], 16) == send_span.span_id
     store.close()
+
+
+def test_local_authority_command_replay_keeps_scheduler_and_runtime_in_one_trace(
+    recorder,
+    tmp_path,
+):
+    """Scheduler 落盘命令在 Authority 重启后仍把 W3C carrier 送到 Runtime。"""
+
+    from unilabos.app.edge_control.client import (
+        EdgeControlClient,
+        EdgeControlSettings,
+    )
+    from unilabos.app.edge_control.local_authority import LocalEdgeAuthorityStore
+    from unilabos.app.edge_control.store import EdgeControlStore
+
+    authority_path = tmp_path / "local-authority-trace.db"
+    authority = LocalEdgeAuthorityStore(authority_path)
+    payload = DispatchPayload(
+        job_id=str(uuid.uuid4()),
+        task_id=str(uuid.uuid4()),
+        workflow_id=str(uuid.uuid4()),
+        node_id=str(uuid.uuid4()),
+        device_id="robot-trace",
+        action="transfer",
+        action_type="normal",
+        action_args={"source": "A", "target": "B"},
+        attempt=1,
+        command_uuid=str(uuid.uuid4()),
+        claim_uuid=str(uuid.uuid4()),
+        fences=[{"lock_key": "/devices/robot-trace", "fencing_token": 1}],
+    )
+    with tracing.span("workflow.job.dispatch") as dispatch_span:
+        authority.dispatch(payload)
+    authority.close()
+
+    restarted_authority = LocalEdgeAuthorityStore(authority_path)
+    command = restarted_authority.pending_commands()[0]
+    restarted_authority.close()
+    assert command["traceparent"].startswith(
+        f"00-{dispatch_span.trace_id:032x}-"
+    )
+
+    runtime_path = tmp_path / "edge-runtime-trace.db"
+    runtime_store = EdgeControlStore(str(runtime_path))
+    client = EdgeControlClient(
+        EdgeControlSettings(
+            scheduler_address="http://scheduler:8081",
+            backend_address="http://backend:8080",
+            api_key="edge-secret",
+            edge_key="edge-test",
+            capability_revision="test-v1",
+            instance_uuid="",
+            state_db=str(runtime_path),
+            reconnect_interval=0.01,
+            request_timeout=1,
+            event_retry_interval=0.01,
+        ),
+        store=runtime_store,
+        data_plane=SimpleNamespace(),
+        host_node_provider=lambda: None,
+    )
+    accepted_carriers: list[dict[str, str]] = []
+
+    async def accept_job_start(
+        _command_uuid: str,
+        _payload: dict[str, Any],
+        carrier: dict[str, str],
+    ) -> None:
+        accepted_carriers.append(dict(carrier))
+
+    client._accept_job_start = accept_job_start  # type: ignore[method-assign]
+    try:
+        asyncio.run(client._handle_envelope(command))
+    finally:
+        runtime_store.close()
+
+    receive_span = _span_by_name(recorder, "edge.command.receive")[0]
+    assert receive_span.trace_id == dispatch_span.trace_id
+    assert accepted_carriers == [
+        {
+            "traceparent": command["traceparent"],
+            "tracestate": command.get("tracestate", ""),
+        }
+    ]
 
 
 def test_errors_and_sensitive_attributes_are_sanitized(recorder):

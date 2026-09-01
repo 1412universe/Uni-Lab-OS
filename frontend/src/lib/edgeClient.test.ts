@@ -188,6 +188,33 @@ describe('Edge view model adapters', () => {
     expect(task.nodes.map((node) => node.status)).toEqual(['succeeded', 'running', 'pending'])
   })
 
+  it('projects a safe SigNoz trace reference from the task response', () => {
+    const rawTask = {
+      uuid: 'task-traced',
+      workflow_uuid: 'wf-1',
+      status: 'running',
+      trace_context: {
+        trace_id: '0123456789abcdef0123456789abcdef',
+      },
+      execution_plan: { nodes: [] },
+    }
+    const task = adaptTask(
+      rawTask,
+      [],
+      '测试工作流',
+      [],
+      undefined,
+      'http://127.0.0.1:30081',
+    )
+    const unsafe = adaptTask(rawTask, [], '测试工作流', [], undefined, 'javascript:alert(1)')
+
+    expect(task.trace).toEqual({
+      traceId: '0123456789abcdef0123456789abcdef',
+      url: 'http://127.0.0.1:30081/trace/0123456789abcdef0123456789abcdef',
+    })
+    expect(unsafe.trace).toBeUndefined()
+  })
+
   it('preserves skipped, cancellation, and intervention node states', () => {
     const rawTask = {
       uuid: 'task-state-map',

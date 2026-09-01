@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID, uuid4
 
+from unilabos.utils.tracing import normalize_trace_context
 from unilabos.workflow._execution_plan_graph import final_target_data_key
 from unilabos.workflow.device_tenancy import (
     active_task_device_tenancies,
@@ -499,6 +500,38 @@ class TaskRuntimeProjection:
             raise StoreConflict(
                 f"本地提交状态与任务聚合冲突：{task_uuid}/{scheduler_state}"
             )
+
+    def project_trace_context(
+        self,
+        task_uuid: str,
+        trace_context: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """持久化 Scheduler 创建的工作流根 Trace 身份。
+
+        该投影不改变任务业务状态或更新时间；恢复运行允许更新当前父 span，但不
+        允许同一 Task 被改挂到另一个 Trace ID。
+        """
+
+        normalized = normalize_trace_context(trace_context)
+        if "traceparent" not in normalized:
+            raise StoreConflict("工作流任务 Trace Context 缺少合法 traceparent")
+        with self._store.transaction() as connection:
+            task_row = self._task_row(connection, task_uuid)
+            current = normalize_trace_context(
+                _decode_json_field(task_row["trace_context"], fallback={})
+            )
+            current_trace_id = current.get("trace_id")
+            if current_trace_id and current_trace_id != normalized["trace_id"]:
+                raise StoreConflict(f"工作流任务 Trace ID 不可变：{task_uuid}")
+            if current != normalized:
+                connection.execute(
+                    "UPDATE workflow_task SET trace_context = ? WHERE uuid = ?",
+                    (
+                        _encode_json_field(normalized, field_name="trace_context"),
+                        task_uuid,
+                    ),
+                )
+            return self._aggregate(connection, task_uuid)
 
     def project_canceled(self, task_uuid: str) -> dict[str, Any]:
         """取消可证明尚未派发的任务；在途任务必须走持久取消状态机。"""

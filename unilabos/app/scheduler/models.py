@@ -182,6 +182,8 @@ class WorkflowSpec:
     lab_id: str = ""
     task_id: str = ""  # 云端 WorkflowTask uuid（可空，Edge 本地提交时等于 workflow_id）
     run_mode: str = "normal"  # normal / step / single_node
+    # 恢复时以上一次 workflow span 为父上下文，使 Trace ID 跨进程重启稳定。
+    trace_context: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.task_id:

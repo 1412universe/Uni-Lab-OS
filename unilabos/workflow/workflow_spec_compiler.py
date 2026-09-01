@@ -15,6 +15,7 @@ from unilabos.app.scheduler.models import (
     WorkflowNode,
     WorkflowSpec,
 )
+from unilabos.utils.tracing import normalize_trace_context
 from unilabos.workflow._workflow_spec_snapshot import (
     WorkflowSpecCompilationError,
     canonical_uuid,
@@ -131,6 +132,11 @@ class WorkflowSpecCompiler:
             submitted_at=self._submitted_at(task.get("create_time")),
             lab_id=str(task.get("lab_id") or "").strip(),
             run_mode=str(task.get("run_mode") or plan.get("run_mode") or "normal"),
+            trace_context=normalize_trace_context(
+                task.get("trace_context")
+                if isinstance(task.get("trace_context"), Mapping)
+                else None
+            ),
         )
 
     @staticmethod

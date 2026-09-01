@@ -98,6 +98,7 @@ from unilabos.registry.material_lock_schema import (
 from unilabos.utils.tracing import (
     DetachedSpan,
     add_event,
+    extract_trace_context,
     span,
     start_detached_span,
 )
@@ -869,6 +870,7 @@ class EdgeScheduler:
                     "workflow.plan.node_count": len(spec.nodes),
                     "workflow.priority": str(spec.priority),
                 },
+                parent_context=extract_trace_context(spec.trace_context),
             )
             # 先登记 span 也充当 submit 占位，避免并发同 ID 覆盖对方的追踪句柄。
             self._workflow_spans[spec.workflow_id] = workflow_trace
@@ -880,7 +882,9 @@ class EdgeScheduler:
                     "workflow.task.uuid": spec.task_id,
                 },
             ):
-                return self._submit_workflow(spec)
+                result = self._submit_workflow(spec)
+                result["trace_context"] = workflow_trace.trace_context()
+                return result
         except BaseException as exc:
             workflow_trace.fail(exc)
             workflow_trace.end()
@@ -1067,6 +1071,7 @@ class EdgeScheduler:
                     "workflow.plan.node_count": len(spec.nodes),
                     "workflow.recovered.node_count": len(completed_results),
                 },
+                parent_context=extract_trace_context(spec.trace_context),
             )
             self._workflow_spans[spec.workflow_id] = workflow_trace
         try:
@@ -1100,11 +1105,13 @@ class EdgeScheduler:
                 dispatched = self._reschedule_locked()
                 notifications = self._collect_terminal_notifications()
             self._fire_notifications(notifications)
-            return {
+            result = {
                 "workflow_id": spec.workflow_id,
                 "state": run.state.value,
                 "dispatched": dispatched,
             }
+            result["trace_context"] = workflow_trace.trace_context()
+            return result
         except BaseException as exc:
             workflow_trace.fail(exc)
             workflow_trace.end()

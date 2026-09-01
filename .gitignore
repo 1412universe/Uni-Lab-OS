@@ -158,6 +158,7 @@ venv.bak/
 /frontend/coverage/
 /frontend/.env*
 !/frontend/.env.example
+/unilabos/app/web/static/console/
 
 # mypy
 .mypy_cache/

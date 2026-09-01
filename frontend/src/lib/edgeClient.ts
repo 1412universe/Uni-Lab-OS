@@ -548,12 +548,30 @@ function collectTaskMaterialUuids(
   return [...materialUuids]
 }
 
+function taskTraceReference(raw: RawRecord, traceUiUrl: string): WorkflowTask['trace'] {
+  const traceId = typeof raw.trace_context?.trace_id === 'string'
+    ? raw.trace_context.trace_id.toLowerCase()
+    : ''
+  if (!/^[0-9a-f]{32}$/.test(traceId) || !traceUiUrl) return undefined
+  try {
+    const url = new URL(traceUiUrl)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/trace/${traceId}`
+    url.search = ''
+    url.hash = ''
+    return { traceId, url: url.toString() }
+  } catch {
+    return undefined
+  }
+}
+
 export function adaptTask(
   raw: RawRecord,
   jobs: RawRecord[] = [],
   workflowName = '未命名工作流',
   inputContract: ContractField[] = [],
   knownMaterialUuids?: ReadonlySet<string>,
+  traceUiUrl = '',
 ): WorkflowTask {
   const attentionMessage = typeof raw.attention_reason === 'string'
     ? raw.attention_reason
@@ -684,6 +702,7 @@ export function adaptTask(
     workflowRevision: Number(raw.workflow_snapshot?.workflow?.revision || raw.workflow?.revision || 0) || undefined,
     runMode: String(raw.run_mode || raw.execution_plan?.run_mode || 'normal'),
     matrixGroupKey: matrixGroupKey(raw),
+    trace: taskTraceReference(raw, traceUiUrl),
   }
 }
 
@@ -1137,6 +1156,7 @@ async function taskWithJobs(
   raw: RawRecord,
   workflowsByUuid: Map<string, WorkflowDefinition>,
   knownMaterialUuids: ReadonlySet<string>,
+  traceUiUrl: string,
   signal?: AbortSignal,
 ) {
   const jobs = await requestData<RawRecord[]>(
@@ -1154,6 +1174,7 @@ async function taskWithJobs(
     workflow?.name || '未命名工作流',
     frozenInputContract.length ? frozenInputContract : workflow?.inputContract || [],
     knownMaterialUuids,
+    traceUiUrl,
   )
 }
 
@@ -1187,6 +1208,9 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
     requestData<RawRecord>('/materials/graph', signal),
   ])
   if (readiness.status !== 'ready') throw new Error('Edge 工作流运行时尚未就绪')
+  const traceUiUrl = typeof readiness.observability?.traceUiUrl === 'string'
+    ? readiness.observability.traceUiUrl
+    : ''
 
   const workflows = (workflowPage.items || []).map(adaptWorkflow)
   const workflowsByUuid = new Map(workflows.map((workflow) => [workflow.uuid, workflow]))
@@ -1205,7 +1229,7 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
   const tasks = await mapWithConcurrency(
     [...taskRowsByUuid.values()],
     6,
-    (task) => taskWithJobs(task, workflowsByUuid, knownMaterialUuids, signal),
+    (task) => taskWithJobs(task, workflowsByUuid, knownMaterialUuids, traceUiUrl, signal),
   )
   const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
   const materialReferences = new Map<string, MaterialRecord['taskReferences']>()

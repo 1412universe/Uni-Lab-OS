@@ -33,6 +33,7 @@ from unilabos.app.edge_control.local_edge_session import (
     project_local_edge_readiness,
 )
 from unilabos.app.scheduler.dispatch import CommittedJobOutcome, DispatchPayload
+from unilabos.utils.tracing import inject_trace_context, normalize_trace_context
 
 _PROTOCOL_VERSION = 1
 _COMMAND_RETRY_SECONDS = 0.5
@@ -74,6 +75,8 @@ class LocalEdgeAuthorityStore:
                     sequence INTEGER NOT NULL UNIQUE,
                     type TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
+                    traceparent TEXT NOT NULL DEFAULT '',
+                    tracestate TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
                     last_sent_at REAL,
                     created_at REAL NOT NULL,
@@ -128,6 +131,18 @@ class LocalEdgeAuthorityStore:
                 if name not in job_columns:
                     self._connection.execute(
                         f"ALTER TABLE local_edge_job ADD COLUMN {name} {declaration}"
+                    )
+            command_columns = {
+                str(row["name"])
+                for row in self._connection.execute(
+                    "PRAGMA table_info(local_edge_command)"
+                ).fetchall()
+            }
+            for name in ("traceparent", "tracestate"):
+                if name not in command_columns:
+                    self._connection.execute(
+                        "ALTER TABLE local_edge_command "
+                        f"ADD COLUMN {name} TEXT NOT NULL DEFAULT ''"
                     )
             self._connection.commit()
         self._sessions = LocalEdgeSessionStore(self._connection, self._lock)
@@ -399,6 +414,7 @@ class LocalEdgeAuthorityStore:
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ValueError("attempt must be a positive integer")
         fences = _validate_fences(payload.get("fences"))
+        trace_context = _current_trace_context()
         now = time.time()
         with self._lock:
             self._connection.execute("BEGIN IMMEDIATE")
@@ -476,8 +492,9 @@ class LocalEdgeAuthorityStore:
                 self._connection.execute(
                     """
                     INSERT INTO local_edge_command(
-                        command_uuid, sequence, type, payload_json, status, created_at
-                    ) VALUES (?, ?, 'job.start', ?, 'pending', ?)
+                        command_uuid, sequence, type, payload_json,
+                        traceparent, tracestate, status, created_at
+                    ) VALUES (?, ?, 'job.start', ?, ?, ?, 'pending', ?)
                     """,
                     (
                         command_uuid,
@@ -487,6 +504,8 @@ class LocalEdgeAuthorityStore:
                             ensure_ascii=False,
                             separators=(",", ":"),
                         ),
+                        trace_context.get("traceparent", ""),
+                        trace_context.get("tracestate", ""),
                         now,
                     ),
                 )
@@ -512,7 +531,8 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT command_uuid, sequence, type, payload_json
+                SELECT command_uuid, sequence, type, payload_json,
+                       traceparent, tracestate
                 FROM local_edge_command
                 WHERE status != 'acked'
                   AND (last_sent_at IS NULL OR last_sent_at <= ?)
@@ -520,8 +540,9 @@ class LocalEdgeAuthorityStore:
                 """,
                 (retry_before,),
             ).fetchall()
-        return [
-            {
+        commands: list[dict[str, Any]] = []
+        for row in rows:
+            command = {
                 "protocol_version": _PROTOCOL_VERSION,
                 "message_uuid": str(row["command_uuid"]),
                 "sequence": int(row["sequence"]),
@@ -529,8 +550,11 @@ class LocalEdgeAuthorityStore:
                 "sent_at": _utc_now(),
                 "payload": json.loads(str(row["payload_json"])),
             }
-            for row in rows
-        ]
+            for key in ("traceparent", "tracestate"):
+                if row[key]:
+                    command[key] = str(row[key])
+            commands.append(command)
+        return commands
 
     def mark_command_sent(self, command_uuid: str) -> None:
         with self._lock:
@@ -980,6 +1004,7 @@ class LocalEdgeAuthorityStore:
                 }
             sequence = self._next_sequence_locked()
             command_uuid = str(uuid.uuid4())
+            trace_context = _current_trace_context()
             payload = {
                 "job_uuid": normalized_job,
                 "local_device_id": str(row["local_device_id"]),
@@ -991,13 +1016,16 @@ class LocalEdgeAuthorityStore:
                 self._connection.execute(
                     """
                     INSERT INTO local_edge_command(
-                        command_uuid, sequence, type, payload_json, status, created_at
-                    ) VALUES (?, ?, 'job.resolve_unknown', ?, 'pending', ?)
+                        command_uuid, sequence, type, payload_json,
+                        traceparent, tracestate, status, created_at
+                    ) VALUES (?, ?, 'job.resolve_unknown', ?, ?, ?, 'pending', ?)
                     """,
                     (
                         command_uuid,
                         sequence,
                         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        trace_context.get("traceparent", ""),
+                        trace_context.get("tracestate", ""),
                         time.time(),
                     ),
                 )
@@ -1880,6 +1908,14 @@ def _job_result_projection(
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _current_trace_context() -> dict[str, str]:
+    """捕获当前调度 span 的持久 W3C carrier；追踪关闭时为空。"""
+
+    carrier: dict[str, Any] = {}
+    inject_trace_context(carrier)
+    return normalize_trace_context(carrier)
 
 
 def _job_projection(row: sqlite3.Row) -> dict[str, Any]:

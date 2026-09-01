@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   Clock3,
+  ExternalLink,
   FlaskConical,
   GitBranch,
   LoaderCircle,
@@ -499,6 +500,18 @@ export function TasksPage({
                 <div><dt>整体进度</dt><dd>{selected.progress}%</dd></div>
                 <div><dt>更新时间</dt><dd>{selected.updatedAt}</dd></div>
               </dl>
+              {selected.trace ? (
+                <a
+                  className="selected-task-trace-link"
+                  href={selected.trace.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="在 SigNoz 中查看 Trace"
+                >
+                  <span><ExternalLink size={15} />查看 Trace</span>
+                  <code>{selected.trace.traceId}</code>
+                </a>
+              ) : null}
             </>
           ) : <EmptyState title="没有选中任务" description="从矩阵中选择任务查看详情。" />}
         </Panel>

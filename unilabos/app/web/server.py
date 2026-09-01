@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse, Response
 
 from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
 from unilabos.utils.log import info, error
-from unilabos.utils.tracing import install_http_tracing
+from unilabos.utils.tracing import install_http_tracing, trace_ui_base_url
 from unilabos.config.config import BasicConfig
 
 # 创建FastAPI应用
@@ -191,6 +191,9 @@ def api_readiness() -> Response:
         "workflowRuntime": "disabled" if not required else phase,
         "workflowProgress": {"loaded": loaded, "total": total},
     }
+    signoz_ui_url = trace_ui_base_url()
+    if signoz_ui_url:
+        payload["observability"] = {"traceUiUrl": signoz_ui_url}
     if runtime_error is not None:
         payload["status"] = "failed"
         payload["error"] = {"code": "workflow_runtime_start_failed"}

@@ -395,6 +395,31 @@ describe('TasksPage', () => {
     expect(container.querySelectorAll('.matrix-node-running')).toHaveLength(3)
   })
 
+  it('opens the selected task trace in SigNoz without replacing the console', () => {
+    const tracedTask = {
+      ...demoTasks[0],
+      trace: {
+        traceId: '0123456789abcdef0123456789abcdef',
+        url: 'http://127.0.0.1:30081/trace/0123456789abcdef0123456789abcdef',
+      },
+    }
+    renderWithQuery(
+      <TasksPage
+        tasks={[tracedTask]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    const link = screen.getByRole('link', { name: '在 SigNoz 中查看 Trace' })
+    expect(link).toHaveAttribute('href', tracedTask.trace.url)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
+
   it('shows a waiting reason only while its node is hovered or keyboard-focused', () => {
     const task = {
       ...demoTasks[0],

@@ -314,6 +314,10 @@ class TaskSchedulerBridge:
             self._submitted_tasks.add(task_uuid)
             registered = True
             submission = self._scheduler.submit_workflow(spec)
+            self._project_scheduler_trace_context(
+                task_uuid,
+                submission.get("trace_context"),
+            )
             # ``scheduler_state`` 是内部等料或运行状态；投影层负责限制 wire 状态。
             scheduler_state = self._required_text(
                 submission.get("state"), field="scheduler.state"
@@ -1017,7 +1021,11 @@ class TaskSchedulerBridge:
             self._task_by_job[job_uuid] = task_uuid
         self._submitted_tasks.add(task_uuid)
         try:
-            self._scheduler.restore_workflow(spec, completed_results)
+            restored = self._scheduler.restore_workflow(spec, completed_results)
+            self._project_scheduler_trace_context(
+                task_uuid,
+                restored.get("trace_context"),
+            )
         except Exception:
             if not self._crossed_dispatch_boundary(jobs):
                 self._submitted_tasks.discard(task_uuid)
@@ -2086,6 +2094,30 @@ class TaskSchedulerBridge:
             "task": self._store.get_task(task_uuid),
             "jobs": self._store.list_jobs(task_uuid),
         }
+
+    def _project_scheduler_trace_context(
+        self,
+        task_uuid: str,
+        trace_context: Any,
+    ) -> None:
+        """把 Scheduler 根 span carrier 写入 Task，关闭观测时保持业务 no-op。"""
+
+        if not isinstance(trace_context, Mapping) or not trace_context:
+            return
+        projector = getattr(self._projection, "project_trace_context", None)
+        if not callable(projector):
+            logger.warning(
+                "任务运行投影未实现 Trace Context 接口，忽略 task=%s",
+                task_uuid,
+            )
+            return
+        try:
+            projector(task_uuid, trace_context)
+        except Exception:  # noqa: BLE001 - 观测元数据失败不得改变物理调度结论
+            logger.exception(
+                "工作流任务 Trace Context 持久化失败，业务继续 task=%s",
+                task_uuid,
+            )
 
     def _cancel_failed_submission(
         self,

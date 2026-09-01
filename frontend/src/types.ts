@@ -119,6 +119,10 @@ export interface WorkflowTask {
   workflowRevision?: number
   runMode: string
   matrixGroupKey: string
+  trace?: {
+    traceId: string
+    url: string
+  }
 }
 
 export interface MaterialTaskReference {
