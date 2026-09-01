@@ -210,7 +210,8 @@ class EdgeDataPlane:
         ):
             carrier: Dict[str, Any] = {}
             inject_trace_context(carrier)
-            for key in ("traceparent", "tracestate"):
+            # OTel 关闭时只有本地 trace_id；开启时同时保留 W3C 载体。
+            for key in ("trace_id", "traceparent", "tracestate"):
                 if carrier.get(key):
                     headers[key] = str(carrier[key])
             if headers:

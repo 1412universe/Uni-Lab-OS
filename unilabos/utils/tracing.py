@@ -5,9 +5,11 @@
 OpenTelemetry，未安装依赖、配置错误或 SigNoz 不可达时都按 no-op/fail-open
 处理，不允许观测链路影响仪器控制。
 
-跨进程/线程边界统一使用 W3C Trace Context（``traceparent`` /
-``tracestate``），同时附带只读关联字段 ``trace_id`` / ``span_id`` 供云端表和
-日志检索；后两者不用于恢复父上下文。
+OTel 开启时，跨进程/线程边界使用 W3C Trace Context（``traceparent`` /
+``tracestate``），并附带 ``trace_id`` / ``span_id`` 供日志检索。OTel 未开启时不
+伪造 Span，而是由 OS 生成本地 ``trace_id``，通过同名字段恢复日志和异步载体上下文；
+此时没有 ``span_id`` 或 OTLP 上报。如果上游已经提供 ``traceparent``，本地模式只
+提取其中的 trace_id，不改写原有父上下文。
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import contextvars
 import logging
 import os
 import re
+import secrets
 import threading
 import traceback
 import types
@@ -41,6 +44,12 @@ SPAN_ID = "span_id"
 _WORKFLOW_EXECUTION_IDENTITY: contextvars.ContextVar[Dict[str, str]] = (
     contextvars.ContextVar("unilabos_workflow_execution_identity", default={})
 )
+
+# OTel 关闭时仍保留同一套 trace_id 语义，用于日志和异步调用关联。
+_LOCAL_TRACE_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "unilabos_local_trace_id", default=""
+)
+_TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 _SENSITIVE_KEY = re.compile(
     r"(authorization|cookie|password|passwd|secret|token|api[_-]?key|access[_-]?key)",
@@ -138,6 +147,67 @@ def _sanitize_text(value: Any, limit: int = 1024) -> str:
     if len(text) > limit:
         return text[:limit] + "…"
     return text
+
+
+def _normalize_trace_id(value: Any) -> str:
+    """规范化外部传入的 trace_id，拒绝空值、非十六进制值和全零值。
+
+    参数：``value`` 是请求头、消息载荷或上下文中的候选 trace_id。
+    返回：通过校验的 32 位小写十六进制 trace_id；不合法时返回空字符串。
+    """
+
+    candidate = str(value or "").strip().lower()
+    if not _TRACE_ID_PATTERN.fullmatch(candidate) or int(candidate, 16) == 0:
+        return ""
+    return candidate
+
+
+def _new_local_trace_id() -> str:
+    """生成关闭 OTel 时使用的 W3C 兼容 32 位 trace_id。
+
+    返回：由 16 字节随机数编码得到的 trace_id。
+    """
+
+    return secrets.token_hex(16)
+
+
+def _trace_id_from_carrier(carrier: Optional[Mapping[str, Any]]) -> str:
+    """从消息或请求载体提取 traceparent/trace_id 中的关联标识。
+
+    参数：``carrier`` 是可能包含顶层或 ``trace_context`` 嵌套字段的载体。
+    返回：合法的 trace_id；载体未携带或校验失败时返回空字符串。
+    """
+
+    if not carrier:
+        return ""
+    nested = carrier.get("trace_context")
+    sources: list[Mapping[str, Any]] = []
+    if isinstance(nested, Mapping):
+        sources.append(nested)
+    sources.append(carrier)
+    for source in sources:
+        traceparent = str(source.get(TRACEPARENT) or "")
+        parts = traceparent.split("-")
+        if len(parts) == 4:
+            trace_id = _normalize_trace_id(parts[1])
+            if trace_id:
+                return trace_id
+        trace_id = _normalize_trace_id(source.get(TRACE_ID))
+        if trace_id:
+            return trace_id
+    return ""
+
+
+def _trace_id_from_context(context_value: Any) -> str:
+    """从关闭 OTel 时的字符串或消息上下文中读取 trace_id。
+
+    参数：``context_value`` 是本地 trace_id 字符串或包含关联字段的映射。
+    返回：合法的 trace_id；无法识别时返回空字符串。
+    """
+
+    if isinstance(context_value, Mapping):
+        return _trace_id_from_carrier(context_value)
+    return _normalize_trace_id(context_value)
 
 
 def _safe_attributes(attributes: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -767,12 +837,36 @@ def shutdown_tracing(timeout_ms: Optional[int] = None) -> bool:
 
 
 def capture_context() -> Any:
-    return _backend.current_context() if _backend is not None else None
+    """捕获当前异步/线程上下文，供后续任务恢复同一 trace_id。
+
+    返回：OTel Context；OTel 关闭时返回本地 trace_id；当前没有业务上下文时返回 None。
+    """
+
+    if _backend is not None:
+        return _backend.current_context()
+    return _LOCAL_TRACE_ID.get() or None
 
 
 @contextlib.contextmanager
 def use_context(context_value: Any) -> Iterator[None]:
-    if _backend is None or context_value is None:
+    """在当前执行范围恢复 OTel 或本地 trace_id 上下文。
+
+    参数：``context_value`` 是 OTel Context 或关闭 OTel 时捕获的本地 trace_id。
+    产出：上下文生效期间不返回业务值。
+    """
+
+    if _backend is None:
+        local_trace_id = _trace_id_from_context(context_value)
+        if not local_trace_id:
+            yield
+            return
+        token = _LOCAL_TRACE_ID.set(local_trace_id)
+        try:
+            yield
+        finally:
+            _LOCAL_TRACE_ID.reset(token)
+        return
+    if context_value is None:
         yield
         return
     token = _backend.attach(context_value)
@@ -820,8 +914,16 @@ def await_with_context(context_value: Any, awaitable: Any) -> Any:
 
 
 def extract_trace_context(carrier: Optional[Mapping[str, Any]]) -> Any:
-    if _backend is None or not carrier:
+    """从请求或异步消息提取父上下文，兼容 OTel 与本地 trace_id。
+
+    参数：``carrier`` 是请求头、消息载荷或包含 ``trace_context`` 的嵌套载体。
+    返回：OTel Context；OTel 关闭时返回合法的本地 trace_id；无效输入返回 None。
+    """
+
+    if not carrier:
         return None
+    if _backend is None:
+        return _trace_id_from_carrier(carrier) or None
     source: Dict[str, str] = {}
     nested = carrier.get("trace_context")
     if isinstance(nested, Mapping):
@@ -842,7 +944,19 @@ def extract_trace_context(carrier: Optional[Mapping[str, Any]]) -> Any:
 def inject_trace_context(
     carrier: MutableMapping[str, Any], context_value: Any = None
 ) -> MutableMapping[str, Any]:
+    """向请求或异步消息注入当前 trace_id，并在 OTel 开启时注入 W3C 上下文。
+
+    参数：``carrier`` 是要写入关联字段的可变请求头或消息载体；
+    ``context_value`` 是可选的 OTel Context 或本地 trace_id，省略时读取当前上下文。
+    返回：写入后的原载体，便于调用方继续构造请求。
+    """
+
     if _backend is None:
+        trace_id = _trace_id_from_context(context_value) or _LOCAL_TRACE_ID.get()
+        if not trace_id:
+            trace_id = _new_local_trace_id()
+            _LOCAL_TRACE_ID.set(trace_id)
+        carrier[TRACE_ID] = trace_id
         return carrier
     text_carrier: Dict[str, str] = {}
     try:
@@ -861,8 +975,18 @@ def inject_trace_context(
 
 
 def current_trace_ids(context_value: Any = None) -> tuple[str, str]:
+    """返回当前上下文中的 trace_id/span_id。
+
+    参数：``context_value`` 是可选的 OTel Context 或本地 trace_id，省略时读取当前上下文。
+    返回：OTel 开启时返回 trace_id 与 span_id；关闭时返回本地 trace_id 与空
+    span_id；没有上下文时返回两个空字符串。
+    """
+
     if _backend is None:
-        return "", ""
+        return (
+            _trace_id_from_context(context_value) or _LOCAL_TRACE_ID.get(),
+            "",
+        )
     try:
         return _backend.trace_ids(context_value)
     except Exception:  # noqa: BLE001
@@ -925,9 +1049,18 @@ class SpanScope:
         self.span: Any = _NULL_SPAN
         self.context: Any = None
         self._token: Any = None
+        self._local_token: Any = None
 
     def __enter__(self) -> Any:
         if _backend is None:
+            # 没有 OTel SDK 时，仍为当前业务操作建立可继承的本地 trace_id。
+            local_trace_id = (
+                _trace_id_from_context(self.parent_context)
+                or _LOCAL_TRACE_ID.get()
+                or _new_local_trace_id()
+            )
+            self.context = local_trace_id
+            self._local_token = _LOCAL_TRACE_ID.set(local_trace_id)
             return self.span
         try:
             self.span, self.context = _backend.start_span(
@@ -943,6 +1076,13 @@ class SpanScope:
         return self.span
 
     def __exit__(self, exc_type, exc, _tb) -> bool:
+        if self._local_token is not None:
+            try:
+                _LOCAL_TRACE_ID.reset(self._local_token)
+            except Exception:  # noqa: BLE001 - 日志上下文恢复不得影响业务
+                pass
+            finally:
+                self._local_token = None
         if exc is not None:
             record_exception(exc, span=self.span)
         if _backend is not None and self._token is not None:
@@ -985,16 +1125,23 @@ class DetachedSpan:
         self.span: Any = _NULL_SPAN
         self.context: Any = None
         self._ended = False
-        if _backend is not None:
-            try:
-                self.span, self.context = _backend.start_span(
-                    name,
-                    parent_context=parent_context,
-                    kind=kind,
-                    attributes=_safe_attributes(attributes),
-                )
-            except Exception:  # noqa: BLE001
-                self.span = _NULL_SPAN
+        if _backend is None:
+            # 长生命周期工作流没有 OTel Span 时仍保留可传递的本地 trace_id。
+            self.context = (
+                _trace_id_from_context(parent_context)
+                or _LOCAL_TRACE_ID.get()
+                or _new_local_trace_id()
+            )
+            return
+        try:
+            self.span, self.context = _backend.start_span(
+                name,
+                parent_context=parent_context,
+                kind=kind,
+                attributes=_safe_attributes(attributes),
+            )
+        except Exception:  # noqa: BLE001
+            self.span = _NULL_SPAN
 
     @contextlib.contextmanager
     def activate(self) -> Iterator[Any]:
@@ -1137,12 +1284,18 @@ def _set_backend_for_test(backend: Any) -> None:
 
 
 def _reset_for_test() -> None:
+    """重置追踪单测状态，包括 OTel 后端和本地 trace_id 上下文。
+
+    返回：仅清理当前测试上下文，不影响业务持久化状态。
+    """
+
     global _backend, _settings, _shutdown_started, _initialization_attempted
     with _backend_lock:
         _backend = None
         _settings = None
         _shutdown_started = False
         _initialization_attempted = False
+        _LOCAL_TRACE_ID.set("")
 
 
 __all__ = [

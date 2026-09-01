@@ -254,7 +254,7 @@ async def websocket_device_status(websocket: WebSocket):
 
     carrier = {
         key: value
-        for key in ("traceparent", "tracestate")
+        for key in ("trace_id", "traceparent", "tracestate")
         if (value := websocket.query_params.get(key))
     }
     with span(

@@ -26,6 +26,7 @@ class StoredEvent:
     created_at: str
     traceparent: str = ""
     tracestate: str = ""
+    trace_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class StoredJob:
     fences: tuple[tuple[str, int], ...] = ()
     traceparent: str = ""
     tracestate: str = ""
+    trace_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -56,7 +58,7 @@ class StoredOutcome:
 class EdgeControlStore:
     """线程安全的 SQLite Command/Outbox 存储。"""
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, path: str) -> None:
         """打开并迁移边缘控制投递存储（Edge Control Delivery Store）。
@@ -100,6 +102,7 @@ class EdgeControlStore:
                     sequence INTEGER NOT NULL,
                     type TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
+                    trace_id TEXT NOT NULL DEFAULT '',
                     traceparent TEXT NOT NULL DEFAULT '',
                     tracestate TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
@@ -114,6 +117,7 @@ class EdgeControlStore:
                     type TEXT NOT NULL,
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    trace_id TEXT NOT NULL DEFAULT '',
                     traceparent TEXT NOT NULL DEFAULT '',
                     tracestate TEXT NOT NULL DEFAULT '',
                     last_sent_at REAL,
@@ -132,6 +136,7 @@ class EdgeControlStore:
                     job_access_token TEXT NOT NULL,
                     status TEXT NOT NULL,
                     feedback_sequence INTEGER NOT NULL DEFAULT 0,
+                    trace_id TEXT NOT NULL DEFAULT '',
                     traceparent TEXT NOT NULL DEFAULT '',
                     tracestate TEXT NOT NULL DEFAULT '',
                     updated_at REAL NOT NULL
@@ -187,6 +192,13 @@ class EdgeControlStore:
                 self._migrate_legacy_column(
                     "edge_job_runtime", "fences_json", "TEXT NOT NULL DEFAULT '[]'"
                 )
+            if schema_version < 3:
+                # 本地 trace_id 在 OTel 关闭时是跨进程关联同一操作的唯一身份，
+                # 必须随既有命令、事件和作业镜像持久化，重启后才能继续重放。
+                for table in ("edge_command", "edge_event_outbox", "edge_job_runtime"):
+                    self._migrate_legacy_column(
+                        table, "trace_id", "TEXT NOT NULL DEFAULT ''"
+                    )
             # Pong only answers a ping from the current WebSocket session. Older
             # versions persisted it as a durable business event, which allowed a
             # stale pong to be replayed into a new session and closed by the
@@ -352,15 +364,16 @@ class EdgeControlStore:
             cursor = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO edge_command(
-                    command_uuid, sequence, type, payload_json, traceparent,
-                    tracestate, status, received_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'received', ?)
+                    command_uuid, sequence, type, payload_json, trace_id,
+                    traceparent, tracestate, status, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'received', ?)
                 """,
                 (
                     command_uuid,
                     int(envelope.get("sequence") or 0),
                     str(envelope.get("type") or ""),
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                    str(envelope.get("trace_id") or ""),
                     str(envelope.get("traceparent") or ""),
                     str(envelope.get("tracestate") or ""),
                     time.time(),
@@ -429,14 +442,15 @@ class EdgeControlStore:
                         """
                         INSERT INTO edge_event_outbox(
                             event_uuid, type, payload_json, created_at,
-                            traceparent, tracestate
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            trace_id, traceparent, tracestate
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             event_uuid,
                             event_type,
                             json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                             created_at,
+                            str(trace_context.get("trace_id") or ""),
                             str(trace_context.get("traceparent") or ""),
                             str(trace_context.get("tracestate") or ""),
                         ),
@@ -529,14 +543,15 @@ class EdgeControlStore:
                 """
                 INSERT INTO edge_event_outbox(
                     event_uuid, type, payload_json, created_at,
-                    traceparent, tracestate
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    trace_id, traceparent, tracestate
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_uuid,
                     event_type,
                     json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                     created_at,
+                    str(trace_context.get("trace_id") or ""),
                     str(trace_context.get("traceparent") or ""),
                     str(trace_context.get("tracestate") or ""),
                 ),
@@ -549,7 +564,7 @@ class EdgeControlStore:
             rows = self._connection.execute(
                 """
                 SELECT event_uuid, type, payload_json, created_at,
-                       traceparent, tracestate
+                       trace_id, traceparent, tracestate
                 FROM edge_event_outbox
                 WHERE acked_at IS NULL
                   AND (last_sent_at IS NULL OR last_sent_at <= ?)
@@ -566,6 +581,7 @@ class EdgeControlStore:
                 created_at=str(row["created_at"]),
                 traceparent=str(row["traceparent"]),
                 tracestate=str(row["tracestate"]),
+                trace_id=str(row["trace_id"]),
             )
             for row in rows
         ]
@@ -589,7 +605,7 @@ class EdgeControlStore:
             row = self._connection.execute(
                 """
                 SELECT event_uuid, type, payload_json, created_at,
-                       traceparent, tracestate
+                       trace_id, traceparent, tracestate
                 FROM edge_event_outbox WHERE event_uuid = ?
                 """,
                 (event_uuid,),
@@ -603,6 +619,7 @@ class EdgeControlStore:
             created_at=str(row["created_at"]),
             traceparent=str(row["traceparent"]),
             tracestate=str(row["tracestate"]),
+            trace_id=str(row["trace_id"]),
         )
 
     def acknowledge_event(self, event_uuid: str) -> None:
@@ -720,6 +737,7 @@ class EdgeControlStore:
             raise ValueError("job.start attempt must be a positive integer")
         fences = _normalize_fences(payload.get("fences"))
         trace_context = trace_context or {}
+        trace_id = str(trace_context.get("trace_id") or "")
         traceparent = str(trace_context.get("traceparent") or "")
         tracestate = str(trace_context.get("tracestate") or "")
         values = (
@@ -731,23 +749,30 @@ class EdgeControlStore:
             attempt,
             json.dumps(fences, separators=(",", ":")),
             str(payload["job_access_token"]),
+            trace_id,
             traceparent,
             tracestate,
             time.time(),
         )
         with self._lock, self._immediate_transaction():
-            if not traceparent and not tracestate:
+            if not trace_id and not traceparent and not tracestate:
                 command = self._connection.execute(
                     """
-                    SELECT traceparent, tracestate FROM edge_command
+                    SELECT trace_id, traceparent, tracestate FROM edge_command
                     WHERE command_uuid = ?
                     """,
                     (str(uuid.UUID(command_uuid)),),
                 ).fetchone()
                 if command is not None:
+                    trace_id = str(command["trace_id"])
                     traceparent = str(command["traceparent"])
                     tracestate = str(command["tracestate"])
-                    values = values[:-3] + (traceparent, tracestate, values[-1])
+                    values = values[:-4] + (
+                        trace_id,
+                        traceparent,
+                        tracestate,
+                        values[-1],
+                    )
             existing = self._connection.execute(
                 "SELECT * FROM edge_job_runtime WHERE job_uuid = ?",
                 (values[0],),
@@ -811,22 +836,24 @@ class EdgeControlStore:
                 INSERT OR IGNORE INTO edge_job_runtime(
                     job_uuid, task_uuid, node_uuid, command_uuid,
                     claim_uuid, attempt, fences_json, job_access_token,
-                    status, traceparent, tracestate, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?)
+                    status, trace_id, traceparent, tracestate, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'received', ?, ?, ?, ?)
                 """,
                 values,
             )
-            if cursor.rowcount == 0 and (traceparent or tracestate):
+            if cursor.rowcount == 0 and (trace_id or traceparent or tracestate):
                 self._connection.execute(
                     """
                     UPDATE edge_job_runtime
-                    SET traceparent = CASE
+                    SET trace_id = CASE
+                            WHEN trace_id = '' THEN ? ELSE trace_id END,
+                        traceparent = CASE
                             WHEN traceparent = '' THEN ? ELSE traceparent END,
                         tracestate = CASE
                             WHEN tracestate = '' THEN ? ELSE tracestate END
                     WHERE job_uuid = ?
                     """,
-                    (traceparent, tracestate, values[0]),
+                    (trace_id, traceparent, tracestate, values[0]),
                 )
             return cursor.rowcount == 1
 
@@ -843,7 +870,7 @@ class EdgeControlStore:
                 SELECT job_uuid, task_uuid, node_uuid, command_uuid,
                        claim_uuid, attempt, fences_json,
                        job_access_token, status, feedback_sequence,
-                       traceparent, tracestate
+                       trace_id, traceparent, tracestate
                 FROM edge_job_runtime WHERE job_uuid = ?
                 """,
                 (job_uuid,),
@@ -867,7 +894,7 @@ class EdgeControlStore:
                 SELECT job_uuid, task_uuid, node_uuid, command_uuid,
                        claim_uuid, attempt, fences_json,
                        job_access_token, status, feedback_sequence,
-                       traceparent, tracestate
+                       trace_id, traceparent, tracestate
                 FROM edge_job_runtime WHERE status IN ({placeholders})
                 ORDER BY updated_at
                 """,
@@ -1036,25 +1063,27 @@ class EdgeControlStore:
                     if pending_unknown_command_ids
                     else "outcome_committed"
                 )
+                trace_id = str(trace_context.get("trace_id") or "")
                 traceparent = str(trace_context.get("traceparent") or "")
                 tracestate = str(trace_context.get("tracestate") or "")
-                if not traceparent and not tracestate:
+                if not trace_id and not traceparent and not tracestate:
                     runtime = self._connection.execute(
                         """
-                        SELECT traceparent, tracestate FROM edge_job_runtime
+                        SELECT trace_id, traceparent, tracestate FROM edge_job_runtime
                         WHERE job_uuid = ?
                         """,
                         (job_uuid,),
                     ).fetchone()
                     if runtime is not None:
+                        trace_id = str(runtime["trace_id"])
                         traceparent = str(runtime["traceparent"])
                         tracestate = str(runtime["tracestate"])
                 self._connection.execute(
                     """
                     INSERT INTO edge_event_outbox(
                         event_uuid, type, payload_json, created_at,
-                        traceparent, tracestate
-                    ) VALUES (?, 'job.outcome_committed', ?, ?, ?, ?)
+                        trace_id, traceparent, tracestate
+                    ) VALUES (?, 'job.outcome_committed', ?, ?, ?, ?, ?)
                     """,
                     (
                         event_uuid,
@@ -1062,6 +1091,7 @@ class EdgeControlStore:
                             event_payload, ensure_ascii=False, separators=(",", ":")
                         ),
                         created_at,
+                        trace_id,
                         traceparent,
                         tracestate,
                     ),
@@ -1150,6 +1180,7 @@ def _stored_job(row: sqlite3.Row) -> StoredJob:
         feedback_sequence=int(row["feedback_sequence"]),
         traceparent=str(row["traceparent"]),
         tracestate=str(row["tracestate"]),
+        trace_id=str(row["trace_id"]),
     )
 
 

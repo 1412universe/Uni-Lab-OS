@@ -83,7 +83,7 @@ def test_acknowledged_protocol_state_is_retired_without_losing_highwater(
     reopened.close()
 
     with sqlite3.connect(database_path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
         job_indexes = {
             row[1]
             for row in connection.execute("PRAGMA index_list(edge_job_runtime)")

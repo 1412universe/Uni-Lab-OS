@@ -504,6 +504,7 @@ def create_app(
             "Accept",
             "X-Workflow-Filename",
             "Last-Event-ID",
+            "trace_id",
             "traceparent",
             "tracestate",
         ],

@@ -167,6 +167,8 @@ def _span_by_name(recorder: _RecordingBackend, name: str) -> list[_RecordingSpan
 
 
 def test_initialization_failure_is_fail_open(monkeypatch):
+    """OTel 初始化失败时业务继续运行，并在本地上下文中保留 trace_id。"""
+
     tracing._reset_for_test()
 
     def fail_backend(_settings):
@@ -180,8 +182,10 @@ def test_initialization_failure_is_fail_open(monkeypatch):
     try:
         assert tracing.initialize_tracing(settings) is False
         with tracing.span("still.noop"):
-            pass
-        assert tracing.current_trace_ids() == ("", "")
+            trace_id, span_id = tracing.current_trace_ids()
+            assert len(trace_id) == 32
+            assert int(trace_id, 16) != 0
+            assert span_id == ""
     finally:
         tracing._reset_for_test()
 
@@ -316,7 +320,7 @@ def test_edge_cors_allows_w3c_trace_context_headers():
     allowed = {str(value).lower() for value in cors.kwargs["allow_headers"]}
     exposed = {str(value).lower() for value in cors.kwargs["expose_headers"]}
 
-    assert {"traceparent", "tracestate"} <= allowed
+    assert {"trace_id", "traceparent", "tracestate"} <= allowed
     assert {"trace_id", "span_id"} <= exposed
 
 

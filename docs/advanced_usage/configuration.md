@@ -850,7 +850,7 @@ trace 与日志实现都使用异步批量导出和有界队列。collector 不�
 - `export_timeout_ms = 5000`
 - `shutdown_timeout_ms = 5000`
 
-链路使用 W3C `traceparent` / `tracestate` 穿过 HTTP、WebSocket、HostLink、线程队列和 inventory outbox；`trace_id` / `span_id` 只用于日志、ledger、SSE 和云端记录关联。追踪属性只记录 workflow、job、device、action、material 等标识和状态，不记录完整配方、动作参数、认证 token 或原始 payload。主要层级为：
+开启 OTel 时，链路使用 W3C `traceparent` / `tracestate` 穿过 HTTP、WebSocket、HostLink、线程队列和 inventory outbox；`trace_id` / `span_id` 同时用于日志、ledger、SSE 和云端记录关联。关闭 OTel 时，OS 仍生成同格式的 `trace_id`，并通过 HTTP、WebSocket、HostLink 和进程内异步上下文继续传递，日志也打印同一个值；此时没有 `span_id` 和 OTLP 上报。追踪属性只记录 workflow、job、device、action、material 等标识和状态，不记录完整配方、动作参数、认证 token 或原始 payload。主要层级为：
 
 ```text
 HTTP 路由模板 server span / ws.receive
@@ -864,9 +864,11 @@ HTTP 路由模板 server span / ws.receive
         └── action.status.publish
 ```
 
-启用观测后，现有文本日志会自动附加 `trace_id` 和 `span_id`，同时作为 OTLP LogRecord 写入 SigNoz，可按 `service.name=uni-lab-edge` 关联检索。
+文本日志始终附加当前 `trace_id`；启用观测后还会附加 `span_id`，并作为 OTLP LogRecord 写入 SigNoz，可按 `service.name=uni-lab-edge` 关联检索。
+Edge Control 的既有 SQLite 状态库会自动迁移并保存命令、事件发件箱和作业镜像中的 `trace_id`，因此进程重启后的重放仍能沿用原关联链路；不会新增业务表。
 Electron 直连 Edge 时，REST 与 SSE 使用 W3C `traceparent` 请求头，设备状态 WebSocket
-握手使用同名查询参数；CORS 已放行 `traceparent`/`tracestate`。Edge server span 会
+握手使用同名查询参数；关闭 OTel 时也可改为携带 `trace_id`。CORS 已放行
+`trace_id`/`traceparent`/`tracestate`。Edge server span 会
 继承该远程上下文，因此可以在 SigNoz 中按同一个 Trace ID 查看请求与后续调度链路。
 
 ## 相关文档

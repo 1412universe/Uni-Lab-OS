@@ -721,6 +721,20 @@ def test_store_migrates_existing_runtime_and_outbox_schema(tmp_path: Path) -> No
     assert job.traceparent == ""
     assert [event.event_uuid for event in events] == [event_uuid]
     assert events[0].traceparent == ""
+    with sqlite3.connect(path) as migrated:
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert {
+            str(row[1])
+            for row in migrated.execute("PRAGMA table_info(edge_event_outbox)")
+        } >= {"trace_id", "traceparent", "tracestate"}
+        assert {
+            str(row[1])
+            for row in migrated.execute("PRAGMA table_info(edge_command)")
+        } >= {"trace_id", "traceparent", "tracestate"}
+        assert {
+            str(row[1])
+            for row in migrated.execute("PRAGMA table_info(edge_job_runtime)")
+        } >= {"trace_id", "traceparent", "tracestate"}
     store.close()
 
 
@@ -1258,11 +1272,10 @@ def test_http_data_plane_uses_complete_job_attempt_identity() -> None:
         "task_uuid": job.task_uuid,
         "node_uuid": job.node_uuid,
     }
-    assert fetch["headers"] == {
-        "X-Command-UUID": job.command_uuid,
-        "X-Job-Token": job.job_access_token,
-        "Authorization": "Bearer edge-secret",
-    }
+    assert fetch["headers"]["X-Command-UUID"] == job.command_uuid
+    assert fetch["headers"]["X-Job-Token"] == job.job_access_token
+    assert fetch["headers"]["Authorization"] == "Bearer edge-secret"
+    assert len(fetch["headers"]["trace_id"]) == 32
     assert fetch["url"].startswith("http://scheduler:8081/api/v1/edge/jobs/")
     expected_identity = {
         "job_uuid": job.job_uuid,

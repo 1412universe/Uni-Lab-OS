@@ -715,7 +715,7 @@ class EdgeControlClient(BaseCommunicationClient):
         ):
             envelope = _envelope("pong", {"ping_uuid": ping_uuid})
             trace_context = _current_trace_carrier(fallback=parent_carrier)
-            for key in ("traceparent", "tracestate"):
+            for key in ("trace_id", "traceparent", "tracestate"):
                 if trace_context.get(key):
                     envelope[key] = trace_context[key]
             await websocket.send(json.dumps(envelope, ensure_ascii=False))
@@ -1260,7 +1260,7 @@ def _stored_event_envelope(
         sent_at=event.created_at,
     )
     effective = trace_context or _event_trace_carrier(event)
-    for key in ("traceparent", "tracestate"):
+    for key in ("trace_id", "traceparent", "tracestate"):
         if effective.get(key):
             envelope[key] = effective[key]
     return envelope
@@ -1268,6 +1268,7 @@ def _stored_event_envelope(
 
 def _job_trace_carrier(job: StoredJob) -> dict[str, str]:
     return {
+        "trace_id": job.trace_id,
         "traceparent": job.traceparent,
         "tracestate": job.tracestate,
     }
@@ -1275,6 +1276,7 @@ def _job_trace_carrier(job: StoredJob) -> dict[str, str]:
 
 def _event_trace_carrier(event: StoredEvent) -> dict[str, str]:
     return {
+        "trace_id": event.trace_id,
         "traceparent": event.traceparent,
         "tracestate": event.tracestate,
     }
@@ -1282,6 +1284,7 @@ def _event_trace_carrier(event: StoredEvent) -> dict[str, str]:
 
 def _message_trace_carrier(message: dict[str, Any]) -> dict[str, str]:
     return {
+        "trace_id": str(message.get("trace_id") or ""),
         "traceparent": str(message.get("traceparent") or ""),
         "tracestate": str(message.get("tracestate") or ""),
     }
@@ -1294,10 +1297,10 @@ def _current_trace_carrier(
     inject_trace_context(carrier)
     result = {
         key: str(carrier.get(key) or "")
-        for key in ("traceparent", "tracestate")
+        for key in ("trace_id", "traceparent", "tracestate")
     }
     fallback = fallback or {}
-    for key in ("traceparent", "tracestate"):
+    for key in ("trace_id", "traceparent", "tracestate"):
         if not result[key] and fallback.get(key):
             result[key] = str(fallback[key])
     return result
