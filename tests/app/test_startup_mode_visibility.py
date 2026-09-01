@@ -220,3 +220,108 @@ def test_product_only_lists_published_normal_workflows(tmp_path: Path) -> None:
         reset_startup_mode()
         service.close()
         store.close()
+
+
+def test_product_mode_blocks_definition_writes_but_allows_visible_task_creation(
+    tmp_path: Path,
+) -> None:
+    """生产模式拒绝定义写入，但允许已发布普通工作流创建任务。
+
+    参数：``tmp_path`` 隔离工作流定义与运行事实。返回：无。异常：生产模式仍
+    允许新增、修改、删除、导入、编辑图或发布，或不能创建已发布普通工作流任务
+    时由断言暴露。状态不变量：所有定义写入在进入 DTO 校验和业务服务前失败，
+    任务接口仍可运行，但源码工作流和实验操作不能绕过可见性门禁创建任务。
+    """
+
+    client, service, store = _client(tmp_path)
+    try:
+        published_normal = _create_and_publish(
+            client,
+            name="生产可执行工作流",
+            workflow_type="normal",
+        )
+        source_normal = client.post(
+            "/api/v1/workflows",
+            json={
+                "name": "生产不可见草稿",
+                "workflow_type": "normal",
+                "tags": [],
+                "meta_data": {},
+            },
+        ).json()["data"]["uuid"]
+        published_operation = _create_and_publish(
+            client,
+            name="生产不可见实验操作",
+            workflow_type="experiment_operation",
+        )
+
+        set_startup_mode(OSStartupMode.PRODUCT)
+        write_requests = [
+            ("post", "/api/v1/workflows", {"name": "禁止创建"}),
+            ("post", "/api/v1/workflows/import", {}),
+            ("post", "/api/v1/local/workflows/import-python", None),
+            (
+                "put",
+                f"/api/v1/workflows/{published_normal}",
+                {"name": "禁止修改", "tags": [], "meta_data": {}},
+            ),
+            ("delete", f"/api/v1/workflows/{published_normal}", None),
+            ("put", f"/api/v1/workflows/{published_normal}/graph", {}),
+            ("post", f"/api/v1/workflows/{published_normal}/nodes", {}),
+            ("post", f"/api/v1/workflows/{published_normal}/edges", {}),
+            ("post", f"/api/v1/workflows/{published_normal}/batch-delete", {}),
+            ("post", f"/api/v1/workflows/{published_normal}/duplicate", {}),
+            ("post", f"/api/v1/workflows/{published_normal}/publications", {}),
+            (
+                "post",
+                f"/api/v1/workflows/{published_normal}/composite-invocations",
+                {},
+            ),
+            ("patch", f"/api/v1/workflow-nodes/{uuid4()}", {}),
+            ("delete", f"/api/v1/workflow-nodes/{uuid4()}", None),
+            ("post", f"/api/v1/workflow-nodes/{uuid4()}/duplicate", {}),
+            ("delete", f"/api/v1/workflow-edges/{uuid4()}", None),
+            ("post", "/api/v1/experiment-operation-categories", {}),
+            ("put", f"/api/v1/experiment-operation-categories/{uuid4()}", {}),
+            ("delete", f"/api/v1/experiment-operation-categories/{uuid4()}", None),
+        ]
+        for method, path, body in write_requests:
+            kwargs = {"headers": {"content-type": "application/json"}}
+            if path.endswith("import-python"):
+                kwargs["content"] = b"# blocked"
+                kwargs["headers"]["content-type"] = "text/x-python"
+                kwargs["headers"]["X-Workflow-Filename"] = "blocked.py"
+            elif body is not None:
+                kwargs["json"] = body
+            response = client.request(method, path, **kwargs)
+            assert response.status_code == 200
+            assert response.json()["code"] == 1001
+
+        created_task = client.post(
+            "/api/v1/workflow-tasks",
+            json={"workflow_uuid": published_normal, "input": {}},
+        )
+        assert created_task.status_code == 201
+        assert created_task.json()["code"] == 0
+
+        preflight = client.post(
+            f"/api/v1/workflows/{published_normal}/run-preflight",
+            json={"run_mode": "normal", "input": {}},
+        )
+        assert preflight.status_code == 200
+        assert preflight.json()["code"] == 0
+
+        hidden_source_task = client.post(
+            "/api/v1/workflow-tasks",
+            json={"workflow_uuid": source_normal, "input": {}},
+        )
+        assert hidden_source_task.json()["code"] != 0
+        hidden_operation_task = client.post(
+            "/api/v1/workflow-tasks",
+            json={"workflow_uuid": published_operation, "input": {}},
+        )
+        assert hidden_operation_task.json()["code"] != 0
+    finally:
+        reset_startup_mode()
+        service.close()
+        store.close()

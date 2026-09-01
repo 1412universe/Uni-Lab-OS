@@ -36,6 +36,7 @@ def _child_source() -> str:
 @workflow(
     workflow_uuid="{CHILD_WORKFLOW_UUID}",
     displayname="Published child",
+    workflow_type="experiment_operation",
 )
 def prepare_sample():
     return workflow_output()

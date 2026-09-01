@@ -329,6 +329,46 @@ def test_composite_invocation_expands_one_frozen_contract_into_parent(tmp_path) 
     store.close()
 
 
+def test_only_published_experiment_operation_can_be_composite_child(tmp_path) -> None:
+    """组合调用只允许已发布实验操作，普通工作流发布后仍不得作为子工作流。
+
+    参数：``tmp_path`` 隔离工作流与发布合同存储。返回：无；通过公开 HTTP
+    接口验证普通工作流合同被拒绝且父图保持不变。异常：若类型门禁缺失或拒绝后
+    仍写入调用节点，由 pytest 断言报告。
+    """
+
+    client, store = _client(tmp_path)
+    child_uuid, child_revision = _create_workflow_with_one_node(client)
+    published = client.post(
+        f"/api/v1/workflows/{child_uuid}/publications",
+        json={"revision": child_revision},
+    )
+    assert published.status_code == 201
+    contract = published.json()["data"]
+
+    parent = client.post(
+        "/api/v1/workflows",
+        json={"name": "实验操作父图", "tags": [], "meta_data": {}},
+    ).json()["data"]
+    attempted = client.post(
+        f"/api/v1/workflows/{parent['uuid']}/composite-invocations",
+        json={
+            "revision": parent["revision"],
+            "contract_uuid": contract["uuid"],
+            "invocation_uuid": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "device_bindings": {},
+            "pose": {"x": 320, "y": 100},
+            "param": {},
+        },
+    )
+    assert attempted.status_code == 200
+    assert attempted.json()["code"] == 1000
+    graph = client.get(f"/api/v1/workflows/{parent['uuid']}/graph")
+    assert graph.status_code == 200
+    assert graph.json()["data"]["nodes"] == []
+    store.close()
+
+
 def test_referenced_by_lists_workflows_using_experiment_operation(tmp_path) -> None:
     """反向引用接口须分页返回真正包含实验操作调用的父工作流。
 
@@ -427,7 +467,12 @@ def test_new_operation_publication_refreshes_parent_and_nested_grandparent(
     ).json()["data"]
     parent = client.post(
         "/api/v1/workflows",
-        json={"name": "自动更新父工作流", "tags": [], "meta_data": {}},
+        json={
+            "name": "自动更新父工作流",
+            "tags": [],
+            "meta_data": {},
+            "workflow_type": "experiment_operation",
+        },
     ).json()["data"]
     # ``invocation_uuid`` 是引用方图中对实验操作第一次调用的稳定身份；刷新前后必须
     # 保持不变，才能证明外部连线和画布布局不会因子版本替换而漂移。

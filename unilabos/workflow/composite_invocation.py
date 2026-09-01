@@ -10,6 +10,7 @@ from unilabos.workflow.authoring_identity import (
     authoring_edge_uuid,
     expanded_node_uuid,
 )
+from unilabos.workflow.workflow_type import WORKFLOW_TYPE_EXPERIMENT_OPERATION
 
 
 class CompositeInvocationInvalid(ValueError):
@@ -167,6 +168,13 @@ def expand_composite_invocation(
     snapshot = contract.get("graph_snapshot")
     if not isinstance(snapshot, Mapping):
         raise CompositeInvocationInvalid("发布合同缺少冻结图")
+    snapshot_workflow = snapshot.get("workflow")
+    if (
+        not isinstance(snapshot_workflow, Mapping)
+        or snapshot_workflow.get("workflow_type")
+        != WORKFLOW_TYPE_EXPERIMENT_OPERATION
+    ):
+        raise CompositeInvocationInvalid("组合调用只能引用实验操作")
     source_nodes = snapshot.get("nodes")
     source_edges = snapshot.get("edges")
     if not isinstance(source_nodes, list) or not isinstance(source_edges, list):

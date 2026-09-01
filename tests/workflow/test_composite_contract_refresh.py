@@ -76,7 +76,11 @@ def _contract(
             },
         },
         "graph_snapshot": {
-            "workflow": {"uuid": CHILD_UUID, "revision": revision},
+            "workflow": {
+                "uuid": CHILD_UUID,
+                "revision": revision,
+                "workflow_type": "experiment_operation",
+            },
             "nodes": [
                 {
                     "uuid": CHILD_NODE_UUID,

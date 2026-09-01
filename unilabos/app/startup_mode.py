@@ -65,6 +65,17 @@ def allows_experiment_operations() -> bool:
     return get_startup_mode() is OSStartupMode.DEVELOP
 
 
+def allows_definition_writes() -> bool:
+    """判断当前模式是否允许修改工作流定义。
+
+    参数：无。返回：调试模式为 ``True``，生产模式为 ``False``。异常：无；该
+    判断只供 HTTP 写入边界使用，不影响生产模式读取已发布工作流或创建任务。
+    状态不变量：生产模式不会通过工作流定义接口新增、修改、删除或发布内容。
+    """
+
+    return get_startup_mode() is OSStartupMode.DEVELOP
+
+
 def is_workflow_visible(workflow: Mapping[str, Any]) -> bool:
     """判断一个工作流读模型是否可以在当前启动模式展示。
 
@@ -108,6 +119,7 @@ def visible_workflow_filter(
 
 __all__ = [
     "OSStartupMode",
+    "allows_definition_writes",
     "allows_experiment_operations",
     "get_startup_mode",
     "is_workflow_visible",

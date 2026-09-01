@@ -93,6 +93,22 @@ def test_missing_unapplied_and_stale_child_fail_closed(
     assert provider.read_count == 1
 
 
+def test_published_normal_workflow_cannot_be_composite_child() -> None:
+    """已发布但类型为普通工作流的来源不得进入组合展开。
+
+    参数：无。返回：无；把已发布快照改为普通工作流后，公共组合编译应返回稳定
+    类型诊断且不产生调用节点。异常：若普通工作流被误当作实验操作展开，由
+    pytest 断言报告。
+    """
+
+    authoring, provider = _world()
+    provider.snapshots[CHILD_WORKFLOW_UUID]["workflow"]["workflow_type"] = "normal"
+
+    expansion = _compile(authoring)
+
+    _assert_closed(expansion, "composite_child_not_experiment_operation")
+
+
 def test_published_template_provenance_mismatch_fails_closed() -> None:
     """已发布模板的 package 来源与解析结果不一致时拒绝展开。
 

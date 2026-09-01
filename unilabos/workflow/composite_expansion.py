@@ -31,6 +31,7 @@ from unilabos.workflow.workflow_io import (
     schema_is_assignable,
     validate_workflow_graph_io,
 )
+from unilabos.workflow.workflow_type import WORKFLOW_TYPE_EXPERIMENT_OPERATION
 
 
 class PublishedWorkflowSnapshotProvider(Protocol):
@@ -221,6 +222,11 @@ class CompositeAuthoring:
         if workflow.get("uuid") != source.workflow_uuid:
             raise _CompositeFailure(
                 "composite_catalog_mismatch", "/child/workflow/uuid"
+            )
+        if workflow.get("workflow_type") != WORKFLOW_TYPE_EXPERIMENT_OPERATION:
+            raise _CompositeFailure(
+                "composite_child_not_experiment_operation",
+                "/child/workflow/workflow_type",
             )
         revision = workflow.get("revision")
         applied_source = snapshot.get("applied_source")

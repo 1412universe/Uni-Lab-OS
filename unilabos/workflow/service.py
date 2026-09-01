@@ -153,6 +153,10 @@ _OPERATION_CATEGORY_UNSET = object()
 
 _ERRORS = {
     "invalid_input": (400, "提交内容格式不正确"),
+    "read_only_mode": (
+        403,
+        "生产模式只允许查看已发布普通工作流和创建工作流任务",
+    ),
     "not_found": (404, "请求的资源不存在"),
     "conflict": (409, "资源已发生冲突，请刷新后重试"),
     "workflow_not_found": (404, "工作流不存在或已被删除"),

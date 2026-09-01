@@ -160,6 +160,7 @@ def _applied_snapshot() -> dict[str, Any]:
         "workflow": {
             "uuid": CHILD_WORKFLOW_UUID,
             "revision": 7,
+            "workflow_type": "experiment_operation",
             "name": "Prepare sample",
             "tags": [],
             "description": "fixture",

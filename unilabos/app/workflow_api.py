@@ -25,6 +25,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from unilabos.app.startup_mode import (
+    allows_definition_writes,
     allows_experiment_operations,
     get_startup_mode,
     is_workflow_visible,
@@ -82,6 +83,45 @@ _GO_WHITE_SPACE = (
     "\u2028\u2029\u202f\u205f\u3000"
 )
 
+_DEFINITION_WRITE_PREFIXES = (
+    "/api/v1/workflows",
+    "/api/v1/local/workflows",
+    "/api/v1/workflow-nodes",
+    "/api/v1/workflow-edges",
+    "/api/v1/experiment-operation-categories",
+)
+
+
+def _path_is_or_below(path: str, prefix: str) -> bool:
+    """判断 HTTP 路径是否为指定接口或其子路径。
+
+    参数：``path`` 是当前请求路径；``prefix`` 是工作流 API 的稳定路径前缀。
+    返回：路径完全匹配前缀或位于其下一级时为 ``True``。异常：无；函数不做
+    URL 解码，也不改变请求。状态不变量：只按完整路径段匹配，避免把相似名称
+    的其他接口误判为工作流定义接口。
+    """
+
+    return path == prefix or path.startswith(f"{prefix}/")
+
+
+def _is_definition_write_request(path: str, method: str) -> bool:
+    """识别需要受启动模式保护的工作流定义写请求。
+
+    参数：``path`` 与 ``method`` 来自一次公开 HTTP 请求。返回：请求会改变工作流、
+    实验操作、图、节点、连线、类别或发布事实时为 ``True``；任务创建、任务控制、
+    运行预检和其他运行时处置返回 ``False``。异常：无。状态不变量：生产模式
+    只拒绝定义写入，不阻断查看和工作流任务执行。
+    """
+
+    if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    if not any(_path_is_or_below(path, prefix) for prefix in _DEFINITION_WRITE_PREFIXES):
+        return False
+    # 运行预检使用 POST 传入候选参数，但只读计算，不改变工作流定义。
+    if path.endswith("/run-preflight"):
+        return False
+    return True
+
 
 async def _read_limited_body(request: Request) -> bytes:
     """增量读取工作流（Workflow）请求体并在首次超限时停止。
@@ -119,7 +159,19 @@ class _BackendJSONRoute(APIRoute):
         expects_body = self.body_field is not None
 
         async def backend_json_route_handler(request: Request) -> Response:
-            """在业务处理前校验请求体；`request` 是单次 HTTP 请求。"""
+            """在业务处理前执行模式门禁和请求体预算校验。
+
+            参数：``request`` 是单次 HTTP 请求。返回：路由处理结果或统一业务
+            错误响应。异常：请求体超限、JSON 非法或生产模式写入定义时返回稳定
+            错误，不进入具体业务处理器。状态不变量：生产模式只保留工作流定义
+            的读取能力和运行时任务接口。
+            """
+
+            if not allows_definition_writes() and _is_definition_write_request(
+                request.url.path,
+                request.method,
+            ):
+                return _error(WorkflowError("read_only_mode"))
 
             if expects_body:
                 content_type = request.headers.get("content-type", "")
@@ -704,6 +756,8 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         business_code = 3002
     elif error.code in conflict_codes:
         business_code = 3003
+    elif error.code == "read_only_mode":
+        business_code = 1001
     elif error.code == "template_catalog_unavailable":
         business_code = 5001
     else:
@@ -789,6 +843,37 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         if not is_workflow_visible(workflow):
             raise WorkflowError("not_found")
         return workflow
+
+    def _ensure_station_workflow_visible(
+        workflow_uuid: str | None,
+        workflow_name: str | None,
+    ) -> None:
+        """在工站按 UUID 或名称提交任务前执行生产可见性校验。
+
+        参数：``workflow_uuid`` 和 ``workflow_name`` 来自工站调用请求，二者至少
+        由服务层要求其一。返回：工作流在调试模式或生产模式可见时无返回。异常：
+        生产模式下没有可见的已发布普通工作流时抛 ``not_found``，不让隐藏的实验
+        操作或源码定义绕过列表接口直接创建任务。状态不变量：本校验只读，不会
+        修改工作流或任务事实。
+        """
+
+        if get_startup_mode().value != "product":
+            return
+        if workflow_uuid:
+            _visible_workflow(workflow_uuid)
+            return
+        if not workflow_name:
+            return
+        result = service.list_workflows(
+            page=1,
+            page_size=100,
+            name=workflow_name,
+        )
+        if not any(
+            item.get("name") == workflow_name and is_workflow_visible(item)
+            for item in result["items"]
+        ):
+            raise WorkflowError("not_found")
 
     def _empty_workflow_page(page: int, page_size: int) -> dict[str, Any]:
         """构造生产模式下隐藏筛选条件对应的空工作流页。
@@ -1346,9 +1431,11 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         参数：``body`` 携带工作流身份、运行模式、任务优先级和任务输入。返回：
         HTTP 201 的标准任务投影，包含已规范化输入与冻结执行计划（ExecutionPlan）。
         异常：
-        服务层稳定错误由应用异常处理器转换为后端业务响应。
+        生产模式下工作流不可见时按 ``not_found`` 拒绝；其他服务层稳定错误由
+        应用异常处理器转换为后端业务响应。
         """
 
+        _visible_workflow(body.workflow_uuid)
         return _success(
             service.create_workflow_task(
                 workflow_uuid=body.workflow_uuid,
@@ -1386,6 +1473,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             expected,
         ):
             raise HTTPException(status_code=401, detail="工站调用凭据无效")
+        _ensure_station_workflow_visible(body.workflow_id, body.workflow_name)
         return _success(
             service.submit_station_workflow(
                 backend_task_uuid=body.task_uuid or body.backend_task_uuid or "",
@@ -1427,8 +1515,15 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def create_debug_workflow_task(
         body: DebugWorkflowTaskCreateRequest,
     ) -> JSONResponse:
-        """以不可变起始点、断点和任务优先级创建标准工作流任务。"""
+        """以不可变起始点、断点和任务优先级创建标准工作流任务。
 
+        参数：``body`` 携带可见工作流身份、起始节点、断点和任务输入。返回：
+        调试运行任务投影。异常：生产模式下工作流不可见时按 ``not_found`` 拒绝，
+        其他输入或调度错误由统一工作流错误适配器处理。状态不变量：任务创建
+        只能基于当前启动模式允许读取的工作流。
+        """
+
+        _visible_workflow(body.workflow_uuid)
         return _success(
             service.create_debug_workflow_task(
                 workflow_uuid=body.workflow_uuid,
