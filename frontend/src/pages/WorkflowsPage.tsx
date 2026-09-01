@@ -2,8 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
-  ArrowRight,
-  Braces,
   Check,
   ChevronRight,
   CircleDot,
@@ -26,25 +24,11 @@ import { createWorkflowTask, importWorkflowJson, importWorkflowPython, loadWorkf
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
+import { WorkflowDag } from '../components/WorkflowDag'
 
 function tagForWorkflow(workflow: WorkflowDefinition) {
   if (workflow.tags[0]) return workflow.tags[0]
   return workflow.status === 'source' ? '源码定义' : workflow.status
-}
-
-function WorkflowNode({ node, index }: { node: Record<string, any>; index: number }) {
-  const label = node.name || node.action_name || node.kind || `节点 ${index + 1}`
-  const device = node.meta_data?.unilab?.executor_binding?.device_id || node.device_id
-  return (
-    <div className="workflow-flow-item">
-      {index ? <span className="flow-connector"><ArrowRight size={15} /></span> : null}
-      <button type="button" className="workflow-node">
-        <span>{node.kind === 'material_source' ? <CircleDot size={17} /> : <Braces size={17} />}</span>
-        <strong>{label}</strong>
-        <small>{device || node.type || node.kind || 'workflow node'}</small>
-      </button>
-    </div>
-  )
 }
 
 type ReadinessTone = 'ready' | 'warning' | 'error' | 'neutral' | 'loading'
@@ -102,6 +86,7 @@ export function WorkflowsPage({
   const pythonImportRef = useRef<HTMLInputElement>(null)
   const jsonImportRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
+  const [knownNodeCounts, setKnownNodeCounts] = useState<Record<string, number>>({})
 
   useEffect(() => {
     if (!workflows.some((workflow) => workflow.uuid === selectedId)) {
@@ -132,6 +117,14 @@ export function WorkflowsPage({
     retry: false,
     staleTime: 0,
   })
+
+  useEffect(() => {
+    if (!selected || !graphQuery.data) return
+    const count = graphQuery.data.nodes.length
+    setKnownNodeCounts((current) => current[selected.uuid] === count
+      ? current
+      : { ...current, [selected.uuid]: count })
+  }, [graphQuery.data, selected])
 
   const detail = graphQuery.data?.workflow || selected
   const graphNodes = graphQuery.data?.nodes || []
@@ -260,18 +253,22 @@ export function WorkflowsPage({
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或 UUID" />
           </label>
           <div className="workflow-list">
-            {visibleWorkflows.map((workflow) => (
-              <button
-                type="button"
-                className={`workflow-list-item ${selected?.uuid === workflow.uuid ? 'active' : ''}`}
-                key={workflow.uuid}
-                onClick={() => setSelectedId(workflow.uuid)}
-              >
-                <span className="workflow-list-icon"><GitBranch size={17} /></span>
-                <div><strong>{workflow.name}</strong><small>r{workflow.revision} · {workflow.nodeCount || '—'} 节点</small></div>
-                <em>{tagForWorkflow(workflow)}</em>
-              </button>
-            ))}
+            {visibleWorkflows.map((workflow) => {
+              const hasLoadedNodeCount = Object.prototype.hasOwnProperty.call(knownNodeCounts, workflow.uuid)
+              const nodeCount = knownNodeCounts[workflow.uuid] ?? workflow.nodeCount
+              return (
+                <button
+                  type="button"
+                  className={`workflow-list-item ${selected?.uuid === workflow.uuid ? 'active' : ''}`}
+                  key={workflow.uuid}
+                  onClick={() => setSelectedId(workflow.uuid)}
+                >
+                  <span className="workflow-list-icon"><GitBranch size={17} /></span>
+                  <div><strong>{workflow.name}</strong><small>r{workflow.revision} · {hasLoadedNodeCount || workflow.nodeCount > 0 ? `${nodeCount} 节点` : '节点数待加载'}</small></div>
+                  <em>{tagForWorkflow(workflow)}</em>
+                </button>
+              )
+            })}
             {!visibleWorkflows.length ? <EmptyState title="没有匹配的工作流" description="调整搜索词后重试。" /> : null}
           </div>
           <div className="library-summary">
@@ -305,16 +302,12 @@ export function WorkflowsPage({
               </div>
               {workspaceView === 'topology' ? <div className="workflow-canvas">
                 <div className="canvas-toolbar"><span><GitBranch size={15} />发布修订拓扑</span><small>{graphQuery.isFetching ? '正在读取图…' : graphQuery.isError ? '图接口不可用，显示定义摘要' : 'Edge 权威图'}</small></div>
-                <div className="workflow-flow">
-                  <div className="workflow-flow-item">
-                    <button type="button" className="workflow-node boundary"><span><FileInput size={17} /></span><strong>运行输入</strong><small>{detail.inputContract.length} 个参数</small></button>
-                  </div>
-                  {graphNodes.slice(0, 8).map((node, index) => <WorkflowNode key={String(node.uuid || index)} node={node} index={index + 1} />)}
-                  <div className="workflow-flow-item">
-                    <span className="flow-connector"><ArrowRight size={15} /></span>
-                    <button type="button" className="workflow-node boundary"><span><Check size={17} /></span><strong>结果汇总</strong><small>{detail.outputContract.length} 个输出</small></button>
-                  </div>
-                </div>
+                <WorkflowDag
+                  nodes={graphNodes}
+                  edges={graphEdges}
+                  loading={graphQuery.isFetching}
+                  error={graphQuery.isError}
+                />
               </div> : null}
               {workspaceView === 'contract' ? (
                 <div className="workflow-inline-contracts">

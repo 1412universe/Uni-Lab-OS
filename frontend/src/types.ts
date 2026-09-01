@@ -44,6 +44,37 @@ export interface WorkflowDefinition {
   operationCategoryUuid?: string
 }
 
+export interface WorkflowGraphNode {
+  uuid: string
+  name: string
+  type: string
+  kind: 'group' | 'material_source' | 'action'
+  action_name?: string
+  workflow_node_template_uuid?: string
+  material_uuid?: string
+  param?: Record<string, any>
+  meta_data?: Record<string, any>
+  parentUuid?: string
+  deviceId?: string
+  authoringOrder?: number
+  authoringResultName?: string
+  materialRole?: string
+  description?: string
+  disabled: boolean
+}
+
+export interface WorkflowGraphEdge {
+  uuid: string
+  sourceNodeUuid: string
+  targetNodeUuid: string
+}
+
+export interface WorkflowGraph {
+  workflow: WorkflowDefinition
+  nodes: WorkflowGraphNode[]
+  edges: WorkflowGraphEdge[]
+}
+
 export interface ContractField {
   name: string
   type: string

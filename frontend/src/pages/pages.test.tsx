@@ -228,6 +228,91 @@ describe('WorkflowsPage', () => {
     expect(screen.getByText(/运行时自动解析/)).toBeInTheDocument()
     expect(screen.getByText('挂载资源')).toBeInTheDocument()
   })
+
+  it('renders the complete authoritative DAG instead of inventing a linear preview', async () => {
+    const workflow = {
+      ...demoWorkflows[0],
+      uuid: 'wf-authoritative-dag',
+      name: '权威 DAG 验证流程',
+      revision: 2,
+      nodeCount: 0,
+      inputContract: [],
+      outputContract: [],
+    }
+    const nodes = [
+      { uuid: 'source-a', name: '样品物料', type: 'material_source' },
+      { uuid: 'source-b', name: '试剂物料', type: 'material_source' },
+      {
+        uuid: 'move',
+        name: '搬运',
+        type: 'ILab',
+        parent_uuid: 'transfer-group',
+        meta_data: { unilab: { executor_binding: { device_id: 'robot' } } },
+      },
+      { uuid: 'transfer-group', name: '原子转运组', type: 'group' },
+      { uuid: 'photo', name: '拍照', type: 'ILab' },
+      { uuid: 'cap', name: '开盖', type: 'ILab' },
+      { uuid: 'join', name: '汇合倒液', type: 'ILab' },
+      { uuid: 'stir', name: '搅拌', type: 'ILab' },
+      { uuid: 'density', name: '测密度', type: 'ILab' },
+      { uuid: 'finish', name: '封装', type: 'ILab' },
+      { uuid: 'archive', name: '归档', type: 'ILab' },
+    ]
+    const edges = [
+      { uuid: 'edge-1', source_node_uuid: 'source-a', target_node_uuid: 'move' },
+      { uuid: 'edge-2', source_node_uuid: 'source-b', target_node_uuid: 'cap' },
+      { uuid: 'edge-3', source_node_uuid: 'move', target_node_uuid: 'photo' },
+      { uuid: 'edge-4', source_node_uuid: 'move', target_node_uuid: 'cap' },
+      { uuid: 'edge-5', source_node_uuid: 'photo', target_node_uuid: 'join' },
+      { uuid: 'edge-6', source_node_uuid: 'cap', target_node_uuid: 'join' },
+      { uuid: 'edge-7', source_node_uuid: 'join', target_node_uuid: 'stir' },
+      { uuid: 'edge-8', source_node_uuid: 'stir', target_node_uuid: 'density' },
+      { uuid: 'edge-9', source_node_uuid: 'density', target_node_uuid: 'finish' },
+      { uuid: 'edge-10', source_node_uuid: 'finish', target_node_uuid: 'archive' },
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/graph')) {
+        return response({
+          code: 0,
+          data: {
+            workflow: {
+              uuid: workflow.uuid,
+              name: workflow.name,
+              revision: workflow.revision,
+              status: 'source',
+              description: '验证完整节点、分组、分支与汇合。',
+              meta_data: { unilab: { input_contract: {}, output_contract: {} } },
+            },
+            nodes,
+            edges,
+          },
+        })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+
+    renderWithQuery(
+      <WorkflowsPage
+        workflows={[workflow]}
+        materials={demoMaterials}
+        connected
+        onNavigate={vi.fn()}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    const topology = await screen.findByRole('region', { name: '发布修订拓扑' })
+    expect(await within(topology).findAllByRole('article')).toHaveLength(10)
+    expect(within(topology).getByRole('article', { name: /归档/ })).toBeInTheDocument()
+    expect(within(topology).getByRole('group', { name: '分组：原子转运组' })).toHaveTextContent('搬运')
+    expect(within(topology).getAllByRole('img', { name: /^依赖：/ })).toHaveLength(edges.length)
+    expect(within(topology).getByRole('img', { name: '依赖：搬运 → 拍照' })).toBeInTheDocument()
+    expect(within(topology).getByRole('img', { name: '依赖：搬运 → 开盖' })).toBeInTheDocument()
+    expect(within(topology).queryByRole('img', { name: '依赖：拍照 → 开盖' })).not.toBeInTheDocument()
+    expect(within(topology).getByRole('article', { name: '样品物料，物料源' })).toHaveTextContent('物料源')
+    expect(await screen.findByRole('button', { name: /r2 · 11 节点/ })).toBeInTheDocument()
+  })
 })
 
 describe('TasksPage', () => {

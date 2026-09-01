@@ -8,6 +8,9 @@ import type {
   TaskNode,
   TaskPresentationStatus,
   WorkflowDefinition,
+  WorkflowGraph,
+  WorkflowGraphEdge,
+  WorkflowGraphNode,
   WorkflowTask,
   ResourceTemplateRecord,
   ActionTemplateRecord,
@@ -193,6 +196,68 @@ export function adaptWorkflow(raw: RawRecord): WorkflowDefinition {
     sourcePath: unilab.source_bootstrap?.relative_path,
     workflowType: raw.workflow_type === 'experiment_operation' ? 'experiment_operation' : 'normal',
     operationCategoryUuid: raw.operation_category_uuid ? String(raw.operation_category_uuid) : undefined,
+  }
+}
+
+function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
+  const unilab = raw.meta_data?.unilab || {}
+  const type = String(raw.type || raw.kind || 'workflow_node')
+  const normalisedType = type.toLowerCase()
+  const authoringResultName = unilab.authoring_result_name
+    ? String(unilab.authoring_result_name)
+    : undefined
+  const rawName = String(raw.name || raw.action_name || authoringResultName || raw.uuid)
+  const name = type.toLowerCase() === 'material_source'
+    && rawName.trim().toLowerCase() === 'material source'
+    && authoringResultName
+    ? authoringResultName
+    : rawName
+  const authoringOrderValue = unilab.authoring_source_order
+  const authoringOrder = authoringOrderValue !== undefined
+    && authoringOrderValue !== null
+    && Number.isFinite(Number(authoringOrderValue))
+    ? Number(authoringOrderValue)
+    : undefined
+
+  return {
+    uuid: String(raw.uuid),
+    name,
+    type,
+    kind: normalisedType === 'group'
+      ? 'group'
+      : normalisedType === 'material_source'
+        ? 'material_source'
+        : 'action',
+    action_name: raw.action_name ? String(raw.action_name) : undefined,
+    workflow_node_template_uuid: raw.workflow_node_template_uuid
+      ? String(raw.workflow_node_template_uuid)
+      : undefined,
+    material_uuid: raw.material_uuid ? String(raw.material_uuid) : undefined,
+    param: raw.param && typeof raw.param === 'object' ? raw.param : undefined,
+    meta_data: raw.meta_data && typeof raw.meta_data === 'object' ? raw.meta_data : undefined,
+    parentUuid: raw.parent_uuid ? String(raw.parent_uuid) : undefined,
+    deviceId: unilab.executor_binding?.device_id
+      ? String(unilab.executor_binding.device_id)
+      : raw.device_id
+        ? String(raw.device_id)
+        : undefined,
+    authoringOrder,
+    authoringResultName,
+    materialRole: raw.param?.flow_role || raw.params?.flow_role
+      ? String(raw.param?.flow_role || raw.params?.flow_role)
+      : undefined,
+    description: raw.description ? String(raw.description) : undefined,
+    disabled: Boolean(raw.disabled),
+  }
+}
+
+function adaptWorkflowGraphEdge(raw: RawRecord): WorkflowGraphEdge {
+  const sourceNodeUuid = String(raw.source_node_uuid || raw.sourceNodeUuid || '')
+  const targetNodeUuid = String(raw.target_node_uuid || raw.targetNodeUuid || '')
+  return {
+    uuid: String(raw.uuid || `${sourceNodeUuid}->${targetNodeUuid}`),
+    sourceNodeUuid,
+    targetNodeUuid,
   }
 }
 
@@ -1062,12 +1127,13 @@ export async function loadMaterialDetail(materialUuid: string, signal?: AbortSig
   return adaptMaterial(material)
 }
 
-export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSignal) {
+export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSignal): Promise<WorkflowGraph> {
   const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`, signal)
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes.map(adaptWorkflowGraphNode) : []
   return {
     workflow: adaptWorkflow({ ...graph.workflow, nodes: graph.nodes }),
-    nodes: Array.isArray(graph.nodes) ? graph.nodes : [],
-    edges: Array.isArray(graph.edges) ? graph.edges : [],
+    nodes,
+    edges: Array.isArray(graph.edges) ? graph.edges.map(adaptWorkflowGraphEdge) : [],
   }
 }
 
