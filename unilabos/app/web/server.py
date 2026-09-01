@@ -562,6 +562,18 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
         except Exception as e:  # noqa: BLE001 - 调度器路由失败不影响设备诊断
             error(f"[Web] 挂载本地调试 Scheduler 路由失败: {str(e)}")
 
+    # React 实验运营控制台只属于拥有本地 Scheduler/Inventory 的工作区进程。
+    # 静态挂载必须先于遗留根页面注册，使 `/` 稳定跳转到 `/console/`；挂载范围
+    # 仅为 `/console`，不会吞掉 `/api`、文档或诊断页面。
+    if embedded_scheduler_enabled:
+        from unilabos.app.web.console import (
+            install_console_security,
+            install_console_ui,
+        )
+
+        install_console_security(app)
+        install_console_ui(app)
+
     # 设备本机页面只属于本地控制面；正式 Backend 不为展示层导入设备注册表。
     if BasicConfig.control_plane != "backend":
         try:
