@@ -58,6 +58,7 @@ export interface WorkflowGraphNode {
   deviceId?: string
   authoringOrder?: number
   authoringResultName?: string
+  parallelScope?: string
   materialRole?: string
   description?: string
   disabled: boolean

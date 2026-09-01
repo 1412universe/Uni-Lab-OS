@@ -218,7 +218,6 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
     && Number.isFinite(Number(authoringOrderValue))
     ? Number(authoringOrderValue)
     : undefined
-
   return {
     uuid: String(raw.uuid),
     name,
@@ -243,6 +242,7 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
         : undefined,
     authoringOrder,
     authoringResultName,
+    parallelScope: unilab.parallel_scope ? String(unilab.parallel_scope) : undefined,
     materialRole: raw.param?.flow_role || raw.params?.flow_role
       ? String(raw.param?.flow_role || raw.params?.flow_role)
       : undefined,

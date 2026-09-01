@@ -1,7 +1,32 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Braces, CircleDot, Layers3, ListTree, Network, PackageOpen, TriangleAlert } from 'lucide-react'
-import { layoutWorkflowGraph, type PositionedWorkflowNode } from '../lib/workflowGraphLayout'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import {
+  Braces,
+  CircleDot,
+  Layers3,
+  ListTree,
+  Network,
+  PackageOpen,
+  RotateCcw,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
+import {
+  applyWorkflowNodeOffsets,
+  layoutWorkflowGraph,
+  type PositionedWorkflowNode,
+  type WorkflowNodeOffset,
+} from '../lib/workflowGraphLayout'
 import type { WorkflowGraphEdge, WorkflowGraphNode } from '../types'
+
+type WorkflowEdgeKind = 'dependency' | 'material' | 'parallel_entry' | 'parallel_join'
+type EdgeEndpoint = 'source' | 'target'
+
+const edgeKindLabels: Record<WorkflowEdgeKind, string> = {
+  dependency: '流程依赖',
+  material: '物料输入',
+  parallel_entry: '并行入口',
+  parallel_join: '并行汇合',
+}
 
 function nodeTypeLabel(node: WorkflowGraphNode) {
   if (node.kind === 'material_source') return '物料源'
@@ -9,12 +34,51 @@ function nodeTypeLabel(node: WorkflowGraphNode) {
   return node.deviceId || node.type || '工作流节点'
 }
 
+function nodeParallelScope(node: WorkflowGraphNode | undefined, nodesByUuid: Map<string, WorkflowGraphNode>) {
+  if (!node) return undefined
+  if (node.parallelScope) return node.parallelScope
+  return node.parentUuid ? nodesByUuid.get(node.parentUuid)?.parallelScope : undefined
+}
+
+function classifyEdge(
+  edge: WorkflowGraphEdge,
+  nodesByUuid: Map<string, WorkflowGraphNode>,
+): WorkflowEdgeKind {
+  const source = nodesByUuid.get(edge.sourceNodeUuid)
+  const target = nodesByUuid.get(edge.targetNodeUuid)
+  if (source?.kind === 'material_source') return 'material'
+  const sourceScope = nodeParallelScope(source, nodesByUuid)
+  const targetScope = nodeParallelScope(target, nodesByUuid)
+  if (targetScope && sourceScope !== targetScope) return 'parallel_entry'
+  if (sourceScope && sourceScope !== targetScope) return 'parallel_join'
+  return 'dependency'
+}
+
+function edgeDescription(kind: WorkflowEdgeKind) {
+  if (kind === 'material') return '物料来源与消费节点的输入关系'
+  if (kind === 'parallel_entry') return '前置条件满足后，该节点进入并行分支；不表示物料被复制'
+  if (kind === 'parallel_join') return '并行分支完成后，后续节点才能继续'
+  return '前置节点完成后，后续节点才能继续'
+}
+
 function WorkflowNodeCard({
   positioned,
   materialInputs = [],
+  edgeEndpoint,
+  dimmed,
+  dragging,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
 }: {
   positioned: PositionedWorkflowNode
   materialInputs?: WorkflowGraphNode[]
+  edgeEndpoint?: EdgeEndpoint
+  dimmed?: boolean
+  dragging?: boolean
+  onPointerDown: (event: PointerEvent<HTMLElement>) => void
+  onPointerMove: (event: PointerEvent<HTMLElement>) => void
+  onPointerUp: (event: PointerEvent<HTMLElement>) => void
 }) {
   const { node } = positioned
   const isMaterial = node.kind === 'material_source'
@@ -27,15 +91,32 @@ function WorkflowNodeCard({
   const accessibleMaterialInputs = materialInputs.length
     ? `物料输入：${materialInputs.map((material) => material.name).join('、')}`
     : undefined
+  const endpointLabel = edgeEndpoint === 'source'
+    ? '已选连线起点'
+    : edgeEndpoint === 'target'
+      ? '已选连线终点'
+      : undefined
   return (
     <article
-      className={`workflow-dag-node ${isMaterial ? 'material-source' : ''} ${node.disabled ? 'disabled' : ''}`}
-      aria-label={[node.name, ...accessibleDetails, accessibleMaterialInputs].filter(Boolean).join('，')}
+      className={[
+        'workflow-dag-node',
+        isMaterial ? 'material-source' : '',
+        node.disabled ? 'disabled' : '',
+        edgeEndpoint ? `edge-${edgeEndpoint}` : '',
+        dimmed ? 'edge-dimmed' : '',
+        dragging ? 'dragging' : '',
+      ].filter(Boolean).join(' ')}
+      aria-label={[node.name, ...accessibleDetails, accessibleMaterialInputs, endpointLabel].filter(Boolean).join('，')}
+      aria-grabbed={dragging}
       data-node-uuid={node.uuid}
       data-rank={positioned.rank}
       data-band={positioned.band}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
       style={{ left: positioned.x, top: positioned.y, width: positioned.width, height: positioned.height }}
-      title={`${node.name}\n${alias}\n${typeLabel}\n${node.uuid}`}
+      title={`${node.name}\n${alias}\n${typeLabel}\n拖动可调整位置\n${node.uuid}`}
     >
       <span className="workflow-dag-node-icon">
         {isMaterial ? <CircleDot size={17} /> : <Braces size={17} />}
@@ -58,6 +139,17 @@ function WorkflowNodeCard({
   )
 }
 
+interface DragSession {
+  pointerId: number
+  startClientX: number
+  startClientY: number
+  nodeUuids: string[]
+  initialOffsets: Record<string, WorkflowNodeOffset>
+  bounds: { minX: number; minY: number; maxX: number; maxY: number }
+}
+
+type DragBounds = DragSession['bounds']
+
 export function WorkflowDag({
   nodes,
   edges,
@@ -70,8 +162,12 @@ export function WorkflowDag({
   error: boolean
 }) {
   const regionRef = useRef<HTMLElement>(null)
+  const dragSessionRef = useRef<DragSession | null>(null)
   const [ranksPerBand, setRanksPerBand] = useState(4)
   const [viewMode, setViewMode] = useState<'focus' | 'complete'>('focus')
+  const [selectedEdgeUuid, setSelectedEdgeUuid] = useState<string>()
+  const [nodeOffsets, setNodeOffsets] = useState<Record<string, WorkflowNodeOffset>>({})
+  const [draggingNodeUuids, setDraggingNodeUuids] = useState<Set<string>>(new Set())
   const graphProjection = useMemo(() => {
     const nodeByUuid = new Map(nodes.map((node) => [node.uuid, node]))
     const materialNodes = nodes
@@ -84,7 +180,8 @@ export function WorkflowDag({
     const materialEdges = edges.filter((edge) => (
       materialNodeUuids.has(edge.sourceNodeUuid) || materialNodeUuids.has(edge.targetNodeUuid)
     ))
-    const workflowEdges = edges.filter((edge) => !materialEdges.includes(edge))
+    const materialEdgeUuids = new Set(materialEdges.map((edge) => edge.uuid))
+    const workflowEdges = edges.filter((edge) => !materialEdgeUuids.has(edge.uuid))
     const materialInputsByTarget = new Map<string, WorkflowGraphNode[]>()
     materialEdges.forEach((edge) => {
       const material = nodeByUuid.get(edge.sourceNodeUuid)
@@ -93,6 +190,11 @@ export function WorkflowDag({
       inputs.push(material)
       materialInputsByTarget.set(edge.targetNodeUuid, inputs)
     })
+    const edgeKindByUuid = new Map(edges.map((edge) => [edge.uuid, classifyEdge(edge, nodeByUuid)]))
+    const parallelControlCount = workflowEdges.filter((edge) => {
+      const kind = edgeKindByUuid.get(edge.uuid)
+      return kind === 'parallel_entry' || kind === 'parallel_join'
+    }).length
     return {
       nodeByUuid,
       materialNodes,
@@ -100,14 +202,28 @@ export function WorkflowDag({
       materialInputsByTarget,
       workflowNodes: nodes.filter((node) => node.kind !== 'material_source'),
       workflowEdges,
+      edgeKindByUuid,
+      parallelControlCount,
+      dependencyCount: workflowEdges.length - parallelControlCount,
     }
   }, [edges, nodes])
   const visibleNodes = viewMode === 'focus' ? graphProjection.workflowNodes : nodes
   const visibleEdges = viewMode === 'focus' ? graphProjection.workflowEdges : edges
-  const layout = useMemo(
+  const automaticLayout = useMemo(
     () => layoutWorkflowGraph(visibleNodes, visibleEdges, { ranksPerBand }),
     [ranksPerBand, visibleEdges, visibleNodes],
   )
+  const layout = useMemo(
+    () => applyWorkflowNodeOffsets(automaticLayout, nodeOffsets),
+    [automaticLayout, nodeOffsets],
+  )
+  const selectedEdge = selectedEdgeUuid
+    ? edges.find((edge) => edge.uuid === selectedEdgeUuid)
+    : undefined
+  const selectedSource = selectedEdge ? graphProjection.nodeByUuid.get(selectedEdge.sourceNodeUuid) : undefined
+  const selectedTarget = selectedEdge ? graphProjection.nodeByUuid.get(selectedEdge.targetNodeUuid) : undefined
+  const selectedKind = selectedEdge ? graphProjection.edgeKindByUuid.get(selectedEdge.uuid) : undefined
+  const hasCustomLayout = Object.keys(nodeOffsets).length > 0
 
   useEffect(() => {
     const region = regionRef.current
@@ -123,26 +239,151 @@ export function WorkflowDag({
     return () => observer.disconnect()
   }, [])
 
+  const selectEdge = (edgeUuid: string) => {
+    setSelectedEdgeUuid((current) => current === edgeUuid ? undefined : edgeUuid)
+  }
+
+  const selectEdgeWithKeyboard = (event: KeyboardEvent<SVGGElement>, edgeUuid: string) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    selectEdge(edgeUuid)
+  }
+
+  const startDrag = (
+    event: PointerEvent<HTMLElement>,
+    requestedNodeUuids: string[],
+    requestedBounds?: DragBounds,
+  ) => {
+    if (event.button !== 0 || !requestedNodeUuids.length) return
+    event.preventDefault()
+    const draggedNodes = layout.nodes.filter((node) => requestedNodeUuids.includes(node.node.uuid))
+    if (!draggedNodes.length && !requestedBounds) return
+    const initialOffsets = Object.fromEntries(requestedNodeUuids.map((uuid) => [
+      uuid,
+      nodeOffsets[uuid] || { x: 0, y: 0 },
+    ]))
+    dragSessionRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      nodeUuids: requestedNodeUuids,
+      initialOffsets,
+      bounds: requestedBounds || {
+        minX: Math.min(...draggedNodes.map((node) => node.x)),
+        minY: Math.min(...draggedNodes.map((node) => node.y)),
+        maxX: Math.max(...draggedNodes.map((node) => node.x + node.width)),
+        maxY: Math.max(...draggedNodes.map((node) => node.y + node.height)),
+      },
+    }
+    setDraggingNodeUuids(new Set(requestedNodeUuids))
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  const startNodeDrag = (event: PointerEvent<HTMLElement>, positioned: PositionedWorkflowNode) => {
+    const group = positioned.groupUuid
+      ? automaticLayout.groups.find((candidate) => candidate.node.uuid === positioned.groupUuid)
+      : undefined
+    startDrag(event, group?.children.map((child) => child.node.uuid) || [positioned.node.uuid])
+  }
+
+  const startGroupDrag = (event: PointerEvent<HTMLElement>, groupUuid: string) => {
+    const group = layout.groups.find((candidate) => candidate.node.uuid === groupUuid)
+    if (!group) return
+    const childUuids = group.children.map((child) => child.node.uuid)
+    const frameBounds = group.frames.length
+      ? {
+          minX: Math.min(...group.frames.map((frame) => frame.x)),
+          minY: Math.min(...group.frames.map((frame) => frame.y)),
+          maxX: Math.max(...group.frames.map((frame) => frame.x + frame.width)),
+          maxY: Math.max(...group.frames.map((frame) => frame.y + frame.height)),
+        }
+      : undefined
+    startDrag(event, childUuids.length ? childUuids : [groupUuid], childUuids.length ? undefined : frameBounds)
+  }
+
+  const moveDrag = (event: PointerEvent<HTMLElement>) => {
+    const session = dragSessionRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+    const requestedX = event.clientX - session.startClientX
+    const requestedY = event.clientY - session.startClientY
+    const deltaX = Math.max(-session.bounds.minX, Math.min(layout.width - session.bounds.maxX, requestedX))
+    const deltaY = Math.max(-session.bounds.minY, Math.min(layout.height - session.bounds.maxY, requestedY))
+    setNodeOffsets((current) => {
+      const next = { ...current }
+      session.nodeUuids.forEach((uuid) => {
+        const initial = session.initialOffsets[uuid]
+        next[uuid] = { x: initial.x + deltaX, y: initial.y + deltaY }
+      })
+      return next
+    })
+  }
+
+  const endDrag = (event: PointerEvent<HTMLElement>) => {
+    const session = dragSessionRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    dragSessionRef.current = null
+    setDraggingNodeUuids(new Set())
+  }
+
+  const changeViewMode = () => {
+    setViewMode((current) => current === 'focus' ? 'complete' : 'focus')
+    setNodeOffsets({})
+    setDraggingNodeUuids(new Set())
+    dragSessionRef.current = null
+  }
+
+  const endpointFor = (nodeUuid: string): EdgeEndpoint | undefined => {
+    if (selectedEdge?.sourceNodeUuid === nodeUuid) return 'source'
+    if (selectedEdge?.targetNodeUuid === nodeUuid) return 'target'
+    return undefined
+  }
+
   return (
     <section ref={regionRef} className="workflow-dag-region" role="region" aria-label="发布修订拓扑" tabIndex={0}>
       <div className="workflow-dag-summary">
         <span><strong>{nodes.length}</strong> 个节点</span>
-        <span><strong>{edges.length}</strong> 条权威依赖</span>
+        <span><strong>{edges.length}</strong> 条权威连线</span>
         <span><strong>{layout.groups.length}</strong> 个分组</span>
         {viewMode === 'focus' ? (
-          <span>{graphProjection.workflowEdges.length} 条流程依赖 · {graphProjection.materialEdges.length} 条物料输入</span>
+          <span>{graphProjection.dependencyCount} 条流程依赖 · {graphProjection.parallelControlCount} 条并行控制 · {graphProjection.materialEdges.length} 条物料输入</span>
         ) : null}
         <em>蛇形布局 · 每行最多 {layout.ranksPerBand} 个拓扑层</em>
         <button
           type="button"
           className="workflow-dag-view-toggle"
+          aria-label="恢复自动布局"
+          disabled={!hasCustomLayout}
+          onClick={() => setNodeOffsets({})}
+        >
+          <RotateCcw size={13} />恢复布局
+        </button>
+        <button
+          type="button"
+          className="workflow-dag-view-toggle"
           aria-label={viewMode === 'focus' ? '查看完整 DAG' : '查看主流程'}
-          onClick={() => setViewMode((current) => current === 'focus' ? 'complete' : 'focus')}
+          onClick={changeViewMode}
         >
           {viewMode === 'focus' ? <Network size={13} /> : <ListTree size={13} />}
           {viewMode === 'focus' ? '完整 DAG' : '主流程'}
         </button>
       </div>
+      <div className="workflow-dag-legend" aria-label="连线图例">
+        <span className="dependency">流程依赖</span>
+        <span className="material">物料输入</span>
+        <span className="parallel">并行入口 / 汇合</span>
+        <small>点击连线查看两端节点 · 拖动分组内任一节点会移动整个分组</small>
+      </div>
+      {selectedEdge && selectedSource && selectedTarget && selectedKind ? (
+        <div className={`workflow-dag-relation ${selectedKind}`} role="status">
+          <strong>{edgeKindLabels[selectedKind]}</strong>
+          <span>{selectedSource.name} → {selectedTarget.name}</span>
+          <small>{edgeDescription(selectedKind)}</small>
+          <button type="button" aria-label="清除连线选择" onClick={() => setSelectedEdgeUuid(undefined)}><X size={13} /></button>
+        </div>
+      ) : null}
       {loading && !nodes.length ? <div className="workflow-dag-state">正在计算拓扑布局…</div> : null}
       {error ? <div className="workflow-dag-state error"><TriangleAlert size={16} />工作流图读取失败，未生成推测拓扑。</div> : null}
       {!loading && !error && !nodes.length ? <div className="workflow-dag-state">该修订没有工作流节点。</div> : null}
@@ -157,10 +398,11 @@ export function WorkflowDag({
               <div className="workflow-dag-material-list">
                 {graphProjection.materialNodes.map((material) => {
                   const outgoingEdges = graphProjection.materialEdges.filter((edge) => edge.sourceNodeUuid === material.uuid)
+                  const endpoint = endpointFor(material.uuid)
                   return (
                     <article
-                      className="workflow-dag-material"
-                      aria-label={`${material.name}，物料源`}
+                      className={`workflow-dag-material ${endpoint ? `edge-${endpoint}` : ''}`}
+                      aria-label={[material.name, '物料源', endpoint === 'source' ? '已选连线起点' : endpoint === 'target' ? '已选连线终点' : undefined].filter(Boolean).join('，')}
                       data-node-uuid={material.uuid}
                       key={material.uuid}
                     >
@@ -170,14 +412,18 @@ export function WorkflowDag({
                         {outgoingEdges.map((edge) => {
                           const target = graphProjection.nodeByUuid.get(edge.targetNodeUuid)
                           const targetName = target?.authoringResultName || target?.name || edge.targetNodeUuid
+                          const label = `${edgeKindLabels.material}：${material.name} → ${target?.name || targetName}`
                           return (
-                            <span
+                            <button
+                              className={selectedEdgeUuid === edge.uuid ? 'selected' : ''}
                               data-edge-uuid={edge.uuid}
                               key={edge.uuid}
-                              role="img"
-                              aria-label={`依赖：${material.name} → ${target?.name || targetName}`}
+                              type="button"
+                              aria-label={label}
+                              aria-pressed={selectedEdgeUuid === edge.uuid}
                               title={`输入到 ${targetName}`}
-                            >→ {targetName}</span>
+                              onClick={() => selectEdge(edge.uuid)}
+                            >→ {targetName}</button>
                           )
                         })}
                         {!outgoingEdges.length ? <span>未连接</span> : null}
@@ -189,55 +435,95 @@ export function WorkflowDag({
             </section>
           ) : null}
           <div className="workflow-dag-scroll">
-          <div className="workflow-dag-stage" style={{ width: layout.width, height: layout.height }}>
-            <svg className="workflow-dag-edges" width={layout.width} height={layout.height}>
-              <defs>
-                <marker id="workflow-dag-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-                  <path d="M 0 0 L 8 4 L 0 8 z" />
-                </marker>
-              </defs>
-              {layout.edges.map(({ edge, source, target, path }) => (
-                <path
-                  className="workflow-dag-edge"
-                  d={path}
-                  data-edge-uuid={edge.uuid}
-                  key={edge.uuid}
-                  markerEnd="url(#workflow-dag-arrow)"
-                  role="img"
-                  aria-label={`依赖：${source.node.name} → ${target.node.name}`}
-                />
+            <div className="workflow-dag-stage" style={{ width: layout.width, height: layout.height }}>
+              <svg className="workflow-dag-edges" width={layout.width} height={layout.height}>
+                <defs>
+                  {(['dependency', 'material', 'parallel_entry', 'parallel_join'] as WorkflowEdgeKind[]).map((kind) => (
+                    <marker
+                      className={`workflow-dag-arrow ${kind}`}
+                      id={`workflow-dag-arrow-${kind}`}
+                      key={kind}
+                      viewBox="0 0 8 8"
+                      refX="7"
+                      refY="4"
+                      markerWidth="7"
+                      markerHeight="7"
+                      orient="auto-start-reverse"
+                    >
+                      <path d="M 0 0 L 8 4 L 0 8 z" />
+                    </marker>
+                  ))}
+                </defs>
+                {layout.edges.map(({ edge, source, target, path }) => {
+                  const kind = graphProjection.edgeKindByUuid.get(edge.uuid) || 'dependency'
+                  const selected = edge.uuid === selectedEdgeUuid
+                  const label = `${edgeKindLabels[kind]}：${source.node.name} → ${target.node.name}`
+                  return (
+                    <g
+                      className={`workflow-dag-edge-control ${kind} ${selected ? 'selected' : ''}`}
+                      data-edge-uuid={edge.uuid}
+                      key={edge.uuid}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={label}
+                      aria-pressed={selected}
+                      onClick={() => selectEdge(edge.uuid)}
+                      onKeyDown={(event) => selectEdgeWithKeyboard(event, edge.uuid)}
+                    >
+                      <path className="workflow-dag-edge-hit" d={path} aria-hidden="true" />
+                      <path
+                        className="workflow-dag-edge"
+                        d={path}
+                        markerEnd={`url(#workflow-dag-arrow-${kind})`}
+                        aria-hidden="true"
+                      />
+                    </g>
+                  )
+                })}
+              </svg>
+              {layout.groups.map((group) => (
+                <div
+                  className={`workflow-dag-group ${draggingNodeUuids.has(group.node.uuid) || group.children.some((child) => draggingNodeUuids.has(child.node.uuid)) ? 'dragging' : ''}`}
+                  data-node-uuid={group.node.uuid}
+                  data-rank={group.rank}
+                  data-band={group.band}
+                  key={group.node.uuid}
+                  role="group"
+                  aria-label={`分组：${group.node.name}`}
+                >
+                  {group.frames.map((frame, index) => (
+                    <div
+                      className="workflow-dag-group-frame"
+                      key={`${group.node.uuid}-${index}`}
+                      onPointerDown={(event) => startGroupDrag(event, group.node.uuid)}
+                      onPointerMove={moveDrag}
+                      onPointerUp={endDrag}
+                      onPointerCancel={endDrag}
+                      style={{ left: frame.x, top: frame.y, width: frame.width, height: frame.height }}
+                    >
+                      <div className="workflow-dag-group-title"><Layers3 size={14} /><strong>{group.node.name}</strong></div>
+                    </div>
+                  ))}
+                  <span className="sr-only">{group.children.map((child) => child.node.name).join('、')}</span>
+                </div>
               ))}
-            </svg>
-            {layout.groups.map((group) => (
-              <div
-                className="workflow-dag-group"
-                data-node-uuid={group.node.uuid}
-                data-rank={group.rank}
-                data-band={group.band}
-                key={group.node.uuid}
-                role="group"
-                aria-label={`分组：${group.node.name}`}
-              >
-                {group.frames.map((frame, index) => (
-                  <div
-                    className="workflow-dag-group-frame"
-                    key={`${group.node.uuid}-${index}`}
-                    style={{ left: frame.x, top: frame.y, width: frame.width, height: frame.height }}
-                  >
-                    <div className="workflow-dag-group-title"><Layers3 size={14} /><strong>{group.node.name}</strong></div>
-                  </div>
-                ))}
-                <span className="sr-only">{group.children.map((child) => child.node.name).join('、')}</span>
-              </div>
-            ))}
-            {layout.nodes.map((node) => (
-              <WorkflowNodeCard
-                key={node.node.uuid}
-                positioned={node}
-                materialInputs={viewMode === 'focus' ? graphProjection.materialInputsByTarget.get(node.node.uuid) : undefined}
-              />
-            ))}
-          </div>
+              {layout.nodes.map((positioned) => {
+                const endpoint = endpointFor(positioned.node.uuid)
+                return (
+                  <WorkflowNodeCard
+                    key={positioned.node.uuid}
+                    positioned={positioned}
+                    materialInputs={viewMode === 'focus' ? graphProjection.materialInputsByTarget.get(positioned.node.uuid) : undefined}
+                    edgeEndpoint={endpoint}
+                    dimmed={Boolean(selectedEdge) && !endpoint}
+                    dragging={draggingNodeUuids.has(positioned.node.uuid)}
+                    onPointerDown={(event) => startNodeDrag(event, positioned)}
+                    onPointerMove={moveDrag}
+                    onPointerUp={endDrag}
+                  />
+                )
+              })}
+            </div>
           </div>
         </>
       ) : null}

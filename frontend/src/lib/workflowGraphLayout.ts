@@ -78,7 +78,7 @@ function compareEntities(left: LayoutEntity, right: LayoutEntity) {
   return compareNodes(left.node, right.node)
 }
 
-function edgePath(source: PositionedWorkflowNode, target: PositionedWorkflowNode) {
+export function workflowEdgePath(source: PositionedWorkflowNode, target: PositionedWorkflowNode) {
   if (target.band > source.band) {
     const sourceX = source.x + source.width / 2
     const sourceY = source.y + source.height
@@ -284,7 +284,7 @@ export function layoutWorkflowGraph(
       }
       return []
     }
-    return [{ edge, source, target, path: edgePath(source, target) }]
+    return [{ edge, source, target, path: workflowEdgePath(source, target) }]
   })
 
   const stageWidth = Math.max(
@@ -305,4 +305,49 @@ export function layoutWorkflowGraph(
     warnings: [...new Set(warnings)],
     ranksPerBand,
   }
+}
+
+export interface WorkflowNodeOffset {
+  x: number
+  y: number
+}
+
+export function applyWorkflowNodeOffsets(
+  layout: WorkflowGraphLayout,
+  offsets: Record<string, WorkflowNodeOffset>,
+): WorkflowGraphLayout {
+  const nodes = layout.nodes.map((positioned) => {
+    const offset = offsets[positioned.node.uuid]
+    return offset
+      ? { ...positioned, x: positioned.x + offset.x, y: positioned.y + offset.y }
+      : positioned
+  })
+  const nodesByUuid = new Map(nodes.map((node) => [node.node.uuid, node]))
+  const groups = layout.groups.map((group) => {
+    const children = group.children.map((child) => nodesByUuid.get(child.node.uuid) || child)
+    return {
+      ...group,
+      children,
+      frames: group.frames.map((frame, index) => {
+        const originalChild = group.children[index]
+        const movedChild = originalChild ? nodesByUuid.get(originalChild.node.uuid) : undefined
+        const emptyGroupOffset = !originalChild ? offsets[group.node.uuid] : undefined
+        return movedChild
+          ? {
+              ...frame,
+              x: frame.x + movedChild.x - originalChild.x,
+              y: frame.y + movedChild.y - originalChild.y,
+            }
+          : emptyGroupOffset
+            ? { ...frame, x: frame.x + emptyGroupOffset.x, y: frame.y + emptyGroupOffset.y }
+            : frame
+      }),
+    }
+  })
+  const edges = layout.edges.map((positioned) => {
+    const source = nodesByUuid.get(positioned.source.node.uuid) || positioned.source
+    const target = nodesByUuid.get(positioned.target.node.uuid) || positioned.target
+    return { ...positioned, source, target, path: workflowEdgePath(source, target) }
+  })
+  return { ...layout, nodes, groups, edges }
 }

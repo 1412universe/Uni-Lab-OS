@@ -247,6 +247,7 @@ describe('WorkflowsPage', () => {
         name: '原子物料搬运',
         type: 'ILab',
         parent_uuid: 'transfer-group',
+        param: { target_device: 'camera' },
         meta_data: {
           unilab: {
             authoring_source_order: 8,
@@ -256,8 +257,32 @@ describe('WorkflowsPage', () => {
         },
       },
       { uuid: 'transfer-group', name: '原子转运组', type: 'group' },
-      { uuid: 'photo', name: '拍照', type: 'ILab' },
-      { uuid: 'cap', name: '开盖', type: 'ILab' },
+      {
+        uuid: 'photo-group',
+        name: '烧杯拍照',
+        type: 'group',
+        meta_data: { unilab: { parallel_scope: 'parallel-1' } },
+      },
+      {
+        uuid: 'cap-group',
+        name: '样品瓶开盖',
+        type: 'group',
+        meta_data: { unilab: { parallel_scope: 'parallel-1' } },
+      },
+      {
+        uuid: 'photo',
+        name: '拍照',
+        type: 'ILab',
+        parent_uuid: 'photo-group',
+        meta_data: { unilab: { executor_binding: { device_id: 'camera' } } },
+      },
+      {
+        uuid: 'cap',
+        name: '开盖',
+        type: 'ILab',
+        parent_uuid: 'cap-group',
+        meta_data: { unilab: { executor_binding: { device_id: 'capper' } } },
+      },
       { uuid: 'join', name: '汇合倒液', type: 'ILab' },
       { uuid: 'stir', name: '搅拌', type: 'ILab' },
       { uuid: 'density', name: '测密度', type: 'ILab' },
@@ -321,14 +346,15 @@ describe('WorkflowsPage', () => {
       '样品物料，物料源',
       '试剂物料，物料源',
     ])
-    expect(within(topology).getByText('8 条流程依赖 · 2 条物料输入')).toBeInTheDocument()
+    expect(within(topology).getByText('4 条流程依赖 · 4 条并行控制 · 2 条物料输入')).toBeInTheDocument()
     expect(within(topology.querySelector('.workflow-dag-stage') as HTMLElement).getAllByRole('article')).toHaveLength(8)
     expect(within(topology).getByRole('article', { name: /归档/ })).toBeInTheDocument()
     expect(within(topology).getByRole('group', { name: '分组：原子转运组' })).toHaveTextContent('搬运')
-    expect(within(topology).getAllByRole('img', { name: /^依赖：/ })).toHaveLength(edges.length)
-    expect(within(topology).getByRole('img', { name: '依赖：原子物料搬运 → 拍照' })).toBeInTheDocument()
-    expect(within(topology).getByRole('img', { name: '依赖：原子物料搬运 → 开盖' })).toBeInTheDocument()
-    expect(within(topology).queryByRole('img', { name: '依赖：拍照 → 开盖' })).not.toBeInTheDocument()
+    expect(within(topology).getAllByRole('button', { name: /^(流程依赖|物料输入|并行入口|并行汇合)：/ })).toHaveLength(edges.length)
+    expect(within(topology).getByRole('button', { name: '流程依赖：汇合倒液 → 搅拌' })).toBeInTheDocument()
+    const parallelControl = within(topology).getByRole('button', { name: '并行入口：原子物料搬运 → 开盖' })
+    expect(parallelControl).toBeInTheDocument()
+    expect(within(topology).queryByRole('button', { name: '流程依赖：拍照 → 开盖' })).not.toBeInTheDocument()
     expect(within(topology).getByRole('article', { name: '样品物料，物料源' })).toHaveTextContent('物料源')
     expect(within(topology).getByRole('article', {
       name: '原子物料搬运，beaker_at_s07，robot，物料输入：样品物料',
@@ -336,7 +362,14 @@ describe('WorkflowsPage', () => {
     expect(within(topology).getByRole('article', {
       name: '原子物料搬运，product_at_s11，ILab',
     })).toBeInTheDocument()
-    expect(await screen.findByRole('button', { name: /r2 · 11 节点/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /r2 · 13 节点/ })).toBeInTheDocument()
+
+    fireEvent.click(parallelControl)
+    expect(within(topology).getByRole('status')).toHaveTextContent('并行入口')
+    expect(within(topology).getByRole('article', {
+      name: /原子物料搬运，beaker_at_s07，robot，物料输入：样品物料，已选连线起点/,
+    })).toBeInTheDocument()
+    expect(within(topology).getByRole('article', { name: /开盖，capper.*已选连线终点/ })).toBeInTheDocument()
 
     fireEvent.click(within(topology).getByRole('button', { name: '查看完整 DAG' }))
     expect(within(topology).getByRole('button', { name: '查看主流程' })).toBeInTheDocument()
