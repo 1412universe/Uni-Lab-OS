@@ -3,6 +3,11 @@ import {
   adaptMaterial,
   adaptTask,
   adaptWorkflow,
+  createExperimentOperation,
+  createReagent,
+  createReagentInfo,
+  instantiateMaterial,
+  lookupCompoundByCas,
   loadEdgeSnapshot,
   unwrapEnvelope,
 } from './edgeClient'
@@ -24,6 +29,75 @@ describe('unwrapEnvelope', () => {
 })
 
 describe('Edge view model adapters', () => {
+  it('writes reagent identity and container inventory through distinct contracts', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => response({ code: 0, data: { uuid: init?.method === 'POST' ? 'created' : 'other' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createReagentInfo({ name: '乙醇', cas: '64-17-5', aliases: ['酒精'], physicalState: 'liquid' })
+    await createReagent({ materialUuid: 'material-1', reagentInfoUuid: 'info-1', quantity: 500, quantityUnit: 'mL', concentrationValue: 95, concentrationUnit: '%' })
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/reagent-infos')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ name: '乙醇', cas: '64-17-5', physical_state: 'liquid' })
+    expect(String(fetchMock.mock.calls[1][0])).toContain('/reagents')
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ material_uuid: 'material-1', reagent_info_uuid: 'info-1', quantity: 500, quantity_unit: 'mL', concentration_value: 95, concentration_unit: '%' })
+  })
+
+  it('instantiates a material directly into the selected site', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0, data: { uuid: 'material-1' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await instantiateMaterial({ resourceTemplateUuid: 'template-1', name: '样品瓶', barcode: 'B-001', siteUuid: 'site-1' })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      resource_template_uuid: 'template-1',
+      name: '样品瓶',
+      barcode: 'B-001',
+      site_placement: { action: 'place', site_uuid: 'site-1' },
+    })
+  })
+
+  it('decodes CAS lookup fields and preserves chemistry metadata when creating a catalog item', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/compounds/')) return response({ code: 0, data: { cas: '64-17-5', status: 'ok', compound: { name: 'Ethanol', molecular_formula: 'C2H6O', smiles: 'CCO', inchi_key: 'KEY', molecular_weight: 46.07 } } })
+      return response({ code: 0, data: { uuid: 'info-1' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(lookupCompoundByCas('64-17-5')).resolves.toMatchObject({ status: 'ok', compound: { name: 'Ethanol', molecularFormula: 'C2H6O', smiles: 'CCO', inchiKey: 'KEY', molecularWeight: 46.07 } })
+    await createReagentInfo({ name: '乙醇', cas: '64-17-5', aliases: ['酒精'], physicalState: 'liquid', smiles: 'CCO', inchiKey: 'KEY', metadata: { custom_parameters: [{ name: '等级', value: '分析纯' }] } })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({ smiles: 'CCO', inchi_key: 'KEY', meta_data: { custom_parameters: [{ name: '等级', value: '分析纯' }] } })
+  })
+
+  it('saves an experiment operation as source and links nodes using returned node UUIDs', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-1')) return response({ code: 0, data: { template: { uuid: 'template-1' }, handles: [{ uuid: 'ready-source', handle_key: 'ready', io_type: 'source' }, { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' }] } })
+      if (url.endsWith('/workflows/operation-1/nodes') && init?.method === 'POST') {
+        const nodeCalls = fetchMock.mock.calls.filter(([calledUrl, calledInit]) => String(calledUrl).endsWith('/workflows/operation-1/nodes') && calledInit?.method === 'POST').length
+        return response({ code: 0, data: { uuid: `node-${nodeCalls}`, workflow_node_template_uuid: 'template-1' } })
+      }
+      if (url.endsWith('/workflows/operation-1/edges') && init?.method === 'POST') return response({ code: 0, data: { workflow: { uuid: 'operation-1', revision: 4 }, nodes: [], edges: [{ uuid: 'edge-1' }] } })
+      if (url.endsWith('/workflows/operation-1/graph')) return response({ code: 0, data: { workflow: { uuid: 'operation-1', revision: 2 }, nodes: [], edges: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const saved = await createExperimentOperation({
+      name: '移液操作', description: '', actions: [{ templateUuid: 'template-1', materialUuid: 'device-1', deviceId: 's09_station', name: '吸液' }, { templateUuid: 'template-1', materialUuid: 'device-1', deviceId: 's09_station', name: '放液' }],
+    })
+
+    expect(saved).toMatchObject({ workflowUuid: 'operation-1', revision: 2, status: 'source' })
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workflows/operation-1/publications'))).toBe(false)
+    const edgeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/workflows/operation-1/edges'))
+    expect(JSON.parse(String(edgeCall?.[1]?.body))).toMatchObject({ source_node_uuid: 'node-1', target_node_uuid: 'node-2' })
+    const nodeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/workflows/operation-1/nodes'))
+    expect(JSON.parse(String(nodeCall?.[1]?.body))).toMatchObject({
+      material_uuid: 'device-1',
+      meta_data: { unilab: { executor_binding: { mode: 'fixed', device_id: 's09_station' } } },
+    })
+  })
+
   it('adapts workflow metadata and contracts', () => {
     const workflow = adaptWorkflow({
       uuid: 'wf-1',
@@ -321,6 +395,18 @@ describe('Edge view model adapters', () => {
       kind: 'unassigned',
       label: '未分配权威库位',
     })
+    const structural = adaptMaterial({
+      uuid: 'station-s09',
+      name: 'S09移液工位仓',
+      config: { logical_mount: true, sites: [{ name: 'BEAKER1' }, { name: 'REAGENT1' }] },
+      current_site: null,
+    })
+    expect(structural.currentLocation).toEqual({
+      kind: 'structural',
+      label: '结构资源 · 提供 2 个库位',
+      siteCount: 2,
+    })
+    expect(structural.isStructural).toBe(true)
   })
 })
 

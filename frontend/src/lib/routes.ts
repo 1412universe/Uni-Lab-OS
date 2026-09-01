@@ -1,6 +1,6 @@
 import type { PageId } from '../types'
 
-const supportedPages = new Set<PageId>(['overview', 'materials', 'workflows', 'tasks'])
+const supportedPages = new Set<PageId>(['overview', 'materials', 'reagents', 'operations', 'workflows', 'tasks'])
 
 export function pageFromSearch(search: string): PageId {
   const page = new URLSearchParams(search).get('page')

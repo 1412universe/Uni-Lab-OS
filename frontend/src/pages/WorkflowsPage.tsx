@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   ArrowRight,
@@ -9,18 +9,23 @@ import {
   CircleDot,
   Code2,
   FileInput,
+  FileJson,
+  FlaskConical,
   GitBranch,
   LoaderCircle,
+  Network,
   Play,
   Plus,
   RefreshCw,
   Search,
   ShieldCheck,
+  Send,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
-import { loadWorkflowGraph, loadWorkflowPreflight } from '../lib/edgeClient'
-import type { PageId, WorkflowDefinition } from '../types'
+import { createWorkflowTask, loadWorkflowGraph, loadWorkflowPreflight } from '../lib/edgeClient'
+import type { ContractField, MaterialRecord, PageId, WorkflowDefinition } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
+import { serialiseTaskInput } from './TasksPage'
 
 function tagForWorkflow(workflow: WorkflowDefinition) {
   if (workflow.tags[0]) return workflow.tags[0]
@@ -50,6 +55,25 @@ interface ReadinessRow {
   tone: ReadinessTone
 }
 
+function resourceSlotSchema(field: ContractField): Record<string, any> | undefined {
+  const visit = (schema: Record<string, any>): Record<string, any> | undefined => {
+    if (schema.$slot === 'ResourceSlot') return schema
+    if (!Array.isArray(schema.anyOf)) return undefined
+    return schema.anyOf.map((item: unknown) => item && typeof item === 'object' ? visit(item as Record<string, any>) : undefined).find(Boolean)
+  }
+  return visit(field.schema)
+}
+
+function initialRunInput(workflow?: WorkflowDefinition): Record<string, string> {
+  return Object.fromEntries((workflow?.inputContract || []).map((field) => {
+    if (field.defaultValue === undefined || field.defaultValue === null) return [field.name, '']
+    if (resourceSlotSchema(field) && typeof field.defaultValue === 'object') {
+      return [field.name, String((field.defaultValue as Record<string, unknown>).uuid || '')]
+    }
+    return [field.name, typeof field.defaultValue === 'object' ? JSON.stringify(field.defaultValue) : String(field.defaultValue)]
+  }))
+}
+
 function ReadinessIcon({ tone }: { tone: ReadinessTone }) {
   if (tone === 'loading') return <LoaderCircle className="spin" size={12} />
   if (tone === 'ready') return <Check size={12} />
@@ -59,17 +83,23 @@ function ReadinessIcon({ tone }: { tone: ReadinessTone }) {
 
 export function WorkflowsPage({
   workflows,
+  materials,
   connected,
   onNavigate,
   onNotify,
 }: {
   workflows: WorkflowDefinition[]
+  materials: MaterialRecord[]
   connected: boolean
   onNavigate: (page: PageId) => void
   onNotify: (message: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [selectedId, setSelectedId] = useState(workflows[0]?.uuid || '')
+  const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
+  const [runInput, setRunInput] = useState<Record<string, string>>({})
+  const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     if (!workflows.some((workflow) => workflow.uuid === selectedId)) {
@@ -103,7 +133,48 @@ export function WorkflowsPage({
 
   const detail = graphQuery.data?.workflow || selected
   const graphNodes = graphQuery.data?.nodes || []
+  const graphEdges = graphQuery.data?.edges || []
+  const materialDependencies = graphNodes.filter((node) => (
+    node.type === 'material_source' || node.kind === 'material_source' || node.action_name === 'material_source'
+  )).map((node) => {
+    const templateUuid = String(node.param?.resource_template_uuid || '')
+    const materialUuid = String(node.param?.material_uuid || '')
+    return {
+      uuid: String(node.uuid || ''),
+      name: String(node.name || 'Material Source'),
+      mode: String(node.param?.mode || 'existing'),
+      templateUuid,
+      mountUuid: String(node.param?.mount?.uuid || node.meta_data?.unilab?.resource_refs?.mount?.resource_id || ''),
+      candidates: materials.filter((material) => (
+        materialUuid ? material.uuid === materialUuid : Boolean(templateUuid && material.resourceTemplateUuid === templateUuid)
+      )),
+    }
+  })
   const preflight = preflightQuery.data
+  useEffect(() => setRunInput(initialRunInput(detail)), [detail?.uuid, detail?.revision])
+  const requiredInputReady = Boolean(detail) && detail.inputContract.every((field) => (
+    !field.required || field.defaultValue !== undefined || Boolean(runInput[field.name]?.trim())
+  ))
+  const boundMaterials = detail?.inputContract.flatMap((field) => {
+    const selectedMaterial = materials.find((material) => material.uuid === runInput[field.name])
+    return selectedMaterial ? [{ field, material: selectedMaterial }] : []
+  }) || []
+  const taskMutation = useMutation({
+    mutationFn: async () => {
+      if (!detail) throw new Error('请选择工作流')
+      return createWorkflowTask({
+        workflowUuid: detail.uuid,
+        description: runDescription,
+        input: serialiseTaskInput(detail.inputContract, runInput),
+      })
+    },
+    onSuccess: async (task) => {
+      onNotify(`任务 ${task.uuid || ''} 已提交到 Edge`)
+      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
+      onNavigate('tasks')
+    },
+    onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
   const preflightTone: ReadinessTone = preflightQuery.isFetching
     ? 'loading'
     : preflightQuery.isError
@@ -166,7 +237,7 @@ export function WorkflowsPage({
         }
       />
 
-      <div className="workflow-layout">
+      <div className={`workflow-layout workflow-layout-${workspaceView}`}>
         <Panel className="workflow-library">
           <PanelHeader title="工作流目录" description={`${workflows.length} 个 Edge 定义`} action={<WorkflowIcon size={18} />} />
           <label className="search-field">
@@ -202,16 +273,22 @@ export function WorkflowsPage({
                 <div><span className="definition-tag">{tagForWorkflow(detail)}</span><h2>{detail.name}</h2><p>{detail.description}</p></div>
                 <div className="definition-actions">
                   <Button tone="ghost" icon={<Code2 size={15} />} onClick={() => onNotify(detail.sourcePath ? `源文件：${detail.sourcePath}` : '该定义没有可编辑源文件')}>查看源码</Button>
-                  <Button tone="primary" icon={<Play size={15} />} onClick={() => onNavigate('tasks')}>运行</Button>
+                  <Button tone="primary" icon={<Play size={15} />} onClick={() => setWorkspaceView('run')}>进入运行准备</Button>
                 </div>
               </div>
               <div className="definition-metrics">
                 <div><span>工作流 UUID</span><code>{detail.uuid}</code></div>
                 <div><span>应用修订</span><strong>r{detail.revision}</strong></div>
-                <div><span>节点规模</span><strong>{graphNodes.length || detail.nodeCount || '—'} 个节点</strong></div>
+                <div><span>拓扑规模</span><strong>{graphNodes.length || detail.nodeCount || '—'} 节点 · {graphEdges.length} 连线</strong></div>
                 <div><span>来源</span><code>{detail.sourcePath || 'Edge runtime'}</code></div>
               </div>
-              <div className="workflow-canvas">
+              <div className="workflow-workspace-tabs" aria-label="工作流工作区视图">
+                <button className={workspaceView === 'topology' ? 'active' : ''} onClick={() => setWorkspaceView('topology')}><GitBranch size={14} />拓扑</button>
+                <button className={workspaceView === 'contract' ? 'active' : ''} onClick={() => setWorkspaceView('contract')}><FileJson size={14} />合同</button>
+                <button className={workspaceView === 'diagnostics' ? 'active' : ''} onClick={() => setWorkspaceView('diagnostics')}><ShieldCheck size={14} />诊断</button>
+                <button className={workspaceView === 'run' ? 'active' : ''} onClick={() => setWorkspaceView('run')}><Play size={14} />运行准备</button>
+              </div>
+              {workspaceView === 'topology' ? <div className="workflow-canvas">
                 <div className="canvas-toolbar"><span><GitBranch size={15} />发布修订拓扑</span><small>{graphQuery.isFetching ? '正在读取图…' : graphQuery.isError ? '图接口不可用，显示定义摘要' : 'Edge 权威图'}</small></div>
                 <div className="workflow-flow">
                   <div className="workflow-flow-item">
@@ -223,10 +300,56 @@ export function WorkflowsPage({
                     <button type="button" className="workflow-node boundary"><span><Check size={17} /></span><strong>结果汇总</strong><small>{detail.outputContract.length} 个输出</small></button>
                   </div>
                 </div>
-              </div>
+              </div> : null}
+              {workspaceView === 'contract' ? (
+                <div className="workflow-inline-contracts">
+                  <section><header><strong>运行输入</strong><span>{detail.inputContract.length}</span></header>{detail.inputContract.map((field) => <div key={field.name}><code>{field.name}</code><span>{field.type}</span><em>{field.required ? '必填' : '可选'}</em></div>)}</section>
+                  <section><header><strong>正式输出</strong><span>{detail.outputContract.length}</span></header>{detail.outputContract.map((field) => <div key={field.name}><code>{field.name}</code><span>{field.type}</span><em>输出</em></div>)}</section>
+                </div>
+              ) : null}
+              {workspaceView === 'diagnostics' ? (
+                <div className="workflow-diagnostics">
+                  <header><div><strong>运行前诊断</strong><small>来自 Edge Preflight 的只读判断，不创建任务或占用资源</small></div><Button icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} disabled={!connected || preflightQuery.isFetching} onClick={() => void preflightQuery.refetch()}>重新检查</Button></header>
+                  {!preflight ? <EmptyState title="尚未运行 Preflight" description="执行检查后可按节点查看阻断、延后与人工确认项。" /> : (
+                    <div className="diagnostic-checks">
+                      {preflight.checks.map((check, index) => <div className={`diagnostic-check check-${check.status}`} key={`${check.code}-${index}`}><span><ReadinessIcon tone={check.status === 'passed' ? 'ready' : check.status === 'blocked' ? 'error' : 'warning'} /></span><div><strong>{check.nodeName || check.type}</strong><p>{check.message}</p><code>{check.code}</code></div><em>{check.status}</em></div>)}
+                      {!preflight.checks.length ? <EmptyState title="没有诊断项" description="当前报告未返回逐项检查结果。" /> : null}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+              {workspaceView === 'run' ? (
+                <div className="workflow-run-preparation">
+                  <header className="run-preparation-header"><div><span>COMPOSITE RUN SETUP</span><strong>工作流 × 物料运行准备</strong><small>绑定公开输入与权威物料，检查当前引用和库位，再由 Edge 决定是否准入。</small></div><span className={`run-gate gate-${preflightTone}`}><ReadinessIcon tone={preflightTone} />{preflightStatusLabel}</span></header>
+                  <div className="run-preparation-grid">
+                    <section className="run-input-panel">
+                      <div className="run-section-title"><span>01</span><div><strong>运行输入与物料绑定</strong><small>{detail.inputContract.length} 个公开输入 · {detail.inputContract.filter(resourceSlotSchema).length} 个手动物料槽位 · {materialDependencies.length} 个自动物料源</small></div></div>
+                      <label className="run-description"><span>任务描述</span><input value={runDescription} onChange={(event) => setRunDescription(event.target.value)} /></label>
+                      <div className="run-fields">
+                        {detail.inputContract.map((field) => {
+                          const slot = resourceSlotSchema(field)
+                          const allowed = Array.isArray(slot?.allowed_resource_template_uuids) ? new Set(slot.allowed_resource_template_uuids.map(String)) : undefined
+                          const options = slot ? materials.filter((material) => !allowed || Boolean(material.resourceTemplateUuid && allowed.has(material.resourceTemplateUuid))) : []
+                          return <label className={slot ? 'run-field resource-binding-field' : 'run-field'} key={field.name}><span><code>{field.name}</code><em>{field.required ? '必填' : '可选'} · {field.type}</em></span>{slot ? <select value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))}><option value="">{options.length ? '选择权威物料实例' : '没有符合模板约束的物料'}</option>{options.map((material) => <option key={material.uuid} value={material.uuid}>{material.name} · {material.currentLocation.label}</option>)}</select> : <input value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))} placeholder={field.type} />}</label>
+                        })}
+                        {!detail.inputContract.length ? <EmptyState title="无需运行输入" description="该工作流可直接进入 Preflight。" /> : null}
+                      </div>
+                    </section>
+                    <aside className="run-context-panel">
+                      <div className="run-section-title"><span>02</span><div><strong>物料上下文</strong><small>权威库位与未结束任务引用</small></div></div>
+                      <div className="bound-material-list">
+                        {boundMaterials.map(({ field, material }) => <article key={field.name}><header><span><FlaskConical size={15} /></span><div><strong>{material.name}</strong><code>{field.name}</code></div></header><dl><div><dt>当前位置</dt><dd>{material.currentLocation.label}</dd></div><div><dt>任务引用</dt><dd className={material.taskReferences.length ? 'risk' : ''}>{material.taskReferences.length ? `${material.taskReferences.length} 个未结束任务` : '无未结束任务引用'}</dd></div><div><dt>UUID</dt><dd title={material.uuid}>{material.uuid}</dd></div></dl></article>)}
+                        {materialDependencies.map((dependency) => <article className="material-dependency-card" key={dependency.uuid}><header><span><Network size={15} /></span><div><strong>{dependency.name}</strong><code>运行时自动解析 · {dependency.mode}</code></div><em>{dependency.candidates.length} 个候选</em></header><dl><div><dt>模板 UUID</dt><dd title={dependency.templateUuid}>{dependency.templateUuid || '未声明'}</dd></div><div><dt>挂载资源</dt><dd title={dependency.mountUuid}>{dependency.mountUuid || '未声明'}</dd></div>{dependency.candidates.slice(0, 2).map((material) => <div key={material.uuid}><dt>候选物料</dt><dd title={material.uuid}>{material.name} · {material.currentLocation.label}</dd></div>)}</dl></article>)}
+                        {!boundMaterials.length && !materialDependencies.length ? <EmptyState title="没有物料依赖" description="该工作流既没有 ResourceSlot，也没有 Material Source。" /> : null}
+                      </div>
+                    </aside>
+                  </div>
+                  <footer className="run-preparation-footer"><div className="run-steps"><span className={requiredInputReady ? 'done' : ''}><i>1</i>输入完整</span><b /><span className={preflight ? 'done' : ''}><i>2</i>Preflight</span><b /><span className={preflight?.canRun ? 'done' : ''}><i>3</i>Edge 准入</span></div><div><Button icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />} disabled={!connected || !requiredInputReady || preflightQuery.isFetching} onClick={() => void preflightQuery.refetch()}>运行 Preflight</Button><Button tone="primary" icon={taskMutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Send size={14} />} disabled={!connected || !requiredInputReady || !preflight?.canRun || taskMutation.isPending} onClick={() => taskMutation.mutate()}>提交任务</Button></div></footer>
+                </div>
+              ) : null}
             </Panel>
 
-            <section className="workflow-bottom-grid">
+            {workspaceView === 'topology' ? <section className="workflow-bottom-grid">
               <Panel className="contract-panel">
                 <PanelHeader title="输入合同" description="创建任务时允许提交的参数" action={<span className="count-badge">{detail.inputContract.length}</span>} />
                 <div className="contract-list">
@@ -243,11 +366,11 @@ export function WorkflowsPage({
                   )) : <EmptyState title="没有正式输出" description="结果保留在 Job return_info。" />}
                 </div>
               </Panel>
-            </section>
+            </section> : null}
           </div>
         ) : <Panel><EmptyState title="没有工作流定义" description="确认 Edge 已加载工作流运行时。" /></Panel>}
 
-        <aside className="workflow-aside">
+        {workspaceView !== 'run' ? <aside className="workflow-aside">
           <Panel className="readiness-panel">
             <PanelHeader title="运行准备" description="Edge 只读快照，不创建 Task 或取得资源" action={<span className={`ready-orb readiness-${preflightTone}`}><ShieldCheck size={15} /></span>} />
             {readinessRows.map(({ label, value, tone }) => (
@@ -274,7 +397,7 @@ export function WorkflowsPage({
               <div><dt>节点</dt><dd>{graphNodes.length || detail?.nodeCount || 0}</dd></div>
             </dl>
           </Panel>
-        </aside>
+        </aside> : null}
       </div>
     </div>
   )

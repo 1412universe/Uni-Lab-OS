@@ -1,55 +1,37 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Archive,
   Barcode,
   Boxes,
-  ChevronRight,
   CircleCheck,
   Download,
-  FlaskConical,
   MapPin,
-  PackageSearch,
-  Search,
-  ShieldCheck,
 } from 'lucide-react'
 import type { MaterialRecord } from '../types'
-import { loadMaterialDetail } from '../lib/edgeClient'
-import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
-
-const categoryLabels: Record<string, string> = {
-  beaker: '烧杯',
-  sample_vial: '样品瓶',
-  powder: '粉体',
-  liquid_reagent: '液体试剂',
-  consumable: '耗材',
-  material: '其他物料',
-}
-
-function materialTaskReferenceLabel(material: MaterialRecord): string {
-  const count = material.taskReferences.length
-  return count ? `${count} 个未结束任务` : '无未结束任务引用'
-}
-
-function MaterialIcon({ category }: { category: string }) {
-  const Icon = category.includes('liquid') || category.includes('powder') ? FlaskConical : Boxes
-  return <Icon size={18} />
-}
+import { changeMaterialSite, instantiateMaterial, loadMaterialDetail, loadResourceTemplates, verifyMaterialBarcode } from '../lib/edgeClient'
+import { Button, EmptyState, Panel } from '../components/ui'
+import { LabObliqueOverview } from '../components/LabObliqueOverview'
+import { MaterialHierarchyTree } from '../components/MaterialHierarchyTree'
 
 export function MaterialsPage({
   materials,
-  total,
   connected,
   onNotify,
+  onRefresh,
 }: {
   materials: MaterialRecord[]
   total: number
   connected: boolean
   onNotify: (message: string) => void
+  onRefresh?: () => void
 }) {
-  const [query, setQuery] = useState('')
-  const [category, setCategory] = useState('all')
   const [selectedId, setSelectedId] = useState(materials[0]?.uuid || '')
+  const [selectedSiteId, setSelectedSiteId] = useState('')
+  const [dialog, setDialog] = useState<'barcode' | 'instantiate' | 'place' | 'remove' | null>(null)
+  const [barcodeInput, setBarcodeInput] = useState('')
+  const [templateId, setTemplateId] = useState('')
+  const [materialForm, setMaterialForm] = useState({ name: '', barcode: '', description: '', siteUuid: '' })
+  const [placementMaterialId, setPlacementMaterialId] = useState('')
 
   useEffect(() => {
     if (!materials.some((material) => material.uuid === selectedId)) {
@@ -57,167 +39,99 @@ export function MaterialsPage({
     }
   }, [materials, selectedId])
 
-  const categories = useMemo(() => {
-    const counts = new Map<string, number>()
-    materials.forEach((material) => counts.set(material.category, (counts.get(material.category) || 0) + 1))
-    return [...counts.entries()].sort((a, b) => b[1] - a[1])
-  }, [materials])
-
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase()
-    return materials.filter((material) => {
-      const categoryMatch = category === 'all' || material.category === category
-      const textMatch = !needle || [material.name, material.uuid, material.barcode, material.currentLocation.label]
-        .join(' ')
-        .toLowerCase()
-        .includes(needle)
-      return categoryMatch && textMatch
-    })
-  }, [materials, query, category])
-
-  const selected = filtered.find((material) => material.uuid === selectedId) || filtered[0]
+  const selected = materials.find((material) => material.uuid === selectedId) || materials[0]
+  useEffect(() => {
+    setSelectedSiteId(selected?.currentLocation.kind === 'site' ? selected.currentLocation.siteUuid : '')
+  }, [selected?.uuid])
   const detailQuery = useQuery({
     queryKey: ['material-detail', selected?.uuid],
     queryFn: ({ signal }) => loadMaterialDetail(selected!.uuid, signal),
     enabled: connected && Boolean(selected),
     retry: 1,
   })
+  const templatesQuery = useQuery({ queryKey: ['resource-templates'], queryFn: ({ signal }) => loadResourceTemplates(signal), enabled: connected, retry: 1 })
+  const materialTemplates = useMemo(() => (templatesQuery.data || []).filter((template) => template.resourceType !== 'device'), [templatesQuery.data])
+  const barcodeQuery = useQuery({ queryKey: ['barcode-verification', barcodeInput], queryFn: ({ signal }) => verifyMaterialBarcode(barcodeInput.trim(), signal), enabled: false, retry: false })
+  const verifiedMaterials = barcodeQuery.data?.map((result) => materials.find((material) => material.uuid === result.uuid) || result)
   const detail = detailQuery.data
     ? {
         ...detailQuery.data,
         taskReferences: selected?.taskReferences || detailQuery.data.taskReferences,
+        sites: selected?.sites?.length ? selected.sites : detailQuery.data.sites,
+        isStructural: selected?.isStructural ?? detailQuery.data.isStructural,
+        siteCount: selected?.siteCount ?? detailQuery.data.siteCount,
+        currentLocation: selected?.currentLocation ?? detailQuery.data.currentLocation,
       }
     : selected
-  const detailAuthoritative = Boolean(detailQuery.data)
+  const selectedOwnerUuid = detail?.currentLocation.kind === 'site'
+    ? detail.currentLocation.ownerMaterialUuid
+    : ''
+  const siteContainers = detail
+    ? (detail.isStructural
+        ? [detail]
+        : selectedOwnerUuid
+          ? materials.filter((material) => material.uuid === selectedOwnerUuid)
+          : [])
+    : []
+  const availableSites = siteContainers.flatMap((container) => container.sites)
+  const selectedSite = availableSites.find((site) => site.uuid === selectedSiteId) || availableSites[0]
+  const inventoryCandidates = materials.filter((material) => !material.isStructural && material.currentLocation.kind === 'unassigned')
+  const emptySiteOptions = useMemo(() => materials.flatMap((owner) => owner.sites
+    .filter((site) => !site.occupiedMaterialUuid)
+    .map((site) => ({ ...site, ownerName: owner.name }))), [materials])
+  const selectedTemplate = materialTemplates.find((template) => template.uuid === templateId)
+
+  function exportInventory() {
+    const header = ['UUID', '名称', '条码', '类型', '权威位置', '修订']
+    const rows = materials.map((material) => [material.uuid, material.name, material.barcode, material.category, material.currentLocation.label, String(material.revision)])
+    const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }))
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `unilab-inventory-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url)
+    onNotify(`已导出 ${materials.length} 条权威物料记录`)
+  }
+
+  async function submitInstantiation() {
+    if (!templateId || !materialForm.name.trim() || !materialForm.barcode.trim()) return
+    try {
+      await instantiateMaterial({ resourceTemplateUuid: templateId, ...materialForm, siteUuid: materialForm.siteUuid || undefined })
+      const targetSite = emptySiteOptions.find((site) => site.uuid === materialForm.siteUuid)
+      onNotify(targetSite ? `已实例化“${materialForm.name}”并上料至 ${targetSite.ownerName} / ${targetSite.name}` : `已从模板实例化物料：${materialForm.name}`); setDialog(null); onRefresh?.()
+    } catch (error) { onNotify(`实例化失败：${error instanceof Error ? error.message : '未知错误'}`) }
+  }
+
+  async function submitPlacement(remove = false) {
+    const material = remove ? materials.find((item) => item.uuid === selectedSite?.occupiedMaterialUuid) : materials.find((item) => item.uuid === placementMaterialId)
+    if (!material || (!remove && !selectedSite)) return
+    try {
+      await changeMaterialSite(material.uuid, material.revision, remove ? undefined : selectedSite?.uuid)
+      onNotify(remove ? `已从 ${selectedSite?.name} 下料` : `已上料至 ${selectedSite?.name}`); setDialog(null); onRefresh?.()
+    } catch (error) { onNotify(`库位操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
+  }
 
   return (
     <div className="page materials-page">
-      <PageHeader
-        eyebrow="MATERIAL AUTHORITY"
-        title="物料与库存"
-        description="从统一物料账本查看身份、权威位置、当前任务引用与来源图，页面数据直接来自 Edge。"
-        actions={
-          <>
-            <Button icon={<Download size={16} />} onClick={() => onNotify('盘点导出将在文件服务接入后开放')}>导出盘点</Button>
-            <Button tone="primary" icon={<Barcode size={17} />} onClick={() => onNotify('扫码核验入口已就绪，等待扫码设备接入')}>扫码核验</Button>
-          </>
-        }
-      />
-
-      <section className="materials-stats" aria-label="物料概览">
-        <div><span><Archive size={18} /></span><p><small>物料总量</small><strong>{total}</strong></p></div>
-        <div><span><CircleCheck size={18} /></span><p><small>已分配权威库位</small><strong>{materials.filter((item) => item.currentLocation.kind === 'site').length}</strong></p></div>
-        <div><span><ShieldCheck size={18} /></span><p><small>有未结束任务引用</small><strong>{materials.filter((item) => item.taskReferences.length > 0).length}</strong></p></div>
-        <div><span><PackageSearch size={18} /></span><p><small>未结束任务引用</small><strong>{materials.reduce((sum, item) => sum + item.taskReferences.length, 0)}</strong></p></div>
-      </section>
-
-      <div className="materials-layout">
-        <Panel className="material-filter-panel">
-          <PanelHeader title="物料视图" description="按业务类别筛选" />
-          <label className="search-field">
-            <Search size={16} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="名称、UUID、条码或位置" />
-          </label>
-          <div className="filter-section">
-            <span>物料类型</span>
-            <button className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')}>
-              <b>全部物料</b><em>{materials.length}</em>
-            </button>
-            {categories.map(([key, count]) => (
-              <button key={key} className={category === key ? 'active' : ''} onClick={() => setCategory(key)}>
-                <b>{categoryLabels[key] || key}</b><em>{count}</em>
-              </button>
-            ))}
-          </div>
-          <div className="filter-note">
-            <ShieldCheck size={16} />
-            <div><strong>权威来源</strong><small>Edge Material Aggregate</small></div>
-          </div>
-        </Panel>
+      <div className="materials-layout scene-layout">
+        <MaterialHierarchyTree materials={materials} selectedId={selected?.uuid} onSelect={setSelectedId} />
 
         <Panel className="material-table-panel">
           <div className="table-toolbar">
-            <div><strong>物料实例</strong><span>当前显示 {filtered.length} / {total}</span></div>
-            <div className="segmented"><button className="active">列表</button><button onClick={() => onNotify('库位拓扑视图将在下一阶段接入')}>库位</button></div>
+            <div><strong>实验室 2.5D</strong><span>{materials.length} 个对象</span></div>
+            <div className="material-toolbar-actions"><button onClick={exportInventory}><Download size={13} />导出盘点</button><button onClick={() => { setBarcodeInput(''); setDialog('barcode') }}><Barcode size={13} />扫码核验</button></div>
           </div>
-          {filtered.length ? (
-            <div className="table-scroll">
-              <table className="data-table material-table">
-                <thead><tr><th>物料</th><th>类型</th><th>权威当前位置</th><th>未结束任务引用</th><th>条码</th><th>更新时间</th></tr></thead>
-                <tbody>
-                  {filtered.map((material) => (
-                    <tr
-                      key={material.uuid}
-                      className={selected?.uuid === material.uuid ? 'selected' : ''}
-                      onClick={() => setSelectedId(material.uuid)}
-                      tabIndex={0}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') setSelectedId(material.uuid)
-                      }}
-                    >
-                      <td><span className="entity-icon"><MaterialIcon category={material.category} /></span><div><strong>{material.name}</strong><code>{material.uuid}</code></div></td>
-                      <td>{categoryLabels[material.category] || material.category}</td>
-                      <td><span className="location-cell"><MapPin size={13} />{material.currentLocation.label}</span></td>
-                      <td><span className={`material-status ${material.taskReferences.length ? 'material-referenced' : 'material-not-referenced'}`}>{materialTaskReferenceLabel(material)}</span></td>
-                      <td><code>{material.barcode}</code></td>
-                      <td>{material.updatedAt}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : <EmptyState title="没有匹配的物料" description="调整搜索词或选择其他物料类型。" />}
-        </Panel>
-
-        <Panel className="material-inspector">
-          {detail ? (
-            <>
-              <div className="inspector-heading">
-                <span className="entity-icon large"><MaterialIcon category={detail.category} /></span>
-                <div><small>{categoryLabels[detail.category] || detail.category}</small><h2>{detail.name}</h2><code>{detail.uuid}</code></div>
-                <span className={`material-status ${detail.taskReferences.length ? 'material-referenced' : 'material-not-referenced'}`}>{materialTaskReferenceLabel(detail)}</span>
-              </div>
-              <div className="inspector-block">
-                <h3>
-                  权威当前位置
-                  {detailQuery.isFetching ? <small>更新中…</small> : null}
-                  {detailQuery.isError ? <small className="detail-error">详情读取失败</small> : null}
-                </h3>
-                <div className="location-path"><span>{detailAuthoritative ? 'Edge Material Detail' : 'Edge Material Graph'}</span><ChevronRight size={15} /><strong>{detail.currentLocation.label}</strong></div>
-                <dl className="property-list">
-                  <div><dt>父物料 UUID</dt><dd>{detail.parentUuid || '根节点'}</dd></div>
-                  <div><dt>物料类别</dt><dd>{detail.category}</dd></div>
-                  <div><dt>资源类</dt><dd title={detail.className}>{detail.className.split('.').at(-1)}</dd></div>
-                  <div><dt>来源图</dt><dd>{detail.sourceGraph || '—'}</dd></div>
-                  <div><dt>配置来源位置</dt><dd>{detail.configuredSource}</dd></div>
-                </dl>
-              </div>
-              <div className="inspector-block">
-                <h3>未结束任务引用（调度投影）</h3>
-                <p className="task-reference-note">这里只表示 Task/Job 载荷引用该 Material UUID，不证明任务物料预留、作业执行占用或库位占用。</p>
-                {detail.taskReferences.length ? (
-                  <div className="material-task-references">
-                    {detail.taskReferences.map((reference) => (
-                      <div key={reference.taskUuid}>
-                        <div><strong>{reference.workflowName}</strong><code>{reference.taskUuid}</code><small>{reference.sample}</small></div>
-                        <StatusBadge status={reference.taskStatus} />
-                      </div>
-                    ))}
-                  </div>
-                ) : <EmptyState title="无未结束任务引用" description="这不代表物料一定可用；正式准入仍由 Scheduler 与 Inventory 原子判断。" />}
-              </div>
-              <div className="inspector-block">
-                <h3>资源谱系</h3>
-                <div className="lineage">
-                  <div className="done"><span><CircleCheck size={14} /></span><p><strong>资源图加载</strong><small>{detail.sourceGraph || 'runtime inventory'}</small></p></div>
-                  <div className="done"><span><CircleCheck size={14} /></span><p><strong>物料实例化</strong><small>{detail.barcode}</small></p></div>
-                  <div className="current"><span><MapPin size={14} /></span><p><strong>{detail.currentLocation.label}</strong><small>当前权威位置</small></p></div>
-                </div>
-              </div>
-            </>
-          ) : <EmptyState title="选择一条物料" description="物料详情将在这里显示。" />}
+          <div className="material-scene-view" aria-label="物料 2.5D 库位场景">
+              <LabObliqueOverview materials={materials} templates={templatesQuery.data || []} selectedId={selected?.uuid} onSelect={setSelectedId} onSelectMaterialTemplate={(template) => { setTemplateId(template.uuid); setMaterialForm({ name: template.displayName, barcode: '', description: '', siteUuid: selectedSite && !selectedSite.occupiedMaterialUuid ? selectedSite.uuid : '' }); setDialog('instantiate') }} />
+              {availableSites.length ? <section className="scene-site-strip"><header><div><strong>{detail?.name} · 详细库位</strong><small>{siteContainers.map((container) => container.name).join(' / ')} · 点击库位后可执行上下料</small></div><span>{availableSites.length} 个</span></header><div>{availableSites.map((site) => <button key={site.uuid} className={selectedSite?.uuid === site.uuid ? 'selected' : ''} onClick={() => setSelectedSiteId(site.uuid)}><MapPin size={13} /><strong>{site.name}</strong><small>{site.occupiedMaterialName || '空库位'}</small></button>)}</div>{selectedSite ? <footer><span>{selectedSite.occupiedMaterialUuid ? `已占用：${selectedSite.occupiedMaterialName}` : '当前库位空闲'}</span><Button disabled={Boolean(selectedSite.occupiedMaterialUuid)} onClick={() => setDialog('place')}>上料</Button><Button disabled={!selectedSite.occupiedMaterialUuid} onClick={() => setDialog('remove')}>下料</Button></footer> : null}</section> : null}
+          </div>
+          {!materials.length ? <EmptyState title="暂无物料" description="当前环境尚未加载物料资源。" /> : null}
         </Panel>
       </div>
+      {dialog ? <div className="dialog-backdrop" role="presentation"><div className="material-write-dialog" role="dialog" aria-modal="true">
+        <header><div><span>MATERIAL COMMAND</span><h2>{dialog === 'barcode' ? '扫码核验' : dialog === 'instantiate' ? '从模板实例化物料' : dialog === 'place' ? `上料至 ${selectedSite?.name}` : `从 ${selectedSite?.name} 下料`}</h2></div><button onClick={() => setDialog(null)}>×</button></header>
+        {dialog === 'barcode' ? <div className="dialog-content"><label className="form-field"><span>扫描或输入条码</span><input autoFocus value={barcodeInput} onChange={(event) => setBarcodeInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && barcodeInput.trim()) void barcodeQuery.refetch() }} placeholder="扫描枪回车或手动输入" /></label><Button tone="primary" disabled={!barcodeInput.trim() || barcodeQuery.isFetching} onClick={() => void barcodeQuery.refetch()}>校验条码</Button>{verifiedMaterials ? <div className="barcode-result">{verifiedMaterials.length ? verifiedMaterials.map((item) => <div key={item.uuid}><CircleCheck size={18} /><p><strong>{item.name}</strong><small>{item.currentLocation.label}</small><code>{item.uuid}</code></p></div>) : <EmptyState title="未找到该条码" description="可检查条码后重试，或从物料模板实例化。" />}</div> : null}</div> : null}
+        {dialog === 'instantiate' ? <div className="dialog-content"><div className="dialog-template-summary"><Boxes size={20} /><div><strong>{selectedTemplate?.displayName}</strong><code>{selectedTemplate?.uuid}</code></div></div><label className="form-field"><span>物料名称</span><input value={materialForm.name} onChange={(event) => setMaterialForm((current) => ({ ...current, name: event.target.value }))} /></label><label className="form-field"><span>唯一条码</span><input value={materialForm.barcode} onChange={(event) => setMaterialForm((current) => ({ ...current, barcode: event.target.value }))} /></label><label className="form-field"><span>初始库位</span><select value={materialForm.siteUuid} onChange={(event) => setMaterialForm((current) => ({ ...current, siteUuid: event.target.value }))}><option value="">暂不分配库位</option>{emptySiteOptions.map((site) => <option key={site.uuid} value={site.uuid}>{site.ownerName} / {site.name}</option>)}</select><small>选择后，实例化与上料将在同一事务中完成。</small></label><label className="form-field"><span>说明</span><input value={materialForm.description} onChange={(event) => setMaterialForm((current) => ({ ...current, description: event.target.value }))} /></label><Button tone="primary" disabled={!materialForm.name.trim() || !materialForm.barcode.trim()} onClick={() => void submitInstantiation()}>确认实例化</Button></div> : null}
+        {dialog === 'place' ? <div className="dialog-content"><p className="write-warning">系统会通过 expected_revision 原子校验物料与库位，冲突时不会覆盖他人操作。</p><label className="form-field"><span>选择待上料物料</span><select value={placementMaterialId} onChange={(event) => setPlacementMaterialId(event.target.value)}><option value="">选择未分配库存</option>{inventoryCandidates.map((item) => <option value={item.uuid} key={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label><Button tone="primary" disabled={!placementMaterialId} onClick={() => void submitPlacement()}>确认上料</Button></div> : null}
+        {dialog === 'remove' ? <div className="dialog-content"><p className="write-warning">下料后物料进入“待分配库存”，不会删除物料实例。</p><Button tone="primary" onClick={() => void submitPlacement(true)}>确认下料</Button></div> : null}
+      </div></div> : null}
     </div>
   )
 }

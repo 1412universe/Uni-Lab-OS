@@ -1,4 +1,4 @@
-export type PageId = 'overview' | 'materials' | 'workflows' | 'tasks'
+export type PageId = 'overview' | 'materials' | 'reagents' | 'operations' | 'workflows' | 'tasks'
 
 export type ConnectionMode = 'loading' | 'connected' | 'demo' | 'error'
 
@@ -40,6 +40,8 @@ export interface WorkflowDefinition {
   inputContract: ContractField[]
   outputContract: ContractField[]
   sourcePath?: string
+  workflowType: 'normal' | 'experiment_operation'
+  operationCategoryUuid?: string
 }
 
 export interface ContractField {
@@ -92,6 +94,7 @@ export type MaterialCurrentLocation =
       ownerMaterialUuid: string
     }
   | { kind: 'unassigned'; label: string }
+  | { kind: 'structural'; label: string; siteCount: number }
   | { kind: 'unresolved'; label: string; siteUuid?: string }
 
 export interface MaterialRecord {
@@ -100,12 +103,105 @@ export interface MaterialRecord {
   category: string
   currentLocation: MaterialCurrentLocation
   configuredSource: string
+  sourceNodeId?: string
   taskReferences: MaterialTaskReference[]
   barcode: string
   parentUuid?: string
   className: string
   resourceTemplateUuid?: string
   sourceGraph?: string
+  updatedAt: string
+  isStructural: boolean
+  siteCount: number
+  sites: Array<{
+    uuid: string
+    name: string
+    occupiedMaterialUuid?: string
+    occupiedMaterialName?: string
+  }>
+  revision: number
+  position: [number, number, number]
+  size: [number, number, number]
+}
+
+export interface ResourceTemplateRecord {
+  uuid: string
+  name: string
+  displayName: string
+  description: string
+  resourceType: string
+  availableSites: Array<{ name: string; label: string }>
+}
+
+export interface ActionTemplateRecord {
+  uuid: string
+  name: string
+  displayName: string
+  type: string
+  nodeType: string
+  resourceTemplate: { uuid: string; name: string; displayName: string }
+}
+
+export interface ActionParameterRecord {
+  handleUuid: string
+  key: string
+  displayName: string
+  required: boolean
+  schema: Record<string, unknown>
+}
+
+export interface OperationCategoryRecord {
+  uuid: string
+  name: string
+  sortOrder: number
+}
+
+export interface ReagentInfoRecord {
+  uuid: string
+  name: string
+  nameEn?: string
+  aliases: string[]
+  cas?: string
+  molecularFormula?: string
+  smiles?: string
+  inchiKey?: string
+  molecularWeight?: number
+  densityGPerMl?: number
+  physicalState: 'solid' | 'liquid' | 'gas' | 'other' | 'unknown'
+  description?: string
+  metadata?: Record<string, unknown>
+  updatedAt: string
+}
+
+export interface CompoundLookupResult {
+  cas: string
+  status: 'ok' | 'registered' | 'not_found' | 'unavailable'
+  message?: string
+  compound?: {
+    name?: string
+    molecularFormula?: string
+    smiles?: string
+    inchiKey?: string
+    molecularWeight?: number
+  }
+}
+
+export interface ReagentRecord {
+  uuid: string
+  materialUuid: string
+  reagentInfoUuid: string
+  name: string
+  cas?: string
+  molecularFormula?: string
+  physicalState: string
+  quantity?: number
+  quantityUnit?: string
+  concentrationValue?: number
+  concentrationUnit?: string
+  densityGPerMl?: number
+  containerName?: string
+  containerBarcode?: string
+  revision: number
   updatedAt: string
 }
 

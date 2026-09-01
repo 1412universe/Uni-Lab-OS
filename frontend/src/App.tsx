@@ -7,6 +7,8 @@ import { MaterialsPage } from './pages/MaterialsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { TasksPage } from './pages/TasksPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
+import { OperationsPage } from './pages/OperationsPage'
+import { ReagentsPage } from './pages/ReagentsPage'
 import type { PageId } from './types'
 
 export default function App() {
@@ -57,9 +59,13 @@ export default function App() {
       {page === 'overview' ? (
         <OverviewPage tasks={snapshot.tasks} materialTotal={snapshot.materialTotal} workflowLoaded={snapshot.workflowLoaded} connection={connection} onNavigate={navigate} onNotify={setToast} />
       ) : page === 'materials' ? (
-        <MaterialsPage materials={snapshot.materials} total={snapshot.materialTotal} connected={connection === 'connected'} onNotify={setToast} />
+        <MaterialsPage materials={snapshot.materials} total={snapshot.materialTotal} connected={connection === 'connected'} onNotify={setToast} onRefresh={refresh} />
+      ) : page === 'operations' ? (
+        <OperationsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
+      ) : page === 'reagents' ? (
+        <ReagentsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
       ) : page === 'workflows' ? (
-        <WorkflowsPage workflows={snapshot.workflows} connected={connection === 'connected'} onNavigate={navigate} onNotify={setToast} />
+        <WorkflowsPage workflows={snapshot.workflows} materials={snapshot.materials} connected={connection === 'connected'} onNavigate={navigate} onNotify={setToast} />
       ) : (
         <TasksPage tasks={snapshot.tasks} workflows={snapshot.workflows} materials={snapshot.materials} connected={connection === 'connected'} onRefresh={refresh} onNotify={setToast} />
       )}

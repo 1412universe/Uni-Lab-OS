@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
 import { MaterialsPage } from './MaterialsPage'
@@ -18,19 +18,74 @@ function renderWithQuery(ui: React.ReactNode) {
 }
 
 describe('MaterialsPage', () => {
-  it('selects a material row and updates the inspector without rerendering HTML strings', () => {
+  it('links Electron-style tree selection to the 2.5D scene', () => {
     const { container } = renderWithQuery(
       <MaterialsPage materials={demoMaterials} total={demoMaterials.length} connected={false} onNotify={vi.fn()} />,
     )
 
-    fireEvent.click(screen.getByRole('row', { name: /MAT-VIAL-088/ }))
+    const materialTree = screen.getByRole('complementary', { name: '物料目录' })
+    fireEvent.click(within(materialTree).getByRole('button', { name: '250 mL 样品瓶' }))
 
-    expect(container.querySelector('.inspector-heading h2')).toHaveTextContent('250 mL 样品瓶')
-    expect(screen.getByRole('row', { name: /MAT-VIAL-088/ })).toHaveClass('selected')
-    expect(screen.getByText('未结束任务引用（调度投影）')).toBeInTheDocument()
-    expect(screen.getByText(/不证明任务物料预留、作业执行占用或库位占用/)).toBeInTheDocument()
-    expect(screen.queryByText('当前可用')).not.toBeInTheDocument()
-    expect(screen.queryByText('已预留')).not.toBeInTheDocument()
+    expect(within(materialTree).getByRole('button', { name: '250 mL 样品瓶' }).closest('[role="treeitem"]')).toHaveClass('selected')
+    expect(container.querySelector('.lab-oblique-object.selected')).toHaveAttribute('aria-label', '250 mL 样品瓶')
+  })
+
+  it('keeps inventory, site occupancy and the 2.5D scene in one workspace', () => {
+    renderWithQuery(
+      <MaterialsPage materials={demoMaterials} total={demoMaterials.length} connected={false} onNotify={vi.fn()} />,
+    )
+    expect(screen.getByRole('complementary', { name: '物料目录' })).toBeInTheDocument()
+    expect(screen.getByLabelText('库位状态说明')).toBeInTheDocument()
+    expect(screen.getByLabelText('物料 2.5D 库位场景')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '清单' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '库位' })).not.toBeInTheDocument()
+  })
+
+  it('shows the authoritative owner sites when an occupied material is selected', () => {
+    const owner = {
+      ...demoMaterials[0],
+      uuid: 'warehouse-1',
+      name: 'S09 库位架',
+      isStructural: true,
+      siteCount: 2,
+      currentLocation: { kind: 'structural' as const, label: '结构资源', siteCount: 2 },
+      sites: [
+        { uuid: 'empty-site', name: 'L0' },
+        { uuid: 'site-1', name: 'L1', occupiedMaterialUuid: 'beaker-1', occupiedMaterialName: '测试烧杯' },
+      ],
+    }
+    const occupant = {
+      ...demoMaterials[1],
+      uuid: 'beaker-1',
+      name: '测试烧杯',
+      currentLocation: { kind: 'site' as const, label: 'S09 / L1', siteUuid: 'site-1', ownerMaterialUuid: owner.uuid },
+    }
+    renderWithQuery(
+      <MaterialsPage materials={[occupant, owner]} total={2} connected={false} onNotify={vi.fn()} />,
+    )
+
+    expect(screen.getByText('测试烧杯 · 详细库位')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /L1/ })).toHaveTextContent('测试烧杯')
+    expect(screen.getByText('已占用：测试烧杯')).toBeInTheDocument()
+    expect(screen.queryByLabelText('L1，未占用')).not.toBeInTheDocument()
+  })
+
+  it('reuses the loaded material graph location in barcode verification results', async () => {
+    const material = demoMaterials[0]
+    vi.stubGlobal('fetch', vi.fn(async () => response({
+      code: 0,
+      data: { items: [{ uuid: material.uuid, name: material.name, barcode: material.barcode }], total: 1 },
+    })))
+    renderWithQuery(
+      <MaterialsPage materials={[material]} total={1} connected={false} onNotify={vi.fn()} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '扫码核验' }))
+    fireEvent.change(screen.getByPlaceholderText('扫描枪回车或手动输入'), { target: { value: material.barcode } })
+    fireEvent.click(screen.getByRole('button', { name: '校验条码' }))
+
+    expect(await screen.findByText(material.currentLocation.label)).toBeInTheDocument()
+    expect(screen.queryByText('权威位置尚未读取')).not.toBeInTheDocument()
   })
 })
 
@@ -68,6 +123,7 @@ describe('WorkflowsPage', () => {
     renderWithQuery(
       <WorkflowsPage
         workflows={demoWorkflows}
+        materials={demoMaterials}
         connected
         onNavigate={vi.fn()}
         onNotify={vi.fn()}
@@ -80,6 +136,39 @@ describe('WorkflowsPage', () => {
 
     expect(await screen.findByText('当前条件暂不可用')).toBeInTheDocument()
     expect(screen.getByText('1 项延后 · 0 项人工确认')).toBeInTheDocument()
+  })
+
+  it('switches between topology, contract and diagnostics workspaces', () => {
+    renderWithQuery(
+      <WorkflowsPage workflows={demoWorkflows} materials={demoMaterials} connected={false} onNavigate={vi.fn()} onNotify={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '合同' }))
+    expect(screen.getByText('运行输入')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '诊断' }))
+    expect(screen.getByText('尚未运行 Preflight')).toBeInTheDocument()
+  })
+
+  it('combines workflow inputs, material bindings and preflight into one run setup', () => {
+    renderWithQuery(
+      <WorkflowsPage workflows={demoWorkflows} materials={demoMaterials} connected={false} onNavigate={vi.fn()} onNotify={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '进入运行准备' }))
+    expect(screen.getByText('工作流 × 物料运行准备')).toBeInTheDocument()
+    expect(screen.getByText('运行输入与物料绑定')).toBeInTheDocument()
+    expect(screen.getByText('物料上下文')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '提交任务' })).toBeDisabled()
+  })
+
+  it('projects graph material sources into the composite run context', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (!String(input).endsWith('/graph')) throw new Error(`Unexpected URL: ${String(input)}`)
+      return response({ code: 0, data: { workflow: demoWorkflows[0], edges: [], nodes: [{ uuid: 'source-1', name: '原料来源', type: 'material_source', param: { mode: 'existing', resource_template_uuid: demoMaterials[0].resourceTemplateUuid, mount: { uuid: 'warehouse-1' } } }] } })
+    }))
+    renderWithQuery(<WorkflowsPage workflows={demoWorkflows} materials={demoMaterials} connected={false} onNavigate={vi.fn()} onNotify={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '进入运行准备' }))
+    expect(await screen.findByText('原料来源')).toBeInTheDocument()
+    expect(screen.getByText(/运行时自动解析/)).toBeInTheDocument()
+    expect(screen.getByText('挂载资源')).toBeInTheDocument()
   })
 })
 

@@ -9,6 +9,13 @@ import type {
   TaskPresentationStatus,
   WorkflowDefinition,
   WorkflowTask,
+  ResourceTemplateRecord,
+  ActionTemplateRecord,
+  ActionParameterRecord,
+  OperationCategoryRecord,
+  ReagentInfoRecord,
+  ReagentRecord,
+  CompoundLookupResult,
 } from '../types'
 
 type RawRecord = Record<string, any>
@@ -130,6 +137,20 @@ async function postData<T>(path: string, payload: unknown): Promise<T> {
   return unwrapEnvelope(body as EdgeEnvelope<T>)
 }
 
+async function writeData<T>(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, payload?: unknown): Promise<T> {
+  const response = await fetch(`${EDGE_API_BASE}${path}`, {
+    method,
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: payload === undefined ? undefined : JSON.stringify(payload),
+  })
+  const body = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(`${body?.error?.msg || body?.detail || `Edge API 请求失败（${response.status}）`}（${method} ${path}）`)
+  if (body?.code === 0 && body.data === undefined) return undefined as T
+  try { return unwrapEnvelope(body as EdgeEnvelope<T>) } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : 'Edge API 业务错误'}（${method} ${path}）`)
+  }
+}
+
 function schemaType(schema: unknown): string {
   if (!schema || typeof schema !== 'object') return 'unknown'
   const record = schema as RawRecord
@@ -169,6 +190,8 @@ export function adaptWorkflow(raw: RawRecord): WorkflowDefinition {
     inputContract: adaptContractFields(inputContract.parameters, 'parameters'),
     outputContract: adaptContractFields(outputContract.outputs, 'outputs'),
     sourcePath: unilab.source_bootstrap?.relative_path,
+    workflowType: raw.workflow_type === 'experiment_operation' ? 'experiment_operation' : 'normal',
+    operationCategoryUuid: raw.operation_category_uuid ? String(raw.operation_category_uuid) : undefined,
   }
 }
 
@@ -459,12 +482,32 @@ function configuredSourceLabel(sourceNodeId: unknown): string {
   return id || '无配置来源位置'
 }
 
+function materialStructure(raw: RawRecord): { isStructural: boolean; siteCount: number } {
+  const sites = Array.isArray(raw.config?.sites) ? raw.config.sites : []
+  return {
+    isStructural: raw.config?.logical_mount === true || sites.length > 0,
+    siteCount: sites.length,
+  }
+}
+
+function configuredSites(raw: RawRecord): MaterialRecord['sites'] {
+  const sites = Array.isArray(raw.config?.sites) ? raw.config.sites : []
+  return sites.map((site: RawRecord, index: number) => ({
+    uuid: String(site.uuid || `${raw.uuid || 'material'}-site-${index}`),
+    name: String(site.name || site.id || `SITE-${index + 1}`),
+  }))
+}
+
 function currentLocationFromDetail(raw: RawRecord): MaterialCurrentLocation {
   const hasCurrentSiteProjection = Object.prototype.hasOwnProperty.call(raw, 'current_site')
   if (!hasCurrentSiteProjection) {
     return { kind: 'unresolved', label: '权威位置尚未读取' }
   }
   if (!raw.current_site) {
+    const structure = materialStructure(raw)
+    if (structure.isStructural) {
+      return { kind: 'structural', label: `结构资源 · 提供 ${structure.siteCount} 个库位`, siteCount: structure.siteCount }
+    }
     return { kind: 'unassigned', label: '未分配权威库位' }
   }
   const currentSiteName = String(raw.current_site.name || raw.current_site.uuid)
@@ -482,12 +525,15 @@ export function adaptMaterial(
   raw: RawRecord,
   currentLocation: MaterialCurrentLocation = currentLocationFromDetail(raw),
 ): MaterialRecord {
+  const structure = materialStructure(raw)
+  const relative = raw.relative_position || {}
   return {
     uuid: String(raw.uuid),
     name: String(raw.name || raw.uuid),
     category: String(raw.config?.category || raw.config?.rendering?.kind || 'material'),
     currentLocation,
     configuredSource: configuredSourceLabel(raw.meta_data?.source_node_id),
+    sourceNodeId: raw.meta_data?.source_node_id ? String(raw.meta_data.source_node_id) : undefined,
     taskReferences: [],
     barcode: String(raw.barcode || '—'),
     parentUuid: raw.parent_uuid ? String(raw.parent_uuid) : undefined,
@@ -495,7 +541,272 @@ export function adaptMaterial(
     resourceTemplateUuid: raw.resource_template_uuid ? String(raw.resource_template_uuid) : undefined,
     sourceGraph: raw.meta_data?.source_graph ? String(raw.meta_data.source_graph) : undefined,
     updatedAt: timeLabel(raw.update_time),
+    ...structure,
+    sites: configuredSites(raw),
+    revision: Number(raw.revision || 1),
+    position: [Number(relative.position_x || 0), Number(relative.position_y || 0), Number(relative.position_z || 0)],
+    size: [Number(relative.width || 80), Number(relative.length || 80), Number(relative.depth || 80)],
   }
+}
+
+export async function loadResourceTemplates(signal?: AbortSignal): Promise<ResourceTemplateRecord[]> {
+  const page = await requestAllPages<RawRecord>('/resource-templates', signal)
+  return page.items.map((raw) => ({
+    uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid),
+    description: String(raw.description || ''), resourceType: String(raw.resource_type || raw.registry_type || 'resource'),
+    availableSites: Array.isArray(raw.available_sites) ? raw.available_sites.map((site: RawRecord) => ({ name: String(site.name || site.label), label: String(site.label || site.name) })) : [],
+  }))
+}
+
+export async function instantiateMaterial(payload: { resourceTemplateUuid: string; name: string; barcode: string; description?: string; siteUuid?: string }) {
+  return writeData<RawRecord>('POST', '/materials', {
+    resource_template_uuid: payload.resourceTemplateUuid,
+    name: payload.name,
+    barcode: payload.barcode,
+    description: payload.description || undefined,
+    ...(payload.siteUuid ? { site_placement: { action: 'place', site_uuid: payload.siteUuid } } : {}),
+  })
+}
+
+export async function changeMaterialSite(materialUuid: string, revision: number, siteUuid?: string) {
+  return writeData<RawRecord>('PUT', `/materials/${encodeURIComponent(materialUuid)}`, {
+    expected_revision: revision,
+    site_placement: siteUuid ? { action: 'place', site_uuid: siteUuid } : { action: 'remove' },
+  })
+}
+
+export async function verifyMaterialBarcode(barcode: string, signal?: AbortSignal): Promise<MaterialRecord[]> {
+  const result = await requestData<PageData<RawRecord>>(`/materials?barcode=${encodeURIComponent(barcode)}&page=1&page_size=20`, signal)
+  return (result.items || []).map((raw) => adaptMaterial(raw))
+}
+
+export async function loadActionTemplates(signal?: AbortSignal): Promise<ActionTemplateRecord[]> {
+  const page = await requestAllPages<RawRecord>('/workflow-node-templates', signal)
+  return page.items.map((raw) => ({
+    uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid),
+    type: String(raw.type || ''), nodeType: String(raw.node_type || ''),
+    resourceTemplate: { uuid: String(raw.resource_template?.uuid || ''), name: String(raw.resource_template?.name || ''), displayName: String(raw.resource_template?.display_name || raw.resource_template?.name || '') },
+  }))
+}
+
+export async function loadActionParameters(templateUuid: string, signal?: AbortSignal): Promise<ActionParameterRecord[]> {
+  const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`, signal)
+  return (Array.isArray(detail.handles) ? detail.handles : [])
+    .filter((handle: RawRecord) => handle.io_type === 'target' && handle.handle_key !== 'ready' && handle.data_key)
+    .map((handle: RawRecord) => ({
+      handleUuid: String(handle.uuid),
+      key: String(handle.data_key),
+      displayName: String(handle.display_name || handle.data_key),
+      required: Boolean(handle.required),
+      schema: handle.meta_data?.unilab?.value_schema && typeof handle.meta_data.unilab.value_schema === 'object'
+        ? { ...handle.meta_data.unilab.value_schema }
+        : { type: String(handle.type || 'string').toLowerCase() },
+    }))
+}
+
+export async function loadOperationCategories(signal?: AbortSignal): Promise<OperationCategoryRecord[]> {
+  const data = await requestData<{ items: RawRecord[] }>('/experiment-operation-categories', signal)
+  return (data.items || []).map((raw) => ({ uuid: String(raw.uuid), name: String(raw.name), sortOrder: Number(raw.sort_order || 100) }))
+}
+
+export async function loadReagentInfos(signal?: AbortSignal): Promise<ReagentInfoRecord[]> {
+  const page = await requestAllPages<RawRecord>('/reagent-infos', signal)
+  return page.items.map((raw) => ({
+    uuid: String(raw.uuid),
+    name: String(raw.name || raw.uuid),
+    nameEn: raw.name_en ? String(raw.name_en) : undefined,
+    aliases: Array.isArray(raw.aliases) ? raw.aliases.map(String) : [],
+    cas: raw.cas ? String(raw.cas) : undefined,
+    molecularFormula: raw.molecular_formula ? String(raw.molecular_formula) : undefined,
+    smiles: raw.smiles ? String(raw.smiles) : undefined,
+    inchiKey: raw.inchi_key ? String(raw.inchi_key) : undefined,
+    molecularWeight: raw.molecular_weight == null ? undefined : Number(raw.molecular_weight),
+    densityGPerMl: raw.density_g_per_ml == null ? undefined : Number(raw.density_g_per_ml),
+    physicalState: ['solid', 'liquid', 'gas', 'other'].includes(raw.physical_state) ? raw.physical_state : 'unknown',
+    description: raw.description ? String(raw.description) : undefined,
+    metadata: raw.meta_data && typeof raw.meta_data === 'object' ? { ...raw.meta_data } : undefined,
+    updatedAt: timeLabel(raw.update_time),
+  }))
+}
+
+export async function lookupCompoundByCas(cas: string, signal?: AbortSignal): Promise<CompoundLookupResult> {
+  const raw = await requestData<RawRecord>(`/compounds/${encodeURIComponent(cas)}`, signal)
+  const compound = raw.compound && typeof raw.compound === 'object' ? raw.compound as RawRecord : undefined
+  return {
+    cas: String(raw.cas || cas),
+    status: ['ok', 'registered', 'not_found', 'unavailable'].includes(raw.status) ? raw.status : 'unavailable',
+    message: raw.message ? String(raw.message) : undefined,
+    compound: compound ? {
+      name: compound.name ? String(compound.name) : undefined,
+      molecularFormula: compound.molecular_formula ? String(compound.molecular_formula) : undefined,
+      smiles: compound.smiles ? String(compound.smiles) : undefined,
+      inchiKey: compound.inchi_key ? String(compound.inchi_key) : undefined,
+      molecularWeight: compound.molecular_weight == null ? undefined : Number(compound.molecular_weight),
+    } : undefined,
+  }
+}
+
+export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[]> {
+  const page = await requestAllPages<RawRecord>('/reagents', signal)
+  return page.items.map((raw) => ({
+    uuid: String(raw.uuid), materialUuid: String(raw.material_uuid), reagentInfoUuid: String(raw.reagent_info_uuid),
+    name: String(raw.name || raw.reagent_info_uuid), cas: raw.cas ? String(raw.cas) : undefined,
+    molecularFormula: raw.molecular_formula ? String(raw.molecular_formula) : undefined,
+    physicalState: String(raw.physical_state || 'unknown'), quantity: raw.quantity == null ? undefined : Number(raw.quantity),
+    quantityUnit: raw.quantity_unit ? String(raw.quantity_unit) : undefined,
+    concentrationValue: raw.concentration_value == null ? undefined : Number(raw.concentration_value),
+    concentrationUnit: raw.concentration_unit ? String(raw.concentration_unit) : undefined,
+    densityGPerMl: raw.density_g_per_ml == null ? undefined : Number(raw.density_g_per_ml),
+    containerName: raw.container_name ? String(raw.container_name) : undefined,
+    containerBarcode: raw.container_barcode ? String(raw.container_barcode) : undefined,
+    revision: Number(raw.revision || 1), updatedAt: timeLabel(raw.update_time),
+  }))
+}
+
+export async function createReagentInfo(payload: {
+  name: string; nameEn?: string; aliases?: string[]; cas?: string; molecularFormula?: string;
+  smiles?: string; inchiKey?: string; molecularWeight?: number; densityGPerMl?: number;
+  physicalState: ReagentInfoRecord['physicalState']; description?: string; metadata?: Record<string, unknown>
+}) {
+  return writeData<RawRecord>('POST', '/reagent-infos', {
+    name: payload.name, name_en: payload.nameEn || undefined, aliases: payload.aliases || [], cas: payload.cas || '',
+    molecular_formula: payload.molecularFormula || undefined, smiles: payload.smiles || undefined,
+    inchi_key: payload.inchiKey || undefined, molecular_weight: payload.molecularWeight,
+    density_g_per_ml: payload.densityGPerMl, physical_state: payload.physicalState,
+    description: payload.description || undefined, meta_data: payload.metadata || {},
+  })
+}
+
+export async function createReagent(payload: {
+  materialUuid: string; reagentInfoUuid: string; quantity: number; quantityUnit: string;
+  concentrationValue?: number; concentrationUnit?: string; source?: string; description?: string
+}) {
+  return writeData<RawRecord>('POST', '/reagents', {
+    material_uuid: payload.materialUuid, reagent_info_uuid: payload.reagentInfoUuid,
+    quantity: payload.quantity, quantity_unit: payload.quantityUnit,
+    physical_state: 'unknown',
+    ...(payload.concentrationValue == null || !payload.concentrationUnit ? {} : { concentration_value: payload.concentrationValue, concentration_unit: payload.concentrationUnit }),
+    source: payload.source || 'frontend:os-console', description: payload.description || undefined, meta_data: {},
+  })
+}
+
+export async function loadExperimentOperations(signal?: AbortSignal): Promise<WorkflowDefinition[]> {
+  const page = await requestAllPages<RawRecord>('/workflows?workflow_type=experiment_operation', signal)
+  return mapWithConcurrency(page.items, 6, async (raw) => {
+    const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(raw.uuid)}/graph`, signal)
+    return adaptWorkflow({ ...raw, nodes: Array.isArray(graph.nodes) ? graph.nodes : [] })
+  })
+}
+
+export async function publishExperimentOperation(workflowUuid: string, revision: number) {
+  return writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/publications`, { revision })
+}
+
+export async function deleteExperimentOperation(workflowUuid: string) {
+  return writeData<unknown>('DELETE', `/workflows/${encodeURIComponent(workflowUuid)}`)
+}
+
+export async function updateExperimentOperation(payload: {
+  workflowUuid: string
+  name: string
+  description: string
+  categoryUuid?: string
+  actions: Array<{ nodeUuid: string; name: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+}) {
+  await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}`, {
+    name: payload.name,
+    description: payload.description,
+    tags: ['experiment-operation'],
+    workflow_type: 'experiment_operation',
+    operation_category_uuid: payload.categoryUuid || null,
+    meta_data: {},
+  })
+  const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`)
+  const edits = new Map(payload.actions.map((action) => [action.nodeUuid, action]))
+  const nodes = (Array.isArray(graph.nodes) ? graph.nodes : []).map((node: RawRecord) => {
+    const edit = edits.get(String(node.uuid))
+    if (!edit) return node
+    return {
+      ...node,
+      name: edit.name,
+      material_uuid: edit.materialUuid,
+      param: edit.param,
+      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: edit.inputBindings, executor_binding: { mode: 'fixed', device_id: edit.deviceId } } },
+    }
+  })
+  return writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`, {
+    revision: Number(graph.workflow?.revision),
+    nodes,
+    edges: Array.isArray(graph.edges) ? graph.edges : [],
+  })
+}
+
+export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
+  const workflow = await writeData<RawRecord>('POST', '/workflows', {
+    name: payload.name, description: payload.description, tags: ['experiment-operation'], workflow_type: 'experiment_operation',
+    operation_category_uuid: payload.categoryUuid || undefined, meta_data: {},
+  })
+  const workflowUuid = String(workflow.uuid)
+  const createdNodes: Array<{ uuid: string; readySource?: string; readyTarget?: string }> = []
+  for (let index = 0; index < payload.actions.length; index += 1) {
+    const action = payload.actions[index]
+    const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(action.templateUuid)}`)
+    const handles = Array.isArray(detail.handles) ? detail.handles : []
+    const createdNode = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/nodes`, {
+      workflow_node_template_uuid: action.templateUuid,
+      material_uuid: action.materialUuid || undefined,
+      name: action.name,
+      pose: { x: 120 + index * 220, y: 180 },
+      param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+    })
+    if (!createdNode?.uuid) throw new Error(`动作“${action.name}”已提交，但后端未返回新节点身份`)
+    createdNodes.push({
+      uuid: String(createdNode.uuid),
+      readySource: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source')?.uuid,
+      readyTarget: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target')?.uuid,
+    })
+  }
+  for (let index = 1; index < createdNodes.length; index += 1) {
+    const source = createdNodes[index - 1]
+    const target = createdNodes[index]
+    if (!source.readySource || !target.readyTarget) throw new Error('动作模板缺少 ready 控制句柄，无法建立顺序依赖')
+    await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, {
+      source_node_uuid: source.uuid, target_node_uuid: target.uuid,
+      source_handle_uuid: source.readySource, target_handle_uuid: target.readyTarget,
+      description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } },
+    })
+  }
+  const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+  const revision = Number(graph.workflow?.revision)
+  if (!Number.isFinite(revision)) throw new Error('子工作流已写入，但无法读取当前修订，未执行发布')
+  return { workflowUuid, revision, status: 'source' as const }
+}
+
+function materialSitesFromGraph(graph: RawRecord): Map<string, MaterialRecord['sites']> {
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
+  const occupantBySite = new Map<string, { uuid: string; name: string }>()
+  nodes.forEach((node: RawRecord) => {
+    if (!node.current_site_uuid || !node.material?.uuid) return
+    occupantBySite.set(String(node.current_site_uuid), {
+      uuid: String(node.material.uuid),
+      name: String(node.material.name || node.material.uuid),
+    })
+  })
+  const sitesByOwner = new Map<string, MaterialRecord['sites']>()
+  nodes.forEach((node: RawRecord) => {
+    if (!node.material?.uuid || !Array.isArray(node.sites)) return
+    sitesByOwner.set(String(node.material.uuid), node.sites.map((site: RawRecord, index: number) => {
+      const uuid = String(site.uuid || `${node.material.uuid}-site-${index}`)
+      const occupant = occupantBySite.get(uuid)
+      return {
+        uuid,
+        name: String(site.name || site.id || `SITE-${index + 1}`),
+        occupiedMaterialUuid: occupant?.uuid,
+        occupiedMaterialName: occupant?.name,
+      }
+    }))
+  })
+  return sitesByOwner
 }
 
 function materialLocationsFromGraph(graph: RawRecord): Map<string, MaterialCurrentLocation> {
@@ -520,6 +831,11 @@ function materialLocationsFromGraph(graph: RawRecord): Map<string, MaterialCurre
     }
     const currentSiteUuid = node.current_site_uuid
     if (!currentSiteUuid) {
+      const structure = materialStructure(node.material || {})
+      if (structure.isStructural) {
+        locations.set(materialUuid, { kind: 'structural', label: `结构资源 · 提供 ${structure.siteCount} 个库位`, siteCount: structure.siteCount })
+        return
+      }
       locations.set(materialUuid, { kind: 'unassigned', label: '未分配权威库位' })
       return
     }
@@ -633,16 +949,39 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
     })
   })
   const materialLocations = materialLocationsFromGraph(materialGraph)
+  const materialSites = materialSitesFromGraph(materialGraph)
+  const graphMaterials = new Map<string, RawRecord>()
+  const graphNodes = Array.isArray(materialGraph.nodes) ? materialGraph.nodes : []
+  graphNodes.forEach((node: RawRecord) => {
+    if (node.material?.uuid) {
+      graphMaterials.set(String(node.material.uuid), {
+        ...node.material,
+        relative_position: node.relative_position ?? node.material.relative_position,
+      })
+    }
+  })
   const materials = (materialPage.items || []).map((raw) => {
+    // The paginated material projection can omit geometry. The graph projection is
+    // the authoritative source for the hierarchy and 2.5D relative transforms.
+    const graphMaterial = graphMaterials.get(String(raw.uuid))
+    const geometryRaw = graphMaterial
+      ? {
+          ...graphMaterial,
+          ...raw,
+          parent_uuid: raw.parent_uuid ?? graphMaterial.parent_uuid,
+          relative_position: raw.relative_position ?? graphMaterial.relative_position,
+        }
+      : raw
     const material = adaptMaterial(
-      raw,
+      geometryRaw,
       materialLocations.get(String(raw.uuid)) || {
         kind: 'unresolved',
         label: '物料图缺少位置投影',
       },
     )
+    const enriched = { ...material, sites: materialSites.get(material.uuid) || material.sites }
     const references = materialReferences.get(material.uuid)
-    return references ? { ...material, taskReferences: references } : material
+    return references ? { ...enriched, taskReferences: references } : enriched
   })
 
   return {

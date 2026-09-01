@@ -6,6 +6,7 @@ export const demoWorkflows: WorkflowDefinition[] = [
     name: 'SZLab 单样品全流程（物料感知）',
     revision: 12,
     status: 'published',
+    workflowType: 'normal',
     description: '烧杯、粉体、溶剂、移液、搅拌、检测与成品回库的完整闭环。',
     nodeCount: 10,
     tags: ['生产发布'],
@@ -28,6 +29,7 @@ export const demoWorkflows: WorkflowDefinition[] = [
     name: 'SZLab 标准物料转运',
     revision: 7,
     status: 'published',
+    workflowType: 'normal',
     description: '机器人取料、放料与 Host 物料归属提交。',
     nodeCount: 6,
     tags: ['复合工作流'],
@@ -43,6 +45,7 @@ export const demoWorkflows: WorkflowDefinition[] = [
     name: 'S07 物料投粉',
     revision: 5,
     status: 'source',
+    workflowType: 'normal',
     description: '粗粉、精粉和烧杯三物料汇合投粉。',
     nodeCount: 5,
     tags: ['工站流程'],
@@ -146,6 +149,12 @@ export const demoMaterials: MaterialRecord[] = [
   className: `community.szlab.${category}`,
   sourceGraph: 'szlab-local-debug.json',
   updatedAt: '18:47',
+  isStructural: false,
+  siteCount: 0,
+  sites: [],
+  revision: 1,
+  position: [index * 120, 0, 0],
+  size: [80, 80, 100],
 }))
 
 export const stationOverview = [
