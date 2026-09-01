@@ -6,7 +6,10 @@
 import pytest
 
 from unilabos.app.scheduler.dispatch import CallbackDispatcher, RecordingDispatcher
-from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
+from unilabos.app.scheduler.device_target import (
+    DeviceTargetUnavailable,
+    ResolvedDeviceTarget,
+)
 from unilabos.app.scheduler.models import (
     Handle,
     NODE_TYPES,
@@ -228,6 +231,53 @@ def test_dynamic_device_selector_chooses_another_available_instance() -> None:
     assert [item["device_id"] for item in dispatcher.dispatched] == [
         "reactor-a",
         "reactor-b",
+    ]
+
+
+def test_dynamic_device_wait_notifies_specific_busy_candidates() -> None:
+    """调度等待事件必须把动态选择器已知的忙设备继续传给持久投影。"""
+
+    waiting: list[dict] = []
+
+    def resolve_device(
+        _selector: dict[str, str],
+        _action_name: str,
+        _busy_keys: set[str],
+    ) -> ResolvedDeviceTarget:
+        raise DeviceTargetUnavailable(
+            "device_busy",
+            "匹配设备当前全部忙碌，等待下一轮调度",
+            resources=(
+                {"scope": "device", "device_id": "device-material-a"},
+            ),
+        )
+
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        device_target_resolver=resolve_device,
+    )
+    scheduler.add_job_execution_wait_listener(waiting.append)
+    result = scheduler.submit_workflow(
+        WorkflowSpec(
+            workflow_id="wf-dynamic-wait",
+            nodes=[
+                WorkflowNode(
+                    id="node-wait",
+                    device_selector={
+                        "mode": "resource_template",
+                        "resource_template_uuid": "device-template-a",
+                    },
+                    action_name="run",
+                    action_type="goal",
+                    param={},
+                )
+            ],
+        )
+    )
+
+    assert result["dispatched"] == []
+    assert waiting[0]["wait_resources"] == [
+        {"scope": "device", "device_id": "device-material-a"},
     ]
 
 

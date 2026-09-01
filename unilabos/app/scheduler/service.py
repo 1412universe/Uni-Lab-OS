@@ -1596,6 +1596,7 @@ class EdgeScheduler:
                         "blocking_workflow_id": None,
                         "wait_code": error.code,
                         "wait_message": error.message,
+                        "wait_resources": [dict(item) for item in error.resources],
                     }
                 )
                 continue

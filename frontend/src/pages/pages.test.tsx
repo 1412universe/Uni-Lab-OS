@@ -431,7 +431,10 @@ describe('TasksPage', () => {
               code: 'operation_lease',
               title: '等待库位',
               message: '目标库位正在被其他作业使用',
-              details: ['库位：S0722（物料 material-1）'],
+              details: [
+                '库位：S07 工作站 / 称量位（site-s0722）',
+                '物料：待称量烧杯（material-1）',
+              ],
               waitingSince: '2026-09-01T09:00:00Z',
             },
           }
@@ -453,7 +456,8 @@ describe('TasksPage', () => {
 
     fireEvent.mouseEnter(marker)
     expect(screen.getByRole('tooltip')).toHaveTextContent('等待库位')
-    expect(screen.getByRole('tooltip')).toHaveTextContent('库位：S0722（物料 material-1）')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('库位：S07 工作站 / 称量位（site-s0722）')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('物料：待称量烧杯（material-1）')
 
     fireEvent.mouseLeave(marker)
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()

@@ -331,9 +331,13 @@ def test_blocked_admission_retry_reuses_task_and_job_identities(
         ACTION_JOB_UUID,
     ]
     assert [job["status"] for job in blocked["jobs"]] == ["pending", "pending"]
+    assert blocked["task"]["wait_reason"]["resources"] == [
+        {"scope": "material", "material_uuid": MATERIAL_UUID},
+    ]
     assert [call[0] for call in inventory.admission_calls] == [TASK_UUID, TASK_UUID]
     assert admitted["jobs"][0]["uuid"] == SOURCE_JOB_UUID
     assert admitted["jobs"][0]["status"] == "succeeded"
+    assert admitted["jobs"][0]["wait_reason"] == {}
     assert dispatcher.dispatched[0]["job_id"] == ACTION_JOB_UUID
     with store.transaction() as connection:
         admission = connection.execute(

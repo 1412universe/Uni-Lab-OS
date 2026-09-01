@@ -15,12 +15,19 @@ from unilabos.app.scheduler.inventory.station_resource import (
 class DeviceTargetUnavailable(ValueError):
     """当前没有满足类型、动作与在线条件的设备实例。"""
 
-    def __init__(self, code: str, message: str) -> None:
-        """保存稳定等待码与中文诊断。"""
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        resources: tuple[dict[str, str], ...] = (),
+    ) -> None:
+        """保存稳定等待码、中文诊断与已知候选资源身份。"""
 
         super().__init__(message)
         self.code = code
         self.message = message
+        self.resources = resources
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +111,13 @@ def resolve_registered_device_target(
     raise DeviceTargetUnavailable(
         "device_busy",
         "匹配设备当前全部忙碌，等待下一轮调度",
+        resources=tuple(
+            {
+                "scope": "device",
+                "device_id": candidate.material_uuid,
+            }
+            for candidate in candidates
+        ),
     )
 
 

@@ -153,9 +153,22 @@ class MaterialSourceResolutionCoordinator:
                 admission_requests,
             )
         except InsufficientStock as error:
+            wait_resources_by_node = {
+                node_uuid: (
+                    [{"scope": "material", "material_uuid": fixed_uuid}]
+                    if (
+                        fixed_uuid := str(
+                            selector.get("material_uuid") or ""
+                        ).strip()
+                    )
+                    else []
+                )
+                for node_uuid, selector in selectors.items()
+            }
             self._projection.project_material_source_blocked(
                 task_uuid,
                 reason=str(error) or "任务所需物料暂不可用",
+                wait_resources_by_node=wait_resources_by_node,
             )
             return MaterialSourceResolution(status="blocked")
         allocations: dict[str, Any] = {}

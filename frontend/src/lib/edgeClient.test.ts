@@ -269,12 +269,20 @@ describe('Edge view model adapters', () => {
       status: 'succeeded',
       cleanup_status: 'requires_attention',
       attention_reason: 'inventory_claim_uncertain',
-      execution_plan: { nodes: [{ uuid: 'node-1', topological_index: 0 }] },
-    }, [{ workflow_node_uuid: 'node-1', status: 'pending', wait_reason: { code: 'device_lock' } }])
+      execution_plan: { nodes: [{ uuid: 'node-1', device_id: 'reactor-a', topological_index: 0 }] },
+    }, [
+      { workflow_node_uuid: 'node-1', status: 'pending', wait_reason: { code: 'device_lock' } },
+    ], '设备等待流程', [], undefined, '', {
+      devices: { 'reactor-a': 'S04 反应器' },
+    })
 
     expect(task.status).toBe('intervention_required')
     expect(task.current).toBe('inventory_claim_uncertain')
     expect(task.nodes[0].status).toBe('waiting')
+    expect(task.nodes[0].waitReason).toMatchObject({
+      title: '等待设备',
+      details: ['设备：S04 反应器（reactor-a）'],
+    })
   })
 
   it('presents structured resource waits and derives unresolved upstream dependencies', () => {
@@ -293,7 +301,7 @@ describe('Edge view model adapters', () => {
         ],
       },
     }, [
-      { workflow_node_uuid: 'node-ready', status: 'succeeded' },
+      { workflow_node_uuid: 'node-ready', status: 'succeeded', wait_reason: {} },
       {
         workflow_node_uuid: 'node-site',
         status: 'pending',
@@ -304,26 +312,39 @@ describe('Edge view model adapters', () => {
           resources: [
             { scope: 'device', device_id: 'robot-1' },
             { scope: 'material_site', material_uuid: 'material-1', site_uuid: 'S0722' },
+            { scope: 'material', material_uuid: 'material-1' },
           ],
           blocking_task_uuid: 'task-other',
           blocking_job_uuid: 'job-other',
         },
       },
-      { workflow_node_uuid: 'node-dependent', status: 'ready' },
-    ])
+      { workflow_node_uuid: 'node-dependent', status: 'ready', wait_reason: {} },
+    ], '资源等待流程', [], undefined, '', {
+      devices: {
+        'robot-1': 'S09 机械臂',
+      },
+      sites: {
+        S0722: 'S07 工作站 / 称量位',
+      },
+      materials: {
+        'material-1': '待称量烧杯',
+      },
+    })
 
     expect(task.nodes[1].waitReason).toEqual({
       code: 'operation_lease',
       title: '等待执行资源',
       message: '执行资源正在被其他作业使用',
       details: [
-        '设备：robot-1',
-        '库位：S0722（物料 material-1）',
+        '设备：S09 机械臂（robot-1）',
+        '库位：S07 工作站 / 称量位（S0722）',
+        '物料：待称量烧杯（material-1）',
         '阻塞任务：task-other',
         '阻塞 Job：job-other',
       ],
       waitingSince: '2026-09-01T09:00:00Z',
     })
+    expect(task.nodes[0].waitReason).toBeUndefined()
     expect(task.nodes[2].waitReason).toEqual({
       code: 'upstream_dependency',
       title: '等待前置节点',
@@ -360,6 +381,7 @@ describe('Edge view model adapters', () => {
         code: 'material_unavailable',
         title: '等待物料',
         message: '样品瓶尚未进入目标库位',
+        details: ['物料需求：样品瓶准入（尚未分配具体物料）'],
         waitingSince: '2026-09-01T10:00:00Z',
       },
     })
@@ -608,6 +630,106 @@ describe('Edge view model adapters', () => {
 })
 
 describe('loadEdgeSnapshot', () => {
+  it('resolves waiting device, site, and material identities to authoritative names', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/readiness')) return response({ status: 'ready' })
+      if (url.includes('/workflows?')) {
+        return response({ code: 0, data: { items: [{ uuid: 'wf-1', name: '资源等待流程' }], total: 1 } })
+      }
+      if (url.endsWith('/devices')) {
+        return response({
+          code: 0,
+          data: [{
+            binding: {
+              local_id: 'robot-1',
+              material_uuid: 'device-material-1',
+              name: 'S09 机械臂',
+            },
+            material: { uuid: 'device-material-1', name: '机械臂设备' },
+          }],
+        })
+      }
+      if (url.includes('/workflow-tasks/task-waiting/jobs')) {
+        return response({
+          code: 0,
+          data: [{
+            workflow_node_uuid: 'node-transfer',
+            status: 'pending',
+            wait_reason: {
+              code: 'operation_lease',
+              message: '执行资源正在被其他作业使用',
+              resources: [
+                { scope: 'device', device_id: 'device-material-1' },
+                {
+                  scope: 'material_site',
+                  site_uuid: 'site-s08-open',
+                  material_uuid: 'station-s08',
+                },
+                { scope: 'material', material_uuid: 'material-sample' },
+              ],
+            },
+          }],
+        })
+      }
+      if (url.includes('/workflow-tasks?status=running')) {
+        return response({
+          code: 0,
+          data: {
+            items: [{
+              uuid: 'task-waiting',
+              workflow_uuid: 'wf-1',
+              status: 'running',
+              execution_plan: {
+                nodes: [{ uuid: 'node-transfer', name: '转运样品', topological_index: 0 }],
+                edges: [],
+              },
+            }],
+            total: 1,
+          },
+        })
+      }
+      if (url.includes('/workflow-tasks?')) {
+        return response({ code: 0, data: { items: [], total: 0 } })
+      }
+      if (url.endsWith('/materials/graph')) {
+        return response({
+          code: 0,
+          data: {
+            nodes: [
+              {
+                material: { uuid: 'station-s08', name: 'S08 工作站' },
+                current_site_uuid: null,
+                sites: [{ uuid: 'site-s08-open', name: '开盖位', material_uuid: 'station-s08' }],
+              },
+              {
+                material: { uuid: 'material-sample', name: '待检样品瓶' },
+                current_site_uuid: null,
+                sites: [],
+              },
+            ],
+          },
+        })
+      }
+      if (url.includes('/materials?')) {
+        return response({
+          code: 0,
+          data: { items: [{ uuid: 'material-sample', name: '待检样品瓶' }], total: 1 },
+        })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const snapshot = await loadEdgeSnapshot()
+
+    expect(snapshot.tasks[0].nodes[0].waitReason?.details).toEqual([
+      '设备：S09 机械臂（device-material-1）',
+      '库位：S08 工作站 / 开盖位（site-s08-open）',
+      '物料：待检样品瓶（material-sample）',
+    ])
+  })
+
   it('joins authoritative Material Graph locations and exact nonterminal task references', async () => {
     const taskRows = [
       {

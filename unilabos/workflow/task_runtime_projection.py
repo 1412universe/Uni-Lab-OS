@@ -822,12 +822,17 @@ class TaskRuntimeProjection:
         task_uuid: str,
         *,
         reason: str = "任务所需物料暂不可用",
+        wait_resources_by_node: Mapping[
+            str, Sequence[Mapping[str, Any]]
+        ] | None = None,
     ) -> dict[str, Any]:
         """持久化一次受阻的任务物料准入投影。
 
         参数：``task_uuid`` 是保持待处理的工作流任务（WorkflowTask）身份；
-        ``reason`` 是可展示的受阻原因。返回：写入准入尝试和等待原因后的标准
-        任务/作业聚合。异常：任务不为 ``pending``、没有物料来源
+        ``reason`` 是可展示的受阻原因；``wait_resources_by_node`` 按物料来源节点
+        保存库存尚不能准入的固定物料身份，自动选料节点使用空数组。返回：写入
+        准入尝试和节点级等待原因后的标准任务/作业聚合。异常：任务不为
+        ``pending``、没有物料来源
         解析作业（MaterialSourceResolutionJob），或来源作业已离开 ``pending`` 时
         抛出 ``StoreConflict``；身份不存在时传播 ``StoreNotFound``。
         """
@@ -844,15 +849,64 @@ class TaskRuntimeProjection:
             ]
             if not source_jobs or any(job["status"] != "pending" for job in source_jobs):
                 raise StoreConflict(f"物料来源作业不能保持待处理：{task_uuid}")
+            source_node_uuids = {
+                str(job["workflow_node_uuid"]) for job in source_jobs
+            }
+            raw_resources_by_node = dict(wait_resources_by_node or {})
+            unknown_node_uuids = set(raw_resources_by_node) - source_node_uuids
+            if unknown_node_uuids:
+                raise StoreConflict(
+                    "物料等待资源包含未知来源节点："
+                    + ",".join(sorted(unknown_node_uuids))
+                )
+            resources_by_node = {
+                node_uuid: _normalize_wait_reason_resources(
+                    raw_resources_by_node.get(node_uuid)
+                )
+                for node_uuid in source_node_uuids
+            }
+            task_resources = _normalize_wait_reason_resources(
+                [
+                    resource
+                    for job in source_jobs
+                    for resource in resources_by_node[
+                        str(job["workflow_node_uuid"])
+                    ]
+                ]
+            )
+            wait_reason: dict[str, Any] = {
+                "code": "material_unavailable",
+                "message": reason,
+            }
+            if task_resources:
+                wait_reason["resources"] = task_resources
             record_blocked_admission(
                 connection,
                 task_uuid=task_uuid,
                 reason=reason,
-                wait_reason={
+                wait_reason=wait_reason,
+            )
+            now = utc_now()
+            for job in source_jobs:
+                node_uuid = str(job["workflow_node_uuid"])
+                job_wait_reason: dict[str, Any] = {
                     "code": "material_unavailable",
                     "message": reason,
-                },
-            )
+                }
+                if resources_by_node[node_uuid]:
+                    job_wait_reason["resources"] = resources_by_node[node_uuid]
+                connection.execute(
+                    "UPDATE workflow_node_job SET wait_reason=?, update_time=? "
+                    "WHERE uuid=? AND status='pending'",
+                    (
+                        _encode_json_field(
+                            job_wait_reason,
+                            field_name="wait_reason",
+                        ),
+                        now,
+                        str(job["uuid"]),
+                    ),
+                )
             self._append_invalidation(
                 connection,
                 task_uuid=task_uuid,
@@ -957,7 +1011,7 @@ class TaskRuntimeProjection:
                     """
                     UPDATE workflow_node_job
                     SET status = 'succeeded', return_info = ?, error_info = '[]',
-                        finished_at = ?, update_time = ?
+                        wait_reason = '{}', finished_at = ?, update_time = ?
                     WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
                     """,
                     (return_info_json, projected_at, projected_at, row["uuid"]),

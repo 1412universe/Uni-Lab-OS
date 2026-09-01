@@ -308,6 +308,7 @@ function jobNodeStatus(
 const waitReasonDefaults: Record<string, { title: string; message: string }> = {
   material_unavailable: { title: '等待物料', message: '任务所需物料暂不可用' },
   device_busy: { title: '等待设备', message: '匹配设备当前正在被其他作业使用' },
+  device_lock: { title: '等待设备', message: '节点所需设备当前正在被其他作业使用' },
   global_task_capacity: { title: '等待调度容量', message: '全局运行任务容量已满' },
   workflow_task_capacity: { title: '等待调度容量', message: '该工作流的运行任务容量已满' },
   job_dispatch_capacity: { title: '等待调度容量', message: '当前并行 Job 派发容量已满' },
@@ -324,6 +325,12 @@ const waitReasonDefaults: Record<string, { title: string; message: string }> = {
 
 type WaitResourceScope = 'device' | 'material' | 'material_site'
 
+export interface WaitResourceLabels {
+  devices?: Readonly<Record<string, string>>
+  materials?: Readonly<Record<string, string>>
+  sites?: Readonly<Record<string, string>>
+}
+
 function waitResourceScope(value: unknown): WaitResourceScope | undefined {
   const scope = String(value || '')
   return scope === 'device' || scope === 'material' || scope === 'material_site'
@@ -331,10 +338,32 @@ function waitResourceScope(value: unknown): WaitResourceScope | undefined {
     : undefined
 }
 
-function waitResourceDetails(resources: unknown): { details: string[]; scopes: Set<WaitResourceScope> } {
+function resourceDetail(kind: string, identity: string, label?: string): string {
+  const resolvedLabel = String(label || '').trim()
+  return resolvedLabel && resolvedLabel !== identity
+    ? `${kind}：${resolvedLabel}（${identity}）`
+    : `${kind}：${identity}`
+}
+
+function resourceLabel(
+  labels: Readonly<Record<string, string>> | undefined,
+  identity: string,
+): string | undefined {
+  return labels && Object.prototype.hasOwnProperty.call(labels, identity)
+    ? labels[identity]
+    : undefined
+}
+
+function waitResourceDetails(
+  resources: unknown,
+  labels: WaitResourceLabels,
+): { details: string[]; scopes: Set<WaitResourceScope> } {
   const details: string[] = []
   const scopes = new Set<WaitResourceScope>()
   if (!Array.isArray(resources)) return { details, scopes }
+  const append = (detail: string) => {
+    if (!details.includes(detail)) details.push(detail)
+  }
   resources.forEach((value) => {
     if (!value || typeof value !== 'object') return
     const resource = value as RawRecord
@@ -342,16 +371,18 @@ function waitResourceDetails(resources: unknown): { details: string[]; scopes: S
     if (!scope) return
     scopes.add(scope)
     if (scope === 'device' && resource.device_id) {
-      details.push(`设备：${String(resource.device_id)}`)
+      const identity = String(resource.device_id)
+      append(resourceDetail('设备', identity, resourceLabel(labels.devices, identity)))
       return
     }
     if (scope === 'material_site' && resource.site_uuid) {
-      const material = resource.material_uuid ? `（物料 ${String(resource.material_uuid)}）` : ''
-      details.push(`库位：${String(resource.site_uuid)}${material}`)
+      const siteIdentity = String(resource.site_uuid)
+      append(resourceDetail('库位', siteIdentity, resourceLabel(labels.sites, siteIdentity)))
       return
     }
     if (scope === 'material' && resource.material_uuid) {
-      details.push(`物料：${String(resource.material_uuid)}`)
+      const identity = String(resource.material_uuid)
+      append(resourceDetail('物料', identity, resourceLabel(labels.materials, identity)))
     }
   })
   return { details, scopes }
@@ -365,14 +396,37 @@ function waitTitleFromResources(scopes: Set<WaitResourceScope>, fallback: string
   return fallback
 }
 
-function presentWaitReason(waitReason: unknown, node: RawRecord): TaskNodeWaitReason | undefined {
+function presentWaitReason(
+  waitReason: unknown,
+  node: RawRecord,
+  labels: WaitResourceLabels,
+): TaskNodeWaitReason | undefined {
   if (!waitReason || typeof waitReason !== 'object') return undefined
   const reason = waitReason as RawRecord
+  const hasWaitFact = [
+    reason.code,
+    reason.message,
+    reason.waiting_since,
+    reason.blocking_task_uuid,
+    reason.blocking_job_uuid,
+  ].some((value) => String(value || '').trim())
+    || (Array.isArray(reason.resources) && reason.resources.length > 0)
+  if (!hasWaitFact) return undefined
   const code = String(reason.code || 'waiting_condition')
   const fallback = waitReasonDefaults[code] || { title: '等待条件', message: '节点的运行条件尚未满足' }
-  const { details, scopes } = waitResourceDetails(reason.resources)
-  if (!details.length && scopes.has('device') && node.device_id) {
-    details.push(`设备：${String(node.device_id)}`)
+  const { details, scopes } = waitResourceDetails(reason.resources, labels)
+  const waitsForDevice = scopes.has('device') || code === 'device_busy' || code === 'device_lock'
+  if (!details.length && waitsForDevice && node.device_id) {
+    const identity = String(node.device_id)
+    details.push(resourceDetail('设备', identity, resourceLabel(labels.devices, identity)))
+  }
+  if (!details.length && code === 'material_unavailable' && node.kind === 'material_source') {
+    const identity = String(node.material_uuid || node.param?.material_uuid || '').trim()
+    if (identity) {
+      details.push(resourceDetail('物料', identity, resourceLabel(labels.materials, identity)))
+    } else {
+      details.push(`物料需求：${nodeName(node)}（尚未分配具体物料）`)
+    }
   }
   if (reason.blocking_task_uuid) details.push(`阻塞任务：${String(reason.blocking_task_uuid)}`)
   if (reason.blocking_job_uuid) details.push(`阻塞 Job：${String(reason.blocking_job_uuid)}`)
@@ -572,6 +626,7 @@ export function adaptTask(
   inputContract: ContractField[] = [],
   knownMaterialUuids?: ReadonlySet<string>,
   traceUiUrl = '',
+  waitResourceLabels: WaitResourceLabels = {},
 ): WorkflowTask {
   const attentionMessage = typeof raw.attention_reason === 'string'
     ? raw.attention_reason
@@ -602,7 +657,7 @@ export function adaptTask(
       status: jobNodeStatus(job, status, node),
       device: node.device_id ? String(node.device_id) : undefined,
       materialUuid: node.material_uuid ? String(node.material_uuid) : undefined,
-      waitReason: presentWaitReason(job?.wait_reason, node),
+      waitReason: presentWaitReason(job?.wait_reason, node, waitResourceLabels),
     }
   })
   const incomingNodeUuids = new Map<string, string[]>()
@@ -615,7 +670,7 @@ export function adaptTask(
   })
   const rawNodeByUuid = new Map(sortedNodes.map((node) => [String(node.uuid), node]))
   const taskWaitReason = status === 'admission_blocked'
-    ? presentWaitReason(raw.wait_reason, {})
+    ? presentWaitReason(raw.wait_reason, {}, waitResourceLabels)
     : undefined
   if (taskWaitReason) {
     const pendingNodes = nodes.filter((node) => (
@@ -635,7 +690,11 @@ export function adaptTask(
       ? {
           ...node,
           status: 'waiting',
-          waitReason: presentWaitReason(raw.wait_reason, rawNodeByUuid.get(node.uuid) || {}) || taskWaitReason,
+          waitReason: presentWaitReason(
+            raw.wait_reason,
+            rawNodeByUuid.get(node.uuid) || {},
+            waitResourceLabels,
+          ) || taskWaitReason,
         }
       : node)
   }
@@ -1152,11 +1211,59 @@ function materialLocationsFromGraph(graph: RawRecord): Map<string, MaterialCurre
   return locations
 }
 
+function waitResourceLabelsFromCatalog(
+  materialRows: RawRecord[],
+  materialGraph: RawRecord,
+  deviceRows: RawRecord[],
+): WaitResourceLabels {
+  const devices: Record<string, string> = Object.create(null)
+  const materials: Record<string, string> = Object.create(null)
+  const sites: Record<string, string> = Object.create(null)
+  const remember = (target: Record<string, string>, identity: unknown, label: unknown) => {
+    const normalizedIdentity = String(identity || '').trim()
+    const normalizedLabel = String(label || '').trim()
+    if (normalizedIdentity && normalizedLabel) target[normalizedIdentity] = normalizedLabel
+  }
+
+  materialRows.forEach((material) => {
+    remember(materials, material.uuid, material.name || material.uuid)
+    if (String(material.type || '') === 'device') {
+      remember(devices, material.uuid, material.name || material.uuid)
+    }
+  })
+
+  const graphNodes = Array.isArray(materialGraph.nodes) ? materialGraph.nodes : []
+  graphNodes.forEach((node: RawRecord) => {
+    const owner = node.material || {}
+    const ownerName = String(owner.name || owner.uuid || '').trim()
+    remember(materials, owner.uuid, ownerName)
+    if (!Array.isArray(node.sites)) return
+    node.sites.forEach((site: RawRecord) => {
+      const siteName = String(site.name || site.uuid || '').trim()
+      const qualifiedName = ownerName && siteName && ownerName !== siteName
+        ? `${ownerName} / ${siteName}`
+        : siteName || ownerName
+      remember(sites, site.uuid, qualifiedName)
+    })
+  })
+
+  deviceRows.forEach((device) => {
+    const binding = device.binding || {}
+    const material = device.material || {}
+    const label = binding.name || material.name || binding.local_id || binding.material_uuid
+    remember(devices, binding.local_id, label)
+    remember(devices, binding.material_uuid, label)
+    remember(devices, material.uuid, label)
+  })
+  return { devices, materials, sites }
+}
+
 async function taskWithJobs(
   raw: RawRecord,
   workflowsByUuid: Map<string, WorkflowDefinition>,
   knownMaterialUuids: ReadonlySet<string>,
   traceUiUrl: string,
+  waitResourceLabels: WaitResourceLabels,
   signal?: AbortSignal,
 ) {
   const jobs = await requestData<RawRecord[]>(
@@ -1175,6 +1282,7 @@ async function taskWithJobs(
     frozenInputContract.length ? frozenInputContract : workflow?.inputContract || [],
     knownMaterialUuids,
     traceUiUrl,
+    waitResourceLabels,
   )
 }
 
@@ -1193,7 +1301,7 @@ function selectRecentTerminalTasks(pages: PageData<RawRecord>[], limit = 20): Ra
 }
 
 export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapshot> {
-  const [readiness, workflowPage, terminalTaskPages, runningTaskPage, pendingTaskPage, cancelingTaskPage, attentionTaskPage, materialPage, materialGraph] = await Promise.all([
+  const [readiness, workflowPage, terminalTaskPages, runningTaskPage, pendingTaskPage, cancelingTaskPage, attentionTaskPage, materialPage, materialGraph, deviceRows] = await Promise.all([
     requestJson<RawRecord>('/readiness', signal),
     requestAllPages<RawRecord>('/workflows', signal),
     Promise.all(terminalTaskStatusValues.map((status) => requestData<PageData<RawRecord>>(
@@ -1206,6 +1314,7 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
     requestAllPages<RawRecord>('/workflow-tasks?cleanup_status=requires_attention', signal),
     requestAllPages<RawRecord>('/materials', signal),
     requestData<RawRecord>('/materials/graph', signal),
+    requestData<RawRecord[]>('/devices', signal).catch(() => []),
   ])
   if (readiness.status !== 'ready') throw new Error('Edge 工作流运行时尚未就绪')
   const traceUiUrl = typeof readiness.observability?.traceUiUrl === 'string'
@@ -1216,6 +1325,11 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
   const workflowsByUuid = new Map(workflows.map((workflow) => [workflow.uuid, workflow]))
   const knownMaterialUuids = new Set(
     (materialPage.items || []).map((material) => String(material.uuid)),
+  )
+  const waitResourceLabels = waitResourceLabelsFromCatalog(
+    materialPage.items || [],
+    materialGraph,
+    deviceRows,
   )
   const taskRowsByUuid = new Map<string, RawRecord>()
   const taskRows = [
@@ -1229,7 +1343,14 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
   const tasks = await mapWithConcurrency(
     [...taskRowsByUuid.values()],
     6,
-    (task) => taskWithJobs(task, workflowsByUuid, knownMaterialUuids, traceUiUrl, signal),
+    (task) => taskWithJobs(
+      task,
+      workflowsByUuid,
+      knownMaterialUuids,
+      traceUiUrl,
+      waitResourceLabels,
+      signal,
+    ),
   )
   const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
   const materialReferences = new Map<string, MaterialRecord['taskReferences']>()

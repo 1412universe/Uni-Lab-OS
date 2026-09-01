@@ -329,8 +329,22 @@ def test_blocked_material_admission_is_revisioned_and_restart_visible(
 
     _seed_material_source_task(store, with_action=True)
     projection = _projection(store)
-    projection.project_material_source_blocked(TASK_UUID, reason="缺少目标试剂")
-    projection.project_material_source_blocked(TASK_UUID, reason="缺少目标试剂")
+    wait_resources = [
+        {
+            "scope": "material",
+            "material_uuid": "50000000-0000-4000-8000-000000000001",
+        }
+    ]
+    projection.project_material_source_blocked(
+        TASK_UUID,
+        reason="缺少目标试剂",
+        wait_resources_by_node={NODE_UUIDS[0]: wait_resources},
+    )
+    projection.project_material_source_blocked(
+        TASK_UUID,
+        reason="缺少目标试剂",
+        wait_resources_by_node={NODE_UUIDS[0]: wait_resources},
+    )
 
     admission = projection.get_material_admission(TASK_UUID)
     assert admission is not None
@@ -340,8 +354,44 @@ def test_blocked_material_admission_is_revisioned_and_restart_visible(
     assert store.get_task(TASK_UUID)["wait_reason"] == {
         "code": "material_unavailable",
         "message": "缺少目标试剂",
+        "resources": wait_resources,
     }
     assert projection.list_blocked_material_tasks() == [TASK_UUID]
+
+
+def test_blocked_material_admission_keeps_resources_on_their_source_job(
+    store: WorkflowStore,
+) -> None:
+    """混合来源等待必须按来源节点保存，不得把固定物料显示到自动选料节点。"""
+
+    source_job_uuids = _seed_task(store, job_count=2)
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_node_job SET executor_kind='material_source' "
+            "WHERE workflow_task_uuid=?",
+            (TASK_UUID,),
+        )
+    fixed_material_uuid = "50000000-0000-4000-8000-000000000001"
+
+    _projection(store).project_material_source_blocked(
+        TASK_UUID,
+        wait_resources_by_node={
+            NODE_UUIDS[0]: [
+                {"scope": "material", "material_uuid": fixed_material_uuid}
+            ],
+            NODE_UUIDS[1]: [],
+        },
+    )
+
+    fixed_source = store.get_job(source_job_uuids[0])["wait_reason"]
+    automatic_source = store.get_job(source_job_uuids[1])["wait_reason"]
+    assert fixed_source["resources"] == [
+        {"scope": "material", "material_uuid": fixed_material_uuid},
+    ]
+    assert automatic_source == {
+        "code": "material_unavailable",
+        "message": "任务所需物料暂不可用",
+    }
 
 
 def test_blocked_material_admission_survives_store_reopen(tmp_path: Path) -> None:

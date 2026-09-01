@@ -109,3 +109,60 @@ def test_registered_device_target_fails_closed_when_edge_is_offline(
         assert caught.value.code == "edge_offline"
     finally:
         store.close()
+
+
+def test_registered_device_target_reports_every_busy_candidate(
+    tmp_path: Path,
+) -> None:
+    """同类设备全部忙时，等待事实必须列出可向用户解释的具体设备身份。"""
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        backend = BackendResourceService(store)
+        template = backend.sync_resource_templates(
+            [
+                {
+                    "id": "test.robot",
+                    "display_name": "机械臂",
+                    "registry_type": "device",
+                    "class": {},
+                }
+            ]
+        )["templates"][0]
+        robot = backend.create_material(
+            {
+                "resource_template_uuid": template["uuid"],
+                "barcode": "ROBOT-1",
+                "name": "S09 机械臂",
+            }
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE material SET type='device' WHERE uuid=?",
+                (robot["uuid"],),
+            )
+
+        with pytest.raises(DeviceTargetUnavailable) as caught:
+            resolve_registered_device_target(
+                InventoryService(store).station_resources,
+                {
+                    "connected": True,
+                    "devices": [
+                        {
+                            "local_id": "robot-1",
+                            "material_uuid": robot["uuid"],
+                            "actions": [{"name": "transfer"}],
+                        }
+                    ],
+                },
+                resource_template_uuid=template["uuid"],
+                action_name="transfer",
+                busy_keys={f"/devices/{robot['uuid']}"},
+            )
+
+        assert caught.value.code == "device_busy"
+        assert caught.value.resources == (
+            {"scope": "device", "device_id": robot["uuid"]},
+        )
+    finally:
+        store.close()
