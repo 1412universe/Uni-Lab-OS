@@ -70,6 +70,9 @@ function WorkflowNodeCard({
   onPointerDown,
   onPointerMove,
   onPointerUp,
+  previewingMaterials,
+  onMaterialPreviewStart,
+  onMaterialPreviewEnd,
 }: {
   positioned: PositionedWorkflowNode
   materialInputs?: WorkflowGraphNode[]
@@ -79,6 +82,9 @@ function WorkflowNodeCard({
   onPointerDown: (event: PointerEvent<HTMLElement>) => void
   onPointerMove: (event: PointerEvent<HTMLElement>) => void
   onPointerUp: (event: PointerEvent<HTMLElement>) => void
+  previewingMaterials?: boolean
+  onMaterialPreviewStart: (materialUuids: string[]) => void
+  onMaterialPreviewEnd: () => void
 }) {
   const { node } = positioned
   const isMaterial = node.kind === 'material_source'
@@ -126,13 +132,48 @@ function WorkflowNodeCard({
         <small>{order}{alias}</small>
       </span>
       {materialInputs.length ? (
-        <span
+        <button
+          type="button"
           className="workflow-dag-node-materials"
-          aria-label={`${materialInputs.length} 个物料输入：${materialInputs.map((material) => material.name).join('、')}`}
+          aria-label={`按住查看 ${materialInputs.length} 个物料输入：${materialInputs.map((material) => material.name).join('、')}`}
+          aria-pressed={previewingMaterials}
           title={materialInputs.map((material) => material.name).join('、')}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return
+            event.stopPropagation()
+            event.currentTarget.setPointerCapture?.(event.pointerId)
+            onMaterialPreviewStart(materialInputs.map((material) => material.uuid))
+          }}
+          onPointerMove={(event) => {
+            event.stopPropagation()
+            const bounds = event.currentTarget.getBoundingClientRect()
+            const outside = event.clientX < bounds.left
+              || event.clientX > bounds.right
+              || event.clientY < bounds.top
+              || event.clientY > bounds.bottom
+            if (!outside) return
+            if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId)
+            }
+            onMaterialPreviewEnd()
+          }}
+          onPointerUp={(event) => {
+            event.stopPropagation()
+            if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+              event.currentTarget.releasePointerCapture(event.pointerId)
+            }
+            onMaterialPreviewEnd()
+          }}
+          onPointerCancel={(event) => {
+            event.stopPropagation()
+            onMaterialPreviewEnd()
+          }}
+          onPointerLeave={onMaterialPreviewEnd}
+          onLostPointerCapture={onMaterialPreviewEnd}
+          onClick={(event) => event.stopPropagation()}
         >
           <PackageOpen size={10} />{materialInputs.length}
-        </span>
+        </button>
       ) : null}
       {node.disabled ? <em>已禁用</em> : null}
     </article>
@@ -168,6 +209,7 @@ export function WorkflowDag({
   const [selectedEdgeUuid, setSelectedEdgeUuid] = useState<string>()
   const [nodeOffsets, setNodeOffsets] = useState<Record<string, WorkflowNodeOffset>>({})
   const [draggingNodeUuids, setDraggingNodeUuids] = useState<Set<string>>(new Set())
+  const [previewMaterialUuids, setPreviewMaterialUuids] = useState<Set<string>>(new Set())
   const graphProjection = useMemo(() => {
     const nodeByUuid = new Map(nodes.map((node) => [node.uuid, node]))
     const materialNodes = nodes
@@ -326,6 +368,7 @@ export function WorkflowDag({
     }
     dragSessionRef.current = null
     setDraggingNodeUuids(new Set())
+    setPreviewMaterialUuids(new Set())
   }
 
   const changeViewMode = () => {
@@ -401,7 +444,7 @@ export function WorkflowDag({
                   const endpoint = endpointFor(material.uuid)
                   return (
                     <article
-                      className={`workflow-dag-material ${endpoint ? `edge-${endpoint}` : ''}`}
+                      className={`workflow-dag-material ${endpoint ? `edge-${endpoint}` : ''} ${previewMaterialUuids.has(material.uuid) ? 'material-preview' : ''}`}
                       aria-label={[material.name, '物料源', endpoint === 'source' ? '已选连线起点' : endpoint === 'target' ? '已选连线终点' : undefined].filter(Boolean).join('，')}
                       data-node-uuid={material.uuid}
                       key={material.uuid}
@@ -509,17 +552,23 @@ export function WorkflowDag({
               ))}
               {layout.nodes.map((positioned) => {
                 const endpoint = endpointFor(positioned.node.uuid)
+                const materialInputs = viewMode === 'focus'
+                  ? graphProjection.materialInputsByTarget.get(positioned.node.uuid)
+                  : undefined
                 return (
                   <WorkflowNodeCard
                     key={positioned.node.uuid}
                     positioned={positioned}
-                    materialInputs={viewMode === 'focus' ? graphProjection.materialInputsByTarget.get(positioned.node.uuid) : undefined}
+                    materialInputs={materialInputs}
                     edgeEndpoint={endpoint}
                     dimmed={Boolean(selectedEdge) && !endpoint}
                     dragging={draggingNodeUuids.has(positioned.node.uuid)}
                     onPointerDown={(event) => startNodeDrag(event, positioned)}
                     onPointerMove={moveDrag}
                     onPointerUp={endDrag}
+                    previewingMaterials={Boolean(materialInputs?.some((material) => previewMaterialUuids.has(material.uuid)))}
+                    onMaterialPreviewStart={(materialUuids) => setPreviewMaterialUuids(new Set(materialUuids))}
+                    onMaterialPreviewEnd={() => setPreviewMaterialUuids(new Set())}
                   />
                 )
               })}

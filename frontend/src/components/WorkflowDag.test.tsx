@@ -32,6 +32,17 @@ function group(
   }
 }
 
+function material(uuid: string, name: string, order: number): WorkflowGraphNode {
+  return {
+    uuid,
+    name,
+    type: 'material_source',
+    kind: 'material_source',
+    authoringOrder: order,
+    disabled: false,
+  }
+}
+
 function edge(uuid: string, sourceNodeUuid: string, targetNodeUuid: string): WorkflowGraphEdge {
   return { uuid, sourceNodeUuid, targetNodeUuid }
 }
@@ -131,5 +142,43 @@ describe('WorkflowDag', () => {
 
     expect(Number.parseFloat(frame.style.left)).toBe(initialX + 30)
     expect(Number.parseFloat(frame.style.top)).toBe(initialY + 20)
+  })
+
+  it('highlights referenced material cards only while the material badge is pressed', () => {
+    const nodes = [
+      material('powder', '粉料', 0),
+      material('solvent', '溶剂', 1),
+      material('unused', '未引用物料', 2),
+      action('dose', 'S07 双粉桶注粉', 3),
+    ]
+    const edges = [
+      edge('powder-dose', 'powder', 'dose'),
+      edge('solvent-dose', 'solvent', 'dose'),
+    ]
+    render(<WorkflowDag nodes={nodes} edges={edges} loading={false} error={false} />)
+
+    const badge = screen.getByRole('button', { name: '按住查看 2 个物料输入：粉料、溶剂' })
+    const powder = screen.getByRole('article', { name: '粉料，物料源' })
+    const solvent = screen.getByRole('article', { name: '溶剂，物料源' })
+    const unused = screen.getByRole('article', { name: '未引用物料，物料源' })
+
+    fireEvent.pointerDown(badge, { pointerId: 3, button: 0 })
+    expect(powder).toHaveClass('material-preview')
+    expect(solvent).toHaveClass('material-preview')
+    expect(unused).not.toHaveClass('material-preview')
+
+    fireEvent.pointerUp(badge, { pointerId: 3 })
+    expect(powder).not.toHaveClass('material-preview')
+    expect(solvent).not.toHaveClass('material-preview')
+
+    fireEvent.pointerDown(badge, { pointerId: 4, button: 0 })
+    fireEvent.pointerMove(badge, { pointerId: 4, buttons: 1, clientX: 100, clientY: 100 })
+    expect(powder).not.toHaveClass('material-preview')
+    expect(solvent).not.toHaveClass('material-preview')
+
+    fireEvent.pointerDown(badge, { pointerId: 5, button: 0 })
+    fireEvent.pointerCancel(badge, { pointerId: 5 })
+    expect(powder).not.toHaveClass('material-preview')
+    expect(solvent).not.toHaveClass('material-preview')
   })
 })

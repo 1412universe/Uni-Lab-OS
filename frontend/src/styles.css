@@ -735,6 +735,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .workflow-dag-material-targets span, .workflow-dag-material-targets button { max-width: 100%; padding: 2px 4px; overflow: hidden; color: #2f6b61; background: #e6f7f1; border: 0; border-radius: 4px; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-dag-material-targets button:hover, .workflow-dag-material-targets button.selected { color: #fff; background: #16856d; }
 .workflow-dag-material.edge-source, .workflow-dag-material.edge-target { border-color: #16856d; box-shadow: 0 0 0 3px rgba(31,157,122,.18); }
+.workflow-dag-material.material-preview { border-color: #00a878; background: #f2fffa; box-shadow: 0 0 0 4px rgba(0,168,120,.24), 0 8px 20px rgba(0,112,82,.14); }
 .workflow-dag-scroll { min-height: 360px; max-height: 680px; overflow: auto; overscroll-behavior: contain; }
 .workflow-dag-stage { position: relative; min-width: 100%; }
 .workflow-dag-edges { position: absolute; inset: 0; z-index: 1; overflow: visible; pointer-events: none; }
@@ -764,7 +765,9 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .workflow-dag-node strong, .workflow-dag-node small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workflow-dag-node strong { font-size: 9px; }
 .workflow-dag-node small { margin-top: 5px; color: var(--subtle); font-size: 8px; }
-.workflow-dag-node-materials { position: absolute; right: 6px; bottom: 5px; display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; color: #087f6f; background: #e2f7f0; border-radius: 5px; font-size: 7px; font-weight: 700; }
+.workflow-dag-node-materials { position: absolute; right: 6px; bottom: 5px; display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px; color: #087f6f; background: #e2f7f0; border: 0; border-radius: 5px; font-size: 7px; font-weight: 700; cursor: pointer; touch-action: none; }
+.workflow-dag-node-materials:hover { background: #c9f0e4; }
+.workflow-dag-node-materials:active, .workflow-dag-node-materials[aria-pressed="true"] { color: #fff; background: #087f6f; box-shadow: 0 0 0 3px rgba(8,127,111,.16); }
 .workflow-dag-node.material-source { border-color: #9bdcc8; background: rgba(247,255,252,.98); }
 .workflow-dag-node.material-source .workflow-dag-node-icon { color: #087f6f; background: #dff8f0; }
 .workflow-dag-node.disabled { opacity: .62; filter: grayscale(.35); }
