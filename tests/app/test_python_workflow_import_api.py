@@ -246,6 +246,27 @@ def test_python_file_import_rejects_path_and_duplicate_identity(
         service.close()
 
 
+def test_python_file_import_rejects_duplicate_authoring_function_name(
+    tmp_path: Any,
+) -> None:
+    """同一领域包内作者函数名重复时必须拒绝第二个工作流。"""
+
+    client, service, store = _client(tmp_path)
+    second_workflow_uuid = str(uuid4())
+    second_source = _source().replace(WORKFLOW_UUID, second_workflow_uuid)
+    second_source = second_source.replace(PREPARE_NODE_UUID, str(uuid4()))
+    second_source = second_source.replace(ANALYZE_NODE_UUID, str(uuid4()))
+    try:
+        first = _upload(client, _source(), file_name="first.py")
+        duplicate = _upload(client, second_source, file_name="second.py")
+        assert first.status_code == 201, first.text
+        assert duplicate.status_code == 200
+        assert duplicate.json()["code"] == 3003
+        assert store.count_rows("workflow") == 1
+    finally:
+        service.close()
+
+
 def test_python_file_import_enforces_utf8_and_shared_body_budget(tmp_path: Any) -> None:
     """原始文件必须是 UTF-8，且继续受工作流公共 8 MiB 请求预算保护。
 

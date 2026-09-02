@@ -360,6 +360,34 @@ def test_http_create_persists_workflow_types_in_separate_domain_directories(
         reopened.close()
 
 
+def test_http_create_rejects_duplicate_authoring_function_name(
+    tmp_path: Path,
+) -> None:
+    """接口创建的工作流名称映射为作者函数名时必须保持包内唯一。"""
+
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    service, _runtime_store, _definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+    )
+    client = TestClient(create_workflow_app(service))
+    body = {
+        "name": "重复函数名",
+        "tags": [],
+        "description": None,
+        "meta_data": {},
+    }
+    try:
+        first = client.post("/api/v1/workflows", json=body)
+        second = client.post("/api/v1/workflows", json=body)
+        assert first.status_code == 201, first.text
+        assert second.status_code == 200
+        assert second.json()["code"] == 3003
+    finally:
+        service.close()
+
+
 def test_json_import_is_canonicalized_to_domain_python(tmp_path: Path) -> None:
     """旧 JSON 图导入后应只留下规范 Python，并可从该文件冷启动重建。"""
 
@@ -463,10 +491,10 @@ def json_source():
         reopened.close()
 
 
-def test_imported_workflow_delete_unregisters_manifest_and_survives_restart(
+def test_imported_workflow_delete_removes_source_and_manifest(
     tmp_path: Path,
 ) -> None:
-    """删除领域工作流应注销 manifest；保留的孤儿源码不得让它重启复活。"""
+    """删除领域工作流应同时移除源码文件和 manifest 登记。"""
 
     selected_root = tmp_path / "domain"
     package_root = _empty_domain_package(selected_root)
@@ -482,7 +510,7 @@ def test_imported_workflow_delete_unregisters_manifest_and_survives_restart(
             python_source=_source(),
         )
         service.delete_workflow(WORKFLOW_UUID)
-        assert source_path.is_file()
+        assert not source_path.exists()
         assert (
             yaml.safe_load(
                 selected_root.joinpath("package.yaml").read_text(encoding="utf-8")

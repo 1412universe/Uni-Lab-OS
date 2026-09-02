@@ -21,7 +21,9 @@ from unilabos.workflow.authoring_candidate_hash import (
     AuthoringCandidateHashError,
     compute_authoring_candidate_hash,
 )
+from unilabos.workflow.authoring_ast import parse_authoring_source
 from unilabos.workflow.authoring_identity import declared_workflow_uuid
+from unilabos.workflow.authoring_python import _safe_identifier
 from unilabos.workflow.candidate_validation import (
     CandidateBundleError,
     validate_candidate_bundle,
@@ -205,6 +207,10 @@ _ERRORS = {
     "source_identity_conflict": (
         409,
         "工作流 UUID 或 Python 文件名已被领域包中的其他工作流占用",
+    ),
+    "source_function_conflict": (
+        409,
+        "工作流函数名已被领域包中的其他工作流占用，请修改工作流名称",
     ),
     "internal_error": (500, "本地工作流服务出现错误，请重试或查看日志"),
 }
@@ -525,6 +531,7 @@ class WorkflowService:
         # 文件和工作流定义位于不同存储，不能依赖单个 SQLite/文件事务维护引用；
         # 同一服务进程必须保证“先检查引用再删除”和“先验证类别再写入”互斥。
         self._operation_category_lock = threading.RLock()
+        self._authoring_function_name_lock = threading.RLock()
         self._device_action_runs = DeviceActionRunService(
             store,
             material_resolver=material_resolver,
@@ -1830,6 +1837,53 @@ class WorkflowService:
         with self._active_sources_lock:
             return workflow_uuid in self._active_source_workflow_uuids
 
+    def _ensure_authoring_function_name_available(
+        self,
+        *,
+        workflow_uuid: str,
+        function_name: str,
+    ) -> None:
+        """拒绝同一领域包中重复的工作流作者函数名。"""
+
+        if self._source_target is None:
+            return
+        normalized_name = _safe_identifier(function_name, fallback="workflow")
+        with self._authoring_function_name_lock:
+            page = 1
+            while True:
+                listed = self._definition_store.list_workflows(
+                    page=page,
+                    page_size=100,
+                )
+                for workflow in listed["items"]:
+                    if str(workflow.get("uuid")) == workflow_uuid:
+                        continue
+                    meta_data = workflow.get("meta_data")
+                    unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
+                    existing_name = unilab.get("authoring_function_name") if isinstance(unilab, Mapping) else None
+                    if not isinstance(existing_name, str) or not existing_name:
+                        existing_name = _safe_identifier(str(workflow.get("name") or "workflow"), fallback="workflow")
+                    if existing_name == normalized_name:
+                        raise WorkflowConflict("source_function_conflict")
+                if page * 100 >= int(listed["total"]):
+                    break
+                page += 1
+
+    @staticmethod
+    def _authoring_function_name_from_source(
+        python_source: str,
+        workflow_uuid: str,
+    ) -> str:
+        """从已通过编译的源码读取唯一作者函数名。"""
+
+        try:
+            return parse_authoring_source(
+                python_source=python_source,
+                expected_workflow_uuid=workflow_uuid,
+            ).function_name
+        except Exception:
+            raise WorkflowError("candidate_invalid") from None
+
     def _commit_domain_graph_candidate(
         self,
         workflow_uuid: str,
@@ -2387,6 +2441,14 @@ class WorkflowService:
                     or compilation.normalized_python_source is None
                 ):
                     raise WorkflowError("candidate_invalid")
+                function_name = self._authoring_function_name_from_source(
+                    compilation.normalized_python_source,
+                    identity,
+                )
+                self._ensure_authoring_function_name_available(
+                    workflow_uuid=identity,
+                    function_name=function_name,
+                )
 
                 # 接口创建或旧 JSON 图先经过公共图校验，再以生成的规范 Python
                 # 重编译；重新创建首版图以带齐作者源码映射，同时保持 revision=1。
@@ -2527,6 +2589,15 @@ class WorkflowService:
             )
         except Exception:
             raise WorkflowError("internal_error") from None
+        if compilation.valid and compilation.normalized_python_source is not None:
+            function_name = self._authoring_function_name_from_source(
+                compilation.normalized_python_source,
+                imported.workflow_uuid,
+            )
+            self._ensure_authoring_function_name_available(
+                workflow_uuid=imported.workflow_uuid,
+                function_name=function_name,
+            )
         # ``candidate`` 经过图、源码范围、模板目录和全局节点/连线身份复核；只有
         # 签发成功后才能进入下面唯一的进程内定义事务。
         candidate = self._issue_candidate(
@@ -2729,13 +2800,18 @@ class WorkflowService:
     def _unregister_domain_source(
         self,
         registration: EditableSourceRegistration,
+        *,
+        remove_source: bool = True,
     ) -> None:
-        """从唯一领域包 manifest 注销来源，保留未登记 Python 文件。"""
+        """从唯一领域包 manifest 注销来源，并按场景删除源码文件。"""
 
         if self._source_target is None:
             raise WorkflowError("source_target_unavailable")
         try:
-            self._source_target.unregister(registration=registration)
+            self._source_target.unregister(
+                registration=registration,
+                remove_source=remove_source,
+            )
         except DomainWorkflowSourceError as error:
             raise WorkflowError(error.code) from None
 
@@ -2766,7 +2842,7 @@ class WorkflowService:
             return True
         if source_was_registered:
             try:
-                self._unregister_domain_source(registration)
+                self._unregister_domain_source(registration, remove_source=False)
             except WorkflowError:
                 logger.exception("回滚工作流领域来源失败")
                 # manifest 仍是重启权威；保留本进程定义和授权，避免当前进程与

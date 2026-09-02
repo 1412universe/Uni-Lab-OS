@@ -124,6 +124,24 @@ def publish_registered_source(
     assert_directory_identity(package_root, expected_root_identity)
 
 
+def delete_registered_source(
+    package_root: Path,
+    relative_path: PurePosixPath,
+    *,
+    expected_root_identity: tuple[int, int],
+) -> None:
+    """删除固定包根下一层工作流源码，允许文件已被清理。"""
+
+    absolute = package_root / relative_path.as_posix()
+    try:
+        signature = regular_path_signature(absolute, missing_ok=True)
+        if signature != ("missing",):
+            absolute.unlink()
+    except (OSError, TypeError, ValueError):
+        raise StableFileAccessError("source_delete_failed") from None
+    assert_directory_identity(package_root, expected_root_identity)
+
+
 def read_package_manifest(
     selected_root: Path,
     *,
@@ -206,6 +224,7 @@ def validate_declared_sources(
 
 __all__ = [
     "assert_package_root",
+    "delete_registered_source",
     "publish_registered_source",
     "read_package_manifest",
     "read_registered_source",

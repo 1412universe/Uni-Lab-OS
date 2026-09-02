@@ -40,6 +40,7 @@ from unilabos.workflow.source_file_access import (
 )
 from unilabos.workflow.source_layout import is_workflow_source_directory
 from unilabos.workflow.source_path_access import (
+    delete_registered_source as delete_registered_source_by_path,
     assert_package_root as assert_package_root_by_path,
 )
 from unilabos.workflow.source_path_access import (
@@ -384,6 +385,8 @@ def write_registered_source(
             raise SourceWorkspaceError("internal_error") from None
         except StableFileAccessError:
             raise SourceWorkspaceError("invalid_input") from None
+
+
     # 首次保存允许创建固定的 workflows 目录，但不创建 manifest 声明本身。
     with _source_parent_descriptor(
         root,
@@ -412,6 +415,51 @@ def write_registered_source(
         except SourcePublicationConflict:
             raise SourceWorkspaceConflict("draft_hash_conflict") from None
         except SourcePublicationError:
+            raise SourceWorkspaceError("internal_error") from None
+
+
+def delete_registered_source(
+    registration: Mapping[str, Any],
+) -> None:
+    """删除一项已登记工作流源码，允许目标文件已经不存在。"""
+
+    root, relative, root_identity = _source_location(registration)
+    if not _DIRECTORY_FD_PATHS_SUPPORTED:
+        try:
+            delete_registered_source_by_path(
+                root,
+                relative,
+                expected_root_identity=root_identity,
+            )
+        except StableFileAccessError:
+            raise SourceWorkspaceError("invalid_input") from None
+        return
+    with _source_parent_descriptor(
+        root,
+        relative,
+        expected_root_identity=root_identity,
+        create=False,
+    ) as source_parent:
+        if source_parent is None:
+            return
+        parent_descriptor, filename = source_parent
+        try:
+            metadata = os.stat(
+                filename,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            return
+        except OSError:
+            raise SourceWorkspaceError("invalid_input") from None
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SourceWorkspaceError("invalid_input")
+        try:
+            os.unlink(filename, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            return
+        except OSError:
             raise SourceWorkspaceError("internal_error") from None
 
 
@@ -705,6 +753,7 @@ __all__ = [
     "SourceDocument",
     "SourceWorkspaceConflict",
     "SourceWorkspaceError",
+    "delete_registered_source",
     "pin_package_roots",
     "read_package_root",
     "read_registered_source",

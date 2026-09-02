@@ -28,6 +28,7 @@ from unilabos.workflow.source_workspace import (
     MANIFEST_BYTE_LIMIT,
     SourceWorkspaceConflict,
     SourceWorkspaceError,
+    delete_registered_source,
     read_package_root,
     read_registered_source,
     write_registered_source,
@@ -212,6 +213,11 @@ class DomainWorkflowSourceTarget:
             except (SourceManifestError, SourcePublicationError) as error:
                 raise DomainWorkflowSourceError("source_publication_failed") from error
             except SourcePublicationConflict as error:
+                if source_bytes is not None:
+                    try:
+                        write_registered_source(source_row, source_bytes, expected_hash=None)
+                    except SourceWorkspaceError:
+                        raise DomainWorkflowSourceError("source_publication_failed") from error
                 raise DomainWorkflowSourceError("source_identity_conflict") from error
         return registration
 
@@ -219,12 +225,12 @@ class DomainWorkflowSourceTarget:
         self,
         *,
         registration: EditableSourceRegistration,
+        remove_source: bool = True,
     ) -> None:
-        """以 CAS 从 ``package.yaml`` 注销一个工作流来源。
+        """以 CAS 从 ``package.yaml`` 注销并删除一个工作流来源。
 
         参数：``registration`` 必须是当前目标中已登记的同一 UUID 与路径。返回：
-        无。源码文件有意保留为未登记孤儿，便于人工恢复；后续启动只读取 manifest，
-        因而该工作流不会复活。身份已被外部改写时关闭式失败。
+        无；成功后来源登记和源码文件都不存在，后续启动不会复活该工作流。
         """
 
         self._require_registration(registration)
@@ -239,12 +245,27 @@ class DomainWorkflowSourceTarget:
             existing_path = by_uuid.get(registration.workflow_uuid)
             existing_uuid = by_path.get(registration.relative_path)
             if existing_path is None and existing_uuid is None:
+                if remove_source:
+                    try:
+                        delete_registered_source(_registration_row(registration))
+                    except SourceWorkspaceError as error:
+                        raise DomainWorkflowSourceError("source_publication_failed") from error
                 return
             if (
                 existing_path != registration.relative_path
                 or existing_uuid != registration.workflow_uuid
             ):
                 raise DomainWorkflowSourceError("source_identity_conflict")
+
+            source_row = _registration_row(registration)
+            source_bytes: bytes | None = None
+            if remove_source:
+                try:
+                    source = read_registered_source(source_row)
+                    source_bytes = source.python_source.encode("utf-8") if source else None
+                    delete_registered_source(source_row)
+                except SourceWorkspaceError as error:
+                    raise DomainWorkflowSourceError("source_publication_failed") from error
 
             published_manifest = yaml.safe_dump(
                 {
@@ -271,8 +292,18 @@ class DomainWorkflowSourceTarget:
                     expected_hash=_sha256(manifest_bytes),
                 )
             except (SourceManifestError, SourcePublicationError) as error:
+                if source_bytes is not None:
+                    try:
+                        write_registered_source(source_row, source_bytes, expected_hash=None)
+                    except SourceWorkspaceError:
+                        raise DomainWorkflowSourceError("source_publication_failed") from error
                 raise DomainWorkflowSourceError("source_publication_failed") from error
             except SourcePublicationConflict as error:
+                if source_bytes is not None:
+                    try:
+                        write_registered_source(source_row, source_bytes, expected_hash=None)
+                    except SourceWorkspaceError:
+                        raise DomainWorkflowSourceError("source_publication_failed") from error
                 raise DomainWorkflowSourceError("source_identity_conflict") from error
 
     def _current_manifest(self) -> tuple[EditablePackageManifest, bytes]:
