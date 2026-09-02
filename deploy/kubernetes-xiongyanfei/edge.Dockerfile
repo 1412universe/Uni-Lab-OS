@@ -1,3 +1,14 @@
+FROM node:22-bookworm-slim AS frontend-builder
+
+WORKDIR /build/frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+
 FROM ubuntu:24.04
 
 ARG TARGETARCH
@@ -33,6 +44,9 @@ RUN mamba create -y -n unilab \
 COPY setup.py setup.cfg /opt/unilabos/
 COPY unilabos /opt/unilabos/unilabos
 COPY unilabos_msgs /opt/unilabos/unilabos_msgs
+
+# 前端必须由本次镜像构建产出，避免镜像携带工作区里残留的旧静态文件。
+COPY --from=frontend-builder /build/unilabos/app/web/static/console /opt/unilabos/unilabos/app/web/static/console
 
 # 用当前提交覆盖频道包中的 Python 业务代码，但不重新解算其运行依赖。
 RUN /opt/conda/envs/unilab/bin/python -m pip install --no-cache-dir --no-deps /opt/unilabos \
