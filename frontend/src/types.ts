@@ -118,6 +118,7 @@ export interface MaterialRecord {
     name: string
     occupiedMaterialUuid?: string
     occupiedMaterialName?: string
+    allowedResourceTemplateUuids?: string[]
   }>
   revision: number
   position: [number, number, number]
@@ -203,6 +204,24 @@ export interface ReagentRecord {
   containerBarcode?: string
   revision: number
   updatedAt: string
+}
+
+export interface ReagentHistoryRecord {
+  uuid: string
+  materialUuid: string
+  reagentUuid: string
+  eventType: 'add' | 'adjust' | 'consume' | 'remove' | string
+  operatorType: string
+  quantityDelta: number
+  quantityUnit: string
+  revision: number
+  recordedAt: string
+  resultQuantity?: number
+  resultQuantityUnit?: string
+  source?: string
+  workflowTaskUuid?: string
+  workflowNodeJobUuid?: string
+  traceId?: string
 }
 
 export interface RunPreflightCheck {

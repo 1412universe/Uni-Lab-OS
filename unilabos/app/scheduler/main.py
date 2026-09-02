@@ -8,6 +8,9 @@
 
     ULAB_SCHEDULER_HOST      默认 127.0.0.1
     ULAB_SCHEDULER_PORT      默认 8092
+    PUBCHEM_ADDR              PubChem PUG REST 地址，默认
+                              https://pubchem.ncbi.nlm.nih.gov；设为 off 关闭
+    PUBCHEM_TIMEOUT           PubChem 请求超时（秒或带 s 后缀），默认 30s
     ULAB_LAB_ID              本地实验室身份，默认 edge-lab
     ULAB_INVENTORY_DB        Edge 仓储 SQLite 路径（如 ~/.unilabos/inventory.db）；
                              设置后启用仓储路由并接入调度器物料预留
@@ -207,6 +210,7 @@ if _workflow_history_path and _workflow_history_path.lower() != "off":
         _workflow_service,
     )
 if _inventory is not None:
+    from unilabos.app.scheduler.inventory.compound_source import configured_compound_source
     from unilabos.app.scheduler.inventory.api import (
         create_legacy_material_router as _create_legacy_material_router,
     )
@@ -230,6 +234,7 @@ if _inventory is not None:
             edge_id=_inventory.edge_id,
             lab_id=_inventory.lab_id,
         ),
+        compound_source=configured_compound_source(),
     )
     app.include_router(_create_inventory_router(_inventory))
     app.include_router(_create_legacy_material_router(_inventory))

@@ -6,9 +6,11 @@ import {
   createExperimentOperation,
   createReagent,
   createReagentInfo,
+  deleteReagentInfo,
   instantiateMaterial,
   lookupCompoundByCas,
   loadEdgeSnapshot,
+  loadReagentHistory,
   unwrapEnvelope,
 } from './edgeClient'
 
@@ -54,6 +56,30 @@ describe('Edge view model adapters', () => {
       barcode: 'B-001',
       site_placement: { action: 'place', site_uuid: 'site-1' },
     })
+  })
+
+  it('deletes a reagent catalog item through its stable UUID', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await deleteReagentInfo('info-1')
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/reagent-infos/info-1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('DELETE')
+  })
+
+  it('loads the immutable reagent ledger for a container material', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => response({ code: 0, data: { items: [{
+      uuid: 'history-1', material_uuid: 'material-1', subject_uuid: 'reagent-1', event_type: 'add',
+      operator_type: 'frontend', quantity_delta: 500, quantity_unit: 'mL', revision: 1,
+      recorded_at: '2026-09-02T01:02:03.000Z', changes: { result: { quantity: 500, quantity_unit: 'mL' } },
+      extension: { source: 'frontend:workbench' },
+    }], has_more: false } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(loadReagentHistory('material-1')).resolves.toEqual([expect.objectContaining({
+      uuid: 'history-1', materialUuid: 'material-1', reagentUuid: 'reagent-1', eventType: 'add',
+      quantityDelta: 500, quantityUnit: 'mL', resultQuantity: 500, source: 'frontend:workbench',
+    })])
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/materials/material-1/reagent-history')
   })
 
   it('decodes CAS lookup fields and preserves chemistry metadata when creating a catalog item', async () => {

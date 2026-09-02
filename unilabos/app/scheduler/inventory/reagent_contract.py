@@ -192,6 +192,7 @@ class BackendReagentService:
         *,
         edge_id: str = "edge-default",
         lab_id: str = "edge-lab",
+        compound_source: Any = None,
     ):
         """绑定库存库与发件箱身份。
 
@@ -202,6 +203,7 @@ class BackendReagentService:
         self.store = store
         self.edge_id = edge_id
         self.lab_id = lab_id
+        self.compound_source = compound_source
 
     def create_reagent_info(self, values: Dict[str, Any]) -> Dict[str, Any]:
         """登记一条不依赖库存存在的化学品身份。
@@ -352,7 +354,7 @@ class BackendReagentService:
             )
 
     def lookup_compound(self, cas_value: str) -> Dict[str, Any]:
-        """按 CAS 查询本地登记状态；本地模式不冒充外部 PubChem 数据源。"""
+        """按 CAS 查询本地身份，未登记时可选查询 PubChem 候选信息。"""
 
         cas = normalize_cas(cas_value)
         row = self.store.query_one(
@@ -361,7 +363,15 @@ class BackendReagentService:
         )
         if row:
             return {"cas": cas, "status": "registered", "message": "该 CAS 已在本地试剂身份目录登记"}
-        return {"cas": cas, "status": "unavailable", "message": "OS 本地模式未配置外部化合物数据源"}
+        if self.compound_source is None:
+            return {"cas": cas, "status": "unavailable", "message": "OS 本地模式未配置外部化合物数据源"}
+        try:
+            compound = self.compound_source.lookup_by_cas(cas)
+        except LookupError:
+            return {"cas": cas, "status": "not_found", "message": "化合物数据源没有收录该 CAS，请手工填写化学信息"}
+        except Exception:  # noqa: BLE001 - 外部数据源故障不得阻断试剂录入
+            return {"cas": cas, "status": "unavailable", "message": "化合物数据源暂时不可用，请手工填写化学信息"}
+        return {"cas": cas, "status": "ok", "compound": compound}
 
     def get_reagent_info_structure(self, identity: str) -> Dict[str, Any]:
         """返回本地化学品三维缓存投影；尚未生成时明确返回 pending。"""

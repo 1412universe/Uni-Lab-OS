@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BookOpen, FlaskConical, PackagePlus, Plus, Search, Trash2 } from 'lucide-react'
+import { BookOpen, FlaskConical, History, PackagePlus, Plus, Search, Trash2 } from 'lucide-react'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
-import { createReagent, createReagentInfo, loadReagentInfos, loadReagents, lookupCompoundByCas } from '../lib/edgeClient'
-import type { CompoundLookupResult, MaterialRecord, ReagentInfoRecord } from '../types'
+import { createReagent, createReagentInfo, deleteReagentInfo, loadReagentHistory, loadReagentInfos, loadReagents, lookupCompoundByCas } from '../lib/edgeClient'
+import type { CompoundLookupResult, MaterialRecord, ReagentHistoryRecord, ReagentInfoRecord, ReagentRecord } from '../types'
 
 const physicalStateLabels: Record<ReagentInfoRecord['physicalState'], string> = {
   solid: '固体', liquid: '液体', gas: '气体', other: '其他', unknown: '未知',
@@ -37,8 +37,10 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
   const [lookup, setLookup] = useState<{ phase: 'idle' | 'loading' | 'success' | 'warning'; message: string; blocks: boolean }>({ phase: 'idle', message: '有效 CAS 会自动查询化学信息；自配物质可留空。', blocks: false })
   const previousCandidate = useRef<CompoundLookupResult['compound']>(undefined)
   const [registerForm, setRegisterForm] = useState({ materialUuid: '', reagentInfoUuid: '', quantity: '', quantityUnit: 'mL', concentrationValue: '', concentrationUnit: '%', description: '' })
+  const [historyReagent, setHistoryReagent] = useState<ReagentRecord | null>(null)
   const infosQuery = useQuery({ queryKey: ['reagent-infos'], queryFn: ({ signal }) => loadReagentInfos(signal), enabled: connected, retry: 1 })
   const reagentsQuery = useQuery({ queryKey: ['reagents'], queryFn: ({ signal }) => loadReagents(signal), enabled: connected, retry: 1 })
+  const historyQuery = useQuery({ queryKey: ['reagent-history', historyReagent?.materialUuid], queryFn: ({ signal }) => loadReagentHistory(historyReagent?.materialUuid || '', signal), enabled: connected && Boolean(historyReagent), retry: 1 })
   const reagentMaterialIds = new Set((reagentsQuery.data || []).map((item) => item.materialUuid))
   const containers = materials.filter((material) => !material.isStructural && !reagentMaterialIds.has(material.uuid))
   const keyword = query.trim().toLowerCase()
@@ -112,16 +114,29 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
     } catch (error) { onNotify(`录入失败：${error instanceof Error ? error.message : '未知错误'}`) } finally { setSaving(false) }
   }
 
+  async function removeCatalogItem(item: ReagentInfoRecord) {
+    if (!window.confirm(`确认删除试剂目录“${item.name}”？\n\n已被试剂库存引用的目录项会由后端拒绝删除。`)) return
+    setSaving(true)
+    try {
+      await deleteReagentInfo(item.uuid)
+      await infosQuery.refetch()
+      onNotify(`已删除试剂目录“${item.name}”`)
+    } catch (error) {
+      onNotify(`删除失败：${error instanceof Error ? error.message : '未知错误'}`)
+    } finally { setSaving(false) }
+  }
+
   const loadingError = infosQuery.error || reagentsQuery.error
   return <div className="page reagents-page">
     <PageHeader eyebrow="REAGENT AUTHORITY" title="试剂" description="试剂目录定义化学品身份；试剂库存记录具体容器、数量与浓度。" actions={<><Button icon={<BookOpen size={15} />} onClick={openCatalogDialog}>新增试剂目录</Button><Button tone="primary" icon={<PackagePlus size={15} />} disabled={!infosQuery.data?.length || !containers.length} onClick={() => setDialog('register')}>录入试剂</Button></>} />
     <div className="reagent-summary"><div><FlaskConical size={19} /><span>试剂库存<strong>{reagentsQuery.data?.length || 0}</strong></span></div><div><BookOpen size={19} /><span>试剂目录<strong>{infosQuery.data?.length || 0}</strong></span></div><div><PackagePlus size={19} /><span>可录入容器<strong>{containers.length}</strong></span></div></div>
     <Panel className="reagent-workspace">
-      <PanelHeader title={view === 'inventory' ? '试剂库存' : '试剂目录'} description={view === 'inventory' ? '容器级数量、浓度与化学身份' : 'CAS、分子式与基础理化信息'} action={<div className="segmented"><button className={view === 'inventory' ? 'active' : ''} onClick={() => setView('inventory')}>库存</button><button className={view === 'catalog' ? 'active' : ''} onClick={() => setView('catalog')}>目录</button></div>} />
+      <PanelHeader title={view === 'inventory' ? '试剂库存' : '试剂目录'} description={view === 'inventory' ? '容器级数量、浓度与化学身份' : 'CAS、分子式与基础理化信息'} action={<div className="segmented"><button className={view === 'inventory' ? 'active' : ''} onClick={() => setView('inventory')}>库存</button><button className={view === 'catalog' ? 'active' : ''} onClick={() => { setView('catalog'); setHistoryReagent(null) }}>目录</button></div>} />
       <label className="reagent-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={view === 'inventory' ? '搜索试剂、CAS、容器或条码' : '搜索名称、别名、CAS 或分子式'} /></label>
       {loadingError ? <div className="connection-alert" role="alert"><div><strong>试剂数据不可用</strong><span>{loadingError instanceof Error ? loadingError.message : '读取失败'}</span></div></div> : null}
-      {view === 'inventory' ? <InventoryTable items={inventory} materials={materials} hasCatalog={Boolean(infosQuery.data?.length)} /> : <CatalogTable items={infos} />}
+      {view === 'inventory' ? <InventoryTable items={inventory} materials={materials} hasCatalog={Boolean(infosQuery.data?.length)} onHistory={setHistoryReagent} /> : <CatalogTable items={infos} deleting={saving} onDelete={(item) => void removeCatalogItem(item)} />}
     </Panel>
+    {historyReagent ? <ReagentHistoryDrawer reagent={historyReagent} items={historyQuery.data || []} loading={historyQuery.isLoading || historyQuery.isFetching} error={historyQuery.error} onClose={() => setHistoryReagent(null)} /> : null}
     {dialog ? <div className="dialog-backdrop" role="presentation"><div className={`material-write-dialog reagent-dialog ${dialog === 'catalog' ? 'reagent-dialog-wide' : ''}`} role="dialog" aria-modal="true"><header><div><span>REAGENT COMMAND</span><h2>{dialog === 'catalog' ? '新增试剂目录' : '录入试剂'}</h2>{dialog === 'catalog' ? <p>输入 CAS 可自动补全化学信息；无 CAS 的自配物质可直接填写名称。</p> : null}</div><button aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
       {dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} saving={saving} onSave={() => void saveRegistration()} />}
     </div></div> : null}
@@ -160,8 +175,30 @@ function RegisterForm({ form, setForm, infos, containers, saving, onSave }: { fo
   return <div className="dialog-content reagent-form"><label className="form-field wide"><span>试剂目录 *</span><select value={form.reagentInfoUuid} onChange={(e) => setForm({ ...form, reagentInfoUuid: e.target.value })}><option value="">选择试剂目录项</option>{infos.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.cas || '无 CAS'}</option>)}</select></label><label className="form-field wide"><span>试剂容器 *</span><select value={form.materialUuid} onChange={(e) => setForm({ ...form, materialUuid: e.target.value })}><option value="">选择未登记试剂的容器</option>{containers.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label><label className="form-field"><span>数量 *</span><input type="number" min="0" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label><label className="form-field"><span>单位 *</span><select value={form.quantityUnit} onChange={(e) => setForm({ ...form, quantityUnit: e.target.value })}>{['mL', 'L', 'g', 'mg', 'μL', 'mmol'].map((unit) => <option key={unit}>{unit}</option>)}</select></label><label className="form-field"><span>浓度</span><input type="number" min="0" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label><label className="form-field"><span>浓度单位</span><select value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })}>{['%', 'mol/L', 'mmol/L', 'mg/mL'].map((unit) => <option key={unit}>{unit}</option>)}</select></label><label className="form-field wide"><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || !form.materialUuid || !form.reagentInfoUuid || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button></div>
 }
 
-function InventoryTable({ items, materials, hasCatalog }: { items: Awaited<ReturnType<typeof loadReagents>>; materials: MaterialRecord[]; hasCatalog: boolean }) { return <div className="reagent-table"><header><span>试剂</span><span>容器</span><span>数量</span><span>浓度</span><span>修订</span></header>{items.map((item) => <article key={item.uuid}><span><strong>{item.name}</strong><small>{item.cas || '无 CAS'} · {item.molecularFormula || '无分子式'}</small><code>{item.uuid}</code></span><span><strong>{item.containerName || materials.find((m) => m.uuid === item.materialUuid)?.name || '未知容器'}</strong><small>{item.containerBarcode || materials.find((m) => m.uuid === item.materialUuid)?.barcode || item.materialUuid}</small></span><span><strong>{item.quantity ?? '—'} {item.quantityUnit || ''}</strong><small>{item.quantity != null && item.quantity > 0 ? '可用' : '已空'}</small></span><span>{item.concentrationValue == null ? '—' : `${item.concentrationValue} ${item.concentrationUnit || ''}`}</span><span>r{item.revision}</span></article>)}{!items.length ? <EmptyState title="暂无试剂库存" description={hasCatalog ? '点击“录入试剂”，把目录项登记到具体容器。' : '请先新增试剂目录，再录入容器库存。'} /> : null}</div> }
-function CatalogTable({ items }: { items: ReagentInfoRecord[] }) { return <div className="reagent-table identity-table"><header><span>试剂目录</span><span>CAS</span><span>分子式</span><span>物态</span><span>密度</span></header>{items.map((item) => <article key={item.uuid}><span><strong>{item.name}</strong><small>{item.nameEn || item.aliases.join('、') || '无别名'}</small><code>{item.uuid}</code></span><span>{item.cas || '—'}</span><span>{item.molecularFormula || '—'}</span><span>{physicalStateLabels[item.physicalState]}</span><span>{item.densityGPerMl == null ? '—' : `${item.densityGPerMl} g/mL`}</span></article>)}{!items.length ? <EmptyState title="暂无试剂目录" description="创建化学品目录项后，才可以录入具体容器。" /> : null}</div> }
+function InventoryTable({ items, materials, hasCatalog, onHistory }: { items: Awaited<ReturnType<typeof loadReagents>>; materials: MaterialRecord[]; hasCatalog: boolean; onHistory: (item: ReagentRecord) => void }) { return <div className="reagent-table reagent-inventory-table"><header><span>试剂</span><span>容器</span><span>数量</span><span>浓度</span><span>修订</span><span>操作</span></header>{items.map((item) => <article key={item.uuid}><span><strong>{item.name}</strong><small>{item.cas || '无 CAS'} · {item.molecularFormula || '无分子式'}</small><code>{item.uuid}</code></span><span><strong>{item.containerName || materials.find((m) => m.uuid === item.materialUuid)?.name || '未知容器'}</strong><small>{item.containerBarcode || materials.find((m) => m.uuid === item.materialUuid)?.barcode || item.materialUuid}</small></span><span><strong>{item.quantity ?? '—'} {item.quantityUnit || ''}</strong><small>{item.quantity != null && item.quantity > 0 ? '可用' : '已空'}</small></span><span>{item.concentrationValue == null ? '—' : `${item.concentrationValue} ${item.concentrationUnit || ''}`}</span><span>r{item.revision}</span><span className="reagent-row-actions history-action"><button aria-label={`查看操作历史 ${item.name} ${item.uuid}`} title="查看操作历史" onClick={() => onHistory(item)}><History size={14} /></button></span></article>)}{!items.length ? <EmptyState title="暂无试剂库存" description={hasCatalog ? '点击“录入试剂”，把目录项登记到具体容器。' : '请先新增试剂目录，再录入容器库存。'} /> : null}</div> }
+function CatalogTable({ items, deleting, onDelete }: { items: ReagentInfoRecord[]; deleting: boolean; onDelete: (item: ReagentInfoRecord) => void }) { return <div className="reagent-table identity-table"><header><span>试剂目录</span><span>CAS</span><span>分子式</span><span>物态</span><span>操作</span></header>{items.map((item) => <article key={item.uuid}><span><strong>{item.name}</strong><small>{item.nameEn || item.aliases.join('、') || '无别名'}</small><code>{item.uuid}</code></span><span>{item.cas || '—'}</span><span>{item.molecularFormula || '—'}</span><span>{physicalStateLabels[item.physicalState]}</span><span className="reagent-row-actions"><button disabled={deleting} aria-label={`删除试剂目录 ${item.name}`} title="删除试剂目录" onClick={() => onDelete(item)}><Trash2 size={14} /></button></span></article>)}{!items.length ? <EmptyState title="暂无试剂目录" description="创建化学品目录项后，才可以录入具体容器。" /> : null}</div> }
+
+function ReagentHistoryDrawer({ reagent, items, loading, error, onClose }: { reagent: ReagentRecord; items: ReagentHistoryRecord[]; loading: boolean; error: Error | null; onClose: () => void }) {
+  return <div className="reagent-history-backdrop" role="presentation"><aside className="reagent-history-drawer" role="dialog" aria-modal="true" aria-label={`${reagent.name} 操作历史`}><header><div><span>REAGENT LEDGER</span><h2>操作历史</h2><p>{reagent.name} · {reagent.containerName || reagent.materialUuid}</p></div><button aria-label="关闭操作历史" onClick={onClose}>×</button></header><section className="reagent-history-summary"><div><small>当前余量</small><strong>{reagent.quantity ?? '—'} {reagent.quantityUnit || ''}</strong></div><div><small>当前修订</small><strong>r{reagent.revision}</strong></div><div><small>历史记录</small><strong>{items.length}</strong></div></section><div className="reagent-history-identities"><span>试剂 UUID<code>{reagent.uuid}</code></span><span>容器物料 UUID<code>{reagent.materialUuid}</code></span></div><section className="reagent-history-timeline">{loading ? <EmptyState title="正在读取操作历史" description="正在从本地不可变台账读取记录。" /> : error ? <EmptyState title="操作历史读取失败" description={error.message} /> : items.length ? items.map((item) => <ReagentHistoryItem key={item.uuid} item={item} />) : <EmptyState title="暂无操作历史" description="该试剂尚未产生台账记录。" />}</section></aside></div>
+}
+
+function ReagentHistoryItem({ item }: { item: ReagentHistoryRecord }) {
+  const event = historyEvent(item.eventType)
+  const delta = `${item.quantityDelta > 0 ? '+' : ''}${item.quantityDelta} ${item.quantityUnit}`
+  return <article data-event={item.eventType}><span className="history-marker">{event.short}</span><div><header><div><strong>{event.label}</strong><time>{formatHistoryTime(item.recordedAt)}</time></div><em data-positive={item.quantityDelta > 0}>{delta}</em></header><dl><div><dt>变更后余量</dt><dd>{item.resultQuantity ?? '—'} {item.resultQuantityUnit || item.quantityUnit}</dd></div><div><dt>操作方</dt><dd>{item.operatorType}</dd></div><div><dt>修订</dt><dd>r{item.revision}</dd></div>{item.source ? <div><dt>来源</dt><dd>{item.source}</dd></div> : null}</dl>{item.workflowTaskUuid || item.workflowNodeJobUuid ? <p>{item.workflowTaskUuid ? <>任务 <code>{item.workflowTaskUuid}</code></> : null}{item.workflowNodeJobUuid ? <>节点作业 <code>{item.workflowNodeJobUuid}</code></> : null}</p> : null}<code className="history-uuid">{item.uuid}</code></div></article>
+}
+
+function historyEvent(type: string) {
+  if (type === 'add') return { label: '录入 / 补充', short: '+' }
+  if (type === 'consume') return { label: '工作流消耗', short: '−' }
+  if (type === 'remove') return { label: '移除试剂', short: '×' }
+  return { label: '调整余量', short: '↕' }
+}
+
+function formatHistoryTime(value: string) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value || '—' : date.toLocaleString('zh-CN', { hour12: false })
+}
 
 function validateIdentity(form: IdentityForm, parameters: CustomParameter[]) {
   if (!form.name.trim()) return '试剂名称不能为空'

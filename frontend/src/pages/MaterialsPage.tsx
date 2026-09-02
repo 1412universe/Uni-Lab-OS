@@ -6,11 +6,11 @@ import {
   CircleCheck,
   Download,
   MapPin,
+  PackagePlus,
 } from 'lucide-react'
 import type { MaterialRecord } from '../types'
 import { changeMaterialSite, instantiateMaterial, loadMaterialDetail, loadResourceTemplates, verifyMaterialBarcode } from '../lib/edgeClient'
 import { Button, EmptyState, Panel } from '../components/ui'
-import { LabObliqueOverview } from '../components/LabObliqueOverview'
 import { MaterialHierarchyTree } from '../components/MaterialHierarchyTree'
 
 export function MaterialsPage({
@@ -41,7 +41,7 @@ export function MaterialsPage({
 
   const selected = materials.find((material) => material.uuid === selectedId) || materials[0]
   useEffect(() => {
-    setSelectedSiteId(selected?.currentLocation.kind === 'site' ? selected.currentLocation.siteUuid : '')
+    setSelectedSiteId(selected?.sites[0]?.uuid || '')
   }, [selected?.uuid])
   const detailQuery = useQuery({
     queryKey: ['material-detail', selected?.uuid],
@@ -63,23 +63,32 @@ export function MaterialsPage({
         currentLocation: selected?.currentLocation ?? detailQuery.data.currentLocation,
       }
     : selected
-  const selectedOwnerUuid = detail?.currentLocation.kind === 'site'
-    ? detail.currentLocation.ownerMaterialUuid
-    : ''
-  const siteContainers = detail
-    ? (detail.isStructural
-        ? [detail]
-        : selectedOwnerUuid
-          ? materials.filter((material) => material.uuid === selectedOwnerUuid)
-          : [])
-    : []
-  const availableSites = siteContainers.flatMap((container) => container.sites)
+  const availableSites = detail?.sites || []
   const selectedSite = availableSites.find((site) => site.uuid === selectedSiteId) || availableSites[0]
-  const inventoryCandidates = materials.filter((material) => !material.isStructural && material.currentLocation.kind === 'unassigned')
+  const parentMaterial = detail?.parentUuid ? materials.find((material) => material.uuid === detail.parentUuid) : undefined
+  const locationOwnerUuid = detail?.currentLocation.kind === 'site' ? detail.currentLocation.ownerMaterialUuid : undefined
+  const locationOwner = locationOwnerUuid ? materials.find((material) => material.uuid === locationOwnerUuid) : undefined
+  const childMaterials = detail ? materials.filter((material) => material.parentUuid === detail.uuid) : []
+  const allowedTemplateIds = selectedSite?.allowedResourceTemplateUuids || []
+  const inventoryCandidates = materials.filter((material) => {
+    if (material.isStructural || material.currentLocation.kind !== 'unassigned') return false
+    return !allowedTemplateIds.length || Boolean(material.resourceTemplateUuid && allowedTemplateIds.includes(material.resourceTemplateUuid))
+  })
   const emptySiteOptions = useMemo(() => materials.flatMap((owner) => owner.sites
     .filter((site) => !site.occupiedMaterialUuid)
     .map((site) => ({ ...site, ownerName: owner.name }))), [materials])
   const selectedTemplate = materialTemplates.find((template) => template.uuid === templateId)
+  const allowedTemplateNames = allowedTemplateIds.map((uuid) => ({
+    uuid,
+    name: materialTemplates.find((template) => template.uuid === uuid)?.displayName || uuid,
+  }))
+
+  function openInstantiation() {
+    const template = selectedTemplate || materialTemplates[0]
+    setTemplateId(template?.uuid || '')
+    setMaterialForm({ name: template?.displayName || '', barcode: '', description: '', siteUuid: selectedSite && !selectedSite.occupiedMaterialUuid ? selectedSite.uuid : '' })
+    setDialog('instantiate')
+  }
 
   function exportInventory() {
     const header = ['UUID', '名称', '条码', '类型', '权威位置', '修订']
@@ -108,6 +117,19 @@ export function MaterialsPage({
     } catch (error) { onNotify(`库位操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
 
+  function openPlacementDialog() {
+    setPlacementMaterialId('')
+    setDialog('place')
+  }
+
+  function openRemovalDialog() {
+    if (!selectedSite?.occupiedMaterialUuid) {
+      onNotify(`库位“${selectedSite?.name || '未选择'}”上没有物料，无法下料`)
+      return
+    }
+    setDialog('remove')
+  }
+
   return (
     <div className="page materials-page">
       <div className="materials-layout scene-layout">
@@ -115,21 +137,23 @@ export function MaterialsPage({
 
         <Panel className="material-table-panel">
           <div className="table-toolbar">
-            <div><strong>实验室 2.5D</strong><span>{materials.length} 个对象</span></div>
-            <div className="material-toolbar-actions"><button onClick={exportInventory}><Download size={13} />导出盘点</button><button onClick={() => { setBarcodeInput(''); setDialog('barcode') }}><Barcode size={13} />扫码核验</button></div>
+            <div><strong>物料详情</strong><span>{materials.length} 个权威对象</span></div>
+            <div className="material-toolbar-actions"><button onClick={openInstantiation}><PackagePlus size={13} />从模板实例化</button><button onClick={exportInventory}><Download size={13} />导出盘点</button><button onClick={() => { setBarcodeInput(''); setDialog('barcode') }}><Barcode size={13} />扫码核验</button></div>
           </div>
-          <div className="material-scene-view" aria-label="物料 2.5D 库位场景">
-              <LabObliqueOverview materials={materials} templates={templatesQuery.data || []} selectedId={selected?.uuid} onSelect={setSelectedId} onSelectMaterialTemplate={(template) => { setTemplateId(template.uuid); setMaterialForm({ name: template.displayName, barcode: '', description: '', siteUuid: selectedSite && !selectedSite.occupiedMaterialUuid ? selectedSite.uuid : '' }); setDialog('instantiate') }} />
-              {availableSites.length ? <section className="scene-site-strip"><header><div><strong>{detail?.name} · 详细库位</strong><small>{siteContainers.map((container) => container.name).join(' / ')} · 点击库位后可执行上下料</small></div><span>{availableSites.length} 个</span></header><div>{availableSites.map((site) => <button key={site.uuid} className={selectedSite?.uuid === site.uuid ? 'selected' : ''} onClick={() => setSelectedSiteId(site.uuid)}><MapPin size={13} /><strong>{site.name}</strong><small>{site.occupiedMaterialName || '空库位'}</small></button>)}</div>{selectedSite ? <footer><span>{selectedSite.occupiedMaterialUuid ? `已占用：${selectedSite.occupiedMaterialName}` : '当前库位空闲'}</span><Button disabled={Boolean(selectedSite.occupiedMaterialUuid)} onClick={() => setDialog('place')}>上料</Button><Button disabled={!selectedSite.occupiedMaterialUuid} onClick={() => setDialog('remove')}>下料</Button></footer> : null}</section> : null}
-          </div>
+          {detail ? <div className="material-detail-workspace" aria-label="物料关系详情">
+            <header className="material-detail-hero"><span><Boxes size={24} /></span><div><small>{detail.isStructural ? '结构资源' : '物料实例'}</small><h2>{detail.name}</h2><code>{detail.uuid}</code></div><em data-kind={detail.currentLocation.kind}>{detail.currentLocation.label}</em></header>
+            <dl className="material-detail-facts"><div><dt>物料类型</dt><dd>{detail.category}</dd></div><div><dt>条码</dt><dd>{detail.barcode}</dd></div><div><dt>资源模板</dt><dd>{templatesQuery.data?.find((template) => template.uuid === detail.resourceTemplateUuid)?.displayName || detail.resourceTemplateUuid || '未绑定'}</dd></div><div><dt>修订</dt><dd>r{detail.revision}</dd></div><div><dt>父物料</dt><dd>{parentMaterial?.name || '无父物料'}</dd></div><div><dt>所在库位</dt><dd>{detail.currentLocation.kind === 'site' ? `${locationOwner?.name || detail.currentLocation.ownerMaterialUuid} / ${detail.currentLocation.label}` : detail.currentLocation.label}</dd></div></dl>
+            <section className="material-relation-section"><header><div><strong>物料关系</strong><small>parent 与库位占用关系</small></div></header><div className="material-relation-chain">{parentMaterial ? <button onClick={() => setSelectedId(parentMaterial.uuid)}><small>父物料</small><strong>{parentMaterial.name}</strong><code>{parentMaterial.uuid}</code></button> : <div className="relation-empty"><small>父物料</small><strong>无</strong></div>}<span>→</span><div className="relation-current"><small>当前物料</small><strong>{detail.name}</strong><code>{detail.uuid}</code></div><span>→</span><div><small>直接子物料</small><strong>{childMaterials.length} 个</strong></div></div>{childMaterials.length ? <div className="material-child-list">{childMaterials.map((child) => <button key={child.uuid} onClick={() => setSelectedId(child.uuid)}><Boxes size={14} /><span><strong>{child.name}</strong><small>{child.currentLocation.label}</small></span><code>{child.uuid}</code></button>)}</div> : null}</section>
+            <section className="material-site-section"><header><div><strong>自身库位</strong><small>该物料直接提供的库位及当前占用</small></div><span>{availableSites.length} 个库位</span></header>{availableSites.length ? <><div className="material-site-grid">{availableSites.map((site) => <button key={site.uuid} className={selectedSite?.uuid === site.uuid ? 'selected' : ''} onClick={() => setSelectedSiteId(site.uuid)}><MapPin size={14} /><span><strong>{site.name}</strong><small>{site.occupiedMaterialName || '空库位'}</small></span><em data-occupied={Boolean(site.occupiedMaterialUuid)}>{site.occupiedMaterialUuid ? '已占用' : '空闲'}</em></button>)}</div>{selectedSite ? <><div className="material-site-policy"><div><strong>库位允许放置的物料</strong><small>{allowedTemplateIds.length ? '仅允许以下物料模板的实例' : '未限制物料模板，可放置任意非结构物料'}</small></div><div className="material-site-policy-tags">{allowedTemplateNames.length ? allowedTemplateNames.map((template) => <span key={template.uuid} title={template.uuid}>{template.name}</span>) : <span>全部物料模板</span>}</div></div><footer><div><strong>{selectedSite.name}</strong><small>{selectedSite.occupiedMaterialName ? `当前物料：${selectedSite.occupiedMaterialName}` : '当前没有物料'}</small></div><Button disabled={Boolean(selectedSite.occupiedMaterialUuid)} onClick={openPlacementDialog}>上料</Button><Button onClick={openRemovalDialog}>下料</Button></footer></> : null}</> : <EmptyState title="该物料没有库位" description="它是可被放置的物料实例，不是库位容器或结构资源。" />}</section>
+          </div> : null}
           {!materials.length ? <EmptyState title="暂无物料" description="当前环境尚未加载物料资源。" /> : null}
         </Panel>
       </div>
       {dialog ? <div className="dialog-backdrop" role="presentation"><div className="material-write-dialog" role="dialog" aria-modal="true">
         <header><div><span>MATERIAL COMMAND</span><h2>{dialog === 'barcode' ? '扫码核验' : dialog === 'instantiate' ? '从模板实例化物料' : dialog === 'place' ? `上料至 ${selectedSite?.name}` : `从 ${selectedSite?.name} 下料`}</h2></div><button onClick={() => setDialog(null)}>×</button></header>
         {dialog === 'barcode' ? <div className="dialog-content"><label className="form-field"><span>扫描或输入条码</span><input autoFocus value={barcodeInput} onChange={(event) => setBarcodeInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && barcodeInput.trim()) void barcodeQuery.refetch() }} placeholder="扫描枪回车或手动输入" /></label><Button tone="primary" disabled={!barcodeInput.trim() || barcodeQuery.isFetching} onClick={() => void barcodeQuery.refetch()}>校验条码</Button>{verifiedMaterials ? <div className="barcode-result">{verifiedMaterials.length ? verifiedMaterials.map((item) => <div key={item.uuid}><CircleCheck size={18} /><p><strong>{item.name}</strong><small>{item.currentLocation.label}</small><code>{item.uuid}</code></p></div>) : <EmptyState title="未找到该条码" description="可检查条码后重试，或从物料模板实例化。" />}</div> : null}</div> : null}
-        {dialog === 'instantiate' ? <div className="dialog-content"><div className="dialog-template-summary"><Boxes size={20} /><div><strong>{selectedTemplate?.displayName}</strong><code>{selectedTemplate?.uuid}</code></div></div><label className="form-field"><span>物料名称</span><input value={materialForm.name} onChange={(event) => setMaterialForm((current) => ({ ...current, name: event.target.value }))} /></label><label className="form-field"><span>唯一条码</span><input value={materialForm.barcode} onChange={(event) => setMaterialForm((current) => ({ ...current, barcode: event.target.value }))} /></label><label className="form-field"><span>初始库位</span><select value={materialForm.siteUuid} onChange={(event) => setMaterialForm((current) => ({ ...current, siteUuid: event.target.value }))}><option value="">暂不分配库位</option>{emptySiteOptions.map((site) => <option key={site.uuid} value={site.uuid}>{site.ownerName} / {site.name}</option>)}</select><small>选择后，实例化与上料将在同一事务中完成。</small></label><label className="form-field"><span>说明</span><input value={materialForm.description} onChange={(event) => setMaterialForm((current) => ({ ...current, description: event.target.value }))} /></label><Button tone="primary" disabled={!materialForm.name.trim() || !materialForm.barcode.trim()} onClick={() => void submitInstantiation()}>确认实例化</Button></div> : null}
-        {dialog === 'place' ? <div className="dialog-content"><p className="write-warning">系统会通过 expected_revision 原子校验物料与库位，冲突时不会覆盖他人操作。</p><label className="form-field"><span>选择待上料物料</span><select value={placementMaterialId} onChange={(event) => setPlacementMaterialId(event.target.value)}><option value="">选择未分配库存</option>{inventoryCandidates.map((item) => <option value={item.uuid} key={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label><Button tone="primary" disabled={!placementMaterialId} onClick={() => void submitPlacement()}>确认上料</Button></div> : null}
+        {dialog === 'instantiate' ? <div className="dialog-content"><label className="form-field"><span>物料模板</span><select value={templateId} onChange={(event) => { const template = materialTemplates.find((item) => item.uuid === event.target.value); setTemplateId(event.target.value); if (template) setMaterialForm((current) => ({ ...current, name: template.displayName })) }}><option value="">选择物料模板</option>{materialTemplates.map((template) => <option key={template.uuid} value={template.uuid}>{template.displayName}</option>)}</select></label><div className="dialog-template-summary"><Boxes size={20} /><div><strong>{selectedTemplate?.displayName || '尚未选择模板'}</strong><code>{selectedTemplate?.uuid || '—'}</code></div></div><label className="form-field"><span>物料名称</span><input value={materialForm.name} onChange={(event) => setMaterialForm((current) => ({ ...current, name: event.target.value }))} /></label><label className="form-field"><span>唯一条码</span><input value={materialForm.barcode} onChange={(event) => setMaterialForm((current) => ({ ...current, barcode: event.target.value }))} /></label><label className="form-field"><span>初始库位</span><select value={materialForm.siteUuid} onChange={(event) => setMaterialForm((current) => ({ ...current, siteUuid: event.target.value }))}><option value="">暂不分配库位</option>{emptySiteOptions.map((site) => <option key={site.uuid} value={site.uuid}>{site.ownerName} / {site.name}</option>)}</select><small>选择后，实例化与上料将在同一事务中完成。</small></label><label className="form-field"><span>说明</span><input value={materialForm.description} onChange={(event) => setMaterialForm((current) => ({ ...current, description: event.target.value }))} /></label><Button tone="primary" disabled={!templateId || !materialForm.name.trim() || !materialForm.barcode.trim()} onClick={() => void submitInstantiation()}>确认实例化</Button></div> : null}
+        {dialog === 'place' ? <div className="dialog-content"><p className="write-warning">仅展示符合该库位模板定义且当前未分配的物料。系统还会通过 expected_revision 原子校验，冲突时不会覆盖他人操作。</p>{inventoryCandidates.length ? <label className="form-field"><span>选择待上料物料</span><select value={placementMaterialId} onChange={(event) => setPlacementMaterialId(event.target.value)}><option value="">选择未分配库存</option>{inventoryCandidates.map((item) => <option value={item.uuid} key={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label> : <EmptyState title="没有符合库位定义的未分配物料" description={allowedTemplateIds.length ? '请先实例化允许的物料模板，或选择其他库位。' : '当前没有可上料的未分配物料。'} />}<Button tone="primary" disabled={!placementMaterialId} onClick={() => void submitPlacement()}>确认上料</Button></div> : null}
         {dialog === 'remove' ? <div className="dialog-content"><p className="write-warning">下料后物料进入“待分配库存”，不会删除物料实例。</p><Button tone="primary" onClick={() => void submitPlacement(true)}>确认下料</Button></div> : null}
       </div></div> : null}
     </div>

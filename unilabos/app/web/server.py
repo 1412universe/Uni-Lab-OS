@@ -526,6 +526,9 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
                 from unilabos.app.scheduler.inventory.backend_api import (
                     install_backend_resource_api,
                 )
+                from unilabos.app.scheduler.inventory.compound_source import (
+                    configured_compound_source,
+                )
                 from unilabos.app.scheduler.inventory.backend_contract import (
                     BackendResourceService,
                 )
@@ -545,6 +548,7 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
                         ),
                         material_shapes=get_material_shapes(),
                         material_model_catalog=get_material_model_catalog(),
+                        compound_source=configured_compound_source(),
                     )
                     resource_contract_routes_mounted = True
                 app.include_router(create_inventory_router(inventory_service))

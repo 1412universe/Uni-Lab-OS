@@ -147,6 +147,7 @@ def create_backend_resource_router(
     *,
     material_shapes: Sequence[Mapping[str, Any]] = (),
     material_model_catalog: Any = None,
+    compound_source: Any = None,
 ) -> APIRouter:
     """创建前端资源合同路由并附带静态物料外形。
 
@@ -169,6 +170,7 @@ def create_backend_resource_router(
                 service.store,
                 edge_id=service.edge_id,
                 lab_id=service.lab_id,
+                compound_source=compound_source,
             )
         )
     )
@@ -417,6 +419,7 @@ def install_backend_resource_api(
     *,
     material_shapes: Sequence[Mapping[str, Any]] = (),
     material_model_catalog: Any = None,
+    compound_source: Any = None,
 ) -> None:
     """安装公共资源路由与 Backend 校验信封。
 
@@ -455,6 +458,7 @@ def install_backend_resource_api(
             service,
             material_shapes=material_shapes,
             material_model_catalog=material_model_catalog,
+            compound_source=compound_source,
         )
     )
 

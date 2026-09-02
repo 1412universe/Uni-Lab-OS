@@ -18,8 +18,8 @@ function renderWithQuery(ui: React.ReactNode) {
 }
 
 describe('MaterialsPage', () => {
-  it('links Electron-style tree selection to the 2.5D scene', () => {
-    const { container } = renderWithQuery(
+  it('links tree selection to the selected material relationship detail', () => {
+    renderWithQuery(
       <MaterialsPage materials={demoMaterials} total={demoMaterials.length} connected={false} onNotify={vi.fn()} />,
     )
 
@@ -27,21 +27,26 @@ describe('MaterialsPage', () => {
     fireEvent.click(within(materialTree).getByRole('button', { name: '250 mL 样品瓶' }))
 
     expect(within(materialTree).getByRole('button', { name: '250 mL 样品瓶' }).closest('[role="treeitem"]')).toHaveClass('selected')
-    expect(container.querySelector('.lab-oblique-object.selected')).toHaveAttribute('aria-label', '250 mL 样品瓶')
+    const detail = screen.getByLabelText('物料关系详情')
+    expect(within(detail).getAllByText('250 mL 样品瓶').length).toBeGreaterThan(0)
+    expect(within(detail).getAllByText(demoMaterials[1].uuid).length).toBeGreaterThan(0)
   })
 
-  it('keeps inventory, site occupancy and the 2.5D scene in one workspace', () => {
+  it('keeps inventory, site occupancy and material relationships in one workspace', () => {
     renderWithQuery(
       <MaterialsPage materials={demoMaterials} total={demoMaterials.length} connected={false} onNotify={vi.fn()} />,
     )
     expect(screen.getByRole('complementary', { name: '物料目录' })).toBeInTheDocument()
     expect(screen.getByLabelText('库位状态说明')).toBeInTheDocument()
-    expect(screen.getByLabelText('物料 2.5D 库位场景')).toBeInTheDocument()
+    expect(screen.getByLabelText('物料关系详情')).toBeInTheDocument()
+    expect(screen.getByText('物料关系')).toBeInTheDocument()
+    expect(screen.getByText('自身库位')).toBeInTheDocument()
+    expect(screen.queryByLabelText('物料 2.5D 库位场景')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '清单' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '库位' })).not.toBeInTheDocument()
   })
 
-  it('shows the authoritative owner sites when an occupied material is selected', () => {
+  it('shows where an occupied material is placed without borrowing the owner sites', () => {
     const owner = {
       ...demoMaterials[0],
       uuid: 'warehouse-1',
@@ -58,16 +63,19 @@ describe('MaterialsPage', () => {
       ...demoMaterials[1],
       uuid: 'beaker-1',
       name: '测试烧杯',
+      parentUuid: owner.uuid,
       currentLocation: { kind: 'site' as const, label: 'S09 / L1', siteUuid: 'site-1', ownerMaterialUuid: owner.uuid },
     }
     renderWithQuery(
       <MaterialsPage materials={[occupant, owner]} total={2} connected={false} onNotify={vi.fn()} />,
     )
 
-    expect(screen.getByText('测试烧杯 · 详细库位')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /L1/ })).toHaveTextContent('测试烧杯')
-    expect(screen.getByText('已占用：测试烧杯')).toBeInTheDocument()
-    expect(screen.queryByLabelText('L1，未占用')).not.toBeInTheDocument()
+    const detail = screen.getByLabelText('物料关系详情')
+    expect(within(detail).getAllByText('测试烧杯').length).toBeGreaterThan(0)
+    expect(within(detail).getAllByText('S09 库位架').length).toBeGreaterThan(0)
+    expect(within(detail).getByText('S09 库位架 / S09 / L1')).toBeInTheDocument()
+    expect(within(detail).getByText('该物料没有库位')).toBeInTheDocument()
+    expect(within(detail).queryByRole('button', { name: /L1/ })).not.toBeInTheDocument()
   })
 
   it('reuses the loaded material graph location in barcode verification results', async () => {
@@ -86,6 +94,56 @@ describe('MaterialsPage', () => {
 
     expect(await screen.findByText(material.currentLocation.label)).toBeInTheDocument()
     expect(screen.queryByText('权威位置尚未读取')).not.toBeInTheDocument()
+  })
+
+  it('filters loading candidates by the selected site template policy', () => {
+    const notify = vi.fn()
+    const owner = {
+      ...demoMaterials[0],
+      uuid: 'owner-1',
+      name: 'S04 库位架',
+      isStructural: true,
+      currentLocation: { kind: 'structural' as const, label: '结构资源', siteCount: 1 },
+      sites: [{ uuid: 'site-1', name: 'L1', allowedResourceTemplateUuids: ['template-allowed'] }],
+    }
+    const allowed = {
+      ...demoMaterials[1],
+      uuid: 'allowed-1',
+      name: '允许物料',
+      resourceTemplateUuid: 'template-allowed',
+      currentLocation: { kind: 'unassigned' as const, label: '未分配权威库位' },
+    }
+    const rejected = {
+      ...demoMaterials[2],
+      uuid: 'rejected-1',
+      name: '不允许物料',
+      resourceTemplateUuid: 'template-rejected',
+      currentLocation: { kind: 'unassigned' as const, label: '未分配权威库位' },
+    }
+    renderWithQuery(<MaterialsPage materials={[owner, allowed, rejected]} total={3} connected={false} onNotify={notify} />)
+
+    expect(screen.getByText('库位允许放置的物料')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '上料' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByRole('option', { name: /允许物料/ })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('option', { name: /不允许物料/ })).not.toBeInTheDocument()
+  })
+
+  it('warns before unloading an empty site', () => {
+    const notify = vi.fn()
+    const owner = {
+      ...demoMaterials[0],
+      uuid: 'owner-2',
+      name: 'S04 空库位架',
+      isStructural: true,
+      currentLocation: { kind: 'structural' as const, label: '结构资源', siteCount: 1 },
+      sites: [{ uuid: 'empty-site', name: 'L1' }],
+    }
+    renderWithQuery(<MaterialsPage materials={[owner]} total={1} connected={false} onNotify={notify} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '下料' }))
+    expect(notify).toHaveBeenCalledWith('库位“L1”上没有物料，无法下料')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
 

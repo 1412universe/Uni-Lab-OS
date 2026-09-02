@@ -15,6 +15,7 @@ import type {
   OperationCategoryRecord,
   ReagentInfoRecord,
   ReagentRecord,
+  ReagentHistoryRecord,
   CompoundLookupResult,
 } from '../types'
 
@@ -491,10 +492,17 @@ function materialStructure(raw: RawRecord): { isStructural: boolean; siteCount: 
 }
 
 function configuredSites(raw: RawRecord): MaterialRecord['sites'] {
-  const sites = Array.isArray(raw.config?.sites) ? raw.config.sites : []
+  const sites = Array.isArray(raw.sites)
+    ? raw.sites
+    : Array.isArray(raw.config?.sites) ? raw.config.sites : []
   return sites.map((site: RawRecord, index: number) => ({
     uuid: String(site.uuid || `${raw.uuid || 'material'}-site-${index}`),
     name: String(site.name || site.id || `SITE-${index + 1}`),
+    occupiedMaterialUuid: site.occupied_material_uuid ? String(site.occupied_material_uuid) : undefined,
+    occupiedMaterialName: site.occupied_material_name ? String(site.occupied_material_name) : undefined,
+    allowedResourceTemplateUuids: Array.isArray(site.allowed_resource_template_uuids)
+      ? site.allowed_resource_template_uuids.map(String)
+      : [],
   }))
 }
 
@@ -663,6 +671,32 @@ export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[
   }))
 }
 
+export async function loadReagentHistory(materialUuid: string, signal?: AbortSignal): Promise<ReagentHistoryRecord[]> {
+  const page = await requestAllPages<RawRecord>(`/materials/${encodeURIComponent(materialUuid)}/reagent-history`, signal)
+  return page.items.map((raw) => {
+    const changes = raw.changes && typeof raw.changes === 'object' ? raw.changes as RawRecord : {}
+    const result = changes.result && typeof changes.result === 'object' ? changes.result as RawRecord : {}
+    const extension = raw.extension && typeof raw.extension === 'object' ? raw.extension as RawRecord : {}
+    return {
+      uuid: String(raw.uuid),
+      materialUuid: String(raw.material_uuid || materialUuid),
+      reagentUuid: String(raw.subject_uuid || ''),
+      eventType: String(raw.event_type || 'adjust'),
+      operatorType: String(raw.operator_type || 'system'),
+      quantityDelta: Number(raw.quantity_delta || 0),
+      quantityUnit: String(raw.quantity_unit || result.quantity_unit || ''),
+      revision: Number(raw.revision || result.revision || 0),
+      recordedAt: String(raw.recorded_at || ''),
+      resultQuantity: result.quantity == null ? undefined : Number(result.quantity),
+      resultQuantityUnit: result.quantity_unit ? String(result.quantity_unit) : undefined,
+      source: extension.source ? String(extension.source) : undefined,
+      workflowTaskUuid: raw.workflow_task_uuid ? String(raw.workflow_task_uuid) : undefined,
+      workflowNodeJobUuid: raw.workflow_node_job_uuid ? String(raw.workflow_node_job_uuid) : undefined,
+      traceId: raw.trace_id ? String(raw.trace_id) : undefined,
+    }
+  })
+}
+
 export async function createReagentInfo(payload: {
   name: string; nameEn?: string; aliases?: string[]; cas?: string; molecularFormula?: string;
   smiles?: string; inchiKey?: string; molecularWeight?: number; densityGPerMl?: number;
@@ -675,6 +709,10 @@ export async function createReagentInfo(payload: {
     density_g_per_ml: payload.densityGPerMl, physical_state: payload.physicalState,
     description: payload.description || undefined, meta_data: payload.metadata || {},
   })
+}
+
+export async function deleteReagentInfo(reagentInfoUuid: string) {
+  return writeData<unknown>('DELETE', `/reagent-infos/${encodeURIComponent(reagentInfoUuid)}`)
 }
 
 export async function createReagent(payload: {
@@ -803,6 +841,9 @@ function materialSitesFromGraph(graph: RawRecord): Map<string, MaterialRecord['s
         name: String(site.name || site.id || `SITE-${index + 1}`),
         occupiedMaterialUuid: occupant?.uuid,
         occupiedMaterialName: occupant?.name,
+        allowedResourceTemplateUuids: Array.isArray(site.allowed_resource_template_uuids)
+          ? site.allowed_resource_template_uuids.map(String)
+          : [],
       }
     }))
   })
