@@ -230,8 +230,7 @@ export function WorkflowsPage({
     } catch (error) { onNotify(`引用失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
 
-  async function runPreflight(openDiagnostics = false) {
-    if (openDiagnostics) setWorkspaceView('diagnostics')
+  async function refreshPreflight() {
     const result = await preflightQuery.refetch()
     onNotify(result.isError ? 'Preflight 读取失败' : 'Preflight 报告已更新')
   }
@@ -321,7 +320,10 @@ export function WorkflowsPage({
                   <Button
                     icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
                     disabled={!connected || preflightQuery.isFetching}
-                    onClick={() => void runPreflight(true)}
+                    onClick={() => {
+                      setWorkspaceView('diagnostics')
+                      void refreshPreflight()
+                    }}
                   >运行 Preflight</Button>
                   <Button tone="primary" icon={<Play size={15} />} onClick={() => setWorkspaceView('run')}>进入运行准备</Button>
                 </div>
@@ -365,7 +367,7 @@ export function WorkflowsPage({
                     <div><strong>运行前诊断</strong><small>来自 Edge Preflight 的只读判断，不创建任务或占用资源</small></div>
                     <div className="diagnostic-actions">
                       <span className={`diagnostic-status readiness-${preflightTone}`} role={preflightQuery.isError ? 'alert' : 'status'}><ReadinessIcon tone={preflightTone} />{preflightStatusLabel}</span>
-                      <Button icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} disabled={!connected || preflightQuery.isFetching} onClick={() => void runPreflight()}>{preflight ? '刷新 Preflight' : '运行 Preflight'}</Button>
+                      <Button icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} disabled={!connected || preflightQuery.isFetching} onClick={() => void refreshPreflight()}>{preflight ? '刷新 Preflight' : '运行 Preflight'}</Button>
                     </div>
                   </header>
                   {!preflight ? <EmptyState title="尚未运行 Preflight" description="执行检查后可按节点查看阻断、延后与人工确认项。" /> : (
