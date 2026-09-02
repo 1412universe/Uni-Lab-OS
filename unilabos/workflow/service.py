@@ -1269,8 +1269,15 @@ class WorkflowService:
                 self._definition_store.get_workflow(identity)
             except StoreNotFound:
                 raise WorkflowError("not_found") from None
-            if self._has_active_source(identity):
+            # 来源登记可能已从 active 授权集合移除（例如重启/导入回滚后），
+            # 但仍然存在于内存定义目录。删除时必须以登记表为准清理，不能只
+            # 依赖 active 集合，否则页面删除后再次导入仍会命中 UUID/文件名冲突。
+            try:
                 registration = self._registered_domain_source(identity)
+            except WorkflowError as error:
+                if error.code != "source_target_unavailable":
+                    raise
+            else:
                 self._unregister_domain_source(registration)
             self._definition_store.delete_workflow(identity)
             self._remove_active_source_authorization(identity)
@@ -1981,7 +1988,52 @@ class WorkflowService:
                 node = build_workflow_node(payload=payload, template=template)
             except (TypeError, ValueError, WorkflowDefinitionInvalid):
                 raise WorkflowError("invalid_input") from None
-            updated = self.save_graph(
+
+            # 公共 Graph 写接口不能直接改写 ``unilab`` 保留元数据；但固定设备
+            # 选择又必须同时投影为顶层 material_uuid 和可信 executor_binding，
+            # 否则源码回写会退化成动态 ``device()`` 并丢失用户选择。这里只接受
+            # 用户可编辑的 input_bindings，由服务端根据已校验物料身份生成绑定。
+            submitted_unilab = node.get("meta_data", {}).get("unilab", {})
+            editable_unilab: dict[str, Any] = {}
+            if isinstance(submitted_unilab, Mapping):
+                input_bindings = submitted_unilab.get("input_bindings")
+                if isinstance(input_bindings, Mapping):
+                    editable_unilab["input_bindings"] = dict(input_bindings)
+            material_uuid = node.get("material_uuid")
+            if material_uuid is not None:
+                material = (
+                    self._material_resolver(str(material_uuid))
+                    if self._material_resolver is not None
+                    else None
+                )
+                if material is None:
+                    raise WorkflowError(
+                        "invalid_input", message="固定执行器物料不存在或当前不可用"
+                    )
+                expected_template_uuid = str(
+                    (template or {}).get("resource_template_uuid") or ""
+                )
+                actual_template_uuid = str(
+                    material.get("resource_template_uuid") or ""
+                )
+                if not expected_template_uuid or actual_template_uuid != expected_template_uuid:
+                    raise WorkflowError(
+                        "invalid_input",
+                        message="固定执行器资源模板与动作模板不一致",
+                    )
+                editable_unilab["executor_binding"] = {
+                    "mode": "fixed",
+                    "device_id": str(material_uuid),
+                }
+            node_meta_data = {
+                key: value
+                for key, value in node.get("meta_data", {}).items()
+                if key != "unilab"
+            }
+            if editable_unilab:
+                node_meta_data["unilab"] = editable_unilab
+            node["meta_data"] = node_meta_data
+            updated = self._save_server_generated_graph(
                 identity,
                 revision=graph["workflow"]["revision"],
                 nodes=[*graph["nodes"], node],
