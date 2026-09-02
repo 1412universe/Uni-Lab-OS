@@ -30,6 +30,7 @@ class Robot:
         self,
         material: ResourceSlot,
         source_device: ResourceSlot,
+        source_site: str,
         target_device: ResourceSlot,
         target_site_uuid: str,
     ) -> Result:
@@ -64,6 +65,9 @@ def test_ast_freezes_resource_contract_into_canonical_action_schema(
             },
             "transfer": {
                 "material_param": "material",
+                "source_owner_param": "source_device",
+                "source_site_uuid_param": "",
+                "source_site_name_param": "source_site",
                 "target_owner_param": "target_device",
                 "target_site_uuid_param": "target_site_uuid",
                 "gripper_site_role": "robot.gripper",
@@ -81,6 +85,9 @@ def test_ast_freezes_resource_contract_into_canonical_action_schema(
     assert contract["device_tenancy"]["mode"] == "task_while_loaded"
     assert contract["transfer"] == {
         "material_param": "material",
+        "source_owner_param": "source_device",
+        "source_site_uuid_param": "",
+        "source_site_name_param": "source_site",
         "target_owner_param": "target_device",
         "target_site_uuid_param": "target_site_uuid",
         "target_site_name_param": "",

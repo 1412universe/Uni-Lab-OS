@@ -292,6 +292,70 @@ class ExecutionPlanBuilder:
                     if (node_uuid, str(handle_uuid)) in runtime_handle_ids
                     and isinstance(binding, Mapping)
                 }
+            site_group_bindings = (
+                node_unilab.get("site_group_bindings")
+                if isinstance(node_unilab, Mapping)
+                else None
+            )
+            site_selectors: list[dict[str, Any]] = []
+            for handle in node_handles:
+                selector = handle.get("site_selector")
+                if handle.get("io_type") != "target" or not isinstance(
+                    selector, Mapping
+                ):
+                    continue
+                owner_parameter = selector.get("owner")
+                if not isinstance(owner_parameter, str) or not owner_parameter.strip():
+                    raise ExecutionPlanBuildError(
+                        "invalid_site_selector",
+                        "库位选择器缺少所属资源参数",
+                    )
+                template_handle_uuid = str(handle.get("template_handle_uuid") or "")
+                raw_group = (
+                    site_group_bindings.get(template_handle_uuid)
+                    if isinstance(site_group_bindings, Mapping)
+                    else None
+                )
+                descriptor: dict[str, Any] = {
+                    "version": 1,
+                    "handle_uuid": str(handle["uuid"]),
+                    "parameter": final_target_data_key(str(handle["data_key"])),
+                    "owner_parameter": owner_parameter,
+                    "occupant_parameter": str(selector.get("occupant") or ""),
+                }
+                if raw_group is not None:
+                    if (
+                        not isinstance(raw_group, Mapping)
+                        or raw_group.get("version") != 1
+                        or raw_group.get("owner_parameter") != owner_parameter
+                        or raw_group.get("strategy") != "sort_order"
+                        or not isinstance(raw_group.get("group_key"), str)
+                        or not str(raw_group["group_key"]).strip()
+                    ):
+                        raise ExecutionPlanBuildError(
+                            "invalid_site_group_binding",
+                            "命名库位组绑定与动作 SiteSelector 合同不一致",
+                        )
+                    descriptor.update(
+                        {
+                            "group_key": str(raw_group["group_key"]),
+                            "strategy": "sort_order",
+                        }
+                    )
+                    exact_parameter = raw_group.get("exact_parameter")
+                    if exact_parameter is not None:
+                        if (
+                            not isinstance(exact_parameter, str)
+                            or not exact_parameter.strip()
+                        ):
+                            raise ExecutionPlanBuildError(
+                                "invalid_site_group_binding",
+                                "命名库位组精确覆盖参数无效",
+                            )
+                        descriptor["exact_parameter"] = exact_parameter
+                site_selectors.append(descriptor)
+            if site_selectors:
+                planned_node["site_selectors"] = site_selectors
             if kind in {"condition", "repeat_until"}:
                 planned_node["control_region"] = deepcopy(planned_param)
             if kind in {"device_action", "material_transfer"}:
@@ -430,7 +494,9 @@ class ExecutionPlanBuilder:
             if kinds.get(parent) == "repeat_until":
                 return True
             current = parent
-        raise ExecutionPlanBuildError("invalid_control_region", "控制区域父子关系包含环")
+        raise ExecutionPlanBuildError(
+            "invalid_control_region", "控制区域父子关系包含环"
+        )
 
     @staticmethod
     def _repeat_control_edges(
@@ -466,7 +532,9 @@ class ExecutionPlanBuilder:
                 "invalid_control_region", "循环区域父子关系包含环"
             )
 
-        def add_edge(region_uuid: str, source_uuid: str, target_uuid: str, role: str) -> None:
+        def add_edge(
+            region_uuid: str, source_uuid: str, target_uuid: str, role: str
+        ) -> None:
             """按区域身份与语义角色加入确定性的 dependency_only 边。"""
 
             pair = (source_uuid, target_uuid)
@@ -475,7 +543,12 @@ class ExecutionPlanBuilder:
             seen_pairs.add(pair)
             result.append(
                 {
-                    "uuid": str(uuid5(UUID(region_uuid), f"repeat-{role}:{source_uuid}:{target_uuid}")),
+                    "uuid": str(
+                        uuid5(
+                            UUID(region_uuid),
+                            f"repeat-{role}:{source_uuid}:{target_uuid}",
+                        )
+                    ),
                     "source_node_uuid": source_uuid,
                     "target_node_uuid": target_uuid,
                     "source_handle_uuid": "",
@@ -544,7 +617,10 @@ class ExecutionPlanBuilder:
                     )
                 if binding.get("kind") == "node_result":
                     source_uuid = str(binding.get("node_uuid") or "")
-                    if source_uuid not in active_node_uuids or source_uuid in member_uuids:
+                    if (
+                        source_uuid not in active_node_uuids
+                        or source_uuid in member_uuids
+                    ):
                         raise ExecutionPlanBuildError(
                             "invalid_control_region", "初始 carry 必须来自循环区域外"
                         )
@@ -554,9 +630,10 @@ class ExecutionPlanBuilder:
                     raise ExecutionPlanBuildError(
                         "invalid_control_region", "下一轮 carry 来源必须是对象"
                     )
-                if binding.get("kind") == "node_result" and str(
-                    binding.get("node_uuid") or ""
-                ) not in member_uuids:
+                if (
+                    binding.get("kind") == "node_result"
+                    and str(binding.get("node_uuid") or "") not in member_uuids
+                ):
                     raise ExecutionPlanBuildError(
                         "invalid_control_region", "下一轮 carry 必须来自当前循环体"
                     )
@@ -565,9 +642,10 @@ class ExecutionPlanBuilder:
                     raise ExecutionPlanBuildError(
                         "invalid_control_region", "循环条件绑定必须是对象"
                     )
-                if binding.get("kind") == "node_result" and str(
-                    binding.get("node_uuid") or ""
-                ) not in member_uuids:
+                if (
+                    binding.get("kind") == "node_result"
+                    and str(binding.get("node_uuid") or "") not in member_uuids
+                ):
                     raise ExecutionPlanBuildError(
                         "invalid_control_region", "循环条件节点结果必须来自当前轮"
                     )

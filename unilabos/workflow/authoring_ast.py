@@ -50,12 +50,14 @@ _AUTHORING_MARKERS = {
     "group": "unilabos.workflow.authoring:group",
     "parallel": "unilabos.workflow.authoring:parallel",
     "repeat_until": "unilabos.workflow.authoring:repeat_until",
+    "site_group": "unilabos.workflow.authoring:site_group",
     "until": "unilabos.workflow.authoring:until",
     "workflow": "unilabos.workflow.authoring:workflow",
     "workflow_definition": "unilabos.workflow.authoring:workflow_definition",
     "workflow_output": "unilabos.workflow.authoring:workflow_output",
 }
 _RESOURCE_REF = "unilabos.workflow.authoring:resource_ref"
+_SITE_GROUP = "unilabos.workflow.authoring:site_group"
 
 
 class AuthoringSyntaxError(ValueError):
@@ -1489,7 +1491,9 @@ def _parse_repeat_until(
         _fail("invalid_loop_carry", "carry 必须是字符串键字典", carry_expression)
     node_uuid = state.anchors.get(statement.lineno - 1)
     if node_uuid is None:
-        _fail("invalid_node_anchor", "每个循环区域前必须有相邻节点 UUID 锚点", statement)
+        _fail(
+            "invalid_node_anchor", "每个循环区域前必须有相邻节点 UUID 锚点", statement
+        )
     if (
         loop_target.id in state.input_names
         or loop_target.id in available_results
@@ -1879,10 +1883,16 @@ def _action_declaration(
             # 动作共享同一部署资源引用语法；此处只保存静态业务身份，实际物料
             # UUID 仍由工作流创作组合根注入的库存权威（Inventory Authority）解析。
             resource_binding = _resource_ref_binding(item.value, imports=imports)
+            site_group_binding = _site_group_binding(
+                item.value,
+                imports=imports,
+                input_names=input_names,
+            )
             arguments.append(
                 (
                     item.arg,
                     resource_binding
+                    or site_group_binding
                     or _value_binding(
                         item.value,
                         input_names=input_names,
@@ -1931,10 +1941,16 @@ def _action_declaration(
         # ``resource_binding`` 只识别显式导入的编译标记；解析发生在候选图层，
         # 这里保留部署业务资源 ID，绝不把它误当成实际物料 UUID。
         resource_binding = _resource_ref_binding(keyword.value, imports=imports)
+        site_group_binding = _site_group_binding(
+            keyword.value,
+            imports=imports,
+            input_names=input_names,
+        )
         arguments.append(
             (
                 keyword.arg,
                 resource_binding
+                or site_group_binding
                 or _value_binding(
                     keyword.value,
                     input_names=input_names,
@@ -2001,6 +2017,73 @@ def _resource_ref_binding(
             expression,
         )
     return ValueBinding("resource_ref", resource_id)
+
+
+def _site_group_binding(
+    expression: ast.expr,
+    *,
+    imports: Mapping[str, str],
+    input_names: set[str],
+) -> ValueBinding | None:
+    """识别命名库位组的静态作者标记。
+
+    参数：``expression`` 是动作参数 AST，``imports`` 证明本地函数身份。返回：
+    非 ``site_group`` 调用返回 ``None``；合法调用返回组键绑定。异常：参数不是
+    单个无首尾空白字符串时关闭式抛出稳定作者语法错误；可选 ``exact`` 必须
+    直接引用本工作流输入参数。
+    """
+
+    if (
+        not isinstance(expression, ast.Call)
+        or not isinstance(expression.func, ast.Name)
+        or imports.get(expression.func.id) != _SITE_GROUP
+    ):
+        return None
+    if len(expression.args) != 1 or len(expression.keywords) > 1:
+        _fail(
+            "invalid_action_arguments",
+            "site_group 必须接收静态组键和可选 exact 工作流参数",
+            expression,
+        )
+    try:
+        group_key = ast.literal_eval(expression.args[0])
+    except (TypeError, ValueError):
+        _fail(
+            "invalid_action_arguments",
+            "site_group 必须接收单个静态库位组键",
+            expression,
+        )
+    if (
+        not isinstance(group_key, str)
+        or not group_key.strip()
+        or group_key != group_key.strip()
+    ):
+        _fail(
+            "invalid_action_arguments",
+            "site_group 必须接收无首尾空白的非空库位组键",
+            expression,
+        )
+    exact_parameter = ""
+    if expression.keywords:
+        keyword = expression.keywords[0]
+        if (
+            keyword.arg != "exact"
+            or not isinstance(keyword.value, ast.Name)
+            or keyword.value.id not in input_names
+        ):
+            _fail(
+                "invalid_action_arguments",
+                "site_group.exact 必须直接引用工作流输入参数",
+                expression,
+            )
+        exact_parameter = keyword.value.id
+    return ValueBinding(
+        "site_group",
+        {
+            "group_key": group_key,
+            "exact_parameter": exact_parameter,
+        },
+    )
 
 
 def _workflow_outputs(

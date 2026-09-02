@@ -175,6 +175,8 @@ def _action_schema(*, include_site_uuid: bool = True) -> dict[str, Any]:
     properties: dict[str, Any] = {
         "resource": _material_reference_schema(),
         "mount_resource": _material_reference_schema(),
+        "source_warehouse": _material_reference_schema(),
+        "source_site": {"type": "string", "default": ""},
         "site": {"type": "string", "default": ""},
     }
     if include_site_uuid:
@@ -206,6 +208,8 @@ def _node(
     site_uuid: str = "",
     site: str = "",
     include_site_uuid: bool = True,
+    source_contract: bool = False,
+    expected_source_site: str = "",
 ) -> WorkflowNode:
     """构造真实参数形状的 ``transfer_resource`` 工作流节点。
 
@@ -222,6 +226,8 @@ def _node(
         param["site"] = site
     if site_uuid:
         param["site_uuid"] = site_uuid
+    if expected_source_site:
+        param["source_site"] = expected_source_site
     return WorkflowNode(
         id=node_id,
         device_id=device_id,
@@ -234,16 +240,155 @@ def _node(
             "version": 1,
             "transfer": {
                 "material_param": "resource",
-                "target_owner_param": "mount_resource",
-                "target_site_uuid_param": (
-                    "site_uuid" if include_site_uuid else ""
+                **(
+                    {
+                        "source_owner_param": "source_warehouse",
+                        "source_site_uuid_param": "",
+                        "source_site_name_param": "source_site",
+                    }
+                    if source_contract
+                    else {}
                 ),
+                "target_owner_param": "mount_resource",
+                "target_site_uuid_param": ("site_uuid" if include_site_uuid else ""),
                 "target_site_name_param": "site",
                 "gripper_site_role": "",
             },
         },
         always_free=True,
     )
+
+
+def test_exact_site_selection_defers_occupancy_to_bound_gate7_authority(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """单候选精确覆盖也必须由 Gate 7 事务判断占用，不能在调度器前置过滤。"""
+
+    store, service, identities = inventory
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE site SET occupied_material_uuid=NULL "
+            "WHERE occupied_material_uuid=?",
+            (identities["second"],),
+        )
+        connection.execute(
+            "UPDATE site SET occupied_material_uuid=? WHERE uuid=?",
+            (identities["second"], _SITE_UUID_A),
+        )
+
+    class _RecordingStationResources:
+        def __init__(self, delegate: Any) -> None:
+            self._delegate = delegate
+            self.require_available: list[bool] = []
+
+        def resolve_target_site(self, request: Any) -> Any:
+            self.require_available.append(request.require_available)
+            return self._delegate.resolve_target_site(request)
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._delegate, name)
+
+    resources = _RecordingStationResources(service.station_resources)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=service,
+        station_resources=resources,
+    )
+    admissions: list[dict[str, Any]] = []
+
+    def wait_at_gate7(dispatching: dict[str, Any]) -> bool:
+        admissions.append(dispatching)
+        return False
+
+    scheduler.bind_dispatch_admission_authority(wait_at_gate7)
+    node = _node(
+        "a",
+        device_id="device-a",
+        resource_uuid=identities["first"],
+        owner_uuid=identities["owner"],
+    )
+    node.execution_policy = {
+        "target_site_group": [_SITE_UUID_A],
+        "target_site_selection": {
+            "version": 1,
+            "owner_material_uuid": identities["owner"],
+            "group_key": "process_input",
+            "requested_reference": "owner.A1",
+            "strategy": "sort_order",
+            "site_uuids": [_SITE_UUID_A],
+            "fingerprint": "sha256:exact-selection",
+        },
+    }
+
+    result = scheduler.submit_workflow(
+        WorkflowSpec(workflow_id="wf-exact-gate7", nodes=[node])
+    )
+
+    assert result["dispatched"] == []
+    assert resources.require_available == [False]
+    assert len(admissions) == 1
+
+
+def test_transfer_source_arguments_are_injected_from_site_occupancy(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """机械臂动作来源参数必须使用物料当前 SiteOccupancy，而不是 DAG 猜测值。"""
+
+    _, service, identities = inventory
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher, inventory=service)
+
+    result = scheduler.submit_workflow(
+        WorkflowSpec(
+            workflow_id="wf-source-injection",
+            nodes=[
+                _node(
+                    "a",
+                    device_id="device-a",
+                    resource_uuid=identities["first"],
+                    owner_uuid=identities["owner"],
+                    site_uuid=_SITE_UUID_A,
+                    source_contract=True,
+                )
+            ],
+        )
+    )
+
+    assert len(result["dispatched"]) == 1
+    action_args = dispatcher.dispatched[0]["action_args"]
+    assert action_args["source_warehouse"] == {"uuid": identities["source_owner"]}
+    assert action_args["source_site"] == "SOURCE-A"
+
+
+def test_transfer_expected_source_mismatch_fails_before_dispatch(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """作者保留的来源约束与当前占用不一致时必须关闭失败。"""
+
+    _, service, identities = inventory
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher, inventory=service)
+
+    result = scheduler.submit_workflow(
+        WorkflowSpec(
+            workflow_id="wf-source-mismatch",
+            nodes=[
+                _node(
+                    "a",
+                    device_id="device-a",
+                    resource_uuid=identities["first"],
+                    owner_uuid=identities["owner"],
+                    site_uuid=_SITE_UUID_A,
+                    source_contract=True,
+                    expected_source_site="WRONG-SITE",
+                )
+            ],
+        )
+    )
+
+    assert result["dispatched"] == []
+    assert dispatcher.dispatched == []
+    assert scheduler.workflow_snapshot("wf-source-mismatch")["state"] == "failed"
 
 
 def test_site_uuid_has_priority_and_fills_canonical_site_name(

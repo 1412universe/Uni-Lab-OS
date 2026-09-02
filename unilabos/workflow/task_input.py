@@ -26,6 +26,7 @@ class TaskInputError(ValueError):
 
 
 ResourceSlotResolver = Callable[[str], Mapping[str, Any] | None]
+SiteSelectionResolver = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ def prepare_task_input(
     execution_plan: Mapping[str, Any],
     jobs: Sequence[Mapping[str, Any]],
     resource_resolver: ResourceSlotResolver | None = None,
+    site_selection_resolver: SiteSelectionResolver | None = None,
 ) -> PreparedTaskInput:
     """在持久写入前解析任务输入并绑定活动计划节点。
 
@@ -73,6 +75,12 @@ def prepare_task_input(
             plan=plan,
             jobs=prepared_jobs,
             input_bindings=validated.input_bindings,
+            resolved_input=resolved,
+        )
+        _freeze_site_selections(
+            plan=plan,
+            jobs=prepared_jobs,
+            resolver=site_selection_resolver,
             resolved_input=resolved,
         )
         _add_boundary_jobs(
@@ -155,8 +163,7 @@ def _add_boundary_jobs(
     if output_descriptors:
         output_index = len(existing_nodes) + offset
         output_bindings = {
-            name: dict(binding)
-            for name, binding in workflow_io.output_bindings.items()
+            name: dict(binding) for name, binding in workflow_io.output_bindings.items()
         }
         output_node = {
             "uuid": output_node_uuid,
@@ -338,6 +345,16 @@ def _bind_active_plan(
         label="计划作业节点",
     )
     incoming = _incoming_edges(_object_list(plan.get("edges"), label="计划边"))
+    group_provider_by_handle = {
+        str(selector.get("handle_uuid") or "")
+        for node in plan_nodes.values()
+        for selector in (
+            node.get("site_selectors")
+            if isinstance(node.get("site_selectors"), list)
+            else []
+        )
+        if isinstance(selector, Mapping) and selector.get("group_key")
+    }
     for handle_uuid, handle in plan_handles.items():
         if handle.get("io_type") != "target":
             continue
@@ -380,7 +397,10 @@ def _bind_active_plan(
         ):
             static_provider = False
         provider_count = (
-            int(static_provider) + len(incoming_edges) + int(binding is not None)
+            int(static_provider)
+            + len(incoming_edges)
+            + int(binding is not None)
+            + int(handle_uuid in group_provider_by_handle)
         )
         if provider_count > 1:
             raise TaskInputError("计划目标输入存在多个提供者")
@@ -393,6 +413,137 @@ def _bind_active_plan(
             raise TaskInputError("计划输入绑定引用未解析参数")
         node_param[data_key] = clone_json(resolved_input[parameter])
         job_param[data_key] = clone_json(resolved_input[parameter])
+
+
+def _freeze_site_selections(
+    *,
+    plan: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    resolver: SiteSelectionResolver | None,
+    resolved_input: Mapping[str, Any],
+) -> None:
+    """把节点库位选择声明解析成 Task 代际冻结的具体候选 UUID。
+
+    参数：``plan`` 与 ``jobs`` 已完成工作流输入绑定；``resolver`` 是库存权威的
+    只读任务准入端口。返回：原位写入同一节点与 Job 的冻结执行策略。异常：
+    选择器、父资源或库存回执不完整时抛 ``TaskInputError``，调用方不得创建任务。
+    """
+
+    plan_nodes = _indexed_objects(plan.get("nodes"), key="uuid", label="计划节点")
+    jobs_by_node = _indexed_objects(
+        jobs,
+        key="workflow_node_uuid",
+        label="计划作业节点",
+    )
+    for node_uuid, node in plan_nodes.items():
+        raw_selectors = node.get("site_selectors")
+        if raw_selectors is None:
+            continue
+        if not isinstance(raw_selectors, list) or any(
+            not isinstance(item, Mapping) for item in raw_selectors
+        ):
+            raise TaskInputError("计划库位选择器必须是对象列表")
+        job = jobs_by_node.get(node_uuid)
+        if job is None:
+            raise TaskInputError("计划库位选择器未归属唯一活动作业")
+        node_param = node.get("param")
+        job_param = job.get("param")
+        if not isinstance(node_param, dict) or not isinstance(job_param, dict):
+            raise TaskInputError("计划库位选择器参数不是对象")
+        for raw_selector in raw_selectors:
+            parameter = str(raw_selector.get("parameter") or "").strip()
+            owner_parameter = str(raw_selector.get("owner_parameter") or "").strip()
+            group_key = str(raw_selector.get("group_key") or "").strip()
+            if not parameter or not owner_parameter:
+                raise TaskInputError("计划库位选择器字段不完整")
+            raw_owner = node_param.get(owner_parameter)
+            if not isinstance(raw_owner, Mapping) or not isinstance(
+                raw_owner.get("uuid"), str
+            ):
+                raise TaskInputError("目标库位所属资源没有冻结 UUID")
+            try:
+                owner_material_uuid = validate_uuid(raw_owner["uuid"])
+            except (TypeError, ValueError):
+                raise TaskInputError("目标库位所属资源 UUID 非法") from None
+            raw_occupant = node_param.get(
+                str(raw_selector.get("occupant_parameter") or "")
+            )
+            occupant_material_uuid = ""
+            if raw_occupant is not None:
+                if not isinstance(raw_occupant, Mapping) or not isinstance(
+                    raw_occupant.get("uuid"), str
+                ):
+                    raise TaskInputError("待放物料没有冻结 UUID")
+                try:
+                    occupant_material_uuid = validate_uuid(raw_occupant["uuid"])
+                except (TypeError, ValueError):
+                    raise TaskInputError("待放物料 UUID 非法") from None
+            exact_parameter = str(raw_selector.get("exact_parameter") or "").strip()
+            if exact_parameter:
+                if exact_parameter not in resolved_input:
+                    raise TaskInputError("命名库位组精确覆盖参数没有解析值")
+                exact_reference = resolved_input[exact_parameter]
+                if exact_reference not in (None, "") and not isinstance(
+                    exact_reference, str
+                ):
+                    raise TaskInputError("精确库位覆盖参数必须是字符串")
+            else:
+                exact_reference = node_param.get(parameter)
+            if not group_key and exact_reference in (None, ""):
+                continue
+            if resolver is None:
+                raise TaskInputError("工作流任务缺少库位选择权威解析器")
+            request = {
+                "version": 1,
+                "owner_material_uuid": owner_material_uuid,
+                "occupant_material_uuid": occupant_material_uuid,
+                "group_key": group_key,
+                "exact_site_reference": (
+                    "" if exact_reference in (None, "") else str(exact_reference)
+                ),
+                "strategy": "sort_order",
+            }
+            try:
+                resolution = resolver(request)
+            except Exception as exc:  # noqa: BLE001 - 库存边界统一关闭为任务输入失败
+                raise TaskInputError("工作流任务库位选择解析失败") from exc
+            raw_site_uuids = resolution.get("site_uuids")
+            if (
+                not isinstance(raw_site_uuids, Sequence)
+                or isinstance(raw_site_uuids, (str, bytes))
+                or not raw_site_uuids
+            ):
+                raise TaskInputError("库位选择权威没有返回候选 UUID")
+            try:
+                site_uuids = [validate_uuid(str(value)) for value in raw_site_uuids]
+            except (TypeError, ValueError):
+                raise TaskInputError("库位选择权威返回了非法 UUID") from None
+            if len(set(site_uuids)) != len(site_uuids):
+                raise TaskInputError("库位选择权威返回了重复 UUID")
+            policy = node.get("execution_policy")
+            job_policy = job.get("execution_policy")
+            if not isinstance(policy, dict) or not isinstance(job_policy, dict):
+                raise TaskInputError("计划库位选择执行策略不是对象")
+            existing = policy.get("target_site_group")
+            if existing is not None and list(existing) != site_uuids:
+                raise TaskInputError("库位选择与既有执行策略冲突")
+            selection = {
+                "version": 1,
+                "owner_material_uuid": owner_material_uuid,
+                "group_key": group_key,
+                "requested_reference": request["exact_site_reference"],
+                "strategy": "sort_order",
+                "site_uuids": site_uuids,
+                "fingerprint": str(resolution.get("fingerprint") or ""),
+            }
+            policy["target_site_group"] = site_uuids
+            policy["target_site_selection"] = selection
+            job_policy["target_site_group"] = clone_json(site_uuids)
+            job_policy["target_site_selection"] = clone_json(selection)
+            # 设备驱动只在派发时接收最终选中的规范库位名；Task 快照不把人类
+            # 引用误当成物理动作参数，也避免与冻结候选组形成双选择器。
+            node_param.pop(parameter, None)
+            job_param.pop(parameter, None)
 
 
 def _incoming_edges(
@@ -482,6 +633,7 @@ def _object_list(raw: Any, *, label: str) -> list[dict[str, Any]]:
 __all__ = [
     "PreparedTaskInput",
     "ResourceSlotResolver",
+    "SiteSelectionResolver",
     "TaskInputError",
     "prepare_task_input",
 ]

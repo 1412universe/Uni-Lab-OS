@@ -1238,6 +1238,7 @@ def _candidate_node(
     # ``resource_refs`` 仅保留规范源码往返需要的部署业务 ID，键使用真实目标
     # 连接点（Handle）UUID；实际物料身份单独进入 ``params``。
     resource_refs: dict[str, dict[str, str]] = {}
+    site_group_bindings: dict[str, dict[str, Any]] = {}
     for argument_name, binding in declaration.arguments:
         target_handle = _require_handle(
             catalog_action,
@@ -1277,6 +1278,31 @@ def _candidate_node(
                 ) from error
             params[argument_name] = {"uuid": resolved_reference["uuid"]}
             resource_refs[handle_uuid] = {"resource_id": str(binding.value)}
+        elif binding.kind == "site_group":
+            selector = _site_selector_contract(
+                target_handle,
+                argument_name=argument_name,
+            )
+            binding_value = binding.value
+            group_key = (
+                binding_value.get("group_key")
+                if isinstance(binding_value, Mapping)
+                else binding_value
+            )
+            exact_parameter = (
+                binding_value.get("exact_parameter", "")
+                if isinstance(binding_value, Mapping)
+                else ""
+            )
+            group_binding = {
+                "version": 1,
+                "group_key": str(group_key),
+                "owner_parameter": selector["owner"],
+                "strategy": "sort_order",
+            }
+            if exact_parameter:
+                group_binding["exact_parameter"] = str(exact_parameter)
+            site_group_bindings[handle_uuid] = group_binding
     # 作者结果变量是 Python 数据依赖身份，必须与可编辑的节点标题分离保存。
     unilab: dict[str, Any] = {
         "input_bindings": input_bindings,
@@ -1284,6 +1310,8 @@ def _candidate_node(
     }
     if resource_refs:
         unilab["resource_refs"] = dict(sorted(resource_refs.items()))
+    if site_group_bindings:
+        unilab["site_group_bindings"] = dict(sorted(site_group_bindings.items()))
     if carry_bindings:
         unilab["carry_bindings"] = dict(sorted(carry_bindings.items()))
     template = catalog_action.template
@@ -1348,6 +1376,35 @@ def _candidate_node(
         ),
         "meta_data": {"unilab": unilab},
     }
+
+
+def _site_selector_contract(
+    handle: Mapping[str, Any],
+    *,
+    argument_name: str,
+) -> dict[str, Any]:
+    """读取并验证动作目标连接点的库位选择关系合同。
+
+    参数：``handle`` 是目录目标连接点，``argument_name`` 用于稳定诊断。返回：
+    与目录隔离的 SiteSelector 字典。异常：普通字符串或破损合同使用
+    ``site_group`` 时抛 ``AuthoringGraphError``，禁止把组选择器投影到任意参数。
+    """
+
+    metadata = handle.get("meta_data")
+    unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+    selector = unilab.get("site_selector") if isinstance(unilab, Mapping) else None
+    owner = selector.get("owner") if isinstance(selector, Mapping) else None
+    if (
+        not isinstance(selector, Mapping)
+        or selector.get("version") != 1
+        or not isinstance(owner, str)
+        or not owner.strip()
+    ):
+        raise AuthoringGraphError(
+            "invalid_site_group_binding",
+            f"动作参数 {argument_name} 不是合法库位选择器",
+        )
+    return deepcopy(dict(selector))
 
 
 def _validate_action_resource_reference(

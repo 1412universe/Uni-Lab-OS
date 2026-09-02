@@ -76,9 +76,7 @@ def normalize_action_resource_contract(
     if value.get("transfer") is not None:
         normalized["transfer"] = _transfer(value["transfer"])
     if value.get("operate_in_place") is not None:
-        normalized["operate_in_place"] = _operate_in_place(
-            value["operate_in_place"]
-        )
+        normalized["operate_in_place"] = _operate_in_place(value["operate_in_place"])
     if value.get("aliquot") is not None:
         normalized["aliquot"] = _aliquot(value["aliquot"])
     if len(normalized) == 1:
@@ -129,13 +127,28 @@ def validate_action_resource_contract_schema(
         resource_fields.extend(
             (
                 (str(transfer["material_param"]), "/transfer/material_param"),
+                *(
+                    (
+                        (
+                            str(transfer["source_owner_param"]),
+                            "/transfer/source_owner_param",
+                        ),
+                    )
+                    if transfer.get("source_owner_param")
+                    else ()
+                ),
                 (
                     str(transfer["target_owner_param"]),
                     "/transfer/target_owner_param",
                 ),
             )
         )
-        for field in ("target_site_uuid_param", "target_site_name_param"):
+        for field in (
+            "source_site_uuid_param",
+            "source_site_name_param",
+            "target_site_uuid_param",
+            "target_site_name_param",
+        ):
             name = str(transfer.get(field) or "")
             if not name:
                 continue
@@ -283,6 +296,9 @@ def _transfer(value: Any) -> dict[str, str]:
         _fail("invalid_transfer_contract", "/transfer", "transfer 必须是对象")
     allowed = {
         "material_param",
+        "source_owner_param",
+        "source_site_uuid_param",
+        "source_site_name_param",
         "target_owner_param",
         "target_site_uuid_param",
         "target_site_name_param",
@@ -298,6 +314,30 @@ def _transfer(value: Any) -> dict[str, str]:
         value.get("material_param"),
         "/transfer/material_param",
     )
+    source_owner_param = _optional_parameter_name(
+        value.get("source_owner_param"),
+        "/transfer/source_owner_param",
+    )
+    source_site_uuid_param = _optional_parameter_name(
+        value.get("source_site_uuid_param"),
+        "/transfer/source_site_uuid_param",
+    )
+    source_site_name_param = _optional_parameter_name(
+        value.get("source_site_name_param"),
+        "/transfer/source_site_name_param",
+    )
+    if source_owner_param and not (source_site_uuid_param or source_site_name_param):
+        _fail(
+            "transfer_source_site_parameter_missing",
+            "/transfer",
+            "声明来源父资源时必须同时声明来源库位 UUID 或名称参数",
+        )
+    if (source_site_uuid_param or source_site_name_param) and not source_owner_param:
+        _fail(
+            "transfer_source_owner_parameter_missing",
+            "/transfer",
+            "声明来源库位时必须同时声明来源父资源参数",
+        )
     target_owner_param = _parameter_name(
         value.get("target_owner_param"),
         "/transfer/target_owner_param",
@@ -322,6 +362,9 @@ def _transfer(value: Any) -> dict[str, str]:
     )
     return {
         "material_param": material_param,
+        "source_owner_param": source_owner_param,
+        "source_site_uuid_param": source_site_uuid_param,
+        "source_site_name_param": source_site_name_param,
         "target_owner_param": target_owner_param,
         "target_site_uuid_param": site_uuid_param,
         "target_site_name_param": site_name_param,

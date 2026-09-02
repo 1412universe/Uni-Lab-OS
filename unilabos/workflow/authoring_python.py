@@ -208,6 +208,12 @@ def render_authoring_python(
     ):
         # 普通动作也可用 ``resource_ref``；只有真实节点元数据声明时才生成 import。
         marker_imports += ", resource_ref"
+    if any(
+        isinstance((node.get("meta_data") or {}).get("unilab"), Mapping)
+        and bool((node.get("meta_data") or {})["unilab"].get("site_group_bindings"))
+        for node in ordered_nodes
+    ):
+        marker_imports += ", site_group"
     if not explicit_output_bindings:
         marker_imports += ", workflow_output"
     lines.append(f"from unilabos.workflow.authoring import {marker_imports}")
@@ -980,16 +986,15 @@ def _render_condition_expression(
         return repr(value["lit"])
     if set(value) == {"var"}:
         return _safe_identifier(str(value["var"]), fallback="invalid")
-    if (
-        set(value) == {"carry", "control_region_uuid"}
-        and node_by_uuid is not None
-    ):
+    if set(value) == {"carry", "control_region_uuid"} and node_by_uuid is not None:
         region = node_by_uuid.get(str(value["control_region_uuid"]))
         params = region.get("param") if isinstance(region, Mapping) else None
         variable = params.get("loop_variable") if isinstance(params, Mapping) else None
         if not isinstance(variable, str):
             raise AuthoringGraphError("candidate_invalid", "循环条件 carry 来源无效")
-        return f"{variable}.carry[{json.dumps(str(value['carry']), ensure_ascii=False)}]"
+        return (
+            f"{variable}.carry[{json.dumps(str(value['carry']), ensure_ascii=False)}]"
+        )
     if set(value) == {"field", "name"} and isinstance(value["field"], Mapping):
         name = _safe_identifier(str(value["name"]), fallback="invalid")
         return (
@@ -1671,6 +1676,9 @@ def _render_action_arguments(
     resource_refs = (
         unilab.get("resource_refs", {}) if isinstance(unilab, Mapping) else {}
     )
+    site_group_bindings = (
+        unilab.get("site_group_bindings", {}) if isinstance(unilab, Mapping) else {}
+    )
     # ``rendered`` 按动作合同（Action Contract）业务键顺序收集最终命名参数。
     rendered: list[str] = []
     # ``target_handles`` 只包含动作（Action）数据输入；ready 等结构连接点
@@ -1715,6 +1723,31 @@ def _render_action_arguments(
                     "candidate_invalid", "动作资源引用元数据或实际物料身份无效"
                 )
             expression = f"resource_ref({json.dumps(resource_id, ensure_ascii=False)})"
+        elif handle_uuid in site_group_bindings:
+            binding = site_group_bindings[handle_uuid]
+            group_key = (
+                binding.get("group_key") if isinstance(binding, Mapping) else None
+            )
+            if (
+                not isinstance(group_key, str)
+                or not group_key.strip()
+                or group_key != group_key.strip()
+            ):
+                raise AuthoringGraphError(
+                    "candidate_invalid", "动作命名库位组元数据无效"
+                )
+            exact_parameter = (
+                binding.get("exact_parameter") if isinstance(binding, Mapping) else None
+            )
+            exact_argument = (
+                f", exact={exact_parameter}"
+                if isinstance(exact_parameter, str) and exact_parameter
+                else ""
+            )
+            expression = (
+                f"site_group({json.dumps(group_key, ensure_ascii=False)}"
+                f"{exact_argument})"
+            )
         elif handle_uuid in input_bindings:
             # ``binding`` 是当前目标连接点（Handle）对应的工作流输入绑定事实；
             # 必须按连接点 UUID 查询，避免根据动作参数名称猜测绑定。

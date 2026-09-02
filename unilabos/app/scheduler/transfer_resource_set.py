@@ -43,6 +43,7 @@ class TransferResourceSet:
 
     lock_keys: tuple[str, ...]
     source_site_uuid: str
+    source_site_name: str
     source_owner_material_uuid: str
     source_device_material_uuid: str
     target_device_material_uuid: str
@@ -107,6 +108,7 @@ def resolve_transfer_resource_set(
     return TransferResourceSet(
         lock_keys=tuple(sorted(keys)),
         source_site_uuid=facts.source_site_uuid,
+        source_site_name=facts.source_site_name,
         source_owner_material_uuid=facts.source_owner_material_uuid,
         source_device_material_uuid=facts.source_device_material_uuid,
         target_device_material_uuid=facts.target_device_material_uuid,

@@ -184,6 +184,18 @@ def validate_graph(
         if overlap:
             raise GraphValidationError("同一目标 Handle 不能同时绑定输入和 carry")
         bindings_by_node[node.uuid].update(carry_bindings)
+        site_group_bindings = _validated_site_group_bindings(
+            node,
+            node_meta_data[node.uuid],
+            handles,
+            workflow_meta_data,
+        )
+        overlap = set(bindings_by_node[node.uuid]) & set(site_group_bindings)
+        if overlap:
+            raise GraphValidationError(
+                "同一目标 Handle 不能同时绑定输入、carry 和命名库位组"
+            )
+        bindings_by_node[node.uuid].update(site_group_bindings)
     enabled = {
         node.uuid: node
         for node in nodes
@@ -271,9 +283,7 @@ def validate_graph(
             if node.material_uuid is None:
                 metadata = node_meta_data.get(node.uuid, {})
                 unilab = (
-                    metadata.get("unilab")
-                    if isinstance(metadata, Mapping)
-                    else None
+                    metadata.get("unilab") if isinstance(metadata, Mapping) else None
                 )
                 binding = (
                     unilab.get("executor_binding")
@@ -282,9 +292,12 @@ def validate_graph(
                 )
                 if binding is not None:
                     raise GraphValidationError("固定设备动作节点必须绑定 material_uuid")
-                if template_uuid is None or not str(
-                    templates[template_uuid].get("resource_template_uuid") or ""
-                ).strip():
+                if (
+                    template_uuid is None
+                    or not str(
+                        templates[template_uuid].get("resource_template_uuid") or ""
+                    ).strip()
+                ):
                     raise GraphValidationError("动态设备动作节点缺少设备类型")
 
 
@@ -311,9 +324,7 @@ def _project_composite_boundary_inputs(
         unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
         composite = unilab.get("composite") if isinstance(unilab, Mapping) else None
         mappings = (
-            composite.get("target_mappings")
-            if isinstance(composite, Mapping)
-            else None
+            composite.get("target_mappings") if isinstance(composite, Mapping) else None
         )
         if mappings is None:
             continue
@@ -369,8 +380,7 @@ def _project_composite_boundary_inputs(
                 target_key = _handle_data_key(target_handle)
                 if (
                     target_input in connected_inputs
-                    or target_handle_uuid
-                    in bindings_by_node.get(target_node_uuid, {})
+                    or target_handle_uuid in bindings_by_node.get(target_node_uuid, {})
                     or target_key in effective_params.get(target_node_uuid, {})
                 ):
                     continue
@@ -624,7 +634,9 @@ def _validated_carry_bindings(
             raise GraphValidationError("carry_binding 未引用 RepeatUntil 区域")
         current = node.parent_uuid
         seen: set[str] = set()
-        while isinstance(current, str) and current not in seen and current != region_uuid:
+        while (
+            isinstance(current, str) and current not in seen and current != region_uuid
+        ):
             seen.add(current)
             parent = nodes.get(current)
             current = parent.parent_uuid if parent is not None else None
@@ -632,8 +644,105 @@ def _validated_carry_bindings(
             raise GraphValidationError("carry_binding 只能引用祖先循环区域")
         params = region.param if isinstance(region.param, Mapping) else {}
         initial_carry = params.get("initial_carry")
-        if not isinstance(key, str) or not isinstance(initial_carry, Mapping) or key not in initial_carry:
+        if (
+            not isinstance(key, str)
+            or not isinstance(initial_carry, Mapping)
+            or key not in initial_carry
+        ):
             raise GraphValidationError("carry_binding 引用了未知 carry 键")
+        result[handle_uuid] = dict(raw_binding)
+    return result
+
+
+def _validated_site_group_bindings(
+    node: WorkflowNodeWrite,
+    meta_data: Mapping[str, Any],
+    handles: Mapping[str, Dict[str, Any]],
+    workflow_meta_data: Mapping[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    """校验命名库位组是本动作 SiteSelector 目标连接点的唯一 Provider。"""
+
+    unilab = meta_data.get("unilab", {})
+    raw_bindings = (
+        unilab.get("site_group_bindings", {}) if isinstance(unilab, Mapping) else {}
+    )
+    if not isinstance(raw_bindings, dict):
+        raise GraphValidationError("site_group_bindings 必须是对象")
+    if raw_bindings and node.workflow_node_template_uuid is None:
+        raise GraphValidationError("无模板节点不能声明 site_group_bindings")
+    result: Dict[str, Dict[str, Any]] = {}
+    for handle_uuid, raw_binding in raw_bindings.items():
+        handle = handles.get(handle_uuid)
+        if (
+            handle is None
+            or handle.get("workflow_node_template_uuid")
+            != node.workflow_node_template_uuid
+            or handle.get("io_type") != "target"
+        ):
+            raise GraphValidationError("site_group_binding 未引用本节点的目标 Handle")
+        required_fields = {
+            "version",
+            "group_key",
+            "owner_parameter",
+            "strategy",
+        }
+        if not isinstance(raw_binding, dict) or not (
+            required_fields <= set(raw_binding)
+            and set(raw_binding) <= required_fields | {"exact_parameter"}
+        ):
+            raise GraphValidationError("site_group_binding 字段非法")
+        group_key = raw_binding.get("group_key")
+        owner_parameter = raw_binding.get("owner_parameter")
+        if (
+            raw_binding.get("version") != 1
+            or raw_binding.get("strategy") != "sort_order"
+            or not isinstance(group_key, str)
+            or not group_key.strip()
+            or group_key != group_key.strip()
+            or not isinstance(owner_parameter, str)
+            or not owner_parameter.strip()
+        ):
+            raise GraphValidationError("site_group_binding 选择策略非法")
+        handle_meta = handle.get("meta_data")
+        handle_unilab = (
+            handle_meta.get("unilab") if isinstance(handle_meta, Mapping) else None
+        )
+        selector = (
+            handle_unilab.get("site_selector")
+            if isinstance(handle_unilab, Mapping)
+            else None
+        )
+        if (
+            not isinstance(selector, Mapping)
+            or selector.get("version") != 1
+            or selector.get("owner") != owner_parameter
+        ):
+            raise GraphValidationError("site_group_binding 与 SiteSelector 合同不一致")
+        exact_parameter = raw_binding.get("exact_parameter")
+        if exact_parameter is not None:
+            workflow_unilab = workflow_meta_data.get("unilab", {})
+            input_contract = (
+                workflow_unilab.get("input_contract", {})
+                if isinstance(workflow_unilab, Mapping)
+                else {}
+            )
+            parameters = (
+                input_contract.get("parameters", [])
+                if isinstance(input_contract, Mapping)
+                else []
+            )
+            parameter_names = [
+                item.get("name")
+                for item in parameters
+                if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+            ]
+            if (
+                not isinstance(exact_parameter, str)
+                or parameter_names.count(exact_parameter) != 1
+            ):
+                raise GraphValidationError(
+                    "site_group_binding.exact_parameter 未唯一引用 Workflow 参数"
+                )
         result[handle_uuid] = dict(raw_binding)
     return result
 

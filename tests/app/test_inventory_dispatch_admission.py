@@ -38,6 +38,7 @@ from unilabos.app.scheduler.inventory.content_contract import (
 SOURCE_SITE = "10000000-0000-4000-8000-000000000101"
 TARGET_SITE = "10000000-0000-4000-8000-000000000102"
 GRIPPER_SITE = "10000000-0000-4000-8000-000000000103"
+TARGET_SITE_FALLBACK = "10000000-0000-4000-8000-000000000104"
 
 
 @pytest.fixture()
@@ -178,8 +179,7 @@ def _request(
         ),
         DispatchResource(
             lock_key=(
-                f"material/{identities['source_device']}/site/"
-                f"{SOURCE_SITE}/exclusive"
+                f"material/{identities['source_device']}/site/{SOURCE_SITE}/exclusive"
             ),
             scope="material_site",
             material_uuid=identities["source_device"],
@@ -187,18 +187,14 @@ def _request(
         ),
         DispatchResource(
             lock_key=(
-                f"material/{identities['target_device']}/site/"
-                f"{TARGET_SITE}/exclusive"
+                f"material/{identities['target_device']}/site/{TARGET_SITE}/exclusive"
             ),
             scope="material_site",
             material_uuid=identities["target_device"],
             site_uuid=TARGET_SITE,
         ),
         DispatchResource(
-            lock_key=(
-                f"material/{identities['robot']}/site/"
-                f"{GRIPPER_SITE}/exclusive"
-            ),
+            lock_key=(f"material/{identities['robot']}/site/{GRIPPER_SITE}/exclusive"),
             scope="material_site",
             material_uuid=identities["robot"],
             site_uuid=GRIPPER_SITE,
@@ -246,10 +242,118 @@ def test_transfer_conditions_and_all_claims_commit_in_one_inventory_transaction(
     assert permit.effect_uuid.startswith("50000000-")
     assert len(permit.fences) == 7
     assert store.query_one(
-        "SELECT state,parameter_hash FROM station_execution_claim "
-        "WHERE claim_uuid=?",
+        "SELECT state,parameter_hash FROM station_execution_claim WHERE claim_uuid=?",
         (permit.claim_uuid,),
     ) == {"state": "prepared", "parameter_hash": "sha256:test-parameters"}
+
+
+def test_gate7_claims_fallback_site_in_same_inventory_transaction(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """首选库位已有 Claim 时 Gate 7 必须在同一事务回退下一候选。"""
+
+    store, service, identities = station_inventory
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO site(
+                uuid,create_time,update_time,meta_data,material_uuid,name,
+                sort_order,allowed_resource_template_uuids,
+                occupied_material_uuid,position_x,position_y,position_z,
+                depth,length,width
+            ) VALUES (?,?,?,'{}',?,?,1,'[]',NULL,0,0,0,0,0,0)
+            """,
+            (
+                TARGET_SITE_FALLBACK,
+                "2026-08-31T00:00:00Z",
+                "2026-08-31T00:00:00Z",
+                identities["target_device"],
+                "IN-FALLBACK",
+            ),
+        )
+    blocker = DispatchAdmissionRequest(
+        effect_uuid="50000000-0000-4000-8000-000000000199",
+        task_uuid="30000000-0000-4000-8000-000000000199",
+        job_uuid="40000000-0000-4000-8000-000000000199",
+        attempt=1,
+        parameter_hash="sha256:block-target-b",
+        expected_change_set={"kind": "no_inventory_change"},
+        resources=(
+            DispatchResource(
+                lock_key=(
+                    f"material/{identities['target_device']}/site/"
+                    f"{TARGET_SITE}/exclusive"
+                ),
+                scope="material_site",
+                material_uuid=identities["target_device"],
+                site_uuid=TARGET_SITE,
+            ),
+        ),
+    )
+    service.station_resources.acquire_dispatch_permit(blocker)
+
+    first = _request(identities)
+    target_key = f"material/{identities['target_device']}/site/{TARGET_SITE}/exclusive"
+    fallback_resources = tuple(
+        resource for resource in first.resources if resource.lock_key != target_key
+    ) + (
+        DispatchResource(
+            lock_key=(
+                f"material/{identities['target_device']}/site/"
+                f"{TARGET_SITE_FALLBACK}/exclusive"
+            ),
+            scope="material_site",
+            material_uuid=identities["target_device"],
+            site_uuid=TARGET_SITE_FALLBACK,
+        ),
+    )
+    fallback = replace(
+        first,
+        effect_uuid="50000000-0000-4000-8000-000000000102",
+        parameter_hash="sha256:fallback-parameters",
+        expected_change_set={
+            "kind": "material_transfer",
+            "material_uuid": identities["vessel"],
+            "source_site_uuid": SOURCE_SITE,
+            "target_site_uuid": TARGET_SITE_FALLBACK,
+        },
+        resources=fallback_resources,
+        transfer=replace(first.transfer, target_site_uuid=TARGET_SITE_FALLBACK),
+    )
+
+    decision = service.station_resources.acquire_dispatch_permit_candidates(
+        (first, fallback)
+    )
+
+    assert decision.acquired is True
+    assert decision.selected_candidate_index == 1
+    assert decision.permit is not None
+    assert decision.permit.parameter_hash == "sha256:fallback-parameters"
+    claimed_sites = {
+        row["site_uuid"]
+        for row in store.query_all(
+            "SELECT site_uuid FROM station_execution_lock_lease "
+            "WHERE claim_uuid=? AND site_uuid IS NOT NULL",
+            (decision.claim_uuid,),
+        )
+    }
+    assert TARGET_SITE_FALLBACK in claimed_sites
+    assert TARGET_SITE not in claimed_sites
+
+    service.station_resources.transition_dispatch_permit(
+        decision.claim_uuid,
+        target_state="released",
+    )
+    replay = service.station_resources.acquire_dispatch_permit_candidates(
+        (first, fallback)
+    )
+
+    assert replay.acquired is True
+    assert replay.selected_candidate_index == 1
+    assert replay.claim_uuid == decision.claim_uuid
+    assert [fence.fencing_token for fence in replay.fences] == [
+        fence.fencing_token + 1 for fence in decision.fences
+    ]
 
 
 def test_transfer_endpoint_warehouses_lock_their_device_ancestors(
@@ -602,23 +706,26 @@ def test_physical_settlement_is_the_only_claim_authorized_inventory_writer(
         permit.claim_uuid,
         target_state="released",
     )
-    assert service.station_resources.settle_material_transfer(
-        MaterialTransferCommand(
-            material_uuid=identities["vessel"],
-            target_owner_material_uuid=identities["target_device"],
-            target_site_uuid=TARGET_SITE,
-            target_site_name="IN",
-            actor="station_scheduler.physical_settlement",
-            causation_id=request.job_uuid,
-            effect_uuid=permit.effect_uuid,
-            claim_uuid=permit.claim_uuid,
-            job_uuid=request.job_uuid,
-            attempt=request.attempt,
-            parameter_hash=request.parameter_hash,
-            expected_change_set=request.expected_change_set,
-            fences=permit.fences,
+    assert (
+        service.station_resources.settle_material_transfer(
+            MaterialTransferCommand(
+                material_uuid=identities["vessel"],
+                target_owner_material_uuid=identities["target_device"],
+                target_site_uuid=TARGET_SITE,
+                target_site_name="IN",
+                actor="station_scheduler.physical_settlement",
+                causation_id=request.job_uuid,
+                effect_uuid=permit.effect_uuid,
+                claim_uuid=permit.claim_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=permit.fences,
+            )
         )
-    ) == settled
+        == settled
+    )
 
 
 def test_released_claim_without_settlement_evidence_cannot_first_write(

@@ -62,6 +62,7 @@ def resolve_site_target(
     site_uuids: Sequence[str] = (),
     occupant_material_uuid: str = "",
     unavailable_site_uuids: Sequence[str] = (),
+    require_available: bool = True,
 ) -> ResolvedSiteTarget:
     """按稳定身份优先、名称兜底解析一个可用目标库位。
 
@@ -71,6 +72,8 @@ def resolve_site_target(
     等价库位组，按库存 ``sort_order`` 选择首个可用位置；
     ``occupant_material_uuid`` 是本次准备放入的物料身份；
     ``unavailable_site_uuids`` 是本轮已经被其他作业执行占用（Claim）选中的位置。
+    ``require_available`` 为假时只解析身份和模板兼容性，把占用与 Claim 留给同一
+    库存事务内的 Gate 7 复验。
     返回：数据库中的规范库位 UUID、名称和拥有者。异常：库位不存在、归属错误、
     UUID 与名称不一致，或全部候选已占用/申领时抛
     ``SiteTargetResolutionError``，不得退化执行。
@@ -85,6 +88,7 @@ def resolve_site_target(
                 equivalent_site_uuids=tuple(site_uuids),
                 occupant_material_uuid=occupant_material_uuid,
                 unavailable_site_uuids=tuple(unavailable_site_uuids),
+                require_available=require_available,
             )
         )
     except StationResourceError as error:

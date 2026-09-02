@@ -129,6 +129,7 @@ class DispatchAdmissionDecision:
     wait_message: str = ""
     blocking_task_uuid: str = ""
     blocking_job_uuid: str = ""
+    selected_candidate_index: int = -1
 
     @property
     def acquired(self) -> bool:
@@ -174,9 +175,7 @@ class InventoryMutationConflict(ValueError):
         self.claim_uuid = claim_uuid
         self.job_uuid = job_uuid
         self.requested_lock_keys = tuple(sorted(set(requested_lock_keys)))
-        super().__init__(
-            f"库存资源正由作业 {job_uuid} 的活动 Claim {claim_uuid} 持有"
-        )
+        super().__init__(f"库存资源正由作业 {job_uuid} 的活动 Claim {claim_uuid} 持有")
 
 
 _SCHEMA = """
@@ -376,9 +375,7 @@ def validate_physical_settlement_credentials(
     normalized_fences = {
         str(lock_key): int(token) for lock_key, token in fences.items()
     }
-    allowed_lease_states = (
-        {"released"} if claim_state == "released" else active_states
-    )
+    allowed_lease_states = {"released"} if claim_state == "released" else active_states
     if normalized_fences != persisted_fences or any(
         str(row["state"]) not in allowed_lease_states for row in leases
     ):
@@ -407,10 +404,7 @@ def acquire_dispatch_permit(
         (normalized.job_uuid, normalized.attempt),
     ).fetchone()
     if existing is not None:
-        if (
-            str(existing["state"]) == "released"
-            and existing["committed_at"] is None
-        ):
+        if str(existing["state"]) == "released" and existing["committed_at"] is None:
             return _reprepare_released_permit(
                 connection,
                 existing=existing,
@@ -511,6 +505,73 @@ def acquire_dispatch_permit(
     )
 
 
+def acquire_dispatch_permit_candidates(
+    connection: sqlite3.Connection,
+    requests: Sequence[DispatchAdmissionRequest],
+) -> DispatchAdmissionDecision:
+    """在同一库存事务内按稳定顺序尝试一组完整派发候选。
+
+    参数：``connection`` 已由单写事务串行化；``requests`` 的每项都是同一 Task/
+    Job/attempt 对不同目标库位形成的完整资源闭集。返回：首个成功候选的 Permit
+    与索引；全部竞争时返回首个稳定等待原因。异常：请求身份不一致或任一候选
+    合同损坏时关闭失败；可变化物理条件会尝试后续候选，全部不满足才上抛首项。
+    """
+
+    if not isinstance(requests, Sequence) or isinstance(requests, (str, bytes)):
+        raise DispatchAdmissionConflict("派发候选必须是非空请求数组")
+    candidates = tuple(requests)
+    if not candidates:
+        raise DispatchAdmissionConflict("派发候选必须是非空请求数组")
+    normalized = tuple(_normalize_request(request) for request in candidates)
+    identity = {
+        (request.task_uuid, request.job_uuid, request.attempt) for request in normalized
+    }
+    if len(identity) != 1:
+        raise DispatchAdmissionConflict("派发候选必须属于同一 Task、Job 和 attempt")
+    task_uuid, job_uuid, attempt = next(iter(identity))
+    existing = connection.execute(
+        "SELECT * FROM station_execution_claim WHERE job_uuid=? AND attempt=?",
+        (job_uuid, attempt),
+    ).fetchone()
+    if existing is not None:
+        for index, request in enumerate(normalized):
+            try:
+                _assert_replay_matches(existing, request)
+            except DispatchAdmissionConflict:
+                continue
+            decision = acquire_dispatch_permit(connection, request)
+            return DispatchAdmissionDecision(
+                permit=decision.permit,
+                wait_code=decision.wait_code,
+                wait_message=decision.wait_message,
+                blocking_task_uuid=decision.blocking_task_uuid,
+                blocking_job_uuid=decision.blocking_job_uuid,
+                selected_candidate_index=(index if decision.acquired else -1),
+            )
+        raise DispatchAdmissionConflict("同一作业尝试的既有 Claim 不匹配任何稳定候选")
+    first_wait: DispatchAdmissionDecision | None = None
+    first_temporary: TemporaryDispatchCondition | None = None
+    for index, request in enumerate(normalized):
+        try:
+            decision = acquire_dispatch_permit(connection, request)
+        except TemporaryDispatchCondition as error:
+            if first_temporary is None:
+                first_temporary = error
+            continue
+        if decision.acquired:
+            return DispatchAdmissionDecision(
+                permit=decision.permit,
+                selected_candidate_index=index,
+            )
+        if first_wait is None:
+            first_wait = decision
+    if first_wait is not None:
+        return first_wait
+    if first_temporary is not None:
+        raise first_temporary
+    raise DispatchAdmissionConflict("派发候选没有形成准入结果")
+
+
 def transition_dispatch_permit(
     connection: sqlite3.Connection,
     *,
@@ -596,9 +657,7 @@ def release_unprojected_dispatch_permits(
         "WHERE state='prepared' ORDER BY acquired_at, claim_uuid"
     ).fetchall()
     released = tuple(
-        str(row["claim_uuid"])
-        for row in rows
-        if str(row["claim_uuid"]) not in known
+        str(row["claim_uuid"]) for row in rows if str(row["claim_uuid"]) not in known
     )
     for claim_uuid in released:
         transition_dispatch_permit(
@@ -737,7 +796,10 @@ def _validate_transfer_conditions(
         "WHERE uuid=? AND deleted_at IS NULL",
         (condition.target_site_uuid,),
     ).fetchone()
-    if target is None or str(target["material_uuid"]) != condition.target_owner_material_uuid:
+    if (
+        target is None
+        or str(target["material_uuid"]) != condition.target_owner_material_uuid
+    ):
         raise DispatchAdmissionConflict("目标库位不存在或归属已经改变")
     if str(target["occupied_material_uuid"] or ""):
         raise TemporaryDispatchCondition(
@@ -773,7 +835,10 @@ def _validate_transfer_conditions(
         "WHERE uuid=? AND deleted_at IS NULL",
         (condition.gripper_site_uuid,),
     ).fetchone()
-    if gripper is None or str(gripper["material_uuid"]) != condition.executor_material_uuid:
+    if (
+        gripper is None
+        or str(gripper["material_uuid"]) != condition.executor_material_uuid
+    ):
         raise DispatchAdmissionConflict("机械臂夹爪库位不存在或归属已经改变")
     if str(gripper["occupied_material_uuid"] or ""):
         raise TemporaryDispatchCondition(
@@ -886,7 +951,9 @@ def _validate_aliquot_conditions(
     condition = request.aliquot
     assert condition is not None
     source = str(condition.source_material_uuid or "").strip()
-    targets = tuple(sorted({str(value or "").strip() for value in condition.target_material_uuids}))
+    targets = tuple(
+        sorted({str(value or "").strip() for value in condition.target_material_uuids})
+    )
     if not source or not targets or "" in targets or source in targets:
         raise DispatchAdmissionConflict("分装来源或目标集合非法")
     if len(targets) != len(condition.target_material_uuids):
@@ -925,8 +992,7 @@ def _owning_device_uuid(
             raise DispatchAdmissionConflict("库存物料父链存在循环")
         visited.add(current)
         row = connection.execute(
-            "SELECT type,parent_uuid FROM material "
-            "WHERE uuid=? AND deleted_at IS NULL",
+            "SELECT type,parent_uuid FROM material WHERE uuid=? AND deleted_at IS NULL",
             (current,),
         ).fetchone()
         if row is None:
@@ -1090,9 +1156,7 @@ def _assert_replay_matches(
     }
     for field, expected in expected_fields.items():
         if str(existing[field]) != str(expected):
-            raise DispatchAdmissionConflict(
-                f"同一作业尝试的派发请求发生漂移：{field}"
-            )
+            raise DispatchAdmissionConflict(f"同一作业尝试的派发请求发生漂移：{field}")
 
 
 def _next_fencing_token(
@@ -1164,6 +1228,7 @@ __all__ = [
     "TemporaryDispatchCondition",
     "TransferDispatchCondition",
     "acquire_dispatch_permit",
+    "acquire_dispatch_permit_candidates",
     "assert_inventory_mutation_unclaimed",
     "migrate_dispatch_admission_schema",
     "release_unprojected_dispatch_permits",

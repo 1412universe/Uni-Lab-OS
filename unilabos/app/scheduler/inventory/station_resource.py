@@ -14,6 +14,7 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
     DispatchFence,
     TemporaryDispatchCondition,
     acquire_dispatch_permit,
+    acquire_dispatch_permit_candidates,
     release_unprojected_dispatch_permits,
     transition_dispatch_permit,
 )
@@ -53,6 +54,7 @@ class TargetSiteRequest:
     equivalent_site_uuids: tuple[str, ...] = ()
     occupant_material_uuid: str = ""
     unavailable_site_uuids: tuple[str, ...] = ()
+    require_available: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,7 @@ class TransferResourceFacts:
     """库存权威已证明的转运来源、设备祖先和夹爪库位事实。"""
 
     source_site_uuid: str
+    source_site_name: str
     source_owner_material_uuid: str
     source_device_material_uuid: str
     target_device_material_uuid: str
@@ -209,6 +212,12 @@ class StationResourceInventory(Protocol):
         成功 Permit 或正常竞争等待结果。异常：运行条件改变时抛稳定
         ``StationResourceError``；合同和数据库故障原样传播。
         """
+
+    def acquire_dispatch_permit_candidates(
+        self,
+        requests: Sequence[DispatchAdmissionRequest],
+    ) -> DispatchAdmissionDecision:
+        """在同一库存事务内从有序完整候选中取得首个可用 Claim。"""
 
     def transition_dispatch_permit(
         self,
@@ -363,16 +372,22 @@ class SqliteStationResourceInventory:
             )
 
         occupant_template_uuid = self._material_template_uuid(occupant)
-        active_ingress_sites = self._active_ingress_site_uuids(
-            tuple(str(candidate["uuid"]) for candidate in candidate_rows)
+        active_ingress_sites = (
+            self._active_ingress_site_uuids(
+                tuple(str(candidate["uuid"]) for candidate in candidate_rows)
+            )
+            if request.require_available
+            else set()
         )
         selected: dict[str, Any] | None = None
         for candidate in candidate_rows:
             candidate_uuid = str(candidate["uuid"])
-            if candidate_uuid in unavailable or candidate_uuid in active_ingress_sites:
+            if request.require_available and (
+                candidate_uuid in unavailable or candidate_uuid in active_ingress_sites
+            ):
                 continue
             occupied_by = str(candidate.get("occupied_material_uuid") or "").strip()
-            if occupied_by and occupied_by != occupant:
+            if request.require_available and occupied_by and occupied_by != occupant:
                 continue
             allowed_templates = _allowed_template_uuids(
                 candidate.get("allowed_resource_template_uuids"),
@@ -410,7 +425,7 @@ class SqliteStationResourceInventory:
         """
 
         source = self._store.query_one(
-            "SELECT uuid, material_uuid FROM site "
+            "SELECT uuid, name, material_uuid FROM site "
             "WHERE occupied_material_uuid = ? AND deleted_at IS NULL "
             "ORDER BY sort_order ASC, create_time ASC, uuid ASC LIMIT 1",
             (request.resource_material_uuid,),
@@ -454,6 +469,7 @@ class SqliteStationResourceInventory:
             )
         return TransferResourceFacts(
             source_site_uuid=source_site_uuid,
+            source_site_name=str(source["name"]),
             source_owner_material_uuid=source_owner_uuid,
             source_device_material_uuid=source_device_uuid,
             target_device_material_uuid=target_device_uuid,
@@ -545,6 +561,27 @@ class SqliteStationResourceInventory:
         try:
             with self._store.transaction() as connection:
                 return acquire_dispatch_permit(connection, request)
+        except TemporaryDispatchCondition as error:
+            raise StationResourceError(
+                error.code,
+                error.message,
+                resources=error.resources,
+            ) from error
+
+    def acquire_dispatch_permit_candidates(
+        self,
+        requests: Sequence[DispatchAdmissionRequest],
+    ) -> DispatchAdmissionDecision:
+        """在一个 ``BEGIN IMMEDIATE`` 事务内完成候选回退和整组 Claim。
+
+        参数：``requests`` 是同一作业按冻结组顺序形成的完整派发候选。返回：
+        首个成功 Permit 及其索引，或稳定等待。异常：所有候选物理条件不满足时
+        转为 ``StationResourceError``；合同/数据库故障原样传播且整体回滚。
+        """
+
+        try:
+            with self._store.transaction() as connection:
+                return acquire_dispatch_permit_candidates(connection, requests)
         except TemporaryDispatchCondition as error:
             raise StationResourceError(
                 error.code,

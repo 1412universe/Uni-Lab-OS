@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import textwrap
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -14,7 +15,9 @@ from unilabos.registry.action_template_projection import (
 )
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
 from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
+from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.schema import WorkflowSchemaError, parse_value_schema
+from unilabos.workflow.task_input import prepare_task_input
 from unilabos.workflow.workflow_io import (
     WorkflowIOValidationError,
     handle_value_schema,
@@ -28,6 +31,9 @@ NODE_UUID = "72000000-0000-4000-8000-000000000001"
 TEMPLATE_UUID = "73000000-0000-4000-8000-000000000001"
 # ``RESOURCE_TEMPLATE_UUID`` 是承载 pick 动作设备类的资源模板身份。
 RESOURCE_TEMPLATE_UUID = "74000000-0000-4000-8000-000000000001"
+OWNER_MATERIAL_UUID = "76000000-0000-4000-8000-000000000001"
+GROUP_SITE_A_UUID = "77000000-0000-4000-8000-000000000001"
+GROUP_SITE_B_UUID = "77000000-0000-4000-8000-000000000002"
 
 _HANDLE_UUIDS = {
     ("target", "ready"): "75000000-0000-4000-8000-000000000001",
@@ -256,6 +262,291 @@ def site_selector_workflow(*, resource: ResourceSlot):
 
     assert compiled.valid and compiled.graph is not None, compiled.diagnostics
     assert compiled.graph["nodes"][0]["param"]["site"] is None
+
+
+def test_site_group_marker_compiles_to_stable_site_selector_binding() -> None:
+    """命名库位组必须作为逻辑选择器进入候选图并保持源码固定点。
+
+    参数：无。返回：无；断言作者不需要声明任何具体库位 UUID，编译器按目标
+    连接点保存组键、所属资源参数和稳定选择策略，规范源码再次编译不发生漂移。
+    """
+
+    template, handles = _registry_action_projection(nullable=True)
+    catalog = AuthoringCatalogSnapshot.from_entities([template], handles)
+    source = f'''from lab.devices import SitePicker
+from unilabos.registry.placeholder_type import ResourceSlot
+from unilabos.workflow.authoring import device, site_group, workflow, workflow_output
+
+
+picker: SitePicker = device()
+
+
+@workflow(workflow_uuid="{WORKFLOW_UUID}", displayname="Named site group")
+def named_site_group(*, resource: ResourceSlot):
+    # unilab:node_uuid={NODE_UUID}
+    picked = picker.pick(resource=resource, site=site_group("process_input"))
+    return workflow_output()
+'''
+    applied = {
+        "workflow": {
+            "uuid": WORKFLOW_UUID,
+            "name": "Persisted",
+            "tags": [],
+            "description": None,
+            "meta_data": {},
+            "revision": 1,
+        },
+        "nodes": [],
+        "edges": [],
+        "node_templates": [],
+        "handle_templates": [],
+    }
+    engine = WorkflowAuthoringEngine(catalog=catalog)
+
+    compiled = engine.compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=1,
+        python_source=source,
+        source_uri="package://lab/workflows/named_site_group.py",
+        applied_graph=applied,
+    )
+
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    node = compiled.graph["nodes"][0]
+    assert "site" not in node["param"]
+    assert node["meta_data"]["unilab"]["site_group_bindings"] == {
+        _HANDLE_UUIDS[("target", "site")]: {
+            "version": 1,
+            "group_key": "process_input",
+            "owner_parameter": "resource",
+            "strategy": "sort_order",
+        }
+    }
+    assert compiled.normalized_python_source is not None
+    assert 'site=site_group("process_input")' in compiled.normalized_python_source
+
+    repeated = engine.compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=1,
+        python_source=compiled.normalized_python_source,
+        source_uri="package://lab/workflows/named_site_group.py",
+        applied_graph=compiled.graph,
+    )
+    assert repeated.valid and repeated.graph == compiled.graph, repeated.diagnostics
+
+
+def test_task_admission_freezes_named_site_group_candidates() -> None:
+    """Task 创建必须按最终 owner 参数冻结命名组候选而不冻结占用状态。"""
+
+    template, handles = _registry_action_projection(nullable=True)
+    catalog = AuthoringCatalogSnapshot.from_entities([template], handles)
+    source = f'''from lab.devices import SitePicker
+from unilabos.registry.placeholder_type import ResourceSlot
+from unilabos.workflow.authoring import device, site_group, workflow, workflow_output
+
+
+picker: SitePicker = device()
+
+
+@workflow(workflow_uuid="{WORKFLOW_UUID}", displayname="Named site group")
+def named_site_group(*, resource: ResourceSlot):
+    # unilab:node_uuid={NODE_UUID}
+    picked = picker.pick(resource=resource, site=site_group("process_input"))
+    return workflow_output()
+'''
+    graph = (
+        WorkflowAuthoringEngine(catalog=catalog)
+        .compile(
+            workflow_uuid=WORKFLOW_UUID,
+            workflow_revision=1,
+            python_source=source,
+            source_uri="package://lab/workflows/named_site_group.py",
+            applied_graph={
+                "workflow": {
+                    "uuid": WORKFLOW_UUID,
+                    "name": "Persisted",
+                    "tags": [],
+                    "description": None,
+                    "meta_data": {},
+                    "revision": 1,
+                },
+                "nodes": [],
+                "edges": [],
+                "node_templates": [],
+                "handle_templates": [],
+            },
+        )
+        .graph
+    )
+    assert graph is not None
+    plan, jobs = ExecutionPlanBuilder().build(
+        graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+    seen_requests: list[dict[str, Any]] = []
+
+    def resolve_material(material_uuid: str) -> dict[str, str] | None:
+        return (
+            {
+                "uuid": OWNER_MATERIAL_UUID,
+                "resource_template_uuid": RESOURCE_TEMPLATE_UUID,
+            }
+            if material_uuid == OWNER_MATERIAL_UUID
+            else None
+        )
+
+    def resolve_sites(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        seen_requests.append(dict(request))
+        return {
+            "site_uuids": [GROUP_SITE_A_UUID, GROUP_SITE_B_UUID],
+            "fingerprint": "sha256:deployment-generation",
+        }
+
+    prepared = prepare_task_input(
+        graph=graph,
+        raw_input={"resource": {"uuid": OWNER_MATERIAL_UUID}},
+        execution_plan=plan,
+        jobs=jobs,
+        resource_resolver=resolve_material,
+        site_selection_resolver=resolve_sites,
+    )
+
+    assert seen_requests == [
+        {
+            "version": 1,
+            "owner_material_uuid": OWNER_MATERIAL_UUID,
+            "occupant_material_uuid": "",
+            "group_key": "process_input",
+            "exact_site_reference": "",
+            "strategy": "sort_order",
+        }
+    ]
+    action_node = next(
+        node for node in prepared.execution_plan["nodes"] if node["uuid"] == NODE_UUID
+    )
+    action_job = next(
+        job for job in prepared.jobs if job["workflow_node_uuid"] == NODE_UUID
+    )
+    expected = [GROUP_SITE_A_UUID, GROUP_SITE_B_UUID]
+    assert action_node["execution_policy"]["target_site_group"] == expected
+    assert action_job["execution_policy"]["target_site_group"] == expected
+    assert action_node["execution_policy"]["target_site_selection"] == {
+        "version": 1,
+        "owner_material_uuid": OWNER_MATERIAL_UUID,
+        "group_key": "process_input",
+        "requested_reference": "",
+        "strategy": "sort_order",
+        "site_uuids": expected,
+        "fingerprint": "sha256:deployment-generation",
+    }
+    assert "site" not in action_node["param"]
+    assert "site" not in action_job["param"]
+
+
+def test_task_site_group_exact_override_freezes_only_the_requested_member() -> None:
+    """可选运行参数指定精确库位时，只能冻结命名组内的该成员。"""
+
+    template, handles = _registry_action_projection(nullable=True)
+    catalog = AuthoringCatalogSnapshot.from_entities([template], handles)
+    source = f'''from lab.devices import SitePicker
+from unilabos.registry.placeholder_type import ResourceSlot
+from unilabos.workflow.authoring import device, site_group, workflow, workflow_output
+
+
+picker: SitePicker = device()
+
+
+@workflow(workflow_uuid="{WORKFLOW_UUID}", displayname="Named site override")
+def named_site_override(*, resource: ResourceSlot, exact_site: str = ""):
+    # unilab:node_uuid={NODE_UUID}
+    picked = picker.pick(
+        resource=resource,
+        site=site_group("process_input", exact=exact_site),
+    )
+    return workflow_output()
+'''
+    compiled = WorkflowAuthoringEngine(catalog=catalog).compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=1,
+        python_source=source,
+        source_uri="package://lab/workflows/named_site_override.py",
+        applied_graph={
+            "workflow": {
+                "uuid": WORKFLOW_UUID,
+                "name": "Persisted",
+                "tags": [],
+                "description": None,
+                "meta_data": {},
+                "revision": 1,
+            },
+            "nodes": [],
+            "edges": [],
+            "node_templates": [],
+            "handle_templates": [],
+        },
+    )
+
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    assert compiled.normalized_python_source is not None
+    assert (
+        'site=site_group("process_input", exact=exact_site)'
+        in compiled.normalized_python_source
+    )
+    plan, jobs = ExecutionPlanBuilder().build(
+        compiled.graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+    seen_requests: list[dict[str, Any]] = []
+
+    def resolve_material(material_uuid: str) -> dict[str, str] | None:
+        return (
+            {
+                "uuid": OWNER_MATERIAL_UUID,
+                "resource_template_uuid": RESOURCE_TEMPLATE_UUID,
+            }
+            if material_uuid == OWNER_MATERIAL_UUID
+            else None
+        )
+
+    def resolve_sites(request: Mapping[str, Any]) -> Mapping[str, Any]:
+        seen_requests.append(dict(request))
+        return {
+            "site_uuids": [GROUP_SITE_B_UUID],
+            "fingerprint": "sha256:group-with-exact-override",
+        }
+
+    prepared = prepare_task_input(
+        graph=compiled.graph,
+        raw_input={
+            "resource": {"uuid": OWNER_MATERIAL_UUID},
+            "exact_site": "warehouse.B1",
+        },
+        execution_plan=plan,
+        jobs=jobs,
+        resource_resolver=resolve_material,
+        site_selection_resolver=resolve_sites,
+    )
+
+    assert seen_requests == [
+        {
+            "version": 1,
+            "owner_material_uuid": OWNER_MATERIAL_UUID,
+            "occupant_material_uuid": "",
+            "group_key": "process_input",
+            "exact_site_reference": "warehouse.B1",
+            "strategy": "sort_order",
+        }
+    ]
+    action_node = next(
+        node for node in prepared.execution_plan["nodes"] if node["uuid"] == NODE_UUID
+    )
+    assert action_node["execution_policy"]["target_site_group"] == [GROUP_SITE_B_UUID]
+    assert (
+        action_node["execution_policy"]["target_site_selection"]["requested_reference"]
+        == "warehouse.B1"
+    )
 
 
 @pytest.mark.parametrize(

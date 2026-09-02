@@ -197,6 +197,20 @@ def resource_ref(resource_id: str) -> Any:
     raise RuntimeError("工作流创作 resource_ref() 只能由静态编译器解析")
 
 
+def site_group(group_key: str, *, exact: str | None = None) -> Any:
+    """声明动作目标库位使用部署定义的命名库位组。
+
+    参数：``group_key`` 是同一父资源内由部署配置维护的稳定业务组键；``exact``
+    可绑定一个工作流运行参数，非空时强制选择组内该库位。返回：本标记不产生
+    运行时值；可信编译器把它冻结为逻辑库位选择器，Task 创建时再解析该部署
+    代际的具体候选 UUID。异常：若作者源码被直接执行则抛出 ``RuntimeError``，
+    禁止绕过库存权威自行选择库位。
+    """
+
+    del group_key, exact
+    raise RuntimeError("工作流创作 site_group() 只能由静态编译器解析")
+
+
 def material_source(
     *,
     resource_template: Any,
@@ -247,6 +261,7 @@ __all__ = [
     "parallel",
     "repeat_until",
     "resource_ref",
+    "site_group",
     "workflow",
     "workflow_definition",
     "workflow_output",

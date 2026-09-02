@@ -387,9 +387,10 @@ def test_persisted_task_compiles_and_dispatches_with_stable_identities(
     assert dispatcher.dispatched[0]["task_id"] == TASK_UUID
     assert dispatcher.dispatched[0]["job_id"] == JOB_UUID
     assert dispatcher.dispatched[0]["attempt"] == 1
-    assert dispatcher.dispatched[0]["command_uuid"] == store.get_job(JOB_UUID)[
-        "edge_command_uuid"
-    ]
+    assert (
+        dispatcher.dispatched[0]["command_uuid"]
+        == store.get_job(JOB_UUID)["edge_command_uuid"]
+    )
     assert dispatcher.dispatched[0]["claim_uuid"]
     assert dispatcher.dispatched[0]["fences"] == [
         {
@@ -1131,12 +1132,9 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
 
             return TransferResourceFacts(
                 source_site_uuid="72000000-0000-4000-8000-000000000001",
-                source_owner_material_uuid=(
-                    "73000000-0000-4000-8000-000000000001"
-                ),
-                source_device_material_uuid=(
-                    "73000000-0000-4000-8000-000000000001"
-                ),
+                source_site_name="SOURCE",
+                source_owner_material_uuid=("73000000-0000-4000-8000-000000000001"),
+                source_device_material_uuid=("73000000-0000-4000-8000-000000000001"),
                 target_device_material_uuid=request.target_owner_material_uuid,
                 gripper_site_uuid="74000000-0000-4000-8000-000000000001",
             )
@@ -1257,7 +1255,9 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             CommittedJobOutcome(
                 outcome=outcome,
                 return_info={"result": "ok" if outcome == "succeeded" else "stopped"},
-                error_info=([] if outcome == "succeeded" else [{"code": "grip_failed"}]),
+                error_info=(
+                    [] if outcome == "succeeded" else [{"code": "grip_failed"}]
+                ),
                 unknown_command_ids=[],
             ),
         )
@@ -1271,9 +1271,7 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             assert inventory.claim_states == ["reserved", "running", "uncertain"]
             assert {
                 item["state"]
-                for item in TaskRuntimeProjection(store).list_execution_locks(
-                    JOB_UUID
-                )
+                for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
             } == {"uncertain"}
             bridge.settle_failed_material_transfer(
                 JOB_UUID,
@@ -1323,6 +1321,229 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             item["state"]
             for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
         } == {"released"}
+
+
+def test_gate7_selected_fallback_site_replaces_dispatch_args_and_local_locks(
+    store: WorkflowStore,
+) -> None:
+    """Gate 7 选择备用库位后，派发参数、持久锁和调度器本地锁必须一致。"""
+
+    first_site_uuid = "71000000-0000-4000-8000-000000000001"
+    fallback_site_uuid = "71000000-0000-4000-8000-000000000002"
+    parent_uuid = "52000000-0000-4000-8000-000000000001"
+    robot_uuid = "70000000-0000-4000-8000-000000000001"
+
+    class _CandidateInventory:
+        """让首选在 Gate 7 竞争失败并原子签发第二候选 Permit。"""
+
+        store = None
+
+        def __init__(self) -> None:
+            self.candidate_targets: list[str] = []
+            self.target_identity_checks: list[bool] = []
+
+        def resolve_target_site(self, request: Any) -> StationSiteTarget:
+            self.target_identity_checks.append(request.require_available)
+            site_uuid = request.site_uuid or request.equivalent_site_uuids[0]
+            return StationSiteTarget(
+                uuid=site_uuid,
+                name=("A1" if site_uuid == first_site_uuid else "B1"),
+                owner_material_uuid=request.owner_material_uuid,
+            )
+
+        def resolve_transfer_resources(self, request: Any) -> TransferResourceFacts:
+            return TransferResourceFacts(
+                source_site_uuid="72000000-0000-4000-8000-000000000001",
+                source_site_name="SOURCE",
+                source_owner_material_uuid="73000000-0000-4000-8000-000000000001",
+                source_device_material_uuid="73000000-0000-4000-8000-000000000001",
+                target_device_material_uuid=request.target_owner_material_uuid,
+                gripper_site_uuid="74000000-0000-4000-8000-000000000001",
+            )
+
+        def acquire_dispatch_permit_candidates(
+            self,
+            requests: Any,
+        ) -> DispatchAdmissionDecision:
+            self.candidate_targets = [
+                request.expected_change_set["target_site_uuid"] for request in requests
+            ]
+            request = requests[1]
+            return DispatchAdmissionDecision(
+                permit=DispatchPermit(
+                    effect_uuid=request.effect_uuid,
+                    claim_uuid="75000000-0000-4000-8000-000000000002",
+                    task_uuid=request.task_uuid,
+                    job_uuid=request.job_uuid,
+                    attempt=request.attempt,
+                    parameter_hash=request.parameter_hash,
+                    expected_change_set=request.expected_change_set,
+                    fences=tuple(
+                        DispatchFence(resource.lock_key, index)
+                        for index, resource in enumerate(request.resources, start=1)
+                    ),
+                ),
+                selected_candidate_index=1,
+            )
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            assert claim_uuid == "75000000-0000-4000-8000-000000000002"
+            assert target_state in {"reserved", "running"}
+
+    _seed_task(store, with_material=False)
+    with store.transaction() as connection:
+        row = connection.execute(
+            "SELECT execution_plan FROM workflow_task WHERE uuid=?",
+            (TASK_UUID,),
+        ).fetchone()
+        plan = json.loads(str(row["execution_plan"]))
+        node = plan["nodes"][0]
+        node.update(
+            {
+                "kind": "material_transfer",
+                "material_uuid": robot_uuid,
+                "action_resource_contract": {
+                    "version": 1,
+                    "transfer": {
+                        "material_param": "resource",
+                        "source_owner_param": "source_warehouse",
+                        "source_site_uuid_param": "source_site_uuid",
+                        "source_site_name_param": "source_site",
+                        "target_owner_param": "mount_resource",
+                        "target_site_uuid_param": "site_uuid",
+                        "target_site_name_param": "site",
+                        "gripper_site_role": "robot.gripper",
+                    },
+                },
+                "execution_policy": {
+                    "target_site_group": [first_site_uuid, fallback_site_uuid],
+                    "target_site_selection": {
+                        "version": 1,
+                        "owner_material_uuid": parent_uuid,
+                        "group_key": "process_input",
+                        "requested_reference": "",
+                        "strategy": "sort_order",
+                        "site_uuids": [first_site_uuid, fallback_site_uuid],
+                        "fingerprint": "sha256:test-selection",
+                    },
+                },
+                "param": {
+                    "resource": {"uuid": MATERIAL_UUID},
+                    "mount_resource": {"uuid": parent_uuid},
+                },
+            }
+        )
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=? WHERE uuid=?",
+            (json.dumps(plan), TASK_UUID),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job "
+            "SET executor_kind='material_transfer', execution_policy=?, param=? "
+            "WHERE uuid=?",
+            (
+                json.dumps(node["execution_policy"]),
+                json.dumps(node["param"]),
+                JOB_UUID,
+            ),
+        )
+
+    inventory = _CandidateInventory()
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        inventory=inventory,
+        station_resources=inventory,
+    )
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+    finally:
+        bridge.close()
+
+    assert inventory.candidate_targets == [first_site_uuid, fallback_site_uuid]
+    assert inventory.target_identity_checks == [False, False]
+    assert dispatcher.dispatched[0]["action_args"] == {
+        "resource": {"uuid": MATERIAL_UUID},
+        "mount_resource": {"uuid": parent_uuid},
+        "source_warehouse": {"uuid": "73000000-0000-4000-8000-000000000001"},
+        "source_site_uuid": "72000000-0000-4000-8000-000000000001",
+        "source_site": "SOURCE",
+        "site_uuid": fallback_site_uuid,
+        "site": "B1",
+    }
+    fallback_lock = f"material/{parent_uuid}/site/{fallback_site_uuid}/exclusive"
+    first_lock = f"material/{parent_uuid}/site/{first_site_uuid}/exclusive"
+    assert fallback_lock in scheduler._job_resource_locks[JOB_UUID]
+    assert first_lock not in scheduler._job_resource_locks[JOB_UUID]
+    claim = TaskRuntimeProjection(store).get_execution_claim(JOB_UUID)
+    assert claim is not None
+    assert (
+        store.get_job(JOB_UUID)["expected_change_set"]["target_site_uuid"]
+        == fallback_site_uuid
+    )
+    assert store.get_job(JOB_UUID)["expected_change_set"]["site_selection"] == {
+        "group_key": "process_input",
+        "requested_reference": "",
+        "strategy": "sort_order",
+        "fingerprint": "sha256:test-selection",
+        "selected_site_uuid": fallback_site_uuid,
+    }
+
+
+def test_exact_site_selection_audit_allows_an_empty_group_key(
+    store: WorkflowStore,
+) -> None:
+    """精确库位选择无需伪造组名，仍应进入 Claim 的审计 ChangeSet。"""
+
+    target_site_uuid = "71000000-0000-4000-8000-000000000001"
+    target_owner_uuid = "52000000-0000-4000-8000-000000000001"
+    _seed_task(store, with_material=False)
+    bridge = _bridge(store, EdgeScheduler(dispatcher=RecordingDispatcher()))
+    try:
+        request = bridge._dispatch_admission_request(
+            dispatching={
+                "transfer_dispatch_condition": {
+                    "material_uuid": MATERIAL_UUID,
+                    "source_owner_material_uuid": (
+                        "73000000-0000-4000-8000-000000000001"
+                    ),
+                    "source_site_uuid": "72000000-0000-4000-8000-000000000001",
+                    "target_owner_material_uuid": target_owner_uuid,
+                    "target_site_uuid": target_site_uuid,
+                    "executor_material_uuid": ("70000000-0000-4000-8000-000000000001"),
+                    "gripper_site_uuid": "74000000-0000-4000-8000-000000000001",
+                },
+                "site_selection": {
+                    "version": 1,
+                    "owner_material_uuid": target_owner_uuid,
+                    "group_key": "",
+                    "requested_reference": "s07.S0721",
+                    "strategy": "sort_order",
+                    "site_uuids": [target_site_uuid],
+                    "fingerprint": "sha256:exact-selection",
+                },
+            },
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            resolved_args={"site": "S0721"},
+            execution_locks=[],
+        )
+    finally:
+        bridge.close()
+
+    assert request.expected_change_set["site_selection"] == {
+        "group_key": "",
+        "requested_reference": "s07.S0721",
+        "strategy": "sort_order",
+        "fingerprint": "sha256:exact-selection",
+        "selected_site_uuid": target_site_uuid,
+    }
 
 
 def test_edge_http_unknown_outcome_keeps_running_job_for_reconciliation(

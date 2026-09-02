@@ -1799,6 +1799,8 @@ class EdgeScheduler:
             # ``transfer_dispatch_condition`` 由库存解析快照产生，但只在门禁 7 的
             # 同一库存事务内复验后才具有派发效力。
             transfer_dispatch_condition: dict[str, str] | None = None
+            transfer_dispatch_candidates: list[dict[str, Any]] = []
+            site_selection_audit: dict[str, Any] | None = None
             operate_in_place_condition: dict[str, str] | None = None
             aliquot_dispatch_condition: dict[str, Any] | None = None
             try:
@@ -1819,13 +1821,28 @@ class EdgeScheduler:
                     task.node.execution_policy,
                     resolved_args,
                 )
+                raw_site_selection = task.node.execution_policy.get(
+                    "target_site_selection"
+                )
+                if isinstance(raw_site_selection, Mapping):
+                    site_selection_audit = deepcopy(dict(raw_site_selection))
                 transfer_contract = self._transfer_resource_contract(task.node)
+                unresolved_transfer_args = dict(resolved_args)
+                unavailable_site_uuids = _claimed_site_uuids(held_resource_locks)
+                has_site_selection = site_selection_audit is not None
+                defer_site_availability = (
+                    has_site_selection
+                    and self._dispatch_admission_authority is not None
+                )
                 resolved_args, resolved_site = self._resolve_transfer_site_target(
                     task.node,
                     resolved_args,
                     transfer_contract=transfer_contract,
                     site_uuids=resource_policy.target_site_uuids,
-                    unavailable_site_uuids=_claimed_site_uuids(held_resource_locks),
+                    unavailable_site_uuids=(
+                        () if defer_site_availability else unavailable_site_uuids
+                    ),
+                    require_available=not defer_site_availability,
                 )
                 lock_keys = self._resource_lock_keys(
                     task.node,
@@ -1852,6 +1869,15 @@ class EdgeScheduler:
                         # 本身不应强制两个端点都必须是设备。
                         require_device_owners=False,
                     )
+                    resolved_args = self._inject_actual_transfer_source(
+                        resolved_args,
+                        transfer_contract=transfer_contract,
+                        source_owner_material_uuid=(
+                            transfer_resources.source_owner_material_uuid
+                        ),
+                        source_site_uuid=transfer_resources.source_site_uuid,
+                        source_site_name=transfer_resources.source_site_name,
+                    )
                     lock_keys.update(transfer_resources.lock_keys)
                     transfer_dispatch_condition = {
                         "material_uuid": moved_material_uuid,
@@ -1864,6 +1890,126 @@ class EdgeScheduler:
                         "executor_material_uuid": selected_device_material_uuid,
                         "gripper_site_uuid": transfer_resources.gripper_site_uuid,
                     }
+                    transfer_dispatch_candidates.append(
+                        {
+                            "resolved_args": dict(resolved_args),
+                            "lock_keys": set(lock_keys),
+                            "transfer_dispatch_condition": dict(
+                                transfer_dispatch_condition
+                            ),
+                            "target_site_uuid": resolved_site.uuid,
+                        }
+                    )
+                    if len(resource_policy.target_site_uuids) > 1:
+                        mount_uuid = _resource_argument_uuid(
+                            unresolved_transfer_args.get(
+                                transfer_contract["target_owner_param"]
+                            ),
+                            argument_name=transfer_contract["target_owner_param"],
+                        )
+                        for candidate_site_uuid in resource_policy.target_site_uuids:
+                            if candidate_site_uuid == resolved_site.uuid:
+                                continue
+                            try:
+                                candidate_target = resolve_site_target(
+                                    self._required_station_resources(),
+                                    owner_material_uuid=mount_uuid,
+                                    site_uuid=candidate_site_uuid,
+                                    occupant_material_uuid=moved_material_uuid,
+                                    require_available=False,
+                                )
+                            except SiteTargetResolutionError as candidate_error:
+                                if is_temporary_resource_condition(
+                                    candidate_error.code
+                                ):
+                                    continue
+                                raise
+                            candidate_args = dict(unresolved_transfer_args)
+                            target_name_param = transfer_contract[
+                                "target_site_name_param"
+                            ]
+                            target_uuid_param = transfer_contract[
+                                "target_site_uuid_param"
+                            ]
+                            if target_name_param:
+                                candidate_args[target_name_param] = (
+                                    candidate_target.name
+                                )
+                            if target_uuid_param:
+                                candidate_args[target_uuid_param] = (
+                                    candidate_target.uuid
+                                )
+                            candidate_resources = resolve_transfer_resource_set(
+                                self._required_station_resources(),
+                                resource_material_uuid=moved_material_uuid,
+                                target=candidate_target,
+                                executor_material_uuid=(selected_device_material_uuid),
+                                gripper_site_role=transfer_contract[
+                                    "gripper_site_role"
+                                ],
+                                require_device_owners=False,
+                            )
+                            candidate_args = self._inject_actual_transfer_source(
+                                candidate_args,
+                                transfer_contract=transfer_contract,
+                                source_owner_material_uuid=(
+                                    candidate_resources.source_owner_material_uuid
+                                ),
+                                source_site_uuid=(candidate_resources.source_site_uuid),
+                                source_site_name=(candidate_resources.source_site_name),
+                            )
+                            candidate_locks = self._resource_lock_keys(
+                                task.node,
+                                candidate_args,
+                                resolved_site=candidate_target,
+                            )
+                            candidate_locks.update(resource_policy.device_lock_keys)
+                            if not bypass_device_lock:
+                                candidate_locks.add(device_key)
+                            candidate_locks.update(candidate_resources.lock_keys)
+                            transfer_dispatch_candidates.append(
+                                {
+                                    "resolved_args": candidate_args,
+                                    "lock_keys": candidate_locks,
+                                    "transfer_dispatch_condition": {
+                                        "material_uuid": moved_material_uuid,
+                                        "source_owner_material_uuid": (
+                                            candidate_resources.source_owner_material_uuid
+                                        ),
+                                        "source_site_uuid": (
+                                            candidate_resources.source_site_uuid
+                                        ),
+                                        "target_owner_material_uuid": (
+                                            candidate_target.owner_material_uuid
+                                        ),
+                                        "target_site_uuid": candidate_target.uuid,
+                                        "executor_material_uuid": (
+                                            selected_device_material_uuid
+                                        ),
+                                        "gripper_site_uuid": (
+                                            candidate_resources.gripper_site_uuid
+                                        ),
+                                    },
+                                    "target_site_uuid": candidate_target.uuid,
+                                }
+                            )
+                        candidate_order = {
+                            site_uuid: index
+                            for index, site_uuid in enumerate(
+                                resource_policy.target_site_uuids
+                            )
+                        }
+                        transfer_dispatch_candidates.sort(
+                            key=lambda item: candidate_order[
+                                str(item["target_site_uuid"])
+                            ]
+                        )
+                        selected_candidate = transfer_dispatch_candidates[0]
+                        resolved_args = dict(selected_candidate["resolved_args"])
+                        lock_keys = set(selected_candidate["lock_keys"])
+                        transfer_dispatch_condition = dict(
+                            selected_candidate["transfer_dispatch_condition"]
+                        )
                 operate_contract = self._operate_in_place_contract(task.node)
                 if operate_contract is not None:
                     material_uuid = _resource_argument_uuid(
@@ -2022,34 +2168,24 @@ class EdgeScheduler:
             device_conflict = not bypass_device_lock and (
                 action_key in busy or device_key in busy
             )
-            execution_locks: list[dict[str, Any]] = []
-            for lock_key in sorted(lock_keys):
-                parts = lock_key.split("/")
-                if lock_key.startswith("/devices/"):
-                    execution_locks.append(
-                        {
-                            "lock_key": lock_key,
-                            "scope": "device",
-                            "material_uuid": parts[2],
-                        }
-                    )
-                elif len(parts) == 3:
-                    execution_locks.append(
-                        {
-                            "lock_key": lock_key,
-                            "scope": "material",
-                            "material_uuid": parts[1],
-                        }
-                    )
-                elif len(parts) == 5:
-                    execution_locks.append(
-                        {
-                            "lock_key": lock_key,
-                            "scope": "material_site",
-                            "material_uuid": parts[1],
-                            "site_uuid": parts[3],
-                        }
-                    )
+            if defer_site_availability:
+                # 命名组和精确覆盖的物理可用性只由 Gate 7 的单一库存事务裁决。
+                # 本地锁视图可能比库存 Claim 稍旧，也不能因首选冲突跳过后备候选。
+                conflicting_lock_keys = set()
+                device_conflict = False
+            execution_locks = self._execution_lock_descriptors(lock_keys)
+            dispatch_candidates = [
+                {
+                    "resolved_args": dict(candidate["resolved_args"]),
+                    "execution_locks": self._execution_lock_descriptors(
+                        set(candidate["lock_keys"])
+                    ),
+                    "transfer_dispatch_condition": dict(
+                        candidate["transfer_dispatch_condition"]
+                    ),
+                }
+                for candidate in transfer_dispatch_candidates
+            ]
             if device_conflict or conflicting_lock_keys:
                 blocking_job = next(
                     (
@@ -2163,8 +2299,14 @@ class EdgeScheduler:
                         "execution_locks": execution_locks,
                         "device_tenancy": resource_policy.device_tenancy,
                         "transfer_dispatch_condition": transfer_dispatch_condition,
+                        "site_selection": site_selection_audit,
                         "operate_in_place_condition": operate_in_place_condition,
                         "aliquot_dispatch_condition": aliquot_dispatch_condition,
+                        **(
+                            {"dispatch_candidates": dispatch_candidates}
+                            if len(dispatch_candidates) > 1
+                            else {}
+                        ),
                     }
                     admitted = self._notify_job_pre_dispatch(dispatching)
                     if not admitted:
@@ -2196,6 +2338,57 @@ class EdgeScheduler:
                         )
                     for field in required_dispatch_fields:
                         payload[field] = dispatching[field]
+                    if isinstance(dispatching.get("resolved_args"), Mapping):
+                        resolved_args = dict(dispatching["resolved_args"])
+                        payload["action_args"] = resolved_args
+                    if isinstance(dispatching.get("execution_locks"), list):
+                        execution_locks = list(dispatching["execution_locks"])
+                        selected_lock_keys = {
+                            str(item.get("lock_key") or "")
+                            for item in execution_locks
+                            if isinstance(item, Mapping)
+                        }
+                        if "" in selected_lock_keys:
+                            raise ExecutionPolicyError(
+                                "库存权威选中的执行锁缺少规范 lock_key"
+                            )
+                        lock_keys = selected_lock_keys
+                    selected_transfer = dispatching.get("transfer_dispatch_condition")
+                    if isinstance(selected_transfer, Mapping):
+                        selected_site_audit = dispatching.get("site_selection")
+                        site_audit_attributes: dict[str, str] = {}
+                        if isinstance(selected_site_audit, Mapping):
+                            site_audit_attributes = {
+                                "site.selector.group_key": str(
+                                    selected_site_audit.get("group_key") or ""
+                                ),
+                                "site.selector.strategy": str(
+                                    selected_site_audit.get("strategy") or ""
+                                ),
+                                "site.selector.fingerprint": str(
+                                    selected_site_audit.get("fingerprint") or ""
+                                ),
+                                "site.selector.requested_reference": str(
+                                    selected_site_audit.get("requested_reference") or ""
+                                ),
+                            }
+                        action_trace.event(
+                            "action.target_site.selected",
+                            {
+                                "workflow.job.uuid": job_id,
+                                "material.uuid": str(
+                                    selected_transfer.get("material_uuid") or ""
+                                ),
+                                "target.site.uuid": str(
+                                    selected_transfer.get("target_site_uuid") or ""
+                                ),
+                                "target.owner.uuid": str(
+                                    selected_transfer.get("target_owner_material_uuid")
+                                    or ""
+                                ),
+                                **site_audit_attributes,
+                            },
+                        )
                     dispatch_intent_committed = True
                     # 派发意图持久化后，先保守登记本地在途作业和动作物料锁，再
                     # 调用不可原子确认的执行适配器。适配器异常不得回滚这些事实。
@@ -2465,6 +2658,42 @@ class EdgeScheduler:
             held |= keys
         return held
 
+    @staticmethod
+    def _execution_lock_descriptors(
+        lock_keys: set[str],
+    ) -> list[dict[str, Any]]:
+        """把规范锁键投影为库存 DispatchResource 的公共描述形状。"""
+
+        result: list[dict[str, Any]] = []
+        for lock_key in sorted(lock_keys):
+            parts = lock_key.split("/")
+            if lock_key.startswith("/devices/"):
+                result.append(
+                    {
+                        "lock_key": lock_key,
+                        "scope": "device",
+                        "material_uuid": parts[2],
+                    }
+                )
+            elif len(parts) == 3:
+                result.append(
+                    {
+                        "lock_key": lock_key,
+                        "scope": "material",
+                        "material_uuid": parts[1],
+                    }
+                )
+            elif len(parts) == 5:
+                result.append(
+                    {
+                        "lock_key": lock_key,
+                        "scope": "material_site",
+                        "material_uuid": parts[1],
+                        "site_uuid": parts[3],
+                    }
+                )
+        return result
+
     def _resolve_transfer_site_target(
         self,
         node: Any,
@@ -2473,13 +2702,16 @@ class EdgeScheduler:
         transfer_contract: Mapping[str, str] | None = None,
         site_uuids: tuple[str, ...] = (),
         unavailable_site_uuids: tuple[str, ...] = (),
+        require_available: bool = True,
     ) -> tuple[dict[str, Any], ResolvedSiteTarget | None]:
         """解析转运动作的目标库位并规范化设备执行名称。
 
         参数：``node`` 是候选工作流节点；``resolved_args`` 是合并上游输出后的
         最终参数；``transfer_contract`` 是 AST 冻结的转运参数与夹爪角色映射；
         ``site_uuids`` 是冻结等价组，``unavailable_site_uuids`` 是本轮已有作业
-        执行占用选中的库位。返回：规范参数和具体目标；非转运动作原样返回。
+        执行占用选中的库位；``require_available`` 为假时仅解析候选身份，物理
+        可用性延后到 Gate 7 的单一库存事务。返回：规范参数和具体目标；非转运
+        动作原样返回。
         异常：合同字段缺失、目标库位无法验证或库存权威不可用时抛
         ``SiteTargetResolutionError``；不根据动作名称或库位名称猜测资源。
         """
@@ -2528,6 +2760,7 @@ class EdgeScheduler:
             site_uuids=site_uuids,
             occupant_material_uuid=resource_uuid,
             unavailable_site_uuids=unavailable_site_uuids,
+            require_available=require_available,
         )
         canonical_args = dict(resolved_args)
         # 设备驱动沿用库位名称；稳定 UUID 只用于身份解析和本地互斥。
@@ -2580,19 +2813,87 @@ class EdgeScheduler:
             )
         required = {
             "material_param",
+            "source_owner_param",
+            "source_site_uuid_param",
+            "source_site_name_param",
             "target_owner_param",
             "target_site_uuid_param",
             "target_site_name_param",
             "gripper_site_role",
         }
-        if set(transfer) != required or any(
-            not isinstance(transfer[field], str) for field in required
-        ):
+        legacy_required = required - {
+            "source_owner_param",
+            "source_site_uuid_param",
+            "source_site_name_param",
+        }
+        if frozenset(transfer) not in {
+            frozenset(required),
+            frozenset(legacy_required),
+        } or any(not isinstance(value, str) for value in transfer.values()):
             raise TransferResourceSetError(
                 "invalid_transfer_resource_contract",
                 "冻结动作的 transfer 资源合同字段非法",
             )
-        return {field: str(transfer[field]) for field in required}
+        return {field: str(transfer.get(field) or "") for field in required}
+
+    @staticmethod
+    def _inject_actual_transfer_source(
+        resolved_args: Mapping[str, Any],
+        *,
+        transfer_contract: Mapping[str, str],
+        source_owner_material_uuid: str,
+        source_site_uuid: str,
+        source_site_name: str,
+    ) -> dict[str, Any]:
+        """用 SiteOccupancy 权威来源覆盖机械臂动作来源参数。
+
+        参数：``resolved_args`` 是 DAG 已解析参数；合同声明可选来源字段映射；
+        其余参数来自本轮库存事实。返回：与输入隔离的规范动作参数。异常：作者
+        提供的来源约束与实际占用不一致时抛稳定非临时错误，禁止向错误地点 pick。
+        """
+
+        canonical = dict(resolved_args)
+        owner_param = str(transfer_contract.get("source_owner_param") or "")
+        site_uuid_param = str(transfer_contract.get("source_site_uuid_param") or "")
+        site_name_param = str(transfer_contract.get("source_site_name_param") or "")
+        if not owner_param:
+            return canonical
+        expected_owner = canonical.get(owner_param)
+        if expected_owner not in (None, ""):
+            expected_owner_uuid = _resource_argument_uuid(
+                expected_owner,
+                argument_name=owner_param,
+            )
+            if expected_owner_uuid != source_owner_material_uuid:
+                raise TransferResourceSetError(
+                    "source_constraint_mismatch",
+                    "工作流声明的来源父资源与物料实际库位不一致",
+                )
+        expected_site_uuid = str(
+            (canonical.get(site_uuid_param) if site_uuid_param else "") or ""
+        ).strip()
+        expected_site_name = str(
+            (canonical.get(site_name_param) if site_name_param else "") or ""
+        ).strip()
+        if expected_site_uuid and expected_site_uuid != source_site_uuid:
+            raise TransferResourceSetError(
+                "source_constraint_mismatch",
+                "工作流声明的来源库位 UUID 与物料实际库位不一致",
+            )
+        if (
+            expected_site_name
+            and expected_site_name.casefold() != source_site_name.casefold()
+        ):
+            raise TransferResourceSetError(
+                "source_constraint_mismatch",
+                "工作流声明的来源库位名称与物料实际库位不一致",
+            )
+        canonical[owner_param] = {"uuid": source_owner_material_uuid}
+        if site_uuid_param:
+            canonical[site_uuid_param] = source_site_uuid
+        if site_name_param:
+            canonical[site_name_param] = source_site_name
+        return canonical
 
     @staticmethod
     def _operate_in_place_contract(node: Any) -> dict[str, str] | None:

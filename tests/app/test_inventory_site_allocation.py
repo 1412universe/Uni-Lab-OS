@@ -15,6 +15,10 @@ from unilabos.app.scheduler.inventory.domain import (
     MaterialSourceAdmissionRequest,
 )
 from unilabos.app.scheduler.inventory.service import InventoryService
+from unilabos.app.scheduler.inventory.site_selection import (
+    InventorySiteSelectionError,
+    build_inventory_site_selection_resolver,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.scheduler.inventory.workflow_quantity import (
     WorkflowQuantityReservationError,
@@ -32,7 +36,9 @@ GRIPPER_SITE = "10000000-0000-4000-8000-000000000005"
 
 
 @pytest.fixture()
-def inventory(tmp_path: Path) -> tuple[InventoryStore, InventoryService, dict[str, str]]:
+def inventory(
+    tmp_path: Path,
+) -> tuple[InventoryStore, InventoryService, dict[str, str]]:
     """建立同一仓库下有序库位与两件兼容物料（Material）的库存事实。"""
 
     store = InventoryStore(str(tmp_path / "inventory.db"))
@@ -90,12 +96,23 @@ def inventory(tmp_path: Path) -> tuple[InventoryStore, InventoryService, dict[st
                     sort_order,allowed_resource_template_uuids,
                     occupied_material_uuid,position_x,position_y,position_z,
                     depth,length,width
-                ) VALUES (?,?,?,'{}',?,?,?,?,?,0,0,0,0,0,0)
+                ) VALUES (?,?,?,?,?,?,?,?,?,0,0,0,0,0,0)
                 """,
                 (
                     site_uuid,
                     "2026-08-06T00:00:00Z",
                     "2026-08-06T00:00:00Z",
+                    json.dumps(
+                        {
+                            "unilab": {
+                                "site_groups": (
+                                    ["process_input"]
+                                    if site_uuid in {SITE_A, SITE_B}
+                                    else []
+                                )
+                            }
+                        }
+                    ),
                     mount["uuid"],
                     name,
                     order,
@@ -104,14 +121,81 @@ def inventory(tmp_path: Path) -> tuple[InventoryStore, InventoryService, dict[st
                 ),
             )
     try:
-        yield store, InventoryService(store), {
-            "mount": mount["uuid"],
-            "template": template_by_name["test.plate"],
-            "first": first["uuid"],
-            "second": second["uuid"],
-        }
+        yield (
+            store,
+            InventoryService(store),
+            {
+                "mount": mount["uuid"],
+                "template": template_by_name["test.plate"],
+                "first": first["uuid"],
+                "second": second["uuid"],
+            },
+        )
     finally:
         store.close()
+
+
+def test_named_site_group_and_qualified_site_reference_are_frozen_by_owner(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """任务准入只允许同一父资源内的命名组与 ``父资源.库位`` 引用。"""
+
+    store, _service, identities = inventory
+    resolve = build_inventory_site_selection_resolver(store)
+
+    group = resolve(
+        {
+            "version": 1,
+            "owner_material_uuid": identities["mount"],
+            "group_key": "process_input",
+            "exact_site_reference": "",
+        }
+    )
+    exact = resolve(
+        {
+            "version": 1,
+            "owner_material_uuid": identities["mount"],
+            "group_key": "",
+            "exact_site_reference": f"{identities['mount']}.A1",
+        }
+    )
+
+    assert group["site_uuids"] == [SITE_B, SITE_A]
+    assert str(group["fingerprint"]).startswith("sha256:")
+    assert exact["site_uuids"] == [SITE_A]
+
+    exact_in_group = resolve(
+        {
+            "version": 1,
+            "owner_material_uuid": identities["mount"],
+            "group_key": "process_input",
+            "exact_site_reference": f"{identities['mount']}.A1",
+        }
+    )
+    assert exact_in_group["site_uuids"] == [SITE_A]
+
+    with pytest.raises(InventorySiteSelectionError, match="不属于命名库位组"):
+        resolve(
+            {
+                "version": 1,
+                "owner_material_uuid": identities["mount"],
+                "group_key": "process_input",
+                "exact_site_reference": f"{identities['mount']}.C1",
+            }
+        )
+
+    with pytest.raises(
+        InventorySiteSelectionError,
+        match="不属于声明的父资源",
+    ):
+        resolve(
+            {
+                "version": 1,
+                "owner_material_uuid": identities["mount"],
+                "group_key": "",
+                "exact_site_reference": f"{identities['first']}.A1",
+            }
+        )
 
 
 def test_exact_site_selects_and_reserves_its_occupant_atomically(
@@ -254,6 +338,25 @@ def test_target_site_group_skips_claimed_first_member_by_sort_order(
 
     assert first.uuid == SITE_EMPTY
     assert fallback.uuid == TARGET_SITE
+
+
+def test_target_site_identity_can_be_resolved_before_gate7_availability_check(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """候选组构造应保留已占用成员，把可用性统一留给 Gate 7 事务。"""
+
+    _store, service, identities = inventory
+
+    target = resolve_site_target(
+        service.station_resources,
+        owner_material_uuid=identities["mount"],
+        site_uuid=SITE_A,
+        occupant_material_uuid=identities["second"],
+        require_available=False,
+    )
+
+    assert target.uuid == SITE_A
+    assert target.name == "A1"
 
 
 def test_transfer_resource_set_contains_source_target_and_owner_device(
@@ -601,10 +704,13 @@ def test_material_source_admission_rolls_back_whole_request_set(
     with pytest.raises(InsufficientStock):
         service.admit_material_sources("workflow-atomic", requests)
 
-    assert store.query_all(
-        "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
-        ("workflow-atomic",),
-    ) == []
+    assert (
+        store.query_all(
+            "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
+            ("workflow-atomic",),
+        )
+        == []
+    )
     assert store.reservations_for_workflow("workflow-atomic") == []
 
 
@@ -654,13 +760,19 @@ def test_task_material_admission_rolls_back_source_when_quantity_is_insufficient
     with pytest.raises(WorkflowQuantityReservationError):
         service.admit_task_materials(task_uuid, [source], [allocation])
 
-    assert store.query_all(
-        "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
-        (task_uuid,),
-    ) == []
-    assert store.query_all(
-        "SELECT * FROM inventory_reservation WHERE workflow_id=?", (task_uuid,)
-    ) == []
+    assert (
+        store.query_all(
+            "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
+            (task_uuid,),
+        )
+        == []
+    )
+    assert (
+        store.query_all(
+            "SELECT * FROM inventory_reservation WHERE workflow_id=?", (task_uuid,)
+        )
+        == []
+    )
 
 
 def test_material_source_binding_replays_after_service_restart_and_rejects_change(
@@ -699,9 +811,7 @@ def test_material_source_binding_replays_after_service_restart_and_rejects_chang
         requirement=shared_request.requirement,
     )
     with pytest.raises(CommandRejected):
-        restarted_service.admit_material_sources(
-            "workflow-replay", [changed_request]
-        )
+        restarted_service.admit_material_sources("workflow-replay", [changed_request])
     released = restarted_service.release_workflow(
         "workflow-replay",
         reason="workflow_succeeded",
@@ -741,10 +851,13 @@ def test_fixed_material_source_rejects_instance_from_another_template(
     with pytest.raises(CommandRejected):
         service.admit_material_sources("workflow-wrong-template", [request])
 
-    assert store.query_all(
-        "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
-        ("workflow-wrong-template",),
-    ) == []
+    assert (
+        store.query_all(
+            "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
+            ("workflow-wrong-template",),
+        )
+        == []
+    )
 
 
 def test_move_instance_commits_parent_and_site_occupancy_atomically(
@@ -806,12 +919,18 @@ def test_move_instance_commits_parent_and_site_occupancy_atomically(
 
     assert moved["parent_uuid"] == target["uuid"]
     assert replayed == moved
-    assert store.query_one(
-        "SELECT occupied_material_uuid FROM site WHERE uuid=?", (SITE_A,)
-    )["occupied_material_uuid"] is None
-    assert store.query_one(
-        "SELECT occupied_material_uuid FROM site WHERE uuid=?", (TARGET_SITE,)
-    )["occupied_material_uuid"] == identities["first"]
+    assert (
+        store.query_one(
+            "SELECT occupied_material_uuid FROM site WHERE uuid=?", (SITE_A,)
+        )["occupied_material_uuid"]
+        is None
+    )
+    assert (
+        store.query_one(
+            "SELECT occupied_material_uuid FROM site WHERE uuid=?", (TARGET_SITE,)
+        )["occupied_material_uuid"]
+        == identities["first"]
+    )
     ledger = store.query_one(
         "SELECT op_type,delta_json,actor FROM inventory_ledger "
         "WHERE aggregate_id=? ORDER BY ledger_id DESC LIMIT 1",
@@ -820,8 +939,11 @@ def test_move_instance_commits_parent_and_site_occupancy_atomically(
     assert ledger["op_type"] == "instance.moved"
     assert ledger["actor"] == "host_node.transfer_resource"
     assert json.loads(ledger["delta_json"])["to_slot"] == "A1"
-    assert store.query_one(
-        "SELECT COUNT(*) AS count FROM inventory_ledger "
-        "WHERE aggregate_id=? AND op_type='instance.moved'",
-        (identities["first"],),
-    )["count"] == 1
+    assert (
+        store.query_one(
+            "SELECT COUNT(*) AS count FROM inventory_ledger "
+            "WHERE aggregate_id=? AND op_type='instance.moved'",
+            (identities["first"],),
+        )["count"]
+        == 1
+    )

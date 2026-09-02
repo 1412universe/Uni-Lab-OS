@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 from uuid import UUID, uuid5
 
@@ -511,6 +512,13 @@ class ExecutionPlanGraphNormalizer:
                     uuid5(UUID(node_uuid), f"runtime-handle:{handle_uuid}")
                 )
                 identities[(node_uuid, handle_uuid)] = runtime_uuid
+                metadata = handle.get("meta_data")
+                unilab = (
+                    metadata.get("unilab") if isinstance(metadata, Mapping) else None
+                )
+                site_selector = (
+                    unilab.get("site_selector") if isinstance(unilab, Mapping) else None
+                )
                 runtime.append(
                     {
                         "uuid": runtime_uuid,
@@ -522,6 +530,11 @@ class ExecutionPlanGraphNormalizer:
                         "io_type": str(handle.get("io_type") or ""),
                         "type": str(handle.get("type") or ""),
                         "required": bool(handle.get("required")),
+                        **(
+                            {"site_selector": deepcopy(dict(site_selector))}
+                            if isinstance(site_selector, Mapping)
+                            else {}
+                        ),
                     }
                 )
         runtime.sort(key=lambda item: (item["node_uuid"], item["uuid"]))

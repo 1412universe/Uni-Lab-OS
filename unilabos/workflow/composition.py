@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 from unilabos.app.scheduler.inventory.resource_reference import (
     build_inventory_resource_reference_resolver,
+)
+from unilabos.app.scheduler.inventory.site_selection import (
+    build_inventory_site_selection_resolver,
 )
 from unilabos.registry.local_template_identity import (
     synchronize_local_template_identities,
@@ -172,6 +175,9 @@ def compose_workflow_runtime(
     editable_package_roots: Iterable[str | Path] = (),
     editable_source_discovery_plan: Optional[EditableSourceDiscoveryPlan] = None,
     material_resolver: Optional[Callable[[str], Optional[dict[str, Any]]]] = None,
+    site_selection_resolver: Optional[
+        Callable[[Mapping[str, Any]], Mapping[str, Any]]
+    ] = None,
     scheduler: Optional[Any] = None,
     start_source_monitor: bool = True,
     workflow_activation_progress: Callable[[int, int], None] | None = None,
@@ -311,6 +317,7 @@ def compose_workflow_runtime(
                 compiler_rebuilder=compiler_rebuilder,
                 source_target=source_target,
                 material_resolver=material_resolver,
+                site_selection_resolver=site_selection_resolver,
                 task_scheduler_bridge=task_scheduler_bridge,
             )
             if scheduler is not None:
@@ -617,6 +624,9 @@ def compose_local_workflow_template_runtime(
             resource_reference_resolver = build_inventory_resource_reference_resolver(
                 inventory_store
             )
+            site_selection_resolver = build_inventory_site_selection_resolver(
+                inventory_store
+            )
 
             def rebuild_compiler() -> AuthoringCompiler:
                 """刷新完整模板代际并返回与该代际绑定的新创作编译器。
@@ -653,6 +663,7 @@ def compose_local_workflow_template_runtime(
                 editable_package_roots=editable_package_roots,
                 editable_source_discovery_plan=editable_source_discovery_plan,
                 material_resolver=resolve_material_identity,
+                site_selection_resolver=site_selection_resolver,
                 scheduler=scheduler,
                 start_source_monitor=start_source_monitor,
                 workflow_activation_progress=workflow_activation_progress,

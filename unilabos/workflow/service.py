@@ -137,6 +137,7 @@ from unilabos.workflow.store import (
 )
 from unilabos.workflow.task_input import (
     PreparedTaskInput,
+    SiteSelectionResolver,
     TaskInputError,
     prepare_task_input,
 )
@@ -483,7 +484,9 @@ class WorkflowService:
         compiler_rebuilder: Callable[[], AuthoringCompiler] | None = None,
         source_target: DomainWorkflowSourceTarget | None = None,
         material_resolver: Callable[[str], dict[str, Any] | None] | None = None,
-        device_preflight: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        site_selection_resolver: SiteSelectionResolver | None = None,
+        device_preflight: Callable[[Mapping[str, Any]], Mapping[str, Any]]
+        | None = None,
         task_scheduler_bridge: WorkflowTaskSchedulerBridge | None = None,
     ) -> None:
         """装配本地工作流应用服务。
@@ -546,6 +549,7 @@ class WorkflowService:
             material_resolver=material_resolver,
         )
         self._material_resolver = material_resolver
+        self._site_selection_resolver = site_selection_resolver
         self._device_preflight = device_preflight
         # ``_task_scheduler_bridge`` 是普通任务与设备单动作共享的唯一监听器所有者；
         # 工站调度进程必须装配，纯工作流创作或隔离读取场景才允许保持空。
@@ -1892,10 +1896,20 @@ class WorkflowService:
                     if str(workflow.get("uuid")) == workflow_uuid:
                         continue
                     meta_data = workflow.get("meta_data")
-                    unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
-                    existing_name = unilab.get("authoring_function_name") if isinstance(unilab, Mapping) else None
+                    unilab = (
+                        meta_data.get("unilab")
+                        if isinstance(meta_data, Mapping)
+                        else None
+                    )
+                    existing_name = (
+                        unilab.get("authoring_function_name")
+                        if isinstance(unilab, Mapping)
+                        else None
+                    )
                     if not isinstance(existing_name, str) or not existing_name:
-                        existing_name = _safe_identifier(str(workflow.get("name") or "workflow"), fallback="workflow")
+                        existing_name = _safe_identifier(
+                            str(workflow.get("name") or "workflow"), fallback="workflow"
+                        )
                     if existing_name == normalized_name:
                         raise WorkflowConflict("source_function_conflict")
                 if page * 100 >= int(listed["total"]):
@@ -2036,10 +2050,11 @@ class WorkflowService:
                 expected_template_uuid = str(
                     (template or {}).get("resource_template_uuid") or ""
                 )
-                actual_template_uuid = str(
-                    material.get("resource_template_uuid") or ""
-                )
-                if not expected_template_uuid or actual_template_uuid != expected_template_uuid:
+                actual_template_uuid = str(material.get("resource_template_uuid") or "")
+                if (
+                    not expected_template_uuid
+                    or actual_template_uuid != expected_template_uuid
+                ):
                     raise WorkflowError(
                         "invalid_input",
                         message="固定执行器资源模板与动作模板不一致",
@@ -3138,7 +3153,9 @@ class WorkflowService:
         try:
             with self._authoring_lock(workflow_uuid):
                 applied_graph = (
-                    frozen_graph if frozen_graph is not None else self.get_graph(workflow_uuid)
+                    frozen_graph
+                    if frozen_graph is not None
+                    else self.get_graph(workflow_uuid)
                 )
                 task = self._store.create_task_with_jobs(
                     workflow_uuid=workflow_uuid,
@@ -4150,6 +4167,7 @@ class WorkflowService:
             execution_plan=plan,
             jobs=jobs,
             resource_resolver=self._material_resolver,
+            site_selection_resolver=self._site_selection_resolver,
         )
 
     @staticmethod

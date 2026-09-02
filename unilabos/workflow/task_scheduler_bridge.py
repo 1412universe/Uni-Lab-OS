@@ -1413,6 +1413,16 @@ class TaskSchedulerBridge:
         execution_locks = dispatching.get("execution_locks")
         if not isinstance(execution_locks, list):
             raise StoreConflict(f"派发作业缺少执行锁集合：{job_uuid}")
+        raw_candidates = dispatching.get("dispatch_candidates")
+        dispatch_candidates: list[Mapping[str, Any]] = []
+        if raw_candidates is not None:
+            if (
+                not isinstance(raw_candidates, list)
+                or len(raw_candidates) < 2
+                or any(not isinstance(item, Mapping) for item in raw_candidates)
+            ):
+                raise StoreConflict(f"派发候选集合无效：{job_uuid}")
+            dispatch_candidates = list(raw_candidates)
         device_tenancy = dispatching.get("device_tenancy")
         if device_tenancy is not None and not isinstance(device_tenancy, Mapping):
             raise StoreConflict(f"派发作业设备托管转换不是对象：{job_uuid}")
@@ -1437,15 +1447,56 @@ class TaskSchedulerBridge:
         if inventory_authority is None and self._scheduler.physical_dispatch_enabled:
             raise StoreConflict("物理派发未装配库存 DispatchPermit 权威")
         if inventory_authority is not None:
-            request = self._dispatch_admission_request(
-                dispatching=dispatching,
-                task_uuid=task_uuid,
-                job_uuid=job_uuid,
-                resolved_args=resolved_args,
-                execution_locks=execution_locks,
-            )
             try:
-                decision = inventory_authority.acquire_dispatch_permit(request)
+                if dispatch_candidates:
+                    requests: list[DispatchAdmissionRequest] = []
+                    for candidate in dispatch_candidates:
+                        candidate_args = candidate.get("resolved_args")
+                        candidate_locks = candidate.get("execution_locks")
+                        candidate_transfer = candidate.get(
+                            "transfer_dispatch_condition"
+                        )
+                        if (
+                            not isinstance(candidate_args, Mapping)
+                            or not isinstance(candidate_locks, list)
+                            or not isinstance(candidate_transfer, Mapping)
+                        ):
+                            raise StoreConflict(f"派发候选字段不完整：{job_uuid}")
+                        candidate_dispatching = dict(dispatching)
+                        candidate_dispatching.update(candidate)
+                        requests.append(
+                            self._dispatch_admission_request(
+                                dispatching=candidate_dispatching,
+                                task_uuid=task_uuid,
+                                job_uuid=job_uuid,
+                                resolved_args=candidate_args,
+                                execution_locks=candidate_locks,
+                            )
+                        )
+                    decision = inventory_authority.acquire_dispatch_permit_candidates(
+                        tuple(requests)
+                    )
+                    selected_index = decision.selected_candidate_index
+                    if decision.acquired and not (
+                        0 <= selected_index < len(dispatch_candidates)
+                    ):
+                        raise StoreConflict(
+                            f"库存权威返回了非法派发候选索引：{job_uuid}"
+                        )
+                    if decision.acquired:
+                        selected = dispatch_candidates[selected_index]
+                        dispatching.update(selected)
+                        resolved_args = selected["resolved_args"]
+                        execution_locks = selected["execution_locks"]
+                else:
+                    request = self._dispatch_admission_request(
+                        dispatching=dispatching,
+                        task_uuid=task_uuid,
+                        job_uuid=job_uuid,
+                        resolved_args=resolved_args,
+                        execution_locks=execution_locks,
+                    )
+                    decision = inventory_authority.acquire_dispatch_permit(request)
             except StationResourceError as error:
                 if not is_temporary_resource_condition(error.code):
                     raise
@@ -1618,6 +1669,7 @@ class TaskSchedulerBridge:
                 )
             )
         raw_transfer = dispatching.get("transfer_dispatch_condition")
+        raw_site_selection = dispatching.get("site_selection")
         raw_operate = dispatching.get("operate_in_place_condition")
         raw_aliquot = dispatching.get("aliquot_dispatch_condition")
         transfer = None
@@ -1649,6 +1701,43 @@ class TaskSchedulerBridge:
                 "source_site_uuid": transfer.source_site_uuid,
                 "target_site_uuid": transfer.target_site_uuid,
             }
+            if raw_site_selection is not None:
+                if not isinstance(raw_site_selection, Mapping):
+                    raise StoreConflict("派发库位选择审计信息必须是对象")
+                required_selection = {
+                    "version",
+                    "owner_material_uuid",
+                    "group_key",
+                    "requested_reference",
+                    "strategy",
+                    "site_uuids",
+                    "fingerprint",
+                }
+                if set(raw_site_selection) != required_selection:
+                    raise StoreConflict("派发库位选择审计字段不完整")
+                selection_site_uuids = raw_site_selection.get("site_uuids")
+                selection_group = str(raw_site_selection.get("group_key") or "")
+                requested_reference = str(
+                    raw_site_selection.get("requested_reference") or ""
+                )
+                if (
+                    raw_site_selection.get("version") != 1
+                    or str(raw_site_selection.get("strategy") or "") != "sort_order"
+                    or not str(raw_site_selection.get("owner_material_uuid") or "")
+                    or not (selection_group or requested_reference)
+                    or not str(raw_site_selection.get("fingerprint") or "")
+                    or not isinstance(selection_site_uuids, list)
+                    or not selection_site_uuids
+                    or transfer.target_site_uuid not in selection_site_uuids
+                ):
+                    raise StoreConflict("派发库位选择审计信息非法")
+                expected_change_set["site_selection"] = {
+                    "group_key": selection_group,
+                    "requested_reference": requested_reference,
+                    "strategy": "sort_order",
+                    "fingerprint": str(raw_site_selection["fingerprint"]),
+                    "selected_site_uuid": transfer.target_site_uuid,
+                }
         if raw_operate is not None:
             if not isinstance(raw_operate, Mapping):
                 raise StoreConflict("派发原位操作条件必须是对象")
@@ -2124,9 +2213,7 @@ class TaskSchedulerBridge:
                 carry=carry,
                 next_carry=next_carry,
                 error_code=(str(event["error"]) if event.get("error") else None),
-                error_message=(
-                    str(event["message"]) if event.get("message") else None
-                ),
+                error_message=(str(event["message"]) if event.get("message") else None),
                 skipped_job_uuids=[
                     self._required_text(
                         item.get("job_id"),
