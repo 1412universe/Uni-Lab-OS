@@ -138,6 +138,74 @@ class LocalEdgeSessionStore:
                 self._connection.rollback()
                 raise
 
+    def update_device_status(
+        self,
+        session_uuid: str,
+        local_device_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """更新当前在线会话中一个设备的实时可派发事实。
+
+        参数：会话、设备本地身份和已校验的在线/健康/未知命令及属性增量。
+        返回更新后的脱离设备快照。异常：会话不在线、设备不存在或持久声明损坏
+        时失败关闭；身份、动作能力和物料 UUID 不允许由状态接口修改。
+        """
+
+        normalized_session = str(uuid.UUID(str(session_uuid)))
+        normalized_device = str(local_device_id or "").strip()
+        if not normalized_device:
+            raise ValueError("local device id is required")
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._connection.execute(
+                    "SELECT devices_json,connected FROM local_edge_session "
+                    "WHERE session_uuid=?",
+                    (normalized_session,),
+                ).fetchone()
+                if row is None or not bool(row["connected"]):
+                    raise ValueError("Edge session is not connected")
+                decoded = json.loads(str(row["devices_json"]))
+                if not isinstance(decoded, list):
+                    raise ValueError("registered devices are invalid")
+                selected: dict[str, Any] | None = None
+                for item in decoded:
+                    if (
+                        isinstance(item, dict)
+                        and str(item.get("local_id") or "").strip()
+                        == normalized_device
+                    ):
+                        selected = item
+                        break
+                if selected is None:
+                    raise ValueError("registered device does not exist")
+                selected["online"] = payload["online"]
+                selected["dispatch_block_reason"] = payload[
+                    "dispatch_block_reason"
+                ]
+                selected["unknown_command_ids"] = list(
+                    payload["unknown_command_ids"]
+                )
+                status = selected.get("status")
+                merged_status = dict(status) if isinstance(status, Mapping) else {}
+                merged_status.update(dict(payload.get("status") or {}))
+                selected["status"] = merged_status
+                now = time.time()
+                self._connection.execute(
+                    "UPDATE local_edge_session SET devices_json=?,updated_at=? "
+                    "WHERE session_uuid=? AND connected=1",
+                    (
+                        json.dumps(decoded, ensure_ascii=False, separators=(",", ":")),
+                        now,
+                        normalized_session,
+                    ),
+                )
+                self._connection.commit()
+                return dict(selected)
+            except BaseException:
+                self._connection.rollback()
+                raise
+
     @contextmanager
     def activation_transaction(
         self,

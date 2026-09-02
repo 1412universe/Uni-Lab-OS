@@ -12,6 +12,7 @@ import math
 import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -221,6 +222,7 @@ class WorkflowQuantityInventoryAuthority:
         self,
         task_uuid: str,
         allocations: Sequence[Mapping[str, Any]],
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         """在库存权威内全有或全无地预留一个任务的数量。
 
@@ -250,7 +252,12 @@ class WorkflowQuantityInventoryAuthority:
             }
             for job_uuid, items in by_job.items()
         }
-        with self._store.transaction() as connection:
+        transaction = (
+            self._store.transaction()
+            if connection is None
+            else nullcontext(connection)
+        )
+        with transaction as connection:
             existing_rows = connection.execute(
                 "SELECT * FROM inventory_reservation WHERE workflow_id=?",
                 (task_uuid,),

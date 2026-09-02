@@ -10,7 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
-from unilabos.app.scheduler.models import WorkflowNode, WorkflowSpec
+from unilabos.app.scheduler.device_target import (
+    DeviceTargetUnavailable,
+    ResolvedDeviceTarget,
+)
+from unilabos.app.scheduler.models import DispatchedJob, WorkflowNode, WorkflowSpec
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowConflict, WorkflowService
@@ -174,6 +178,21 @@ def test_scheduler_approval_dispatches_same_manual_job_once() -> None:
 
     dispatcher = RecordingDispatcher()
     scheduler = EdgeScheduler(dispatcher=dispatcher)
+    credentials = {
+        "attempt": 2,
+        "command_uuid": "command-manual-1",
+        "claim_uuid": "claim-manual-1",
+        "fences": [{"lock_key": "/devices/reactor-a", "fencing_token": 9}],
+        "effect_uuid": "effect-manual-1",
+        "parameter_hash": "sha256:manual-frozen",
+        "expected_change_set": {"kind": "no_inventory_change"},
+    }
+
+    def _admit(dispatching: dict[str, Any]) -> bool:
+        dispatching.update(credentials)
+        return True
+
+    scheduler.bind_dispatch_admission_authority(_admit)
     spec = WorkflowSpec(
         workflow_id="wf-manual-continuation",
         nodes=[
@@ -199,6 +218,153 @@ def test_scheduler_approval_dispatches_same_manual_job_once() -> None:
     assert replay["dispatched"] == []
     assert [payload["job_id"] for payload in dispatcher.dispatched] == [job_id]
     assert dispatcher.dispatched[0]["action_args"] == {"speed": 120}
+    assert {
+        key: dispatcher.dispatched[0][key] for key in credentials
+    } == credentials
+
+
+def test_scheduler_restores_manual_dispatch_credentials_before_approval() -> None:
+    """调度重启后批准人工节点仍使用原 Claim、Fence 与命令身份。"""
+
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    credentials = {
+        "attempt": 3,
+        "command_uuid": "command-manual-restored",
+        "claim_uuid": "claim-manual-restored",
+        "fences": [{"lock_key": "/devices/reactor-a", "fencing_token": 17}],
+        "effect_uuid": "effect-manual-restored",
+        "parameter_hash": "sha256:manual-restored",
+        "expected_change_set": {"kind": "no_inventory_change"},
+    }
+    spec = WorkflowSpec(
+        workflow_id="wf-manual-restored",
+        nodes=[
+            WorkflowNode(
+                id="manual-node",
+                job_id="job-manual-restored",
+                device_id="reactor-a",
+                action_name="start",
+                action_type="UniLabJsonCommand",
+                param={"speed": 120},
+                node_type="manual_confirm",
+                manual_continues_device_action=True,
+            )
+        ],
+    )
+    restored = DispatchedJob(
+        job_id="job-manual-restored",
+        workflow_id=spec.workflow_id,
+        node_id="manual-node",
+        device_action_key="/devices/reactor-a/start",
+        device_id="reactor-a",
+        action_name="start",
+        resolved_args={"speed": 120},
+        dispatch_credentials=credentials,
+        resource_lock_keys=set(),
+    )
+
+    scheduler.restore_workflow(spec, {}, [restored])
+    assert dispatcher.dispatched == []
+    scheduler.resolve_manual_confirmation(
+        "job-manual-restored",
+        approved=True,
+    )
+
+    assert len(dispatcher.dispatched) == 1
+    assert {
+        key: dispatcher.dispatched[0][key] for key in credentials
+    } == credentials
+
+
+def test_manual_approval_cannot_change_frozen_dispatch_parameters() -> None:
+    """批准继续真实动作时不得修改已生成参数哈希对应的动作参数。"""
+
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    submitted = scheduler.submit_workflow(
+        WorkflowSpec(
+            workflow_id="wf-manual-frozen-param",
+            nodes=[
+                WorkflowNode(
+                    id="manual-node",
+                    device_id="reactor-a",
+                    action_name="start",
+                    param={"speed": 120},
+                    node_type="manual_confirm",
+                    manual_continues_device_action=True,
+                )
+            ],
+        )
+    )
+
+    with pytest.raises(ValueError, match="冻结的派发参数"):
+        scheduler.resolve_manual_confirmation(
+            submitted["dispatched"][0]["job_id"],
+            approved=True,
+            param={"speed": 240},
+        )
+
+
+def test_manual_approval_rechecks_live_device_gate() -> None:
+    """等待期间设备离线时，批准不得越过 live Gate 4 下发真实动作。"""
+
+    dispatcher = RecordingDispatcher()
+    online = True
+
+    def resolve(
+        selector: dict[str, Any],
+        action_name: str,
+        busy_keys: set[str],
+    ) -> ResolvedDeviceTarget:
+        del busy_keys
+        if not online:
+            raise DeviceTargetUnavailable("device_offline", "目标设备当前离线")
+        assert selector["material_uuid"] == "device-material-a"
+        assert action_name == "start"
+        return ResolvedDeviceTarget("reactor-a", "device-material-a")
+
+    scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        device_target_resolver=resolve,
+    )
+    credentials = {
+        "attempt": 1,
+        "command_uuid": "command-manual-live-gate",
+        "claim_uuid": "claim-manual-live-gate",
+        "fences": [{"lock_key": "/devices/reactor-a", "fencing_token": 1}],
+        "effect_uuid": "effect-manual-live-gate",
+        "parameter_hash": "sha256:manual-live-gate",
+        "expected_change_set": {"kind": "no_inventory_change"},
+    }
+
+    def admit(dispatching: dict[str, Any]) -> bool:
+        dispatching.update(credentials)
+        return True
+
+    scheduler.bind_dispatch_admission_authority(admit)
+    submitted = scheduler.submit_workflow(
+        WorkflowSpec(
+            workflow_id="wf-manual-live-gate",
+            nodes=[
+                WorkflowNode(
+                    id="manual-node",
+                    device_id="reactor-a",
+                    device_material_uuid="device-material-a",
+                    action_name="start",
+                    param={"speed": 120},
+                    node_type="manual_confirm",
+                    manual_continues_device_action=True,
+                )
+            ],
+        )
+    )
+    job_id = submitted["dispatched"][0]["job_id"]
+    online = False
+
+    with pytest.raises(DeviceTargetUnavailable, match="离线"):
+        scheduler.resolve_manual_confirmation(job_id, approved=True)
+
+    assert dispatcher.dispatched == []
 
 
 def test_scheduler_rejects_manual_confirmation_without_physical_dispatch() -> None:
@@ -290,15 +456,14 @@ def test_terminal_job_closes_pending_manual_confirmation(
         store.close()
 
 
-def test_scheduler_restart_fails_pending_manual_confirmation_task(
+def test_scheduler_restart_restores_pending_manual_confirmation_task(
     tmp_path,
 ) -> None:
-    """调度进程重启后运行中任务整体失败且不再恢复人工等待。
+    """调度进程重启后以原作业身份恢复尚未派发设备的人工等待。
 
     参数：``tmp_path`` 提供隔离工作流库。返回：无；断言运行中的工作流任务
-    （WorkflowTask）进入 ``failed``，未越过物理边界的人工确认作业进入
-    ``skipped``，对应确认进入 ``canceled``。异常：任何恢复后继续推进都会使
-    断言失败。
+    （WorkflowTask）、人工确认作业和确认事实保持活动，随后仍可按同一 Job
+    明确批准。异常：恢复误判为执行中断会使断言失败。
     """
 
     store = WorkflowStore(tmp_path / "manual-restart.db")
@@ -339,15 +504,22 @@ def test_scheduler_restart_fails_pending_manual_confirmation_task(
         try:
             recovered = bridge.recover_active_tasks()
             assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
-            assert store.get_job(JOB_UUID)["status"] == "skipped"
+            assert store.get_job(JOB_UUID)["status"] == "dispatched"
             confirmation = WorkflowService(store).list_task_manual_confirmations(
                 TASK_UUID
             )[0]
-            assert confirmation["status"] == "canceled"
+            assert confirmation["status"] == "pending"
             task = store.get_task(TASK_UUID)
-            assert task["status"] == "failed"
-            assert task["cleanup_status"] == "settled"
+            assert task["status"] == "running"
+            assert task["cleanup_status"] == "none"
             assert task["control_status"] == "active"
+            bridge.decide_manual_confirmation(
+                JOB_UUID,
+                approved=True,
+                param=None,
+            )
+            assert store.get_job(JOB_UUID)["status"] == "succeeded"
+            assert store.get_task(TASK_UUID)["status"] == "succeeded"
         finally:
             bridge.close()
     finally:

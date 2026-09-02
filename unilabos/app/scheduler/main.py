@@ -173,6 +173,7 @@ def build_workflow_service(
         service = WorkflowService(
             workflow_store,
             definition_store=workflow_definitions,
+            device_preflight=scheduler.preflight_device_target,
             task_scheduler_bridge=bridge,
         )
         bridge.recover_active_tasks()

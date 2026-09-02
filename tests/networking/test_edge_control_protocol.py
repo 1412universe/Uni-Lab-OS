@@ -34,6 +34,23 @@ class FakeDataPlane:
 
         self.fetched_jobs: list[StoredJob] = []
         self.outcomes: list[dict[str, Any]] = []
+        self.device_statuses: list[dict[str, Any]] = []
+
+    def update_device_status(
+        self,
+        session_uuid: str,
+        local_device_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """记录 Runtime 提交给 Scheduler 的实时设备状态。"""
+
+        item = {
+            "session_uuid": session_uuid,
+            "local_device_id": local_device_id,
+            **payload,
+        }
+        self.device_statuses.append(item)
+        return item
 
     def fetch_job(self, job: StoredJob) -> dict[str, Any]:
         """按持久 Edge 作业返回含 Claim/Fence 的动作载荷。
@@ -115,6 +132,47 @@ def test_edge_control_settings_derives_split_scheduler_address(
 
     assert settings.backend_address == "http://[::1]:8080"
     assert settings.scheduler_address == "http://[::1]:8081"
+
+
+def test_runtime_device_status_refreshes_scheduler_registration(
+    tmp_path: Path,
+) -> None:
+    """Runtime 属性回调必须同时刷新设备健康与未知命令快照。"""
+
+    async def scenario() -> None:
+        data_plane = FakeDataPlane()
+        host_node = FakeHostNode()
+        host_node.dispatch_block_reasons["heater-01"] = (
+            "unresolved_unknown_command:command-1"
+        )
+        client = EdgeControlClient(
+            _settings(tmp_path / "device-status.db"),
+            data_plane=data_plane,  # type: ignore[arg-type]
+            host_node_provider=lambda: host_node,
+        )
+        client._session_uuid = str(uuid.uuid4())
+        client._connected.set()
+
+        await client._commit_device_status(
+            "heater-01",
+            {"temperature": 37.5},
+        )
+
+        assert data_plane.device_statuses == [
+            {
+                "session_uuid": client._session_uuid,
+                "local_device_id": "heater-01",
+                "online": True,
+                "dispatch_block_reason": (
+                    "unresolved_unknown_command:command-1"
+                ),
+                "unknown_command_ids": ["command-1"],
+                "status": {"temperature": 37.5},
+            }
+        ]
+        client.store.close()
+
+    asyncio.run(scenario())
 
 
 class FakeHostNode:

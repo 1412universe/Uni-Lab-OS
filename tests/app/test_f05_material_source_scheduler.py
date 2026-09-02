@@ -41,10 +41,11 @@ class _ToggleInventory:
         self.admission_calls: list[tuple[str, list[Any]]] = []
         self.release_calls: list[tuple[str, str]] = []
 
-    def admit_material_sources(
+    def admit_task_materials(
         self,
         workflow_uuid: str,
         requests: list[Any],
+        quantity_allocations: list[Any] | tuple[Any, ...],
     ) -> dict[str, Any]:
         """模拟整组物料来源的策略化单事务准入。
 
@@ -53,6 +54,7 @@ class _ToggleInventory:
         ``InsufficientStock``，且不形成部分预留。
         """
 
+        assert not quantity_allocations
         self.admission_calls.append((workflow_uuid, requests))
         if not self.available:
             raise InsufficientStock("测试固定物料已被其他任务预留")
@@ -66,6 +68,7 @@ class _ToggleInventory:
             "allocations": {
                 request.node_id: [MATERIAL_UUID] for request in requests
             },
+            "allocation_sites": {},
         }
 
     def consume_reservation(self, workflow_uuid: str, node_uuid: str) -> None:

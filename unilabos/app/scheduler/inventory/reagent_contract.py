@@ -19,6 +19,10 @@ from unilabos.app.scheduler.inventory.backend_contract import (
     BackendContractError,
 )
 from unilabos.app.scheduler.inventory.domain import new_event_id
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    InventoryMutationConflict,
+    assert_inventory_mutation_unclaimed,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.scheduler.inventory.workflow_quantity import (
     WorkflowQuantityReservationError,
@@ -434,6 +438,14 @@ class BackendReagentService:
         now = _now()
         try:
             self._require_container(conn, material_uuid)
+            try:
+                assert_inventory_mutation_unclaimed(
+                    conn, material_uuids=(material_uuid,)
+                )
+            except InventoryMutationConflict as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             # 延迟导入避免共享容器规则在模块初始化时形成循环依赖。
             from unilabos.app.scheduler.inventory.content_rules import (
                 ensure_container_empty,
@@ -576,6 +588,14 @@ class BackendReagentService:
         delta = quantity - float(current["quantity"])
         with self.store.transaction() as conn:
             try:
+                assert_inventory_mutation_unclaimed(
+                    conn, material_uuids=(current["material_uuid"],)
+                )
+            except InventoryMutationConflict as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
+            try:
                 assert_workflow_quantity_mutation_allowed(
                     conn,
                     inventory_type="reagent",
@@ -621,6 +641,14 @@ class BackendReagentService:
         revision = int(current["revision"]) + 1
         now = _now()
         with self.store.transaction() as conn:
+            try:
+                assert_inventory_mutation_unclaimed(
+                    conn, material_uuids=(current["material_uuid"],)
+                )
+            except InventoryMutationConflict as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             try:
                 assert_workflow_quantity_mutation_allowed(
                     conn,

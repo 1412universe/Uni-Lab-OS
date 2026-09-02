@@ -2649,12 +2649,12 @@ class HostNode(BaseROS2DeviceNode):
         ],
     )
     async def discard_resource(self, resource: ResourceSlot, device_id: DeviceSlot) -> dict:
-        """在 OS 本地库存权威（Inventory Authority）中废弃单个台面物料。
+        """从 Edge Runtime 的设备资源树移除单个台面物料并返回执行回执。
 
         与 apply_deduct_resource 对称（扣减→挂载到设备 / 废弃→从设备移除并销毁）：接收单个
-        已存在物料（前端用节点选择器选择，或图 handle 传入，框架在 send_goal 已解析为
-        PLR 实例）与所属设备，先原子更新本地库存（Inventory），再通知对应边缘设备
-        移除该物料。OS 不连接正式后端（Backend）。
+        已存在物料与所属设备，只通知对应边缘设备移除本地资源树。Runtime 不读取或
+        写入 Scheduler Inventory；正式废弃事实必须由 Scheduler 在验证 Claim/Fence
+        与成功回执后通过 PhysicalSettlement 提交。
 
         说明：设备需显式指定，与 ``apply_deduct_resource`` 对称。
 
@@ -2674,29 +2674,17 @@ class HostNode(BaseROS2DeviceNode):
             f"[discard_resource] 废弃物料 name={getattr(resource, 'name', '')} "
             f"barcode={barcode} uuid={res_uuid} device={edge_id}"
         )
-        from unilabos.app.scheduler.integration import get_inventory_service
-
-        inventory = get_inventory_service()
-        if inventory is None:
-            raise RuntimeError("废弃失败：OS 本地库存权威尚未初始化")
-        discarded = inventory.discard_instance(
-            str(res_uuid),
-            reason="host_node.discard_resource",
-            actor="host_node",
-        )
-        # 本地事务提交后，通知对应边缘设备移除（卸载父节点 + tracker 移除）。
+        # Runtime 只执行本地资源树移除；库存结算属于 Scheduler 独占职责。
         notified = self.notify_resource_tree_update(edge_id, "remove", [res_uuid])
         if notified is not True:
-            self.lab_logger().warning(
-                f"[discard_resource] 本地库存已废弃 uuid={res_uuid}，但通知设备 "
-                f"{edge_id} 移除未成功（notified={notified}）"
+            raise RuntimeError(
+                f"废弃执行失败：通知设备 {edge_id} 移除物料 {res_uuid} 未成功"
             )
         return {
             "code": 0,
             "uuids": [res_uuid],
             "device_id": edge_id,
-            "status": discarded.get("status"),
-            "version": discarded.get("version"),
+            "status": "runtime_removed",
         }
 
     async def _do_transfer_resource(
@@ -2707,16 +2695,19 @@ class HostNode(BaseROS2DeviceNode):
         site: str = "",
         site_uuid: str = "",
     ) -> TransferResourceReturn:
-        """把已经物理就位的物料在系统中改挂到目标设备孔位。
+        """在 Edge Runtime 资源树中执行已经获准的物料挂载动作。
 
         与 apply_deduct_resource 一致：入参均为「单个物料」（单 ResourceSlot），框架在 send_goal 已把
         list（一棵树扁平节点组→装配成一个物料）或 dict（资源引用→with_children 拉取）解析为单个 PLR 实例。
 
-        复用 base_device_node.transfer_resource_to_another（移除来源 → 云端改父 → 增加到目标）。
-        transfer 只负责"系统记账"，物理搬运由前序节点（manual_confirm/机械臂 pick+place）保证。
+        复用 base_device_node.transfer_resource_to_another 完成设备进程内资源树切换并
+        返回执行回执。Runtime 不读取或写入 Scheduler 的 Inventory Authority；正式
+        库存物理事实只允许 Scheduler 在校验 Claim/Fence 后通过 PhysicalSettlement
+        提交。物理搬运由前序节点（manual_confirm/机械臂 pick+place）保证。
 
-        site_uuid：目标库位的稳定身份，优先于 ``site``。当只提供 UUID 时，OS
-        从本地库存权威读取规范库位名供设备执行；同时提供时二者必须指向同一库位。
+        site_uuid：目标库位的稳定身份，仅供派发回执关联。Scheduler 必须在派发前
+        完成 UUID、归属、占用和名称校验，并同时下发规范 ``site``；Runtime 禁止
+        通过 UUID 反查调度库存。
         site：目标父级（carrier/deck/plate 等带 _ordering 的容器）上的库位名，显式指定物料落在哪个库位；
         目标端通过 resolve_site_spot（与 set_substance 同一套 slot/site 解析：int 索引 / "A1" 标签 /
         名称匹配）换算成 assign_child_resource 的 spot。空串视作不指定（由父级默认排布）。
@@ -2739,56 +2730,21 @@ class HostNode(BaseROS2DeviceNode):
             ``site`` 回传库位名，``result`` 是底层转移结果的稳定字符串。
 
         Raises:
-            ValueError: 必需物料缺失、库位不存在/归属不符/已占用，或底层转移
-                拒绝时抛出。
+            ValueError: 必需物料缺失、只收到 UUID 而缺少 Scheduler 解析的规范库位
+                名，或底层执行拒绝时抛出。
         """
         if resource is None:
             raise ValueError("转移失败：未接收到待转移物料")
         if mount_resource is None:
             raise ValueError("转移失败：未指定挂载目标孔位")
         target_id = str(target_device).split("/")[-1]
-        from unilabos.app.scheduler.integration import get_inventory_service
-
-        inventory = get_inventory_service()
-        if site_uuid or site:
-            station_resources = getattr(inventory, "station_resources", None)
-            if station_resources is not None:
-                from unilabos.app.scheduler.site_target import (
-                    SiteTargetResolutionError,
-                    resolve_site_target,
-                )
-
-                try:
-                    target_site = resolve_site_target(
-                        station_resources,
-                        owner_material_uuid=_stable_resource_uuid(mount_resource),
-                        site_uuid=site_uuid,
-                        site_name=site,
-                        occupant_material_uuid=_stable_resource_uuid(resource),
-                    )
-                except SiteTargetResolutionError as error:
-                    if site_uuid or error.code != "site_not_found":
-                        raise
-                    self.lab_logger().warning(
-                        "[transfer_resource] 旧库位名称未进入本地 Site 投影，"
-                        f"沿用设备侧名称执行 site={site}"
-                    )
-                else:
-                    site = target_site.name
-            elif site_uuid:
-                raise ValueError(
-                    "转移失败：提供 site_uuid 时必须先初始化本地库存权威"
-                )
+        if site_uuid and not str(site).strip():
+            raise ValueError(
+                "转移失败：Scheduler 必须随 site_uuid 下发已经校验的规范库位名 site"
+            )
         result = await self.transfer_resource_to_another(
             [resource], target_id, [mount_resource], [site if site else None]
         )
-        if inventory is not None:
-            inventory.move_instance(
-                _stable_resource_uuid(resource),
-                parent_uuid=_stable_resource_uuid(mount_resource),
-                slot_id=site,
-                actor="host_node.transfer_resource",
-            )
         return {
             "resource": _dump_resource_slot(resource),
             "mount_resource": _dump_resource_slot(mount_resource),
@@ -2797,7 +2753,7 @@ class HostNode(BaseROS2DeviceNode):
         }
 
     @action(
-        description="转移物料（系统派发）：把已物理就位的物料在系统中改挂到目标设备的目标孔位（人工/机械臂工作流的统一末步）",
+        description="转移物料（系统派发）：执行设备进程内资源树挂载并返回回执；正式库存由 Scheduler PhysicalSettlement 提交",
         always_free=True,
         node_type=NodeType.ILAB,
         executor_kind=ExecutorKind.MATERIAL_TRANSFER,
@@ -2815,7 +2771,8 @@ class HostNode(BaseROS2DeviceNode):
         site_uuid: str = "",
     ) -> TransferResourceReturn:
         """
-        转移物料到目标设备的目标孔位（系统记账，不含物理搬运）。物理搬运由前序节点保证：
+        转移物料到目标设备的目标孔位（Runtime 执行回执，不直接修改调度库存）。
+        物理搬运由前序节点保证：
         - 人工：apply_deduct_resource → transfer_manual → transfer_manual → transfer_resource
         - 机械臂：apply_deduct_resource → 机械臂 pick → 机械臂 place → transfer_resource
 
@@ -2830,8 +2787,9 @@ class HostNode(BaseROS2DeviceNode):
             mount_resource[目标孔位]: 目标设备上的单个挂载孔位/父物料（list/dict 两形态）。
             site[目标库位]: 目标父级容器上的库位名，显式指定物料落在哪个库位（carrier/deck/plate 等按
                 _ordering 换算成 spot）；不传则由父级默认排布。
-            site_uuid[目标库位 UUID]: 可选稳定身份，优先于 ``site``；只传该值时
-                OS 自动解析设备执行所需库位名。为兼容旧工作流可继续只传 ``site``。
+            site_uuid[目标库位 UUID]: 可选稳定身份；非空时 Scheduler 必须同时下发
+                已校验的规范 ``site``，Runtime 不访问库存反查名称。为兼容旧工作流
+                可继续只传 ``site``。
 
         Returns:
             四键运行结果字典；两个物料字段按规范单对象引用返回。静态类型化动作

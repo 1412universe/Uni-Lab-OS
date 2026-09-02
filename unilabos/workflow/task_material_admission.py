@@ -133,6 +133,29 @@ def record_admitted_materials(
                 now=now,
             )
 
+    record_admitted_admission(connection, task_uuid=task_uuid, now=now)
+
+
+def record_admitted_admission(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    now: str | None = None,
+) -> None:
+    """记录不依赖来源绑定的统一任务物料准入成功事实。
+
+    参数：调用方工作流事务、任务身份和可选统一时间戳。返回无。该入口供仅含
+    数量库存需求的任务使用，也由来源绑定入口复用；重复 admitted 为零语义变化。
+    """
+
+    admitted_at = now or utc_now()
+    admission = _admission_row(connection, task_uuid)
+    if admission is not None and admission["status"] == "admitted":
+        connection.execute(
+            "UPDATE workflow_task SET wait_reason = '{}', update_time = ? WHERE uuid = ?",
+            (admitted_at, task_uuid),
+        )
+        return
     if admission is None:
         connection.execute(
             """
@@ -143,7 +166,14 @@ def record_admitted_materials(
             ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, 'admitted', 1, 1,
                       NULL, '{}', ?, ?)
             """,
-            (str(uuid4()), now, now, task_uuid, now, now),
+            (
+                str(uuid4()),
+                admitted_at,
+                admitted_at,
+                task_uuid,
+                admitted_at,
+                admitted_at,
+            ),
         )
     else:
         connection.execute(
@@ -154,11 +184,11 @@ def record_admitted_materials(
                 evaluated_at = ?, admitted_at = ?, update_time = ?
             WHERE uuid = ? AND deleted_at IS NULL
             """,
-            (now, now, now, admission["uuid"]),
+            (admitted_at, admitted_at, admitted_at, admission["uuid"]),
         )
     connection.execute(
         "UPDATE workflow_task SET wait_reason = '{}', update_time = ? WHERE uuid = ?",
-        (now, task_uuid),
+        (admitted_at, task_uuid),
     )
 
 
@@ -413,6 +443,7 @@ def _json_text(value: Any, *, field: str) -> str:
 __all__ = [
     "list_blocked_material_task_uuids",
     "read_material_admission",
+    "record_admitted_admission",
     "record_admitted_materials",
     "record_blocked_admission",
 ]

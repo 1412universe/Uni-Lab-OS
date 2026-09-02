@@ -96,11 +96,73 @@ def check_device_tenancy(
     ).fetchone()
     if blocker is None:
         return DeviceTenancyDecision(acquired=True)
+    blocker_task_uuid = str(blocker["workflow_task_uuid"])
+    wait_edges: dict[str, set[str]] = {}
+    for row in connection.execute(
+        """
+        SELECT waiter.workflow_task_uuid AS waiting_task_uuid,
+               tenancy.workflow_task_uuid AS owning_task_uuid
+        FROM execution_lock_waiter AS waiter
+        JOIN task_device_tenancy AS tenancy
+          ON tenancy.device_lock_key = waiter.lock_key
+         AND tenancy.state = 'active'
+        WHERE waiter.state = 'waiting'
+          AND waiter.workflow_task_uuid <> tenancy.workflow_task_uuid
+        """
+    ).fetchall():
+        wait_edges.setdefault(str(row["waiting_task_uuid"]), set()).add(
+            str(row["owning_task_uuid"])
+        )
+    wait_edges.setdefault(task_uuid, set()).add(blocker_task_uuid)
+    pending = [blocker_task_uuid]
+    visited: set[str] = set()
+    while pending:
+        current = pending.pop()
+        if current == task_uuid:
+            raise StoreConflict(
+                "检测到 Task 间 H→N 设备托管等待环路，拒绝建立第二条等待边"
+            )
+        if current in visited:
+            continue
+        visited.add(current)
+        pending.extend(sorted(wait_edges.get(current, ())))
     return DeviceTenancyDecision(
         acquired=False,
-        blocking_task_uuid=str(blocker["workflow_task_uuid"]),
+        blocking_task_uuid=blocker_task_uuid,
         blocking_job_uuid=str(blocker["acquired_by_job_uuid"]),
     )
+
+
+def require_active_device_tenancy(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    requirement: Mapping[str, Any] | None,
+) -> None:
+    """证明原位操作的物料与设备正由同一 Task 长期托管。"""
+
+    if requirement is None:
+        return
+    if not isinstance(requirement, Mapping) or set(requirement) != {
+        "material_uuid",
+        "device_lock_key",
+    }:
+        raise StoreConflict("原位操作设备托管要求字段非法")
+    material_uuid = str(requirement.get("material_uuid") or "").strip()
+    device_lock_key = str(requirement.get("device_lock_key") or "").strip()
+    if not material_uuid or not device_lock_key.startswith("/devices/"):
+        raise StoreConflict("原位操作设备托管要求缺少物料或规范设备键")
+    owned = connection.execute(
+        """
+        SELECT 1 FROM task_device_tenancy
+        WHERE workflow_task_uuid = ? AND material_uuid = ?
+          AND device_lock_key = ? AND state = 'active'
+        LIMIT 1
+        """,
+        (task_uuid, material_uuid, device_lock_key),
+    ).fetchone()
+    if owned is None:
+        raise StoreConflict("原位操作物料并未由本 Task 托管在实际执行设备中")
 
 
 def prepare_device_tenancy(
@@ -280,5 +342,6 @@ __all__ = [
     "check_device_tenancy",
     "normalize_device_tenancy_transition",
     "prepare_device_tenancy",
+    "require_active_device_tenancy",
     "settle_device_tenancy",
 ]

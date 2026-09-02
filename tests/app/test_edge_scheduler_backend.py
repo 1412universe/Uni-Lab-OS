@@ -10,6 +10,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from unilabos.app.scheduler.backend import JobExecutionBackend, create_edge_stack
+from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
 from unilabos.app.scheduler.dispatch import build_job_start_payload
 from unilabos.app.scheduler.models import WorkflowEdge, WorkflowNode, WorkflowSpec
 from unilabos.app.ws_client import QueueItem
@@ -130,6 +131,12 @@ def _bind_isolated_admission_authority(scheduler: Any) -> None:
         )
         return True
 
+    scheduler._device_target_resolver = (
+        lambda selector, _action, _busy: ResolvedDeviceTarget(
+            local_device_id=str(selector["local_device_id"]),
+            material_uuid=str(selector.get("material_uuid") or ""),
+        )
+    )
     scheduler.bind_dispatch_admission_authority(admit)
 
 

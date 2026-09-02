@@ -10,6 +10,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
     StationResourceError,
     StationResourceInventory,
 )
+from unilabos.app.scheduler.inventory.dispatch_admission import DispatchFence
 from unilabos.workflow.store import StoreConflict
 
 
@@ -31,6 +32,7 @@ class MaterialTransferSettlement:
         *,
         job: Mapping[str, Any],
         execution_plan: Mapping[str, Any] | None = None,
+        execution_claim: Mapping[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         """在作业成功终态落库前提交物料与库位变化。
 
@@ -47,6 +49,50 @@ class MaterialTransferSettlement:
         if self._inventory is None:
             raise StoreConflict("物料转移作业未装配工站库存权威")
         job_uuid = _required_text(job.get("uuid"), field="job.uuid")
+        if not isinstance(execution_claim, Mapping):
+            raise StoreConflict(f"物料转移作业缺少库存 Claim：{job_uuid}")
+        claim_uuid = _required_text(
+            execution_claim.get("claim_uuid"),
+            field="execution_claim.claim_uuid",
+        )
+        effect_uuid = _required_text(
+            job.get("dispatch_effect_uuid"),
+            field="job.dispatch_effect_uuid",
+        )
+        parameter_hash = _required_text(
+            job.get("dispatch_parameter_hash"),
+            field="job.dispatch_parameter_hash",
+        )
+        try:
+            attempt = int(job.get("attempt"))
+        except (TypeError, ValueError) as error:
+            raise StoreConflict("物料转移作业 attempt 无效") from error
+        if attempt <= 0 or int(execution_claim.get("attempt") or 0) != attempt:
+            raise StoreConflict("物料转移作业 Claim attempt 与 Job 不一致")
+        expected_change_set = job.get("expected_change_set")
+        if not isinstance(expected_change_set, Mapping):
+            raise StoreConflict("物料转移作业缺少冻结 ChangeSet")
+        raw_fences = execution_claim.get("fences")
+        if not isinstance(raw_fences, list) or not raw_fences:
+            raise StoreConflict("物料转移作业缺少库存 Fence")
+        try:
+            fences = tuple(
+                DispatchFence(
+                    lock_key=_required_text(
+                        item.get("lock_key"),
+                        field="execution_claim.fence.lock_key",
+                    ),
+                    fencing_token=int(item.get("fencing_token")),
+                )
+                for item in raw_fences
+                if isinstance(item, Mapping)
+            )
+        except (TypeError, ValueError) as error:
+            raise StoreConflict("物料转移作业 Fence 损坏") from error
+        if len(fences) != len(raw_fences) or any(
+            fence.fencing_token <= 0 for fence in fences
+        ):
+            raise StoreConflict("物料转移作业 Fence 损坏")
         param = job.get("param")
         if not isinstance(param, Mapping):
             raise StoreConflict(f"物料转移作业实际参数不是对象：{job_uuid}")
@@ -65,6 +111,10 @@ class MaterialTransferSettlement:
         site_uuid = str(
             (param.get(site_uuid_param) if site_uuid_param else "") or ""
         ).strip()
+        if not site_uuid:
+            site_uuid = str(
+                expected_change_set.get("target_site_uuid") or ""
+            ).strip()
         if not site_name and not site_uuid:
             raise StoreConflict("物料转移结算缺少目标库位名称或稳定 UUID")
         try:
@@ -79,6 +129,13 @@ class MaterialTransferSettlement:
                         causation_id=(
                             f"workflow-node-job:{job_uuid}:material-transfer"
                         ),
+                        effect_uuid=effect_uuid,
+                        claim_uuid=claim_uuid,
+                        job_uuid=job_uuid,
+                        attempt=attempt,
+                        parameter_hash=parameter_hash,
+                        expected_change_set=dict(expected_change_set),
+                        fences=fences,
                     )
                 )
             )

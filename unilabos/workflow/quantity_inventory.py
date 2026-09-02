@@ -122,6 +122,7 @@ class WorkflowQuantityInventory:
         prepared: PreparedTaskInput,
         task_uuid: str,
         bindings: Sequence[Mapping[str, Any]],
+        defer_inventory_reservation: bool = False,
     ) -> list[dict[str, Any]]:
         """在任务创建事务内校验显式绑定并构造分配行。
 
@@ -138,11 +139,25 @@ class WorkflowQuantityInventory:
             task_uuid=task_uuid,
             bindings=bindings,
         )
-        try:
-            self._authority.reserve_task(task_uuid, allocations)
-        except WorkflowQuantityReservationError as error:
-            raise StoreConflict(str(error)) from error
+        if not defer_inventory_reservation:
+            try:
+                self._authority.reserve_task(task_uuid, allocations)
+            except WorkflowQuantityReservationError as error:
+                raise StoreConflict(str(error)) from error
         return allocations
+
+    def task_allocations(self, task_uuid: str) -> list[dict[str, Any]]:
+        """返回工作流事务已冻结、尚待库存统一准入的任务数量分配。"""
+
+        with self._workflow_store.transaction() as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM workflow_inventory_allocation "
+                    "WHERE workflow_task_uuid=? ORDER BY workflow_node_job_uuid,uuid",
+                    (task_uuid,),
+                ).fetchall()
+            ]
 
     def preflight_task_allocations(
         self,

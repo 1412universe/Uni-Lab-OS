@@ -38,6 +38,31 @@ class ResolvedDeviceTarget:
     material_uuid: str
 
 
+def _registered_device_unavailable(
+    device: Mapping[str, Any], *, action_name: str
+) -> tuple[str, str] | None:
+    """返回单个注册设备当前不可派发的稳定原因。"""
+
+    if device.get("online") is False:
+        return "device_offline", "目标设备当前离线"
+    if str(device.get("dispatch_block_reason") or "").strip():
+        return "device_unhealthy", "目标设备当前健康状态不允许派发"
+    unknown_ids = device.get("unknown_command_ids", [])
+    if not isinstance(unknown_ids, list) or unknown_ids:
+        return (
+            "device_requires_reconciliation",
+            "目标设备仍有结果不明命令，必须先完成物理对账",
+        )
+    actions = device.get("actions")
+    if not isinstance(actions, list) or not any(
+        isinstance(action, Mapping)
+        and str(action.get("name") or "").strip() == action_name
+        for action in actions
+    ):
+        return "device_capability_unavailable", "目标设备未注册所需动作能力"
+    return None
+
+
 def resolve_registered_device_target(
     inventory: StationResourceInventory,
     registration: Mapping[str, Any] | None,
@@ -67,24 +92,36 @@ def resolve_registered_device_target(
     if not isinstance(devices, list):
         raise DeviceTargetUnavailable("invalid_edge_registration", "设备注册快照损坏")
     candidates: list[ResolvedDeviceTarget] = []
+    candidate_names: dict[str, str] = {}
+    unavailable_resources: list[dict[str, str]] = []
     for device in devices:
         if not isinstance(device, Mapping):
             continue
         local_id = str(device.get("local_id") or "").strip()
         material_uuid = str(device.get("material_uuid") or "").strip()
-        actions = device.get("actions")
-        if not local_id or not material_uuid or not isinstance(actions, list):
-            continue
-        if not any(
-            isinstance(action, Mapping)
-            and str(action.get("name") or "").strip() == action_name
-            for action in actions
-        ):
+        if not local_id or not material_uuid:
             continue
         if not inventory.is_device_material(
             material_uuid,
             resource_template_uuid=template_uuid,
         ):
+            continue
+        unavailable = _registered_device_unavailable(
+            device,
+            action_name=action_name,
+        )
+        if unavailable is not None:
+            wait_code, wait_message = unavailable
+            unavailable_resources.append(
+                {
+                    "scope": "device",
+                    "device_id": material_uuid,
+                    "local_device_id": local_id,
+                    "device_name": str(device.get("name") or local_id),
+                    "wait_code": wait_code,
+                    "wait_message": wait_message,
+                }
+            )
             continue
         candidates.append(
             ResolvedDeviceTarget(
@@ -92,7 +129,28 @@ def resolve_registered_device_target(
                 material_uuid=material_uuid,
             )
         )
+        candidate_names[material_uuid] = str(device.get("name") or local_id)
     if not candidates:
+        if unavailable_resources:
+            unavailable_resources.sort(
+                key=lambda item: (
+                    item["local_device_id"],
+                    item["device_id"],
+                )
+            )
+            reason_codes = {
+                item["wait_code"] for item in unavailable_resources
+            }
+            code = (
+                next(iter(reason_codes))
+                if len(reason_codes) == 1
+                else "device_currently_unavailable"
+            )
+            raise DeviceTargetUnavailable(
+                code,
+                "匹配设备当前不可派发，请查看具体候选设备原因",
+                resources=tuple(unavailable_resources),
+            )
         raise DeviceTargetUnavailable(
             "device_capability_unavailable",
             "当前没有匹配设备类型和动作能力的在线实例",
@@ -115,10 +173,77 @@ def resolve_registered_device_target(
             {
                 "scope": "device",
                 "device_id": candidate.material_uuid,
+                "local_device_id": candidate.local_device_id,
+                "device_name": candidate_names[candidate.material_uuid],
             }
             for candidate in candidates
         ),
     )
+
+
+def resolve_registered_fixed_device_target(
+    registration: Mapping[str, Any] | None,
+    *,
+    local_device_id: str,
+    material_uuid: str,
+    action_name: str,
+    busy_keys: set[str],
+) -> ResolvedDeviceTarget:
+    """用当前注册快照复核固定设备的在线、健康、能力与忙碌状态。"""
+
+    if not isinstance(registration, Mapping) or not registration.get("connected"):
+        raise DeviceTargetUnavailable("edge_offline", "设备执行进程尚未在线注册")
+    devices = registration.get("devices")
+    if not isinstance(devices, list):
+        raise DeviceTargetUnavailable("invalid_edge_registration", "设备注册快照损坏")
+    target = next(
+        (
+            device
+            for device in devices
+            if isinstance(device, Mapping)
+            and str(device.get("local_id") or "").strip() == local_device_id
+            and str(device.get("material_uuid") or "").strip() == material_uuid
+        ),
+        None,
+    )
+    if target is None:
+        raise DeviceTargetUnavailable(
+            "device_not_registered", "固定设备身份不在当前执行进程注册快照中"
+        )
+    unavailable = _registered_device_unavailable(target, action_name=action_name)
+    if unavailable is not None:
+        raise DeviceTargetUnavailable(
+            *unavailable,
+            resources=(
+                {
+                    "scope": "device",
+                    "device_id": material_uuid,
+                    "local_device_id": local_device_id,
+                    "device_name": str(target.get("name") or local_device_id),
+                    "wait_code": unavailable[0],
+                    "wait_message": unavailable[1],
+                },
+            ),
+        )
+    candidate = ResolvedDeviceTarget(local_device_id, material_uuid)
+    if {
+        f"/devices/{local_device_id}",
+        f"/devices/{local_device_id}/{action_name}",
+        f"/devices/{material_uuid}",
+    } & busy_keys:
+        raise DeviceTargetUnavailable(
+            "device_busy",
+            "固定设备当前忙碌，等待下一轮调度",
+            resources=(
+                {
+                    "scope": "device",
+                    "device_id": material_uuid,
+                    "local_device_id": local_device_id,
+                    "device_name": str(target.get("name") or local_device_id),
+                },
+            ),
+        )
+    return candidate
 
 
 def make_registered_device_target_resolver(
@@ -144,7 +269,22 @@ def make_registered_device_target_resolver(
         非法或没有可用设备时抛 ``DeviceTargetUnavailable``。
         """
 
-        if selector.get("mode") != "resource_template":
+        mode = selector.get("mode")
+        if mode == "fixed":
+            local_device_id = str(selector.get("local_device_id") or "").strip()
+            material_uuid = str(selector.get("material_uuid") or "").strip()
+            if not local_device_id or not material_uuid:
+                raise DeviceTargetUnavailable(
+                    "invalid_device_selector", "固定设备选择器身份不完整"
+                )
+            return resolve_registered_fixed_device_target(
+                registration_reader(),
+                local_device_id=local_device_id,
+                material_uuid=material_uuid,
+                action_name=action_name,
+                busy_keys=busy_keys,
+            )
+        if mode != "resource_template":
             raise DeviceTargetUnavailable(
                 "invalid_device_selector",
                 "动态设备选择器模式非法",
@@ -164,5 +304,6 @@ __all__ = [
     "DeviceTargetUnavailable",
     "ResolvedDeviceTarget",
     "make_registered_device_target_resolver",
+    "resolve_registered_fixed_device_target",
     "resolve_registered_device_target",
 ]

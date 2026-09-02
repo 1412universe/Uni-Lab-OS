@@ -105,3 +105,26 @@ def test_invalid_ast_resource_contract_loses_typed_authority(
     assert action["contract_kind"] == "typed"
     assert action["contract_diagnostic"]["code"] == "invalid_parameter_name"
     assert "schema" not in action
+
+
+def test_ast_freezes_aliquot_source_and_complete_target_parameter_set(
+    tmp_path: Path,
+) -> None:
+    """分装合同必须由 AST 冻结来源与全部目标 ResourceSlot 参数。"""
+
+    action = _scan_action(
+        tmp_path,
+        """{
+            "version": 1,
+            "aliquot": {
+                "source_material_param": "material",
+                "target_material_params": ["source_device", "target_device"],
+            },
+        }""",
+    )
+
+    contract = action["schema"]["x-unilabos-action-contract"]["resource_contract"]
+    assert contract["aliquot"] == {
+        "source_material_param": "material",
+        "target_material_params": ["source_device", "target_device"],
+    }

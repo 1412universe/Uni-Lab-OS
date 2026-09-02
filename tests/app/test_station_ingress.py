@@ -187,7 +187,10 @@ def test_normal_job_target_selection_never_steals_ingress_reservation(
     """
 
     store, _clock, authority, identities = ingress_inventory
-    inventory = SqliteStationResourceInventory(store, move_material=lambda **_: {})
+    inventory = SqliteStationResourceInventory(
+        store,
+        settle_material_transfer=lambda _command: {},
+    )
     first = _reserve(authority, identities)
 
     selected = inventory.resolve_target_site(

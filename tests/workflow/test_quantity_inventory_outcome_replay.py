@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, NoReturn
+from uuid import uuid4
 
 import pytest
 
@@ -150,6 +151,22 @@ def test_local_edge_outcome_replay_settles_quantity_once_with_in_memory_catalog(
         LocalEdgeAuthorityStore(tmp_path / "edge_authority.db"),
         api_key="managed-local-secret",
     )
+    registration = authority.store.register_session(
+        {
+            "edge_key": "quantity-edge",
+            "instance_uuid": str(uuid4()),
+            "devices": [
+                {
+                    "local_id": "quantity-dispenser",
+                    "material_uuid": device_uuid,
+                    "actions": [{"name": "dispense", "type": "command"}],
+                    "online": True,
+                    "unknown_command_ids": [],
+                }
+            ],
+        }
+    )
+    authority.store.set_session_connected(registration["session_uuid"], True)
     scheduler, execution_backend = create_edge_stack(
         execution_backend=authority,
         inventory=InventoryService(inventory_store),

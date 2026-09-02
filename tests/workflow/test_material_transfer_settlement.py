@@ -18,6 +18,40 @@ JOB_UUID = "40000000-0000-4000-8000-000000000001"
 MATERIAL_UUID = "50000000-0000-4000-8000-000000000001"
 PARENT_UUID = "60000000-0000-4000-8000-000000000001"
 NODE_UUID = "30000000-0000-4000-8000-000000000001"
+CLAIM_UUID = "80000000-0000-4000-8000-000000000001"
+EFFECT_UUID = "90000000-0000-4000-8000-000000000001"
+PARAMETER_HASH = "sha256:test-parameters"
+
+
+def _claim() -> dict[str, Any]:
+    """返回工作流投影保存的完整库存 Claim/Fence 凭据。"""
+
+    return {
+        "claim_uuid": CLAIM_UUID,
+        "attempt": 1,
+        "fences": [
+            {
+                "lock_key": f"material/{MATERIAL_UUID}/exclusive",
+                "fencing_token": 3,
+            }
+        ],
+    }
+
+
+def _dispatch_fields() -> dict[str, Any]:
+    """返回 Job 派发意图中冻结的 PhysicalSettlement 凭据。"""
+
+    return {
+        "attempt": 1,
+        "dispatch_effect_uuid": EFFECT_UUID,
+        "dispatch_parameter_hash": PARAMETER_HASH,
+        "expected_change_set": {
+            "kind": "material_transfer",
+            "material_uuid": MATERIAL_UUID,
+            "source_site_uuid": "source-site",
+            "target_site_uuid": "target-site",
+        },
+    }
 
 
 def _transfer_plan() -> dict[str, Any]:
@@ -74,6 +108,15 @@ class _RecordingInventory:
             "slot_id": site_name,
             "actor": command.actor,
             "causation_id": command.causation_id,
+            "effect_uuid": command.effect_uuid,
+            "claim_uuid": command.claim_uuid,
+            "job_uuid": command.job_uuid,
+            "attempt": command.attempt,
+            "parameter_hash": command.parameter_hash,
+            "expected_change_set": dict(command.expected_change_set or {}),
+            "fences": tuple(
+                (fence.lock_key, fence.fencing_token) for fence in command.fences
+            ),
         }
         self.calls.append(item)
         return item
@@ -92,6 +135,7 @@ def test_successful_material_transfer_uses_actual_job_param_and_stable_cause() -
     result = settlement.settle_success(
         job={
             "uuid": JOB_UUID,
+            **_dispatch_fields(),
             "workflow_node_uuid": NODE_UUID,
             "executor_kind": "material_transfer",
             "param": {
@@ -101,6 +145,7 @@ def test_successful_material_transfer_uses_actual_job_param_and_stable_cause() -
             },
         },
         execution_plan=_transfer_plan(),
+        execution_claim=_claim(),
     )
 
     assert result == inventory.calls[0]
@@ -111,6 +156,13 @@ def test_successful_material_transfer_uses_actual_job_param_and_stable_cause() -
             "slot_id": "A1",
             "actor": "station_scheduler.material_transfer",
             "causation_id": (f"workflow-node-job:{JOB_UUID}:material-transfer"),
+            "effect_uuid": EFFECT_UUID,
+            "claim_uuid": CLAIM_UUID,
+            "job_uuid": JOB_UUID,
+            "attempt": 1,
+            "parameter_hash": PARAMETER_HASH,
+            "expected_change_set": _dispatch_fields()["expected_change_set"],
+            "fences": ((f"material/{MATERIAL_UUID}/exclusive", 3),),
         }
     ]
 
@@ -134,10 +186,12 @@ def test_non_transfer_job_is_noop_but_transfer_without_inventory_fails_closed() 
         settlement.settle_success(
             job={
                 **ordinary,
+                **_dispatch_fields(),
                 "workflow_node_uuid": NODE_UUID,
                 "executor_kind": "material_transfer",
             },
             execution_plan=_transfer_plan(),
+            execution_claim=_claim(),
         )
 
 
@@ -152,6 +206,7 @@ def test_transfer_job_without_frozen_contract_is_rejected() -> None:
         MaterialTransferSettlement(_RecordingInventory()).settle_success(
             job={
                 "uuid": JOB_UUID,
+                **_dispatch_fields(),
                 "workflow_node_uuid": NODE_UUID,
                 "executor_kind": "material_transfer",
                 "param": {},
@@ -173,6 +228,7 @@ def test_typed_robot_action_settles_inventory_from_frozen_resource_contract() ->
     node_uuid = NODE_UUID
     job = {
         "uuid": JOB_UUID,
+        **_dispatch_fields(),
         "workflow_node_uuid": node_uuid,
         "executor_kind": "device_action",
         "param": {
@@ -199,7 +255,11 @@ def test_typed_robot_action_settles_inventory_from_frozen_resource_contract() ->
         ]
     }
 
-    settlement.settle_success(job=job, execution_plan=plan)
+    settlement.settle_success(
+        job=job,
+        execution_plan=plan,
+        execution_claim=_claim(),
+    )
 
     assert inventory.calls[0]["edge_uuid"] == MATERIAL_UUID
     assert inventory.calls[0]["parent_uuid"] == PARENT_UUID

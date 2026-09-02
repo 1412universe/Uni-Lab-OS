@@ -15,6 +15,7 @@ WORKFLOW_UUID = "81000000-0000-4000-8000-000000000001"
 TASK_A_UUID = "82000000-0000-4000-8000-000000000001"
 TASK_B_UUID = "82000000-0000-4000-8000-000000000002"
 MATERIAL_A_UUID = "83000000-0000-4000-8000-000000000001"
+MATERIAL_B_UUID = "83000000-0000-4000-8000-000000000002"
 DEVICE_A_UUID = "84000000-0000-4000-8000-000000000001"
 DEVICE_B_UUID = "84000000-0000-4000-8000-000000000002"
 TASK_A_JOBS = (
@@ -23,6 +24,7 @@ TASK_A_JOBS = (
     "85000000-0000-4000-8000-000000000003",
 )
 TASK_B_JOB = "85000000-0000-4000-8000-000000000004"
+TASK_B_SECOND_JOB = "85000000-0000-4000-8000-000000000005"
 _CREATED_AT = "2026-08-30T00:00:00Z"
 
 
@@ -114,6 +116,7 @@ def _transition(
     *,
     acquire_device_uuid: str = "",
     release_device_uuid: str = "",
+    material_uuid: str = MATERIAL_A_UUID,
 ) -> dict[str, str]:
     """构造一个主物料装载期间设备托管转换。
 
@@ -123,7 +126,7 @@ def _transition(
 
     return {
         "mode": "task_while_loaded",
-        "material_uuid": MATERIAL_A_UUID,
+        "material_uuid": material_uuid,
         "acquire_device_lock_key": (
             f"/devices/{acquire_device_uuid}" if acquire_device_uuid else ""
         ),
@@ -204,6 +207,140 @@ def test_device_tenancy_blocks_other_task_until_successful_unload(
         execution_locks=_device_lock(DEVICE_A_UUID),
     )
     assert store.get_job(TASK_B_JOB)["status"] == "dispatched"
+
+
+def test_operate_in_place_requires_matching_active_task_tenancy(
+    store: WorkflowStore,
+) -> None:
+    """原位操作除库存位置外还必须证明同一 Task 正托管该设备与物料。"""
+
+    store.create_workflow(
+        workflow_uuid=WORKFLOW_UUID,
+        name="原位操作托管测试",
+        tags=[],
+        description=None,
+        meta_data={},
+    )
+    _seed_task(store, task_uuid=TASK_A_UUID, job_uuids=TASK_A_JOBS[:2])
+    projection = TaskRuntimeProjection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_A_UUID,
+        job_uuid=TASK_A_JOBS[0],
+        execution_locks=_device_lock(DEVICE_A_UUID),
+        device_tenancy=_transition(acquire_device_uuid=DEVICE_A_UUID),
+    )
+    projection.project_job_finished(
+        job_uuid=TASK_A_JOBS[0], scheduler_state="success", return_info={}
+    )
+
+    projection.project_pre_dispatch(
+        task_uuid=TASK_A_UUID,
+        job_uuid=TASK_A_JOBS[1],
+        execution_locks=_device_lock(DEVICE_A_UUID),
+        required_device_tenancy={
+            "material_uuid": MATERIAL_A_UUID,
+            "device_lock_key": f"/devices/{DEVICE_A_UUID}",
+        },
+    )
+    assert store.get_job(TASK_A_JOBS[1])["status"] == "dispatched"
+
+
+def test_operate_in_place_rejects_missing_or_foreign_task_tenancy(
+    store: WorkflowStore,
+) -> None:
+    """库存中的同位事实不能替代工作流 Task 的长期设备托管权。"""
+
+    store.create_workflow(
+        workflow_uuid=WORKFLOW_UUID,
+        name="原位操作拒绝测试",
+        tags=[],
+        description=None,
+        meta_data={},
+    )
+    _seed_task(store, task_uuid=TASK_A_UUID, job_uuids=(TASK_A_JOBS[0],))
+    projection = TaskRuntimeProjection(store)
+
+    with pytest.raises(Exception, match="托管"):
+        projection.project_pre_dispatch(
+            task_uuid=TASK_A_UUID,
+            job_uuid=TASK_A_JOBS[0],
+            execution_locks=_device_lock(DEVICE_A_UUID),
+            required_device_tenancy={
+                "material_uuid": MATERIAL_A_UUID,
+                "device_lock_key": f"/devices/{DEVICE_A_UUID}",
+            },
+        )
+
+    assert store.get_job(TASK_A_JOBS[0])["status"] == "pending"
+
+
+def test_runtime_rejects_h_to_n_device_tenancy_wait_cycle(
+    store: WorkflowStore,
+) -> None:
+    """两个 Task 各持一台设备并交叉等待时，第二条等待边必须被拒绝。"""
+
+    store.create_workflow(
+        workflow_uuid=WORKFLOW_UUID,
+        name="运行时托管环路测试",
+        tags=[],
+        description=None,
+        meta_data={},
+    )
+    _seed_task(store, task_uuid=TASK_A_UUID, job_uuids=TASK_A_JOBS[:2])
+    _seed_task(
+        store,
+        task_uuid=TASK_B_UUID,
+        job_uuids=(TASK_B_JOB, TASK_B_SECOND_JOB),
+    )
+    projection = TaskRuntimeProjection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_A_UUID,
+        job_uuid=TASK_A_JOBS[0],
+        execution_locks=_device_lock(DEVICE_A_UUID),
+        device_tenancy=_transition(acquire_device_uuid=DEVICE_A_UUID),
+    )
+    projection.project_job_finished(
+        job_uuid=TASK_A_JOBS[0], scheduler_state="success", return_info={}
+    )
+    projection.project_pre_dispatch(
+        task_uuid=TASK_B_UUID,
+        job_uuid=TASK_B_JOB,
+        execution_locks=_device_lock(DEVICE_B_UUID),
+        device_tenancy=_transition(
+            acquire_device_uuid=DEVICE_B_UUID, material_uuid=MATERIAL_B_UUID
+        ),
+    )
+    projection.project_job_finished(
+        job_uuid=TASK_B_JOB, scheduler_state="success", return_info={}
+    )
+
+    blocked = projection.project_pre_dispatch(
+        task_uuid=TASK_A_UUID,
+        job_uuid=TASK_A_JOBS[1],
+        execution_locks=[*_device_lock(DEVICE_A_UUID), *_device_lock(DEVICE_B_UUID)],
+        device_tenancy=_transition(
+            acquire_device_uuid=DEVICE_B_UUID,
+            release_device_uuid=DEVICE_A_UUID,
+        ),
+    )
+    assert next(job for job in blocked["jobs"] if job["uuid"] == TASK_A_JOBS[1])[
+        "status"
+    ] == "pending"
+
+    with pytest.raises(Exception, match="环路"):
+        projection.project_pre_dispatch(
+            task_uuid=TASK_B_UUID,
+            job_uuid=TASK_B_SECOND_JOB,
+            execution_locks=[
+                *_device_lock(DEVICE_A_UUID),
+                *_device_lock(DEVICE_B_UUID),
+            ],
+            device_tenancy=_transition(
+                acquire_device_uuid=DEVICE_A_UUID,
+            release_device_uuid=DEVICE_B_UUID,
+            material_uuid=MATERIAL_B_UUID,
+        ),
+        )
 
 
 def test_transfer_holds_source_and_target_until_settlement(

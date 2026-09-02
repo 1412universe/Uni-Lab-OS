@@ -13,6 +13,7 @@ from unilabos.workflow.device_tenancy import (
     active_task_device_tenancies,
     check_device_tenancy,
     prepare_device_tenancy,
+    require_active_device_tenancy,
     settle_device_tenancy,
 )
 from unilabos.workflow.event_writer import append_frontend_event, append_runtime_event
@@ -24,6 +25,7 @@ from unilabos.workflow.execution_lock_lease import (
     list_execution_locks,
     mark_execution_locks_running,
     mark_execution_locks_uncertain,
+    mirror_execution_locks_from_permit,
     record_execution_lock_wait,
     release_execution_locks,
     release_task_execution_locks,
@@ -46,6 +48,7 @@ from unilabos.workflow.manual_confirmation import (
 )
 from unilabos.workflow.material_source import MaterialCustodyPolicy
 from unilabos.workflow.physical_settlement_policy import (
+    MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
     MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
     PhysicalSettlementPolicyError,
     execution_stopped_evidence,
@@ -69,6 +72,7 @@ from unilabos.workflow.store import (
 from unilabos.workflow.task_material_admission import (
     list_blocked_material_task_uuids,
     read_material_admission,
+    record_admitted_admission,
     record_admitted_materials,
     record_blocked_admission,
 )
@@ -914,6 +918,88 @@ class TaskRuntimeProjection:
             )
             return self._aggregate(connection, task_uuid)
 
+    def project_quantity_inventory_blocked(
+        self,
+        task_uuid: str,
+        *,
+        reason: str,
+        wait_resources_by_job: Mapping[str, Sequence[Mapping[str, Any]]],
+    ) -> dict[str, Any]:
+        """持久化仅含数量库存需求任务的可重试受阻事实。"""
+
+        with self._store.transaction() as connection:
+            aggregate = self._aggregate(connection, task_uuid)
+            if aggregate["task"]["status"] != "pending":
+                raise StoreConflict(f"任务不能保持数量库存准入受阻：{task_uuid}")
+            pending_jobs = {
+                str(job["uuid"]): job
+                for job in aggregate["jobs"]
+                if job["status"] == "pending"
+            }
+            if not wait_resources_by_job or set(wait_resources_by_job) - set(pending_jobs):
+                raise StoreConflict(f"数量库存等待作业集合无效：{task_uuid}")
+            normalized_by_job = {
+                job_uuid: _normalize_wait_reason_resources(resources)
+                for job_uuid, resources in wait_resources_by_job.items()
+            }
+            task_resources = _normalize_wait_reason_resources(
+                [
+                    resource
+                    for resources in normalized_by_job.values()
+                    for resource in resources
+                ]
+            )
+            wait_reason: dict[str, Any] = {
+                "code": "quantity_inventory_unavailable",
+                "message": reason,
+            }
+            if task_resources:
+                wait_reason["resources"] = task_resources
+            record_blocked_admission(
+                connection,
+                task_uuid=task_uuid,
+                reason=reason,
+                wait_reason=wait_reason,
+            )
+            now = utc_now()
+            for job_uuid, resources in normalized_by_job.items():
+                job_wait_reason: dict[str, Any] = dict(wait_reason)
+                if resources:
+                    job_wait_reason["resources"] = resources
+                connection.execute(
+                    "UPDATE workflow_node_job SET wait_reason=?,update_time=? "
+                    "WHERE uuid=? AND status='pending'",
+                    (
+                        _encode_json_field(
+                            job_wait_reason,
+                            field_name="wait_reason",
+                        ),
+                        now,
+                        job_uuid,
+                    ),
+                )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
+            return self._aggregate(connection, task_uuid)
+
+    def project_task_material_admission(self, task_uuid: str) -> dict[str, Any]:
+        """记录仅含数量库存需求任务的统一准入成功事实。"""
+
+        with self._store.transaction() as connection:
+            aggregate = self._aggregate(connection, task_uuid)
+            if aggregate["task"]["status"] not in {"pending", "running"}:
+                raise StoreConflict(f"任务不能提交数量库存准入结果：{task_uuid}")
+            now = utc_now()
+            record_admitted_admission(connection, task_uuid=task_uuid, now=now)
+            connection.execute(
+                "UPDATE workflow_node_job SET wait_reason='{}',update_time=? "
+                "WHERE workflow_task_uuid=? AND status='pending' "
+                "AND json_extract(wait_reason,'$.code')="
+                "'quantity_inventory_unavailable'",
+                (now, task_uuid),
+            )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
+            return self._aggregate(connection, task_uuid)
+
     def project_material_source_admission(
         self,
         task_uuid: str,
@@ -1255,6 +1341,7 @@ class TaskRuntimeProjection:
         resolved_param: Mapping[str, Any] | None = None,
         execution_locks: Sequence[Mapping[str, Any]] | None = None,
         device_tenancy: Mapping[str, Any] | None = None,
+        required_device_tenancy: Mapping[str, Any] | None = None,
         actual_executor: Mapping[str, Any] | None = None,
         dispatch_permit: Mapping[str, Any] | None = None,
         max_active_tasks: int = 500,
@@ -1271,7 +1358,8 @@ class TaskRuntimeProjection:
         成功卸载后释放的主物料设备托管转换；``actual_executor`` 是本轮动态或固定
         选择得到的本地设备业务 ID 与设备物料 UUID；``dispatch_permit`` 是库存
         权威签发的 Claim、Fence、效果身份、最终参数哈希和预期 ChangeSet。返回：提交后的标准聚合；锁暂
-        不可用时 Job 保持 ``pending`` 并写入 ``wait_reason``。异常：身份不匹配、
+        不可用时 Job 保持 ``pending`` 并写入 ``wait_reason``。原位操作通过
+        ``required_device_tenancy`` 证明同一 Task 正长期托管实际设备内的物料。异常：身份不匹配、
         实际执行器合同损坏或状态转换冲突时抛出 ``StoreConflict``；身份缺失时抛出
         ``StoreNotFound``。同一派发意图重放时零写入。
         """
@@ -1356,16 +1444,29 @@ class TaskRuntimeProjection:
                     now=utc_now(),
                 )
                 return self._aggregate(connection, task_uuid)
-            permit = _normalize_dispatch_permit(dispatch_permit, execution_locks)
-            lock_decision = try_acquire_execution_locks(
+            require_active_device_tenancy(
                 connection,
                 task_uuid=task_uuid,
-                job_uuid=job_uuid,
-                requests=execution_locks,
-                claim_uuid=(permit["claim_uuid"] if permit else None),
-                fencing_tokens=(permit["fencing_tokens"] if permit else None),
-                aging_interval_seconds=aging_interval_seconds,
+                requirement=required_device_tenancy,
             )
+            permit = _normalize_dispatch_permit(dispatch_permit, execution_locks)
+            if permit is not None:
+                lock_decision = mirror_execution_locks_from_permit(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=job_uuid,
+                    requests=execution_locks,
+                    claim_uuid=permit["claim_uuid"],
+                    fencing_tokens=permit["fencing_tokens"],
+                )
+            else:
+                lock_decision = try_acquire_execution_locks(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=job_uuid,
+                    requests=execution_locks,
+                    aging_interval_seconds=aging_interval_seconds,
+                )
             if not lock_decision.acquired:
                 self._append_invalidation(
                     connection,
@@ -1425,22 +1526,25 @@ class TaskRuntimeProjection:
             updated_control_data = dict(control_data)
             if actual_executor_snapshot:
                 updated_control_data["actual_executor"] = actual_executor_snapshot
-                connection.execute(
-                    """
-                    UPDATE workflow_node_job
-                    SET control_data = ?, update_time = ?
-                    WHERE uuid = ? AND status = 'dispatched'
-                      AND deleted_at IS NULL
-                    """,
-                    (
-                        _encode_json_field(
-                            updated_control_data,
-                            field_name="control_data",
-                        ),
-                        projected_at,
-                        job_uuid,
+            updated_control_data["execution_locks"] = [
+                dict(request) for request in (execution_locks or ())
+            ]
+            connection.execute(
+                """
+                UPDATE workflow_node_job
+                SET control_data = ?, update_time = ?
+                WHERE uuid = ? AND status = 'dispatched'
+                  AND deleted_at IS NULL
+                """,
+                (
+                    _encode_json_field(
+                        updated_control_data,
+                        field_name="control_data",
                     ),
-                )
+                    projected_at,
+                    job_uuid,
+                ),
+            )
             claim = get_execution_claim(connection, job_uuid=job_uuid)
             if claim is None:
                 raise StoreConflict(f"作业派发意图缺少 Claim：{job_uuid}")
@@ -1988,10 +2092,12 @@ class TaskRuntimeProjection:
                 )
             if (
                 job["status"] not in {"failed", "canceled", "timeout"}
-                or job["uncertainty_reason"]
-                != MATERIAL_TRANSFER_RECONCILIATION_REQUIRED
+                or job["uncertainty_reason"] not in {
+                    MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
+                    MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
+                }
             ):
-                raise StoreConflict("作业不是等待物料位置对账的失败转运作业")
+                raise StoreConflict("作业不是等待库存物理对账的失败作业")
             expected = _decode_json_field(job["expected_change_set"], fallback={})
             if not isinstance(expected, Mapping) or not isinstance(control, Mapping):
                 raise StoreConflict("作业物理结算审计字段已损坏")
@@ -2000,11 +2106,18 @@ class TaskRuntimeProjection:
                 "execution_stopped"
             ):
                 raise StoreConflict("物料位置对账前缺少设备停止证明")
-            if (
-                expected.get("kind") != "material_transfer"
-                or actual_change_set.get("material_uuid")
-                != expected.get("material_uuid")
-            ):
+            change_matches = (
+                expected.get("kind") == "material_transfer"
+                and actual_change_set.get("material_uuid")
+                == expected.get("material_uuid")
+            ) or (
+                expected.get("kind") == "material_content_aliquot"
+                and actual_change_set.get("source_material_uuid")
+                == expected.get("source_material_uuid")
+                and sorted(actual_change_set.get("target_material_uuids") or [])
+                == sorted(expected.get("target_material_uuids") or [])
+            )
+            if not change_matches:
                 raise StoreConflict("实际 ChangeSet 与原转运物料身份不一致")
             if existing is not None and existing != reconciled:
                 raise StoreConflict("作业已有另一份库存位置对账")
@@ -2023,7 +2136,7 @@ class TaskRuntimeProjection:
                     _encode_json_field(updated_control, field_name="control_data"),
                     now,
                     job_uuid,
-                    MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
+                    job["uncertainty_reason"],
                 ),
             )
             release_execution_locks(connection, job_uuid=job_uuid, now=now)
@@ -2433,7 +2546,7 @@ class TaskRuntimeProjection:
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
                     (
-                        MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
+                        uncertainty_reason,
                         resume_control,
                         finished_at,
                         task_uuid,
@@ -2448,7 +2561,7 @@ class TaskRuntimeProjection:
                     to_status=target_job_status,
                     data={
                         "reason": (
-                            MATERIAL_TRANSFER_RECONCILIATION_REQUIRED
+                            uncertainty_reason
                         ),
                         "execution_stopped": True,
                     },

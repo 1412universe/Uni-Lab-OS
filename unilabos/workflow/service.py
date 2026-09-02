@@ -475,6 +475,7 @@ class WorkflowService:
         compiler_rebuilder: Callable[[], AuthoringCompiler] | None = None,
         source_target: DomainWorkflowSourceTarget | None = None,
         material_resolver: Callable[[str], dict[str, Any] | None] | None = None,
+        device_preflight: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
         task_scheduler_bridge: WorkflowTaskSchedulerBridge | None = None,
     ) -> None:
         """装配本地工作流应用服务。
@@ -537,6 +538,7 @@ class WorkflowService:
             material_resolver=material_resolver,
         )
         self._material_resolver = material_resolver
+        self._device_preflight = device_preflight
         # ``_task_scheduler_bridge`` 是普通任务与设备单动作共享的唯一监听器所有者；
         # 工站调度进程必须装配，纯工作流创作或隔离读取场景才允许保持空。
         self._task_scheduler_bridge = task_scheduler_bridge
@@ -1706,6 +1708,7 @@ class WorkflowService:
             run_mode=normalized_mode,
             target_node_uuid=target_node_uuid,
             material_resolver=self._material_resolver,
+            device_preflight=self._device_preflight,
             quantity_inventory_check=quantity_inventory_check,
         )
 

@@ -11,6 +11,9 @@ from unilabos.app.scheduler.inventory.domain import (
     MaterialRequirement,
     MaterialSourceAdmissionRequest,
 )
+from unilabos.app.scheduler.inventory.workflow_quantity import (
+    WorkflowQuantityReservationError,
+)
 from unilabos.workflow.material_source import MaterialCustodyPolicy
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
@@ -52,6 +55,8 @@ class MaterialSourceResolutionCoordinator:
         self,
         task: Mapping[str, Any],
         jobs: Sequence[Mapping[str, Any]],
+        *,
+        quantity_allocations: Sequence[Mapping[str, Any]] = (),
     ) -> MaterialSourceResolution:
         """协调一次可重放的短期任务物料准入（TaskMaterialAdmission）。
 
@@ -75,7 +80,7 @@ class MaterialSourceResolutionCoordinator:
             for node in raw_nodes
             if isinstance(node, Mapping) and node.get("kind") == "material_source"
         ]
-        if not source_nodes:
+        if not source_nodes and not quantity_allocations:
             return MaterialSourceResolution(status="not_required")
         if self._inventory is None:
             raise MaterialSourceResolutionError(
@@ -148,11 +153,17 @@ class MaterialSourceResolutionCoordinator:
         try:
             # 库存权威在一个 SQLite 事务内按保管策略完成整组来源准入；任一来源
             # 不足整体回滚，同一任务/来源/attempt 重放保持稳定绑定。
-            reservation = self._inventory.admit_material_sources(
+            admit_task = getattr(self._inventory, "admit_task_materials", None)
+            if not callable(admit_task):
+                raise MaterialSourceResolutionError(
+                    "库存权威未实现统一 TaskMaterialAdmission"
+                )
+            reservation = admit_task(
                 task_uuid,
                 admission_requests,
+                quantity_allocations,
             )
-        except InsufficientStock as error:
+        except (InsufficientStock, WorkflowQuantityReservationError) as error:
             wait_resources_by_node = {
                 node_uuid: (
                     [{"scope": "material", "material_uuid": fixed_uuid}]
@@ -165,11 +176,32 @@ class MaterialSourceResolutionCoordinator:
                 )
                 for node_uuid, selector in selectors.items()
             }
-            self._projection.project_material_source_blocked(
-                task_uuid,
-                reason=str(error) or "任务所需物料暂不可用",
-                wait_resources_by_node=wait_resources_by_node,
-            )
+            reason = str(error) or "任务所需物料暂不可用"
+            if source_nodes:
+                self._projection.project_material_source_blocked(
+                    task_uuid,
+                    reason=reason,
+                    wait_resources_by_node=wait_resources_by_node,
+                )
+            else:
+                resources_by_job: dict[str, list[dict[str, str]]] = {}
+                for allocation in quantity_allocations:
+                    job_uuid = self._required_text(
+                        allocation.get("workflow_node_job_uuid"),
+                        field="quantity_allocation.workflow_node_job_uuid",
+                    )
+                    material_uuid = self._required_text(
+                        allocation.get("material_uuid"),
+                        field="quantity_allocation.material_uuid",
+                    )
+                    resources_by_job.setdefault(job_uuid, []).append(
+                        {"scope": "material", "material_uuid": material_uuid}
+                    )
+                self._projection.project_quantity_inventory_blocked(
+                    task_uuid,
+                    reason=reason,
+                    wait_resources_by_job=resources_by_job,
+                )
             return MaterialSourceResolution(status="blocked")
         allocations: dict[str, Any] = {}
         allocation_sites: dict[str, Any] = {}
@@ -186,6 +218,9 @@ class MaterialSourceResolutionCoordinator:
                     "库存解析结果的 allocation_sites 必须是对象"
                 )
             allocation_sites.update(result_sites)
+        if not source_nodes:
+            self._projection.project_task_material_admission(task_uuid)
+            return MaterialSourceResolution(status="admitted")
         bindings: dict[str, dict[str, str | None]] = {}
         for node_uuid, selector in selectors.items():
             fixed_uuid = str(selector.get("material_uuid") or "").strip()

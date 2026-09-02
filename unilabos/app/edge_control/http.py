@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -62,6 +63,23 @@ class EdgeDataPlane:
             f"{self.scheduler_api}/edge/sessions",
             span_name="edge.http.session.register",
             http_route="/api/v1/edge/sessions",
+            json=payload,
+        )
+
+    def update_device_status(
+        self,
+        session_uuid: str,
+        local_device_id: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """提交当前 Edge 会话中一个设备的实时可派发事实。"""
+
+        return self._request(
+            "PUT",
+            f"{self.scheduler_api}/edge/sessions/{quote(session_uuid, safe='')}"
+            f"/devices/{quote(local_device_id, safe='')}/status",
+            span_name="edge.http.device.status.update",
+            http_route="/api/v1/edge/sessions/:session_uuid/devices/:device_id/status",
             json=payload,
         )
 
@@ -151,6 +169,8 @@ class EdgeDataPlane:
         return_info: Dict[str, Any],
         error_info: List[Dict[str, Any]],
         unknown_command_ids: Optional[List[str]] = None,
+        inventory_consumptions: Optional[List[Dict[str, Any]]] = None,
+        material_aliquot_receipts: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """提交作业结果以及仍待对账恢复的物理命令身份。
 
@@ -177,6 +197,8 @@ class EdgeDataPlane:
                 "return_info": return_info,
                 "error_info": error_info,
                 "unknown_command_ids": unknown_command_ids or [],
+                "inventory_consumptions": inventory_consumptions or [],
+                "material_aliquot_receipts": material_aliquot_receipts or [],
             },
         )
 

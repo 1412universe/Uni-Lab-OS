@@ -732,6 +732,50 @@ def test_blocked_material_source_admission_preserves_jobs_and_records_wait(
         ).fetchone()[0] == 0
 
 
+def test_quantity_only_material_admission_records_wait_and_can_retry(
+    store: WorkflowStore,
+) -> None:
+    """数量库存竞争失败应标记消费节点，成功重试后清空同一准入等待。"""
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    projection.project_quantity_inventory_blocked(
+        TASK_UUID,
+        reason="当前内容物余量不足",
+        wait_resources_by_job={
+            job_uuid: [
+                {
+                    "scope": "material",
+                    "material_uuid": "50000000-0000-4000-8000-000000000099",
+                }
+            ]
+        },
+    )
+
+    blocked = _aggregate(store)
+    assert blocked["task"]["wait_reason"]["code"] == (
+        "quantity_inventory_unavailable"
+    )
+    assert blocked["jobs"][0]["wait_reason"]["resources"] == [
+        {
+            "scope": "material",
+            "material_uuid": "50000000-0000-4000-8000-000000000099",
+        }
+    ]
+
+    projection.project_task_material_admission(TASK_UUID)
+    admitted = _aggregate(store)
+    assert admitted["task"]["wait_reason"] == {}
+    assert admitted["jobs"][0]["wait_reason"] == {}
+    with store.transaction() as connection:
+        row = connection.execute(
+            "SELECT status FROM workflow_task_material_admission "
+            "WHERE workflow_task_uuid=?",
+            (TASK_UUID,),
+        ).fetchone()
+    assert row["status"] == "admitted"
+
+
 def test_waiting_for_material_projects_to_pending_without_job_mutation(
     store: WorkflowStore,
 ) -> None:

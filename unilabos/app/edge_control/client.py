@@ -308,6 +308,9 @@ class EdgeControlClient(BaseCommunicationClient):
             {"job_uuid": job.job_uuid, "command_uuid": job.command_uuid},
             parent_carrier=_job_trace_carrier(job),
         )
+        device_id = str(getattr(item, "device_id", "") or "").strip()
+        if device_id:
+            self._schedule(self._commit_device_status(device_id, {}))
 
     def publish_job_status(
         self,
@@ -317,6 +320,9 @@ class EdgeControlClient(BaseCommunicationClient):
         return_info: dict | None = None,
     ) -> None:
         job_uuid = str(item.job_id)
+        device_id = str(getattr(item, "device_id", "") or "").strip()
+        if device_id:
+            self._schedule(self._commit_device_status(device_id, {}))
         if status in {"success", "failed", "canceled", "timeout"}:
             with self._active_jobs_lock:
                 if job_uuid in self._terminal_jobs:
@@ -340,8 +346,50 @@ class EdgeControlClient(BaseCommunicationClient):
     def publish_device_status(
         self, device_status: dict, device_id: str, property_name: str
     ) -> None:
-        # 设备属性属于事实数据，不通过生产 WebSocket 控制面传播。
-        return
+        value = copy.deepcopy(
+            device_status.get(device_id, {}).get(property_name)
+        )
+        self._schedule(
+            self._commit_device_status(
+                str(device_id),
+                ({str(property_name): value} if property_name else {}),
+            )
+        )
+
+    async def _commit_device_status(
+        self,
+        device_id: str,
+        status: dict[str, Any],
+    ) -> None:
+        """把 Runtime 设备健康与属性增量提交给工站调度注册权威。"""
+
+        if not self._session_uuid or not self._connected.is_set():
+            return
+        host_node = self._host_node_provider()
+        if host_node is None:
+            return
+        block_reason, unknown_command_ids = _device_dispatch_state(
+            host_node,
+            device_id,
+        )
+        try:
+            await asyncio.to_thread(
+                self.data_plane.update_device_status,
+                self._session_uuid,
+                device_id,
+                {
+                    "online": True,
+                    "dispatch_block_reason": block_reason,
+                    "unknown_command_ids": unknown_command_ids,
+                    "status": status,
+                },
+            )
+        except Exception as error:
+            logger.warning(
+                "[EdgeControl] 提交设备 %s 实时状态失败：%s",
+                device_id,
+                error,
+            )
 
     def send_ping(self, ping_id: str, timestamp: float) -> None:
         # 生产控制面的 ping 由后端发起，Edge 只回复 pong。
@@ -476,12 +524,16 @@ class EdgeControlClient(BaseCommunicationClient):
                     resource,
                 )
             )
-            _, unknown_command_ids = _device_dispatch_state(host_node, candidate["local_id"])
+            block_reason, unknown_command_ids = _device_dispatch_state(
+                host_node, candidate["local_id"]
+            )
             devices.append(
                 {
                     **candidate,
                     "material_uuid": material_uuids[candidate["barcode"]],
                     "actions": actions,
+                    "online": True,
+                    "dispatch_block_reason": block_reason,
                     "unknown_command_ids": unknown_command_ids,
                 }
             )
@@ -899,6 +951,7 @@ class EdgeControlClient(BaseCommunicationClient):
             _current_trace_carrier(fallback=command_trace),
             remaining_job_unknown_command_ids,
         )
+        await self._commit_device_status(local_device_id, {})
 
     async def _resume_received_jobs(self) -> None:
         for job in self.store.list_jobs({"received", "fetch_retry"}):
@@ -1145,14 +1198,37 @@ class EdgeControlClient(BaseCommunicationClient):
                     parent_context=parent_context,
                     attributes={"edge.job.uuid": job.job_uuid},
                 ):
-                    committed = await asyncio.to_thread(
-                        self.data_plane.commit_outcome,
-                        job,
-                        pending.outcome,
-                        pending.return_info,
-                        pending.error_info,
-                        pending.unknown_command_ids,
+                    inventory_consumptions = (
+                        pending.return_info.get("inventory_consumptions", [])
+                        if isinstance(pending.return_info, dict)
+                        else []
                     )
+                    aliquot_receipts = (
+                        pending.return_info.get("material_aliquot_receipts", [])
+                        if isinstance(pending.return_info, dict)
+                        else []
+                    )
+                    if inventory_consumptions or aliquot_receipts:
+                        committed = await asyncio.to_thread(
+                            self.data_plane.commit_outcome,
+                            job,
+                            pending.outcome,
+                            pending.return_info,
+                            pending.error_info,
+                            pending.unknown_command_ids,
+                            inventory_consumptions=inventory_consumptions,
+                            material_aliquot_receipts=aliquot_receipts,
+                        )
+                    else:
+                        # 保持旧 EdgeDataPlane 测试/扩展的五参数协议兼容。
+                        committed = await asyncio.to_thread(
+                            self.data_plane.commit_outcome,
+                            job,
+                            pending.outcome,
+                            pending.return_info,
+                            pending.error_info,
+                            pending.unknown_command_ids,
+                        )
                     result_uuid = str(committed.get("uuid") or "")
                     event_payload: dict[str, Any] = {"job_uuid": job_uuid}
                     if result_uuid:

@@ -8,11 +8,56 @@ import pytest
 
 from unilabos.app.scheduler.device_target import (
     DeviceTargetUnavailable,
+    ResolvedDeviceTarget,
+    make_registered_device_target_resolver,
     resolve_registered_device_target,
 )
 from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.service import EdgeScheduler
+
+
+def test_preflight_uses_frozen_material_and_live_runtime_busy_keys() -> None:
+    """固定设备预检必须读取计划 material_uuid 并合并 Runtime 当前忙碌事实。"""
+
+    observed: list[tuple[dict[str, object], str, set[str]]] = []
+
+    def resolve(
+        selector: dict[str, object],
+        action_name: str,
+        busy_keys: set[str],
+    ) -> ResolvedDeviceTarget:
+        observed.append((dict(selector), action_name, set(busy_keys)))
+        return ResolvedDeviceTarget("reactor-a", "device-material-a")
+
+    scheduler = EdgeScheduler(
+        device_target_resolver=resolve,
+        external_busy_keys={"/devices/runtime-busy"},
+    )
+    result = scheduler.preflight_device_target(
+        {
+            "device_id": "reactor-a",
+            "material_uuid": "device-material-a",
+            "action_name": "heat",
+        }
+    )
+
+    assert result == {
+        "local_device_id": "reactor-a",
+        "material_uuid": "device-material-a",
+    }
+    assert observed == [
+        (
+            {
+                "mode": "fixed",
+                "local_device_id": "reactor-a",
+                "material_uuid": "device-material-a",
+            },
+            "heat",
+            {"/devices/runtime-busy"},
+        )
+    ]
 
 
 def test_registered_device_target_selects_first_available_matching_instance(
@@ -162,7 +207,149 @@ def test_registered_device_target_reports_every_busy_candidate(
 
         assert caught.value.code == "device_busy"
         assert caught.value.resources == (
-            {"scope": "device", "device_id": robot["uuid"]},
+            {
+                "scope": "device",
+                "device_id": robot["uuid"],
+                "local_device_id": "robot-1",
+                "device_name": "robot-1",
+            },
+        )
+    finally:
+        store.close()
+
+
+def test_fixed_device_target_uses_same_online_health_and_capability_gate(
+    tmp_path: Path,
+) -> None:
+    """固定设备不能绕过动态设备使用的注册、健康和动作能力门禁。"""
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        backend = BackendResourceService(store)
+        template = backend.sync_resource_templates(
+            [{"id": "test.fixed", "display_name": "固定设备", "registry_type": "device", "class": {}}]
+        )["templates"][0]
+        device = backend.create_material(
+            {
+                "resource_template_uuid": template["uuid"],
+                "barcode": "FIXED-1",
+                "name": "固定设备 1",
+            }
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE material SET type='device' WHERE uuid=?", (device["uuid"],)
+            )
+        registration = {
+            "connected": True,
+            "devices": [
+                {
+                    "local_id": "fixed-1",
+                    "material_uuid": device["uuid"],
+                    "actions": [{"name": "heat"}],
+                    "online": False,
+                }
+            ],
+        }
+        resolver = make_registered_device_target_resolver(
+            InventoryService(store).station_resources,
+            lambda: registration,
+        )
+
+        with pytest.raises(DeviceTargetUnavailable) as caught:
+            resolver(
+                {
+                    "mode": "fixed",
+                    "local_device_id": "fixed-1",
+                    "material_uuid": device["uuid"],
+                },
+                "heat",
+                set(),
+            )
+        assert caught.value.code == "device_offline"
+
+        registration["devices"][0]["online"] = True
+        registration["devices"][0]["unknown_command_ids"] = ["command-1"]
+        with pytest.raises(DeviceTargetUnavailable) as caught:
+            resolver(
+                {
+                    "mode": "fixed",
+                    "local_device_id": "fixed-1",
+                    "material_uuid": device["uuid"],
+                },
+                "heat",
+                set(),
+            )
+        assert caught.value.code == "device_requires_reconciliation"
+        assert caught.value.resources[0]["device_name"] == "fixed-1"
+        assert caught.value.resources[0]["wait_code"] == (
+            "device_requires_reconciliation"
+        )
+    finally:
+        store.close()
+
+
+def test_dynamic_device_wait_reports_named_unavailable_candidates(
+    tmp_path: Path,
+) -> None:
+    """动态选择全部不可用时必须返回每台匹配设备的名称和具体原因。"""
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        backend = BackendResourceService(store)
+        template = backend.sync_resource_templates(
+            [
+                {
+                    "id": "test.named-device",
+                    "display_name": "命名设备",
+                    "registry_type": "device",
+                    "class": {},
+                }
+            ]
+        )["templates"][0]
+        device = backend.create_material(
+            {
+                "resource_template_uuid": template["uuid"],
+                "barcode": "NAMED-1",
+                "name": "S08 样品瓶开关盖",
+            }
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE material SET type='device' WHERE uuid=?",
+                (device["uuid"],),
+            )
+
+        with pytest.raises(DeviceTargetUnavailable) as caught:
+            resolve_registered_device_target(
+                InventoryService(store).station_resources,
+                {
+                    "connected": True,
+                    "devices": [
+                        {
+                            "local_id": "capper-1",
+                            "name": "S08 样品瓶开关盖",
+                            "material_uuid": device["uuid"],
+                            "actions": [{"name": "open"}],
+                            "online": False,
+                        }
+                    ],
+                },
+                resource_template_uuid=template["uuid"],
+                action_name="open",
+                busy_keys=set(),
+            )
+
+        assert caught.value.code == "device_offline"
+        assert caught.value.resources == (
+            {
+                "scope": "device",
+                "device_id": device["uuid"],
+                "local_device_id": "capper-1",
+                "device_name": "S08 样品瓶开关盖",
+                "wait_code": "device_offline",
+                "wait_message": "目标设备当前离线",
+            },
         )
     finally:
         store.close()

@@ -19,6 +19,7 @@ from tests.workflow.test_f05_task_scheduler_bridge import (
 from unilabos.app.scheduler.dispatch import CancelDispatchState, RecordingDispatcher
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.execution_claim import get_execution_claim
+from unilabos.workflow.execution_lock_lease import mirror_execution_locks_from_permit
 from unilabos.workflow.store import StoreConflict, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
@@ -327,6 +328,41 @@ def test_material_parent_lock_blocks_child_site_until_explicit_result(
     )
     assert admitted["jobs"][0]["status"] == "dispatched"
     assert admitted["jobs"][0]["wait_reason"] == {}
+
+
+def test_inventory_permit_is_mirrored_without_second_workflow_arbitration(
+    store: WorkflowStore,
+) -> None:
+    """工作流库只保留库存 Permit 审计镜像，不建立第二套仲裁结果。"""
+
+    _seed_task(store, with_material=False)
+    lock = {"lock_key": "/devices/reactor-a", "scope": "device"}
+    claim_uuid = "51000000-0000-4000-8000-000000000001"
+    with store.transaction() as connection:
+        decision = mirror_execution_locks_from_permit(
+            connection,
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            requests=[lock],
+            claim_uuid=claim_uuid,
+            fencing_tokens={lock["lock_key"]: 37},
+        )
+        waiters = connection.execute(
+            "SELECT COUNT(*) FROM execution_lock_waiter WHERE workflow_node_job_uuid=?",
+            (JOB_UUID,),
+        ).fetchone()[0]
+        metadata = json.loads(
+            connection.execute(
+                "SELECT meta_data FROM execution_lock_lease WHERE workflow_node_job_uuid=?",
+                (JOB_UUID,),
+            ).fetchone()[0]
+        )
+
+    assert decision.acquired is True
+    assert decision.claim_uuid == claim_uuid
+    assert decision.fencing_tokens == ((lock["lock_key"], 37),)
+    assert waiters == 0
+    assert metadata["authority"] == "inventory_dispatch_permit"
 
 
 def test_claim_is_stable_per_attempt_and_fence_increases_per_resource(

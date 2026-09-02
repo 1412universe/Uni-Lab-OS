@@ -11,6 +11,7 @@ from typing import Any, Protocol
 from unilabos.app.scheduler.inventory.dispatch_admission import (
     DispatchAdmissionDecision,
     DispatchAdmissionRequest,
+    DispatchFence,
     TemporaryDispatchCondition,
     acquire_dispatch_permit,
     release_unprojected_dispatch_permits,
@@ -87,8 +88,18 @@ class TransferResourceFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class OperateInPlaceFacts:
+    """库存已证明物料当前位于实际执行设备内的精确库位事实。"""
+
+    material_uuid: str
+    site_uuid: str
+    site_owner_material_uuid: str
+    device_material_uuid: str
+
+
+@dataclass(frozen=True, slots=True)
 class MaterialTransferCommand:
-    """成功作业向库存权威提交的幂等物料移动命令。"""
+    """成功作业携带完整 Permit 向库存权威提交的幂等物料移动命令。"""
 
     material_uuid: str
     target_owner_material_uuid: str
@@ -96,6 +107,37 @@ class MaterialTransferCommand:
     target_site_name: str = ""
     actor: str = ""
     causation_id: str = ""
+    effect_uuid: str = ""
+    claim_uuid: str = ""
+    job_uuid: str = ""
+    attempt: int = 0
+    parameter_hash: str = ""
+    expected_change_set: Mapping[str, Any] | None = None
+    fences: tuple[DispatchFence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AliquotReceipt:
+    """执行器确认写入一个目标容器的实际分装数量。"""
+
+    target_material_uuid: str
+    actual_quantity: float
+    quantity_unit: str
+
+
+@dataclass(frozen=True, slots=True)
+class MaterialAliquotCommand:
+    """携完整 Permit 和全目标回执的成功分装物理结算。"""
+
+    source_material_uuid: str
+    receipts: tuple[AliquotReceipt, ...]
+    effect_uuid: str
+    claim_uuid: str
+    job_uuid: str
+    attempt: int
+    parameter_hash: str
+    expected_change_set: Mapping[str, Any]
+    fences: tuple[DispatchFence, ...]
 
 
 class StationResourceInventory(Protocol):
@@ -133,6 +175,14 @@ class StationResourceInventory(Protocol):
         库存事实证明时抛 ``StationResourceError``；底层读取故障原样传播。
         """
 
+    def resolve_operate_in_place(
+        self,
+        *,
+        material_uuid: str,
+        device_material_uuid: str,
+    ) -> OperateInPlaceFacts:
+        """证明物料实际占用的库位属于本轮真实执行设备。"""
+
     def settle_material_transfer(
         self,
         command: MaterialTransferCommand,
@@ -143,6 +193,11 @@ class StationResourceInventory(Protocol):
         权威持久化后的移动结果。异常：目标身份不完整、结算冲突或数据库故障时
         原样传播，调用方不得自行补写库位占用。
         """
+
+    def settle_material_aliquot(
+        self, command: MaterialAliquotCommand
+    ) -> Mapping[str, Any]:
+        """以完整 Permit 原子结算来源扣减与全部目标内容写入。"""
 
     def acquire_dispatch_permit(
         self,
@@ -186,17 +241,20 @@ class SqliteStationResourceInventory:
         self,
         store: InventoryStore,
         *,
-        move_material: Callable[..., dict[str, Any]],
+        settle_material_transfer: Callable[[MaterialTransferCommand], dict[str, Any]],
+        settle_material_aliquot: Callable[[MaterialAliquotCommand], dict[str, Any]]
+        | None = None,
     ) -> None:
         """绑定库存存储和既有物料移动写入口。
 
-        参数：``store`` 是本地库存权威的 SQLite 适配器；``move_material`` 是
-        ``InventoryService.move_instance`` 的事务写入口。返回：无。异常：构造
-        不访问数据库；具体查询或结算错误在对应方法中原样传播。
+        参数：``store`` 是本地库存权威的 SQLite 适配器；
+        ``settle_material_transfer`` 是只接受完整 Permit 的内部结算入口。返回：
+        无。异常：构造不访问数据库；具体查询或结算错误原样传播。
         """
 
         self._store = store
-        self._move_material = move_material
+        self._settle_material_transfer = settle_material_transfer
+        self._settle_material_aliquot = settle_material_aliquot
 
     def is_device_material(
         self,
@@ -402,32 +460,76 @@ class SqliteStationResourceInventory:
             gripper_site_uuid=gripper_site_uuid,
         )
 
+    def resolve_operate_in_place(
+        self,
+        *,
+        material_uuid: str,
+        device_material_uuid: str,
+    ) -> OperateInPlaceFacts:
+        """沿库位拥有者父链证明物料仍在本轮实际执行设备中。"""
+
+        material = str(material_uuid or "").strip()
+        device = str(device_material_uuid or "").strip()
+        if not material or not device:
+            raise StationResourceError(
+                "operate_in_place_identity_missing",
+                "原位操作缺少物料或实际执行设备身份",
+            )
+        row = self._store.query_one(
+            "SELECT uuid,material_uuid FROM site WHERE occupied_material_uuid=? "
+            "AND deleted_at IS NULL",
+            (material,),
+        )
+        if row is None:
+            raise StationResourceError(
+                "operate_in_place_site_missing",
+                "待操作物料当前未占用任何设备库位",
+                resources=({"scope": "material", "material_uuid": material},),
+            )
+        owner = str(row["material_uuid"])
+        actual_device = self._owning_device_uuid(owner)
+        if actual_device != device:
+            raise StationResourceError(
+                "operate_in_place_device_mismatch",
+                "待操作物料不在本轮实际执行设备内",
+                resources=(
+                    {
+                        "scope": "material_site",
+                        "material_uuid": owner,
+                        "site_uuid": str(row["uuid"]),
+                    },
+                ),
+            )
+        return OperateInPlaceFacts(
+            material_uuid=material,
+            site_uuid=str(row["uuid"]),
+            site_owner_material_uuid=owner,
+            device_material_uuid=device,
+        )
+
     def settle_material_transfer(
         self,
         command: MaterialTransferCommand,
     ) -> Mapping[str, Any]:
-        """验证目标库位并调用库存写模型幂等移动物料。
+        """把完整 PhysicalSettlement 命令交给库存单事务写模型。
 
         参数：``command`` 提供物料、目标父级、目标库位和稳定作业因果身份。
         返回：库存写模型提交后的物料快照。异常：目标库位不再可用时抛
         ``StationResourceError``；库存版本或物料冲突由写模型原样传播。
         """
 
-        target = self.resolve_target_site(
-            TargetSiteRequest(
-                owner_material_uuid=command.target_owner_material_uuid,
-                site_uuid=command.target_site_uuid,
-                site_name=command.target_site_name,
-                occupant_material_uuid=command.material_uuid,
+        return self._settle_material_transfer(command)
+
+    def settle_material_aliquot(
+        self, command: MaterialAliquotCommand
+    ) -> Mapping[str, Any]:
+        """把完整分装 PhysicalSettlement 交给库存单事务写模型。"""
+
+        if self._settle_material_aliquot is None:
+            raise StationResourceError(
+                "aliquot_settlement_unavailable", "库存权威未装配分装结算入口"
             )
-        )
-        return self._move_material(
-            command.material_uuid,
-            parent_uuid=command.target_owner_material_uuid,
-            slot_id=target.name,
-            actor=command.actor,
-            causation_id=command.causation_id,
-        )
+        return self._settle_material_aliquot(command)
 
     def acquire_dispatch_permit(
         self,
@@ -777,6 +879,8 @@ def _site_role(raw_metadata: Any) -> str:
 
 
 __all__ = [
+    "AliquotReceipt",
+    "MaterialAliquotCommand",
     "MaterialTransferCommand",
     "SqliteStationResourceInventory",
     "StationResourceError",

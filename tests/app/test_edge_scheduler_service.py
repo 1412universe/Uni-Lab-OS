@@ -3,6 +3,8 @@
 核心断言：**每个工作流提交、每个子 action 完成，都触发一次重排**。
 """
 
+import threading
+
 import pytest
 
 from unilabos.app.scheduler.dispatch import CallbackDispatcher, RecordingDispatcher
@@ -20,6 +22,7 @@ from unilabos.app.scheduler.models import (
 )
 from unilabos.app.scheduler.ordering import OrderingContext, StableLocalOrderer
 from unilabos.app.scheduler.service import EdgeScheduler, ExecutionPolicyError
+from unilabos.app.scheduler.site_target import SiteTargetResolutionError
 
 
 def _node(node_id: str, device: str = "dev1", action: str = "run") -> WorkflowNode:
@@ -77,7 +80,11 @@ def test_physical_dispatch_requires_persistent_admission_authority() -> None:
 
     dispatched: list[dict] = []
     scheduler = EdgeScheduler(
-        dispatcher=CallbackDispatcher(lambda payload: dispatched.append(dict(payload)))
+        dispatcher=CallbackDispatcher(lambda payload: dispatched.append(dict(payload))),
+        device_target_resolver=lambda selector, _action, _busy: ResolvedDeviceTarget(
+            local_device_id=str(selector["local_device_id"]),
+            material_uuid=str(selector.get("material_uuid") or ""),
+        ),
     )
 
     with pytest.raises(ExecutionPolicyError, match="持久派发准入权威未装配"):
@@ -95,7 +102,11 @@ def test_admission_authority_cannot_return_without_complete_permit() -> None:
 
     dispatched: list[dict] = []
     scheduler = EdgeScheduler(
-        dispatcher=CallbackDispatcher(lambda payload: dispatched.append(dict(payload)))
+        dispatcher=CallbackDispatcher(lambda payload: dispatched.append(dict(payload))),
+        device_target_resolver=lambda selector, _action, _busy: ResolvedDeviceTarget(
+            local_device_id=str(selector["local_device_id"]),
+            material_uuid=str(selector.get("material_uuid") or ""),
+        ),
     )
     scheduler.bind_dispatch_admission_authority(lambda _dispatching: True)
 
@@ -123,6 +134,19 @@ def test_dispatch_admission_authority_is_single_assignment() -> None:
 
 
 class TestTriggerOnSubmit:
+    def test_submit_accepts_legacy_spec_without_trace_context(self) -> None:
+        """本地覆盖的新调度器必须兼容旧基础镜像生成的 WorkflowSpec。"""
+
+        scheduler, dispatcher = _make()
+        spec = _chain_spec("wf-legacy-spec")
+        if hasattr(spec, "trace_context"):
+            del spec.trace_context
+
+        result = scheduler.submit_workflow(spec)
+
+        assert result["dispatched"][0]["node_id"] == "A"
+        assert len(dispatcher.dispatched) == 1
+
     def test_submit_dispatches_ready_immediately(self):
         scheduler, dispatcher = _make()
         result = scheduler.submit_workflow(_chain_spec("wf1"))
@@ -281,6 +305,65 @@ def test_dynamic_device_wait_notifies_specific_busy_candidates() -> None:
     ]
 
 
+def test_temporary_site_conflict_notifies_wait_without_crashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """目标库位暂时占用时必须保留作业等待，不能让完成回调异常退出。"""
+
+    waiting: list[dict] = []
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    scheduler.add_job_execution_wait_listener(waiting.append)
+
+    def raise_occupied_site(*_args: object, **_kwargs: object) -> None:
+        raise SiteTargetResolutionError(
+            "site_occupied",
+            "目标库位 R1C1 已被其他物料占用",
+            resources=(
+                {
+                    "scope": "material_site",
+                    "site_uuid": "site-r1c1",
+                    "material_uuid": "blocking-material",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        scheduler,
+        "_resolve_transfer_site_target",
+        raise_occupied_site,
+    )
+
+    result = scheduler.submit_workflow(
+        WorkflowSpec(
+            workflow_id="wf-site-occupied",
+            nodes=[_node("return-reagent", device="robot")],
+        )
+    )
+
+    assert result["state"] == "running"
+    assert result["dispatched"] == []
+    assert waiting == [
+        {
+            "job_id": waiting[0]["job_id"],
+            "workflow_id": "wf-site-occupied",
+            "node_id": "return-reagent",
+            "resolved_args": {},
+            "execution_locks": [],
+            "blocking_job_id": None,
+            "blocking_workflow_id": None,
+            "wait_code": "site_occupied",
+            "wait_message": "目标库位 R1C1 已被其他物料占用",
+            "wait_resources": [
+                {
+                    "scope": "material_site",
+                    "site_uuid": "site-r1c1",
+                    "material_uuid": "blocking-material",
+                },
+            ],
+        }
+    ]
+
+
 class TestStepControl:
     def test_each_step_dispatches_one_node_and_pauses_before_next(self):
         scheduler, dispatcher = _make()
@@ -333,6 +416,29 @@ class TestTriggerOnJobFinish:
         assert [d["node_id"] for d in result2["dispatched"]] == ["B"]
         assert len(dispatcher.dispatched) == 2
         assert scheduler.snapshot()["reschedule_count"] == 2
+
+    def test_finish_callback_only_wakes_reconcile_worker(self) -> None:
+        """设备完成回调不得在回调线程/持锁栈内直接执行重排和派发。"""
+
+        scheduler, _dispatcher = _make()
+        submitted = scheduler.submit_workflow(_chain_spec("wf-wakeup"))
+        callback_thread = threading.current_thread().ident
+        reconcile_threads: list[int | None] = []
+        original = scheduler._reschedule_locked
+
+        def _recording_reschedule() -> list[dict[str, object]]:
+            reconcile_threads.append(threading.current_thread().ident)
+            return original()
+
+        scheduler._reschedule_locked = _recording_reschedule  # type: ignore[method-assign]
+        result = scheduler.on_job_finished(
+            submitted["dispatched"][0]["job_id"],
+            True,
+        )
+
+        assert [item["node_id"] for item in result["dispatched"]] == ["B"]
+        assert reconcile_threads
+        assert all(thread_id != callback_thread for thread_id in reconcile_threads)
 
     def test_finish_last_node_completes_workflow(self):
         scheduler, _ = _make()

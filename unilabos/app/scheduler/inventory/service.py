@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from functools import wraps
 from inspect import signature
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -33,9 +34,20 @@ from unilabos.app.scheduler.inventory.domain import (
     check_lot_invariants,
     new_event_id,
 )
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    DispatchAdmissionConflict,
+    assert_inventory_mutation_unclaimed,
+    validate_physical_settlement_credentials,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.workflow_quantity import (
+    WorkflowQuantityInventoryAuthority,
+)
 from unilabos.app.scheduler.inventory.station_resource import (
+    MaterialAliquotCommand,
+    MaterialTransferCommand,
     SqliteStationResourceInventory,
+    StationResourceError,
     StationResourceInventory,
 )
 from unilabos.utils.tracing import add_event, inject_trace_context, span
@@ -116,7 +128,8 @@ class InventoryService:
         self._station_resources: StationResourceInventory = (
             SqliteStationResourceInventory(
                 store,
-                move_material=self.move_instance,
+                settle_material_aliquot=self._settle_claimed_material_aliquot,
+                settle_material_transfer=self._settle_claimed_material_transfer,
             )
         )
 
@@ -542,6 +555,13 @@ class InventoryService:
                  InstanceState.WAREHOUSE.value, ""),
             )
             if parent_uuid:
+                self._tx_assert_physical_mutation_unclaimed(
+                    conn,
+                    edge_uuid=edge_uuid,
+                    related_material_uuids=(parent_uuid,),
+                    target_parent_uuid=parent_uuid,
+                    target_slot_id=slot_id,
+                )
                 self._tx_upsert_relation(conn, parent_uuid, slot_id, edge_uuid)
             self._emit(
                 conn, now, "instance", edge_uuid, 1, "instance.registered",
@@ -685,12 +705,25 @@ class InventoryService:
             raise CommandRejected("material source admission node_id must be non-empty and unique")
 
         with self._tx() as conn:
-            # 先冻结共享来源，再分配任务独占来源；这使准入结果
-            # 不受节点 UUID 字典序影响，并让独占分配稳定避开同一请求
-            # 集中的固定共享物料。
+            # 先冻结选择范围最窄的来源，避免无库位共享来源抢占同一请求中
+            # 已明确指定给独占搬运来源的物料。约束程度相同时仍先处理共享
+            # 来源，使独占分配稳定避开固定共享物料且不受节点 UUID 字典序影响。
+            def selector_rank(item: MaterialSourceAdmissionRequest) -> int:
+                requirement = item.requirement
+                if (
+                    requirement.instance_uuid
+                    or requirement.barcode
+                    or requirement.site_uuid
+                ):
+                    return 0
+                if requirement.slot_uuids:
+                    return 1
+                return 2
+
             ordered_requests = sorted(
                 requests,
                 key=lambda item: (
+                    selector_rank(item),
                     item.custody_policy != "shared_source",
                     item.node_id,
                 ),
@@ -783,6 +816,28 @@ class InventoryService:
             "reserved_nodes": reserved_nodes,
             "allocations": allocations,
         }
+
+    def admit_task_materials(
+        self,
+        workflow_id: str,
+        requests: List[MaterialSourceAdmissionRequest],
+        quantity_allocations: Sequence[Mapping[str, Any]],
+    ) -> Dict[str, Any]:
+        """在一个库存事务中准入全部来源实例与全部数量型库存。"""
+
+        authority = WorkflowQuantityInventoryAuthority(
+            self.store,
+            edge_id=self.edge_id,
+            lab_id=self.lab_id,
+        )
+        with self._tx() as connection:
+            source_result = self.admit_material_sources(workflow_id, requests)
+            authority.reserve_task(
+                workflow_id,
+                quantity_allocations,
+                connection=connection,
+            )
+            return source_result
 
     @staticmethod
     def _validate_material_source_request(request: MaterialSourceAdmissionRequest) -> None:
@@ -1379,6 +1434,36 @@ class InventoryService:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _tx_assert_physical_mutation_unclaimed(
+        conn: sqlite3.Connection,
+        *,
+        edge_uuid: str,
+        related_material_uuids: tuple[str, ...] = (),
+        target_parent_uuid: str = "",
+        target_slot_id: str = "",
+    ) -> None:
+        """在兼容 Inventory 写入口修改规范物理事实前执行统一 Claim 防线。
+
+        参数：当前事务、被改物料、相关父物料及可选目标具名库位。返回：无。
+        异常：任一身份与活动 Claim 冲突时抛 ``InventoryMutationConflict``，由
+        命令/API 适配层映射为稳定拒绝结果。
+        """
+
+        target_site_uuid = ""
+        if target_parent_uuid and target_slot_id:
+            row = conn.execute(
+                "SELECT uuid FROM site WHERE material_uuid=? "
+                "AND LOWER(name)=LOWER(?) AND deleted_at IS NULL",
+                (target_parent_uuid, target_slot_id),
+            ).fetchone()
+            target_site_uuid = str(row["uuid"]) if row is not None else ""
+        assert_inventory_mutation_unclaimed(
+            conn,
+            material_uuids=(edge_uuid, *related_material_uuids),
+            site_uuids=(target_site_uuid,) if target_site_uuid else (),
+        )
+
+    @staticmethod
     def _tx_upsert_relation(
         conn: sqlite3.Connection, parent_uuid: str, slot_id: str, child_uuid: str
     ) -> None:
@@ -1441,6 +1526,11 @@ class InventoryService:
                 ):
                     edge_uuid = issue["child_uuid"]
                     row = self._tx_get_instance(conn, edge_uuid)
+                    self._tx_assert_physical_mutation_unclaimed(
+                        conn,
+                        edge_uuid=edge_uuid,
+                        related_material_uuids=(issue["relation_parent_uuid"],),
+                    )
                     version = row["version"] + 1
                     conn.execute(
                         "UPDATE material_instance SET parent_uuid = ?, version = ? "
@@ -1477,6 +1567,13 @@ class InventoryService:
         with self._tx() as conn:
             inst = self._tx_get_instance(conn, edge_uuid)
             self._tx_check_version(inst, expected_version)
+            self._tx_assert_physical_mutation_unclaimed(
+                conn,
+                edge_uuid=edge_uuid,
+                related_material_uuids=(parent_uuid,) if parent_uuid else (),
+                target_parent_uuid=parent_uuid,
+                target_slot_id=slot_id,
+            )
             inst = self._tx_set_instance_status(conn, inst, InstanceState.BENCH)
             if parent_uuid:
                 self._tx_upsert_relation(conn, parent_uuid, slot_id, edge_uuid)
@@ -1500,7 +1597,6 @@ class InventoryService:
         规则允许工作流库与库存库之间的结算 Saga 在崩溃后按同一 Job 重放。
         """
 
-        now = self._now_ms()
         with self._tx() as conn:
             inst = self._tx_get_instance(conn, edge_uuid)
             self._tx_check_version(inst, expected_version)
@@ -1514,21 +1610,477 @@ class InventoryService:
                 and str(inst.get("parent_uuid") or "") == str(parent_uuid)
             ):
                 return inst
-            self._tx_upsert_relation(conn, parent_uuid, slot_id, edge_uuid)
-            new_version = inst["version"] + 1
-            conn.execute(
-                "UPDATE material_instance SET version = ? WHERE edge_uuid = ?",
-                (new_version, edge_uuid),
+            self._tx_assert_physical_mutation_unclaimed(
+                conn,
+                edge_uuid=edge_uuid,
+                related_material_uuids=(parent_uuid,),
+                target_parent_uuid=parent_uuid,
+                target_slot_id=slot_id,
             )
-            self._emit(
-                conn, now, "instance", edge_uuid, new_version, "instance.moved",
-                {"from_parent": old["parent_uuid"] if old else "",
-                 "from_slot": old["slot_id"] if old else "",
-                 "to_parent": parent_uuid, "to_slot": slot_id},
-                causation_id=causation_id, actor=actor,
+            inst = self._tx_move_instance(
+                conn,
+                inst=inst,
+                old=old,
+                parent_uuid=parent_uuid,
+                slot_id=slot_id,
+                actor=actor,
+                causation_id=causation_id,
             )
-            inst = self._tx_get_instance(conn, edge_uuid)
         return inst
+
+    def _tx_move_instance(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        inst: Dict[str, Any],
+        old: sqlite3.Row | None,
+        parent_uuid: str,
+        slot_id: str,
+        actor: str,
+        causation_id: str,
+    ) -> Dict[str, Any]:
+        """在已经授权的库存事务中提交一次物料父级/库位切换。"""
+
+        edge_uuid = str(inst["edge_uuid"])
+        self._tx_upsert_relation(conn, parent_uuid, slot_id, edge_uuid)
+        new_version = int(inst["version"]) + 1
+        conn.execute(
+            "UPDATE material_instance SET version = ? WHERE edge_uuid = ?",
+            (new_version, edge_uuid),
+        )
+        self._emit(
+            conn,
+            self._now_ms(),
+            "instance",
+            edge_uuid,
+            new_version,
+            "instance.moved",
+            {
+                "from_parent": old["parent_uuid"] if old else "",
+                "from_slot": old["slot_id"] if old else "",
+                "to_parent": parent_uuid,
+                "to_slot": slot_id,
+            },
+            causation_id=causation_id,
+            actor=actor,
+        )
+        return self._tx_get_instance(conn, edge_uuid)
+
+    def _settle_claimed_material_transfer(
+        self,
+        command: MaterialTransferCommand,
+    ) -> Dict[str, Any]:
+        """验证完整 Permit 并在同一事务提交 Scheduler 物料转移结算。"""
+
+        expected_change = dict(command.expected_change_set or {})
+        fences = {
+            str(fence.lock_key): int(fence.fencing_token)
+            for fence in command.fences
+        }
+        if (
+            expected_change.get("kind") != "material_transfer"
+            or str(expected_change.get("material_uuid") or "")
+            != command.material_uuid
+            or str(expected_change.get("target_site_uuid") or "")
+            != command.target_site_uuid
+        ):
+            raise StationResourceError(
+                "settlement_change_set_mismatch",
+                "PhysicalSettlement 目标与派发时冻结的 ChangeSet 不一致",
+            )
+        settlement_event_uuid = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"unilabos-transfer-settlement:{command.effect_uuid}",
+            )
+        )
+        with self._tx() as conn:
+            claim_state = validate_physical_settlement_credentials(
+                conn,
+                effect_uuid=command.effect_uuid,
+                claim_uuid=command.claim_uuid,
+                job_uuid=command.job_uuid,
+                attempt=command.attempt,
+                parameter_hash=command.parameter_hash,
+                expected_change_set=expected_change,
+                fences=fences,
+                allow_released_replay=True,
+            )
+            persisted = conn.execute(
+                "SELECT delta_json,causation_id,workflow_node_job_uuid "
+                "FROM inventory_ledger WHERE entry_uuid=? AND "
+                "op_type='physical_settlement.material_transfer'",
+                (settlement_event_uuid,),
+            ).fetchone()
+            if persisted is not None:
+                if (
+                    str(persisted["causation_id"]) != command.effect_uuid
+                    or str(persisted["workflow_node_job_uuid"] or "")
+                    != command.job_uuid
+                ):
+                    raise StationResourceError(
+                        "transfer_replay_identity_mismatch",
+                        "转运结算重放身份与已提交台账不一致",
+                    )
+                try:
+                    result = json.loads(str(persisted["delta_json"]))[
+                        "changes"
+                    ]["result"]
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise StationResourceError(
+                        "transfer_replay_evidence_invalid",
+                        "转运结算重放台账证据损坏",
+                    ) from error
+                if not isinstance(result, dict):
+                    raise StationResourceError(
+                        "transfer_replay_evidence_invalid",
+                        "转运结算重放台账结果不是对象",
+                    )
+                return result
+            if claim_state == "released":
+                raise DispatchAdmissionConflict(
+                    "已释放 Claim 没有已提交的转运结算证据，禁止首次修改库存"
+                )
+            target = conn.execute(
+                "SELECT uuid,material_uuid,name,occupied_material_uuid FROM site "
+                "WHERE uuid=? AND deleted_at IS NULL",
+                (command.target_site_uuid,),
+            ).fetchone()
+            if target is None:
+                raise StationResourceError(
+                    "site_not_found",
+                    "PhysicalSettlement 目标库位不存在",
+                )
+            if (
+                str(target["material_uuid"]) != command.target_owner_material_uuid
+                or (
+                    command.target_site_name
+                    and str(target["name"]) != command.target_site_name
+                )
+            ):
+                raise StationResourceError(
+                    "site_identity_mismatch",
+                    "PhysicalSettlement 目标库位身份或名称漂移",
+                )
+            occupied = str(target["occupied_material_uuid"] or "")
+            if occupied and occupied != command.material_uuid:
+                raise StationResourceError(
+                    "site_occupied",
+                    f"PhysicalSettlement 目标库位已被物料 {occupied} 占用",
+                )
+            source_site_uuid = str(expected_change.get("source_site_uuid") or "")
+            source = conn.execute(
+                "SELECT occupied_material_uuid FROM site WHERE uuid=? "
+                "AND deleted_at IS NULL",
+                (source_site_uuid,),
+            ).fetchone()
+            if source is None or str(source["occupied_material_uuid"] or "") not in {
+                command.material_uuid,
+                "",
+            }:
+                raise StationResourceError(
+                    "settlement_source_mismatch",
+                    "PhysicalSettlement 来源库位事实与派发快照不一致",
+                )
+            inst = self._tx_get_instance(conn, command.material_uuid)
+            old = conn.execute(
+                "SELECT * FROM resource_relation WHERE child_uuid=?",
+                (command.material_uuid,),
+            ).fetchone()
+            if (
+                old is not None
+                and str(old["parent_uuid"]) == command.target_owner_material_uuid
+                and str(old["slot_id"]) == str(target["name"])
+            ):
+                result = inst
+            else:
+                result = self._tx_move_instance(
+                    conn,
+                    inst=inst,
+                    old=old,
+                    parent_uuid=command.target_owner_material_uuid,
+                    slot_id=str(target["name"]),
+                    actor=command.actor,
+                    causation_id=command.causation_id,
+                )
+            InventoryStore.tx_append_inventory_event(
+                conn,
+                entry_uuid=settlement_event_uuid,
+                edge_id=self.edge_id,
+                lab_id=self.lab_id,
+                occurred_at=self._now_ms(),
+                aggregate_type="material_instance",
+                aggregate_id=command.material_uuid,
+                aggregate_version=int(result["version"]),
+                event_type="physical_settlement.material_transfer",
+                payload={
+                    "changes": {"result": result},
+                    "extension": {
+                        "target_site_uuid": command.target_site_uuid,
+                    },
+                },
+                actor="scheduler",
+                reason="physical_settlement",
+                causation_id=command.effect_uuid,
+                material_uuid=command.material_uuid,
+                subject_type="material_instance",
+                revision=int(result["version"]),
+                workflow_node_job_uuid=command.job_uuid,
+            )
+            return result
+
+    def _settle_claimed_material_aliquot(
+        self,
+        command: MaterialAliquotCommand,
+    ) -> Dict[str, Any]:
+        """验证完整 Permit 并原子扣减来源、写入全部目标内容物。"""
+
+        expected_change = dict(command.expected_change_set or {})
+        fences = {
+            str(fence.lock_key): int(fence.fencing_token)
+            for fence in command.fences
+        }
+        receipts = tuple(command.receipts)
+        targets = tuple(sorted(receipt.target_material_uuid for receipt in receipts))
+        expected_targets = tuple(
+            sorted(str(value) for value in expected_change.get("target_material_uuids", ()))
+        )
+        if (
+            expected_change.get("kind") != "material_content_aliquot"
+            or expected_change.get("source_material_uuid") != command.source_material_uuid
+            or targets != expected_targets
+            or len(set(targets)) != len(targets)
+            or not targets
+        ):
+            raise StationResourceError(
+                "settlement_change_set_mismatch",
+                "分装 PhysicalSettlement 回执与冻结目标闭集不一致",
+            )
+        if any(
+            receipt.actual_quantity < 0 or not receipt.quantity_unit.strip()
+            for receipt in receipts
+        ):
+            raise StationResourceError(
+                "aliquot_receipt_invalid", "分装目标回执数量或单位非法"
+            )
+        now_text = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        now_ms = self._now_ms()
+        source_event_uuid = str(
+            uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"unilabos-aliquot-source:{command.effect_uuid}",
+            )
+        )
+        with self._tx() as conn:
+            claim_state = validate_physical_settlement_credentials(
+                conn,
+                effect_uuid=command.effect_uuid,
+                claim_uuid=command.claim_uuid,
+                job_uuid=command.job_uuid,
+                attempt=command.attempt,
+                parameter_hash=command.parameter_hash,
+                expected_change_set=expected_change,
+                fences=fences,
+                allow_released_replay=True,
+            )
+            persisted = conn.execute(
+                "SELECT delta_json,causation_id,workflow_node_job_uuid "
+                "FROM inventory_ledger WHERE entry_uuid=? AND "
+                "op_type='current_substance.aliquot_source'",
+                (source_event_uuid,),
+            ).fetchone()
+            if persisted is not None:
+                if (
+                    str(persisted["causation_id"]) != command.effect_uuid
+                    or str(persisted["workflow_node_job_uuid"] or "")
+                    != command.job_uuid
+                ):
+                    raise StationResourceError(
+                        "aliquot_replay_identity_mismatch",
+                        "分装结算重放身份与已提交台账不一致",
+                    )
+                try:
+                    result = json.loads(str(persisted["delta_json"]))[
+                        "changes"
+                    ]["result"]
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+                    raise StationResourceError(
+                        "aliquot_replay_evidence_invalid",
+                        "分装结算重放台账证据损坏",
+                    ) from error
+                if not isinstance(result, dict):
+                    raise StationResourceError(
+                        "aliquot_replay_evidence_invalid",
+                        "分装结算重放台账结果不是对象",
+                    )
+                return result
+            if claim_state == "released":
+                raise DispatchAdmissionConflict(
+                    "已释放 Claim 没有已提交的分装结算证据，禁止首次修改库存"
+                )
+            source = conn.execute(
+                "SELECT * FROM current_substance WHERE material_uuid=? "
+                "AND deleted_at IS NULL",
+                (command.source_material_uuid,),
+            ).fetchone()
+            if source is None:
+                raise StationResourceError(
+                    "aliquot_source_content_missing", "分装来源容器没有当前内容物"
+                )
+            source_unit = str(source["quantity_unit"])
+            if any(
+                receipt.quantity_unit.casefold() != source_unit.casefold()
+                for receipt in receipts
+            ):
+                raise StationResourceError(
+                    "aliquot_unit_mismatch", "分装目标回执单位与来源内容物不一致"
+                )
+            total = sum(float(receipt.actual_quantity) for receipt in receipts)
+            if float(source["quantity"]) + 1e-9 < total:
+                raise StationResourceError(
+                    "aliquot_source_insufficient", "分装来源内容物余量不足"
+                )
+            placeholders = ",".join("?" for _ in targets)
+            existing_materials = conn.execute(
+                f"SELECT uuid FROM material WHERE uuid IN ({placeholders}) "
+                "AND deleted_at IS NULL",
+                targets,
+            ).fetchall()
+            if {str(row["uuid"]) for row in existing_materials} != set(targets):
+                raise StationResourceError(
+                    "aliquot_target_missing", "一个或多个分装目标容器不存在"
+                )
+            occupied_targets = conn.execute(
+                f"SELECT material_uuid FROM current_substance WHERE material_uuid IN ({placeholders}) "
+                "AND deleted_at IS NULL UNION SELECT material_uuid FROM reagent "
+                f"WHERE material_uuid IN ({placeholders}) AND deleted_at IS NULL",
+                (*targets, *targets),
+            ).fetchall()
+            if occupied_targets:
+                raise StationResourceError(
+                    "aliquot_target_not_empty", "一个或多个分装目标容器已有内容物"
+                )
+            source_after = float(source["quantity"]) - total
+            source_revision = int(source["revision"]) + 1
+            changed = conn.execute(
+                "UPDATE current_substance SET quantity=?,revision=?,update_time=?,observed_at=? "
+                "WHERE uuid=? AND revision=? AND deleted_at IS NULL",
+                (
+                    source_after,
+                    source_revision,
+                    now_text,
+                    now_text,
+                    source["uuid"],
+                    source["revision"],
+                ),
+            ).rowcount
+            if changed != 1:
+                raise StationResourceError(
+                    "aliquot_source_revision_changed", "分装来源内容物修订已变化"
+                )
+            created: list[dict[str, Any]] = []
+            for receipt in receipts:
+                content_uuid = str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"unilabos-aliquot:{command.effect_uuid}:{receipt.target_material_uuid}",
+                    )
+                )
+                conn.execute(
+                    """INSERT INTO current_substance(
+                        uuid,create_time,update_time,description,meta_data,
+                        material_uuid,name,composition,quantity,quantity_unit,
+                        physical_state,revision,observed_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        content_uuid,
+                        now_text,
+                        now_text,
+                        source["description"],
+                        source["meta_data"],
+                        receipt.target_material_uuid,
+                        source["name"],
+                        source["composition"],
+                        float(receipt.actual_quantity),
+                        source_unit,
+                        source["physical_state"],
+                        1,
+                        now_text,
+                    ),
+                )
+                created.append(
+                    {
+                        "current_substance_uuid": content_uuid,
+                        "target_material_uuid": receipt.target_material_uuid,
+                        "quantity": float(receipt.actual_quantity),
+                        "quantity_unit": source_unit,
+                    }
+                )
+                InventoryStore.tx_append_inventory_event(
+                    conn,
+                    entry_uuid=str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"unilabos-aliquot-target:{command.effect_uuid}:{receipt.target_material_uuid}",
+                        )
+                    ),
+                    edge_id=self.edge_id,
+                    lab_id=self.lab_id,
+                    occurred_at=now_ms,
+                    aggregate_type="current_substance",
+                    aggregate_id=content_uuid,
+                    aggregate_version=1,
+                    event_type="current_substance.aliquot_receive",
+                    payload={"changes": {"result": created[-1]}, "extension": {}},
+                    actor="scheduler",
+                    reason="physical_settlement",
+                    causation_id=command.effect_uuid,
+                    material_uuid=receipt.target_material_uuid,
+                    subject_type="current_substance",
+                    quantity_delta=float(receipt.actual_quantity),
+                    quantity_unit=source_unit,
+                    revision=1,
+                    workflow_node_job_uuid=command.job_uuid,
+                )
+            InventoryStore.tx_append_inventory_event(
+                conn,
+                entry_uuid=str(
+                    source_event_uuid
+                ),
+                edge_id=self.edge_id,
+                lab_id=self.lab_id,
+                occurred_at=now_ms,
+                aggregate_type="current_substance",
+                aggregate_id=str(source["uuid"]),
+                aggregate_version=source_revision,
+                event_type="current_substance.aliquot_source",
+                payload={
+                    "changes": {
+                        "result": {
+                            "source_material_uuid": command.source_material_uuid,
+                            "source_quantity": source_after,
+                            "quantity_unit": source_unit,
+                            "targets": created,
+                        }
+                    },
+                    "extension": {},
+                },
+                actor="scheduler",
+                reason="physical_settlement",
+                causation_id=command.effect_uuid,
+                material_uuid=command.source_material_uuid,
+                subject_type="current_substance",
+                quantity_delta=-total,
+                quantity_unit=source_unit,
+                revision=source_revision,
+                workflow_node_job_uuid=command.job_uuid,
+            )
+            return {
+                "source_material_uuid": command.source_material_uuid,
+                "source_quantity": source_after,
+                "quantity_unit": source_unit,
+                "targets": created,
+            }
 
     @_traced_operation("detach")
     def detach_instance(
@@ -1548,6 +2100,15 @@ class InventoryService:
             ).fetchone()
             if old is None and not inst.get("parent_uuid"):
                 return inst
+            self._tx_assert_physical_mutation_unclaimed(
+                conn,
+                edge_uuid=edge_uuid,
+                related_material_uuids=(
+                    str(old["parent_uuid"])
+                    if old is not None
+                    else str(inst.get("parent_uuid") or ""),
+                ),
+            )
             if old is not None:
                 conn.execute(
                     "DELETE FROM resource_relation WHERE child_uuid = ?", (edge_uuid,)
@@ -1607,6 +2168,15 @@ class InventoryService:
             old_slot = old_rel["slot_id"] if old_rel else ""
             if parent_uuid == old_parent and new_slot == old_slot:
                 return inst  # 幂等 no-op
+            self._tx_assert_physical_mutation_unclaimed(
+                conn,
+                edge_uuid=edge_uuid,
+                related_material_uuids=tuple(
+                    item for item in (str(old_parent or ""), parent_uuid) if item
+                ),
+                target_parent_uuid=parent_uuid,
+                target_slot_id=new_slot,
+            )
             if parent_uuid:
                 if parent_uuid == edge_uuid:
                     raise CommandRejected("instance cannot be its own parent")
@@ -1688,6 +2258,11 @@ class InventoryService:
         with self._tx() as conn:
             inst = self._tx_get_instance(conn, edge_uuid)
             self._tx_check_version(inst, expected_version)
+            self._tx_assert_physical_mutation_unclaimed(
+                conn,
+                edge_uuid=edge_uuid,
+                related_material_uuids=(str(inst.get("parent_uuid") or ""),),
+            )
             inst = self._tx_set_instance_status(conn, inst, target)
             conn.execute("DELETE FROM resource_relation WHERE child_uuid = ?", (edge_uuid,))
             # 终态实例不再是任何物料的组成部分（历史保留在 ledger）
@@ -1741,6 +2316,10 @@ class InventoryService:
         now = self._now_ms()
         with self._tx() as conn:
             self._tx_get_instance(conn, instance_uuid)
+            self._tx_assert_physical_mutation_unclaimed(
+                conn,
+                edge_uuid=instance_uuid,
+            )
             row = conn.execute(
                 "SELECT * FROM substance_content WHERE instance_uuid = ?", (instance_uuid,)
             ).fetchone()

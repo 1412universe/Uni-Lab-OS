@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -273,89 +274,82 @@ async def test_typed_host_transfer_preserves_direct_runtime_call_shape() -> None
     }
 
 
-@pytest.mark.asyncio
-async def test_host_transfer_commits_edge_inventory_after_resource_tree_transfer(
+def test_host_transfer_never_reads_or_writes_scheduler_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """系统转运成功后必须把同一物料身份提交到目标库位（Site）。
+    """Runtime 只能执行本地资源树动作并返回回执，不能访问调度库存。
 
-    参数：``monkeypatch`` 把进程内库存权威替换为只记录调用的替身。返回：无；
-    断言资源树转运先完成，随后使用稳定物料 UUID、目标父物料 UUID 和库位名调用
-    正式 ``move_instance``，防止设备动作成功但库存仍停留在来源仓。异常：任一提交
-    缺失、顺序错误或身份漂移时断言保持 RED。
+    参数：``monkeypatch`` 把任何库存服务读取都变成测试失败。返回：无；断言只执行
+    Scheduler 已经解析好的规范库位名，并返回设备执行回执。异常：Runtime 查询或写入
+    Inventory Authority 时立即失败，防止跨进程越权修改调度物理事实。
     """
 
     calls: list[tuple[Any, ...]] = []
-    inventory = _InventoryTransferRecorder(calls)
+
+    def _forbid_inventory_access() -> Any:
+        raise AssertionError("Edge Runtime must not access scheduler inventory")
+
     monkeypatch.setattr(
         "unilabos.app.scheduler.integration.get_inventory_service",
-        lambda: inventory,
+        _forbid_inventory_access,
     )
     runtime = _TransferExecutionRuntime(calls)
     resource = {"uuid": "10000000-0000-4000-8000-000000000001"}
     mount = {"uuid": "20000000-0000-4000-8000-000000000002"}
 
-    result = await HostNode._do_transfer_resource(
-        runtime,
-        resource,
-        "host_node",
-        mount,
-        "L1B1",
+    result = asyncio.run(
+        HostNode._do_transfer_resource(
+            runtime,
+            resource,
+            "host_node",
+            mount,
+            "L1B1",
+            "30000000-0000-4000-8000-000000000003",
+        )
     )
 
     assert calls == [
         ("resource_tree", [resource], "host_node", [mount], ["L1B1"]),
-        (
-            "inventory",
-            "10000000-0000-4000-8000-000000000001",
-            "20000000-0000-4000-8000-000000000002",
-            "L1B1",
-            "host_node.transfer_resource",
-        ),
     ]
     assert result["result"] == "转运完成"
+    assert result["site"] == "L1B1"
 
 
-@pytest.mark.asyncio
-async def test_host_transfer_accepts_site_uuid_without_site_name(
+def test_host_transfer_rejects_site_uuid_without_canonical_site_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """直接执行只传 ``site_uuid`` 时也应先解析名称再进行物理转运。
+    """Scheduler 未提供规范库位名时 Runtime 必须失败关闭且不能反查库存。
 
-    参数：``monkeypatch`` 注入带库位行的库存权威替身。返回：无；断言设备层和
-    库存提交都使用数据库规范名称。异常：解析或归属失败时测试保持 RED。
+    参数：``monkeypatch`` 禁止库存服务读取。返回：无；断言只有 ``site_uuid`` 的
+    非规范派发被拒绝，要求 Scheduler 在 Job payload 中同时下发库位名。异常：任何
+    库存访问都使测试失败。
     """
 
     calls: list[tuple[Any, ...]] = []
     resource_uuid = "10000000-0000-4000-8000-000000000001"
     owner_uuid = "20000000-0000-4000-8000-000000000002"
     site_uuid = "30000000-0000-4000-8000-000000000003"
-    inventory = _InventoryTransferRecorder(
-        calls,
-        site_row={
-            "uuid": site_uuid,
-            "material_uuid": owner_uuid,
-            "name": "L2C3",
-            "occupied_material_uuid": None,
-        },
-    )
+
+    def _forbid_inventory_access() -> Any:
+        raise AssertionError("Edge Runtime must not access scheduler inventory")
+
     monkeypatch.setattr(
         "unilabos.app.scheduler.integration.get_inventory_service",
-        lambda: inventory,
+        _forbid_inventory_access,
     )
     runtime = _TransferExecutionRuntime(calls)
 
-    result = await HostNode._do_transfer_resource(
-        runtime,
-        {"uuid": resource_uuid},
-        "host_node",
-        {"uuid": owner_uuid},
-        site_uuid=site_uuid,
-    )
-
-    assert calls[0][-1] == ["L2C3"]
-    assert calls[1][3] == "L2C3"
-    assert result["site"] == "L2C3"
+    with pytest.raises(ValueError, match="规范库位名"):
+        asyncio.run(
+            HostNode._do_transfer_resource(
+                runtime,
+                {"uuid": resource_uuid},
+                "host_node",
+                {"uuid": owner_uuid},
+                site_uuid=site_uuid,
+            )
+        )
+    assert calls == []
 
 
 def test_transfer_runtime_prefers_explicit_site_over_legacy_extra() -> None:
@@ -429,35 +423,38 @@ def test_transfer_runtime_prefers_explicit_site_over_legacy_extra() -> None:
     assert parent.received_spot == "EXPLICIT-SITE"
 
 
-@pytest.mark.asyncio
-async def test_host_transfer_preserves_unknown_legacy_site_name(
+def test_host_transfer_preserves_scheduler_resolved_legacy_site_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """旧库位名尚未进入 Site 投影时，Host 仍应按原名称执行。
+    """仅有库位名的旧 Job 仍可执行，但 Runtime 不读取或提交库存。
 
-    参数：``monkeypatch`` 注入查询不到库位的库存替身。返回：无；断言不会因为
-    新库位锁功能阻断旧动作。异常：兼容分支失效时测试保持 RED。
+    参数：``monkeypatch`` 禁止库存访问。返回：无；断言 Scheduler 下发的旧库位名
+    原样传给设备资源树。异常：Runtime 尝试查库存时测试失败。
     """
 
     calls: list[tuple[Any, ...]] = []
-    inventory = _InventoryTransferRecorder(calls)
-    inventory.store = inventory
+
+    def _forbid_inventory_access() -> Any:
+        raise AssertionError("Edge Runtime must not access scheduler inventory")
+
     monkeypatch.setattr(
         "unilabos.app.scheduler.integration.get_inventory_service",
-        lambda: inventory,
+        _forbid_inventory_access,
     )
     runtime = _TransferExecutionRuntime(calls)
 
-    result = await HostNode._do_transfer_resource(
-        runtime,
-        {"uuid": "10000000-0000-4000-8000-000000000001"},
-        "host_node",
-        {"uuid": "20000000-0000-4000-8000-000000000002"},
-        site="LEGACY-SITE",
+    result = asyncio.run(
+        HostNode._do_transfer_resource(
+            runtime,
+            {"uuid": "10000000-0000-4000-8000-000000000001"},
+            "host_node",
+            {"uuid": "20000000-0000-4000-8000-000000000002"},
+            site="LEGACY-SITE",
+        )
     )
 
     assert calls[0][-1] == ["LEGACY-SITE"]
-    assert calls[1][3] == "LEGACY-SITE"
+    assert len(calls) == 1
     assert result["site"] == "LEGACY-SITE"
 
 
@@ -480,3 +477,47 @@ def test_transfer_result_rejects_resource_without_stable_uuid() -> None:
 
     with pytest.raises(ValueError, match="缺少稳定 UUID"):
         _dump_resource_slot({"name": "unstable-resource"})
+
+
+def test_host_discard_returns_runtime_receipt_without_inventory_access(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runtime 废弃动作只能移除设备资源树并回传回执，不能写 Scheduler 库存。"""
+
+    def _forbid_inventory_access() -> Any:
+        raise AssertionError("Edge Runtime must not access scheduler inventory")
+
+    monkeypatch.setattr(
+        "unilabos.app.scheduler.integration.get_inventory_service",
+        _forbid_inventory_access,
+    )
+    monkeypatch.setattr(
+        "unilabos.ros.nodes.presets.host_node.ResourceTreeSet.from_plr_resources",
+        lambda _resources: SimpleNamespace(
+            dump=lambda: [[{"barcode": "BC-1"}]]
+        ),
+    )
+    runtime = SimpleNamespace(
+        lab_logger=lambda: logging.getLogger(__name__),
+        notify_resource_tree_update=lambda edge, action, uuids: (
+            edge,
+            action,
+            uuids,
+        )
+        == ("device-1", "remove", ["material-1"]),
+    )
+
+    result = asyncio.run(
+        HostNode.discard_resource(
+            runtime,
+            SimpleNamespace(unilabos_uuid="material-1", name="sample"),
+            "device-1",
+        )
+    )
+
+    assert result == {
+        "code": 0,
+        "uuids": ["material-1"],
+        "device_id": "device-1",
+        "status": "runtime_removed",
+    }

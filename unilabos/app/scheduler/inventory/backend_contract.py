@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    InventoryMutationConflict,
+    assert_inventory_mutation_unclaimed,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.resources.site_definition import normalize_available_sites
 
@@ -44,6 +48,7 @@ MATERIAL_SITE_OCCUPIED = 6007
 MATERIAL_SITE_TEMPLATE_NOT_ALLOWED = 6008
 MATERIAL_SITE_CYCLE = 6009
 MATERIAL_IDENTITY_CONFLICT = 6010
+MATERIAL_ACTIVE_CLAIM_CONFLICT = 6011
 
 
 def _now() -> str:
@@ -490,6 +495,16 @@ class BackendResourceService:
                     )
                 if parent_uuid:
                     self._require_material(conn, parent_uuid, MATERIAL_PARENT_NOT_FOUND)
+                placement = values.get("site_placement")
+                target_site_uuid = _optional_uuid(
+                    (placement or {}).get("site_uuid")
+                )
+                if parent_uuid or placement:
+                    assert_inventory_mutation_unclaimed(
+                        conn,
+                        material_uuids=(parent_uuid,) if parent_uuid else (),
+                        site_uuids=(target_site_uuid,) if target_site_uuid else (),
+                    )
                 now = _now()
                 conn.execute(
                     """
@@ -523,7 +538,6 @@ class BackendResourceService:
                     self._upsert_relative_position(
                         conn, material_uuid, values["relative_position"]
                     )
-                placement = values.get("site_placement")
                 if placement:
                     self._apply_site_placement(
                         conn, material_uuid, template_uuid, placement
@@ -542,6 +556,11 @@ class BackendResourceService:
                         edge_id=self.edge_id,
                         lab_id=self.lab_id,
                     ).create_reagent_in_transaction(conn, reagent_values)
+        except InventoryMutationConflict as error:
+            raise BackendContractError(
+                MATERIAL_ACTIVE_CLAIM_CONFLICT,
+                str(error),
+            ) from error
         except BackendContractError:
             raise
         except sqlite3.IntegrityError as exc:
@@ -646,6 +665,30 @@ class BackendResourceService:
                     if specified_marker is not None
                     else {key for key in values if not key.startswith("_")}
                 )
+                placement = values.get("site_placement")
+                parent_is_mutated = (
+                    "parent_uuid" in specified
+                    and values.get("parent_uuid") is not None
+                    and _optional_uuid(values.get("parent_uuid"))
+                    != _optional_uuid(current["parent_uuid"])
+                )
+                if placement or parent_is_mutated:
+                    target_site_uuid = _optional_uuid(
+                        (placement or {}).get("site_uuid")
+                    )
+                    assert_inventory_mutation_unclaimed(
+                        conn,
+                        material_uuids=tuple(
+                            item
+                            for item in (
+                                material_uuid,
+                                _optional_uuid(current["parent_uuid"]),
+                                _optional_uuid(values.get("parent_uuid")),
+                            )
+                            if item
+                        ),
+                        site_uuids=(target_site_uuid,) if target_site_uuid else (),
+                    )
                 template_uuid = str(current["resource_template_uuid"])
                 template_value = values.get("resource_template_uuid")
                 if (
@@ -736,7 +779,6 @@ class BackendResourceService:
                         self._upsert_relative_position(
                             conn, material_uuid, values["relative_position"]
                         )
-                placement = values.get("site_placement")
                 if placement:
                     self._apply_site_placement(
                         conn, material_uuid, template_uuid, placement
@@ -746,6 +788,11 @@ class BackendResourceService:
                     "WHERE material_uuid=?",
                     (material_uuid,),
                 )
+        except InventoryMutationConflict as error:
+            raise BackendContractError(
+                MATERIAL_ACTIVE_CLAIM_CONFLICT,
+                str(error),
+            ) from error
         except BackendContractError:
             raise
         except sqlite3.IntegrityError as exc:
@@ -756,9 +803,14 @@ class BackendResourceService:
         return self.get_material(material_uuid)
 
     def delete_material(self, material_uuid: str) -> None:
-        with self.store.transaction() as conn:
-            self._require_material(conn, material_uuid)
-            linked = conn.execute(
+        try:
+            with self.store.transaction() as conn:
+                self._require_material(conn, material_uuid)
+                assert_inventory_mutation_unclaimed(
+                    conn,
+                    material_uuids=(material_uuid,),
+                )
+                linked = conn.execute(
                 """
                 SELECT 1 FROM material
                 WHERE parent_uuid=? AND deleted_at IS NULL
@@ -786,26 +838,31 @@ class BackendResourceService:
                     material_uuid,
                 ),
             ).fetchone()
-            if linked:
-                raise BackendContractError(
-                    DATABASE_CONFLICT,
-                    "Material is referenced by a child, Site, or container content",
+                if linked:
+                    raise BackendContractError(
+                        DATABASE_CONFLICT,
+                        "Material is referenced by a child, Site, or container content",
+                    )
+                now = _now()
+                conn.execute(
+                    "UPDATE relative_position SET deleted_at=?,update_time=? "
+                    "WHERE material_uuid=? AND deleted_at IS NULL",
+                    (now, now, material_uuid),
                 )
-            now = _now()
-            conn.execute(
-                "UPDATE relative_position SET deleted_at=?,update_time=? "
-                "WHERE material_uuid=? AND deleted_at IS NULL",
-                (now, now, material_uuid),
-            )
-            conn.execute(
-                "UPDATE material SET deleted_at=?,update_time=? WHERE uuid=?",
-                (now, now, material_uuid),
-            )
-            conn.execute(
-                "UPDATE material_inventory SET aggregate_version=aggregate_version+1 "
-                "WHERE material_uuid=?",
-                (material_uuid,),
-            )
+                conn.execute(
+                    "UPDATE material SET deleted_at=?,update_time=? WHERE uuid=?",
+                    (now, now, material_uuid),
+                )
+                conn.execute(
+                    "UPDATE material_inventory SET aggregate_version=aggregate_version+1 "
+                    "WHERE material_uuid=?",
+                    (material_uuid,),
+                )
+        except InventoryMutationConflict as error:
+            raise BackendContractError(
+                MATERIAL_ACTIVE_CLAIM_CONFLICT,
+                str(error),
+            ) from error
 
     def material_graph(self) -> Dict[str, Any]:
         materials = self.store.query_all(

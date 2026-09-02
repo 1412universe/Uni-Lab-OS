@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.run_preflight import build_run_preflight_report
+from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 
 
 def _client(tmp_path):
@@ -94,6 +96,55 @@ def test_manual_confirmation_preflight_requires_confirmation(tmp_path) -> None:
     assert confirmation["status"] == "confirmation_required"
     assert confirmation["node_uuid"] == node_uuid
     store.close()
+
+
+def test_manual_confirmation_device_continuation_uses_device_preflight(
+    monkeypatch,
+) -> None:
+    """包装真实设备动作的人工确认节点不能跳过当前设备 Gate 4。"""
+
+    node_uuid = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    monkeypatch.setattr(
+        ExecutionPlanBuilder,
+        "build",
+        lambda self, graph, run_mode, target_node_uuid: (
+            {
+                "nodes": [
+                    {
+                        "uuid": node_uuid,
+                        "kind": "manual_confirm",
+                        "continues_device_action": True,
+                        "device_id": "reactor-a",
+                        "material_uuid": "device-material-a",
+                        "action_name": "heat",
+                    }
+                ]
+            },
+            [],
+        ),
+    )
+    observed: list[dict[str, object]] = []
+
+    report = build_run_preflight_report(
+        graph={
+            "workflow": {"uuid": "workflow-a", "revision": 1},
+            "nodes": [{"uuid": node_uuid, "name": "确认后加热"}],
+        },
+        run_mode="normal",
+        target_node_uuid=None,
+        material_resolver=None,
+        device_preflight=lambda planned: observed.append(dict(planned))
+        or {
+            "local_device_id": "reactor-a",
+            "material_uuid": "device-material-a",
+        },
+    )
+
+    assert observed[0]["continues_device_action"] is True
+    device_check = next(
+        item for item in report["checks"] if item["type"] == "device_selection"
+    )
+    assert device_check["status"] == "passed"
 
 
 def test_single_node_preflight_requires_explicit_target(tmp_path) -> None:

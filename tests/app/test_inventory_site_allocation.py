@@ -16,6 +16,9 @@ from unilabos.app.scheduler.inventory.domain import (
 )
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.workflow_quantity import (
+    WorkflowQuantityReservationError,
+)
 from unilabos.app.scheduler.site_target import resolve_site_target
 from unilabos.app.scheduler.transfer_resource_set import (
     resolve_transfer_resource_set,
@@ -489,6 +492,44 @@ def test_task_exclusive_source_skips_active_shared_material(
         )
 
 
+def test_fixed_exclusive_source_precedes_unpinned_shared_source(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """无库位共享来源不得抢占同任务中固定给独占来源的物料。"""
+
+    _store, service, identities = inventory
+    fixed_exclusive = MaterialSourceAdmissionRequest(
+        node_id="moving-reagent",
+        resource_template_uuid=identities["template"],
+        custody_policy="task_exclusive",
+        requirement=MaterialRequirement(
+            template_id=identities["template"],
+            mount_uuid=identities["mount"],
+            # SITE_B 的 sort_order 更小；旧逻辑会先让无库位共享来源选走它。
+            site_uuid=SITE_B,
+        ),
+    )
+    unpinned_shared = MaterialSourceAdmissionRequest(
+        node_id="solvent-pump",
+        resource_template_uuid=identities["template"],
+        custody_policy="shared_source",
+        requirement=MaterialRequirement(
+            template_id=identities["template"],
+            mount_uuid=identities["mount"],
+        ),
+    )
+
+    admitted = service.admit_material_sources(
+        "workflow-fixed-exclusive-with-shared",
+        [unpinned_shared, fixed_exclusive],
+    )
+
+    assert admitted["allocations"] == {
+        "moving-reagent": [identities["second"]],
+        "solvent-pump": [identities["first"]],
+    }
+
+
 def test_task_exclusive_source_blocks_second_task_until_release(
     inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:
@@ -565,6 +606,61 @@ def test_material_source_admission_rolls_back_whole_request_set(
         ("workflow-atomic",),
     ) == []
     assert store.reservations_for_workflow("workflow-atomic") == []
+
+
+def test_task_material_admission_rolls_back_source_when_quantity_is_insufficient(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """来源实例与数量库存必须共享一个库存事务，任一失败整体零写入。"""
+
+    store, service, identities = inventory
+    content_uuid = "71000000-0000-4000-8000-000000000001"
+    with store.transaction() as connection:
+        connection.execute(
+            """INSERT INTO current_substance(
+                uuid,create_time,update_time,description,meta_data,material_uuid,
+                name,composition,quantity,quantity_unit,physical_state,revision,observed_at
+            ) VALUES(?,?,?,NULL,'{}',?,'测试内容','[]',1,'mL','liquid',1,?)""",
+            (
+                content_uuid,
+                "2026-09-02T00:00:00Z",
+                "2026-09-02T00:00:00Z",
+                identities["first"],
+                "2026-09-02T00:00:00Z",
+            ),
+        )
+    source = MaterialSourceAdmissionRequest(
+        node_id="source-node",
+        resource_template_uuid=identities["template"],
+        custody_policy="shared_source",
+        requirement=MaterialRequirement(
+            template_id=identities["template"],
+            instance_uuid=identities["first"],
+        ),
+    )
+    task_uuid = "72000000-0000-4000-8000-000000000001"
+    allocation = {
+        "uuid": "73000000-0000-4000-8000-000000000001",
+        "workflow_task_uuid": task_uuid,
+        "workflow_node_job_uuid": "74000000-0000-4000-8000-000000000001",
+        "requirement_key": "too-much",
+        "inventory_type": "current_substance",
+        "inventory_uuid": content_uuid,
+        "material_uuid": identities["first"],
+        "reserved_quantity": 2,
+        "quantity_unit": "mL",
+    }
+
+    with pytest.raises(WorkflowQuantityReservationError):
+        service.admit_task_materials(task_uuid, [source], [allocation])
+
+    assert store.query_all(
+        "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
+        (task_uuid,),
+    ) == []
+    assert store.query_all(
+        "SELECT * FROM inventory_reservation WHERE workflow_id=?", (task_uuid,)
+    ) == []
 
 
 def test_material_source_binding_replays_after_service_restart_and_rejects_change(

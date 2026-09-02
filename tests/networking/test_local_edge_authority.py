@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import socket
+import sqlite3
+import time
 import uuid
 from pathlib import Path
+from typing import Callable
 
 import pytest
 from fastapi import FastAPI
@@ -14,6 +19,7 @@ from unilabos.app.edge_control.local_authority import (
     LocalEdgeControlAuthority,
     create_local_edge_control_router,
 )
+from unilabos.app.edge_control.client import EdgeControlClient, EdgeControlSettings
 from unilabos.app.scheduler.dispatch import DispatchPayload
 
 
@@ -45,6 +51,100 @@ def _authority(path: Path) -> LocalEdgeControlAuthority:
     return LocalEdgeControlAuthority(
         LocalEdgeAuthorityStore(path), api_key="managed-local-secret"
     )
+
+
+def _serve_local_edge_authority(
+    database_path: str,
+    port: int,
+    material_uuid: str,
+) -> None:
+    """在独立 Scheduler 进程提供真实 HTTP/WebSocket Edge 协议。"""
+
+    import uvicorn
+
+    authority = _authority(Path(database_path))
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+
+    @application.get("/api/v1/materials")
+    def materials() -> dict[str, object]:
+        return {
+            "code": 0,
+            "data": {
+                "items": [
+                    {
+                        "uuid": material_uuid,
+                        "barcode": "ROBOT-01",
+                    }
+                ],
+                "total": 1,
+            },
+        }
+
+    uvicorn.run(
+        application,
+        host="127.0.0.1",
+        port=port,
+        log_level="error",
+        access_log=False,
+    )
+
+
+class _RuntimeResources:
+    def dump(self) -> list[list[dict[str, str]]]:
+        return [[{"id": "robot-01", "name": "Robot 01", "barcode": "ROBOT-01"}]]
+
+
+class _RuntimeHostNode:
+    """模拟独立 Edge Runtime 中已启动的 HostNode 设备边界。"""
+
+    def __init__(self) -> None:
+        self.resources_config = _RuntimeResources()
+        self.devices_names = {"robot-01": "/devices/robot-01"}
+        self._action_value_mappings = {
+            "robot-01": {"transfer": {"type": "UniLabJsonCommand"}}
+        }
+        self.started: list[object] = []
+        self.retired: list[str] = []
+
+    def send_goal(
+        self,
+        item: object,
+        action_type: str,
+        action_kwargs: dict[str, object],
+        sample_material: dict[str, str],
+        server_info: object,
+    ) -> None:
+        assert action_type == "normal"
+        assert action_kwargs == {"source": "A", "target": "B"}
+        assert sample_material == {}
+        assert server_info is None
+        self.started.append(item)
+
+    def device_dispatch_block_reason(self, _device_id: str) -> str:
+        return ""
+
+    def device_unknown_command_ids(self, _device_id: str) -> list[str]:
+        return []
+
+    def retire_settled_device_command(self, command_id: str) -> int:
+        self.retired.append(command_id)
+        return 1
+
+
+def _free_loopback_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def _wait_until(predicate: Callable[[], bool], *, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.05)
+    raise AssertionError("等待双进程 Edge 协议状态超时")
 
 
 def _attempt_identity(
@@ -105,6 +205,53 @@ def test_latest_registration_returns_detached_edge_capabilities(
         ]
         snapshot["devices"][0]["name"] = "mutated"
         assert authority.store.latest_registration()["devices"][0]["name"] == "Robot"  # type: ignore[index]
+    finally:
+        authority.stop()
+
+
+def test_connected_runtime_can_refresh_live_device_dispatch_state(
+    tmp_path: Path,
+) -> None:
+    """设备状态增量必须更新注册快照且不能改写设备身份与动作能力。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    material_uuid = str(uuid.uuid4())
+    try:
+        registered = authority.store.register_session(
+            {
+                "edge_key": "workspace-edge",
+                "instance_uuid": str(uuid.uuid4()),
+                "devices": [
+                    {
+                        "local_id": "robot-01",
+                        "name": "Robot",
+                        "material_uuid": material_uuid,
+                        "actions": [{"name": "transfer", "type": "command"}],
+                    }
+                ],
+            }
+        )
+        authority.store.set_session_connected(registered["session_uuid"], True)
+
+        updated = authority.store.update_device_status(
+            registered["session_uuid"],
+            "robot-01",
+            {
+                "online": True,
+                "dispatch_block_reason": "driver_fault",
+                "unknown_command_ids": ["command-2", "command-1"],
+                "status": {"temperature": 37.5},
+            },
+        )
+
+        assert updated["dispatch_block_reason"] == "driver_fault"
+        snapshot = authority.store.latest_registration()
+        assert snapshot is not None
+        device = snapshot["devices"][0]
+        assert device["material_uuid"] == material_uuid
+        assert device["actions"] == [{"name": "transfer", "type": "command"}]
+        assert device["unknown_command_ids"] == ["command-2", "command-1"]
+        assert device["status"] == {"temperature": 37.5}
     finally:
         authority.stop()
 
@@ -244,6 +391,109 @@ def test_http_websocket_round_trip_projects_one_terminal_outcome(
         ]
     finally:
         authority.stop()
+
+
+def test_scheduler_and_runtime_processes_complete_one_durable_job(
+    tmp_path: Path,
+) -> None:
+    """真实双进程必须通过 HTTP/WS 保真传递 Claim、Fence、参数和终态。"""
+
+    database_path = tmp_path / "dual-process-authority.db"
+    runtime_path = tmp_path / "dual-process-runtime.db"
+    payload = _payload()
+    material_uuid = str(uuid.uuid4())
+    seeded = _authority(database_path)
+    seeded.dispatch(payload)
+    seeded.stop()
+
+    port = _free_loopback_port()
+    context = multiprocessing.get_context("spawn")
+    scheduler_process = context.Process(
+        target=_serve_local_edge_authority,
+        args=(str(database_path), port, material_uuid),
+    )
+    scheduler_process.start()
+    client: EdgeControlClient | None = None
+    try:
+        def server_accepts_connections() -> bool:
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    return True
+            except OSError:
+                return False
+
+        _wait_until(server_accepts_connections)
+        host_node = _RuntimeHostNode()
+        address = f"http://127.0.0.1:{port}"
+        client = EdgeControlClient(
+            EdgeControlSettings(
+                scheduler_address=address,
+                backend_address=address,
+                api_key="managed-local-secret",
+                edge_key="workspace-edge",
+                capability_revision="dual-process-v1",
+                instance_uuid="",
+                state_db=str(runtime_path),
+                reconnect_interval=0.05,
+                request_timeout=2,
+                event_retry_interval=0.05,
+            ),
+            host_node_provider=lambda: host_node,
+        )
+        client.start()
+        client.publish_host_ready()
+        _wait_until(client.is_connected)
+        _wait_until(lambda: len(host_node.started) == 1)
+
+        item = host_node.started[0]
+        assert item.job_id == payload["job_id"]  # type: ignore[attr-defined]
+        assert item.claim_uuid == payload["claim_uuid"]  # type: ignore[attr-defined]
+        assert item.fences == ((f"/devices/{payload['device_id']}", 1),)  # type: ignore[attr-defined]
+        client.publish_job_started(item)
+        client.publish_job_status(
+            {},
+            item,
+            "success",
+            {"suc": True, "return_value": {"moved": True}},
+        )
+
+        def outcome_is_committed() -> bool:
+            try:
+                with sqlite3.connect(database_path) as connection:
+                    row = connection.execute(
+                        "SELECT outcome_json FROM local_edge_job WHERE job_uuid=?",
+                        (payload["job_id"],),
+                    ).fetchone()
+                return row is not None and row[0] is not None
+            except sqlite3.OperationalError:
+                return False
+
+        _wait_until(outcome_is_committed)
+        with sqlite3.connect(database_path) as connection:
+            encoded = connection.execute(
+                "SELECT outcome_json FROM local_edge_job WHERE job_uuid=?",
+                (payload["job_id"],),
+            ).fetchone()[0]
+        import json
+
+        outcome = json.loads(encoded)
+        assert outcome["outcome"] == "succeeded"
+        assert outcome["return_info"] == {
+            "suc": True,
+            "return_value": {"moved": True},
+        }
+        assert outcome["unknown_command_ids"] == []
+    finally:
+        if client is not None:
+            client.stop()
+            client.store.close()
+        scheduler_process.terminate()
+        scheduler_process.join(timeout=10)
+        if scheduler_process.is_alive():
+            scheduler_process.kill()
+            scheduler_process.join(timeout=5)
+
+    assert scheduler_process.exitcode is not None
 
 
 def test_unknown_outcome_locks_device_until_explicit_reconciliation(
@@ -609,6 +859,7 @@ def test_http_outcome_replay_preserves_exact_terminal_semantics(
                     "error_info": error_info,
                     "unknown_command_ids": [],
                     "inventory_consumptions": [],
+                    "material_aliquot_receipts": [],
                 },
             )
         ]

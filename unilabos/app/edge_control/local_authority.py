@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse
 from fastapi.websockets import WebSocketDisconnect
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from unilabos.app.edge_control.local_edge_session import (
     LocalEdgeSessionStore,
@@ -38,6 +39,67 @@ from unilabos.utils.tracing import inject_trace_context, normalize_trace_context
 _PROTOCOL_VERSION = 1
 _COMMAND_RETRY_SECONDS = 0.5
 _REPLACED_SOCKET_CLOSE_TIMEOUT_SECONDS = 0.5
+
+
+class _MaterialAliquotReceipt(BaseModel):
+    """Edge 动作提交的单个分装目标实收量。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_material_uuid: uuid.UUID
+    actual_quantity: float = Field(gt=0, strict=True)
+    quantity_unit: str = Field(min_length=1)
+
+    @field_validator("actual_quantity", mode="before")
+    @classmethod
+    def _reject_boolean_quantity(cls, value: Any) -> Any:
+        """拒绝 Python 中可被当作数值的布尔值。"""
+
+        if isinstance(value, bool):
+            raise ValueError("actual_quantity 不能是布尔值")
+        return value
+
+    @field_validator("actual_quantity")
+    @classmethod
+    def _require_finite_quantity(cls, value: float) -> float:
+        """拒绝无法写入库存事实的非有限实收量。"""
+
+        if not math.isfinite(value):
+            raise ValueError("actual_quantity 必须是有限数")
+        return value
+
+    @field_validator("quantity_unit")
+    @classmethod
+    def _normalize_quantity_unit(cls, value: str) -> str:
+        """去除单位首尾空白并拒绝空单位。"""
+
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("quantity_unit 不能为空")
+        return normalized
+
+
+class _DeviceStatusUpdate(BaseModel):
+    """Edge Runtime 提交的设备实时可派发状态增量。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    online: bool
+    dispatch_block_reason: str = ""
+    unknown_command_ids: list[str] = Field(default_factory=list)
+    status: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("unknown_command_ids")
+    @classmethod
+    def _normalize_unknown_command_ids(cls, value: list[str]) -> list[str]:
+        """规范未知命令身份并拒绝空值或重复值。"""
+
+        normalized = [item.strip() for item in value]
+        if any(not item for item in normalized) or len(set(normalized)) != len(
+            normalized
+        ):
+            raise ValueError("unknown_command_ids 包含空值或重复值")
+        return sorted(normalized)
 
 
 class LocalEdgeOutcomeConflict(ValueError):
@@ -171,6 +233,20 @@ class LocalEdgeAuthorityStore:
         """
 
         self._sessions.set_session_connected(session_uuid, connected)
+
+    def update_device_status(
+        self,
+        session_uuid: str,
+        local_device_id: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """通过会话深模块更新一个设备的实时可派发事实。"""
+
+        return self._sessions.update_device_status(
+            session_uuid,
+            local_device_id,
+            payload,
+        )
 
     def disconnect_session(self, session_uuid: str) -> list[str]:
         """关闭一个 WebSocket 会话并仅在 Edge 真离线时锁定在途作业。
@@ -837,12 +913,43 @@ class LocalEdgeAuthorityStore:
         inventory_consumptions.sort(
             key=lambda item: (item["inventory_type"], item["inventory_uuid"])
         )
+        raw_aliquot_receipts = payload.get("material_aliquot_receipts", [])
+        if not isinstance(raw_aliquot_receipts, list):
+            raise ValueError("material_aliquot_receipts must be an array")
+        material_aliquot_receipts: list[dict[str, Any]] = []
+        seen_targets: set[str] = set()
+        for index, receipt in enumerate(raw_aliquot_receipts):
+            if not isinstance(receipt, dict):
+                raise ValueError(
+                    f"material_aliquot_receipts[{index}] must be an object"
+                )
+            try:
+                validated_receipt = _MaterialAliquotReceipt.model_validate(receipt)
+            except ValueError as exc:
+                raise ValueError(
+                    f"material_aliquot_receipts[{index}] is invalid"
+                ) from exc
+            target_uuid = str(validated_receipt.target_material_uuid)
+            if target_uuid in seen_targets:
+                raise ValueError("material_aliquot_receipts contains a duplicate target")
+            seen_targets.add(target_uuid)
+            material_aliquot_receipts.append(
+                {
+                    "target_material_uuid": target_uuid,
+                    "actual_quantity": validated_receipt.actual_quantity,
+                    "quantity_unit": validated_receipt.quantity_unit,
+                }
+            )
+        material_aliquot_receipts.sort(
+            key=lambda item: item["target_material_uuid"]
+        )
         normalized = {
             "outcome": outcome,
             "return_info": return_info,
             "error_info": error_info,
             "unknown_command_ids": unknown_ids,
             "inventory_consumptions": inventory_consumptions,
+            "material_aliquot_receipts": material_aliquot_receipts,
         }
         existing = row["outcome_json"]
         if existing is None:
@@ -1136,6 +1243,7 @@ def _committed_outcome(payload: dict[str, Any]) -> CommittedJobOutcome:
     error_info = payload.get("error_info")
     unknown_command_ids = payload.get("unknown_command_ids")
     inventory_consumptions = payload.get("inventory_consumptions", [])
+    material_aliquot_receipts = payload.get("material_aliquot_receipts", [])
     if not isinstance(return_info, dict):
         raise ValueError("committed return_info must be an object")
     if not isinstance(error_info, list):
@@ -1148,12 +1256,19 @@ def _committed_outcome(payload: dict[str, Any]) -> CommittedJobOutcome:
         not isinstance(value, dict) for value in inventory_consumptions
     ):
         raise ValueError("committed inventory_consumptions must be an object array")
+    if not isinstance(material_aliquot_receipts, list) or any(
+        not isinstance(value, dict) for value in material_aliquot_receipts
+    ):
+        raise ValueError("committed material_aliquot_receipts must be an object array")
     return CommittedJobOutcome(
         outcome=str(payload.get("outcome") or ""),
         return_info=dict(return_info),
         error_info=list(error_info),
         unknown_command_ids=list(unknown_command_ids),
         inventory_consumptions=[dict(value) for value in inventory_consumptions],
+        material_aliquot_receipts=[
+            dict(value) for value in material_aliquot_receipts
+        ],
     )
 
 
@@ -1391,6 +1506,7 @@ class LocalEdgeControlAuthority:
                     error_info=[],
                     unknown_command_ids=[],
                     inventory_consumptions=[],
+                    material_aliquot_receipts=[],
                 )
                 for listener in exact_targets:
                     listener(job_uuid, committed)
@@ -1510,6 +1626,26 @@ def create_local_edge_control_router(
             result = authority.store.register_session(payload)
         except (TypeError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        return _envelope(result)
+
+    @router.put("/sessions/{session_uuid}/devices/{local_device_id}/status")
+    def update_device_status(
+        session_uuid: str,
+        local_device_id: str,
+        payload: _DeviceStatusUpdate,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        """提交当前会话中一个设备的在线、健康和属性事实。"""
+
+        authorize(authorization)
+        try:
+            result = authority.store.update_device_status(
+                session_uuid,
+                local_device_id,
+                payload.model_dump(),
+            )
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
         return _envelope(result)
 
     @router.get("/jobs/{job_uuid}")
@@ -1893,6 +2029,10 @@ def _job_result_projection(
         "meta_data": {
             "inventory_consumptions": [
                 dict(item) for item in stored_outcome["inventory_consumptions"]
+            ],
+            "material_aliquot_receipts": [
+                dict(item)
+                for item in stored_outcome.get("material_aliquot_receipts", [])
             ],
             "unknown_command_ids": list(stored_outcome["unknown_command_ids"]),
         },

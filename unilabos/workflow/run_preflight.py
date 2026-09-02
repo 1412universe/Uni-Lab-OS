@@ -115,12 +115,14 @@ def build_run_preflight_report(
     run_mode: str,
     target_node_uuid: str | None,
     material_resolver: Callable[[str], Mapping[str, Any] | None] | None,
+    device_preflight: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     quantity_inventory_check: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """只读检查当前图能否形成执行计划及其明显运行前条件。
 
     参数：``graph`` 是同一修订快照；运行模式和可选目标固定候选范围；
-    ``material_resolver`` 只读确认设备物料身份；可选数量库存检查来自同一候选
+    ``material_resolver`` 只读确认设备物料身份；``device_preflight`` 用派发相同
+    注册事实检查当前在线、健康、能力和忙碌状态；可选数量库存检查来自同一候选
     输入的只读库存快照。返回可展示报告；本函数不创建 Task/Job、不预留库存、
     不取得执行锁，动态条件明确标成 ``deferred``。
     """
@@ -213,27 +215,53 @@ def build_run_preflight_report(
                     node_name=node_name,
                 )
             )
-        device_selector = planned.get("device_selector")
-        if (
-            kind in {"device_action", "material_transfer"}
-            and isinstance(device_selector, Mapping)
-            and device_selector
+        if kind in {"device_action", "material_transfer"} or (
+            kind == "manual_confirm"
+            and planned.get("continues_device_action") is True
         ):
-            report["checks"].append(
-                _check(
-                    check_type="device_selection",
-                    status="deferred",
-                    code="device_instance_selected_at_dispatch",
-                    message="具体设备实例将在派发门禁按冻结设备类选择并原子占用",
-                    node_uuid=node_uuid,
-                    node_name=node_name,
-                    details={
-                        "resource_template_uuid": str(
-                            device_selector.get("resource_template_uuid") or ""
+            if device_preflight is not None:
+                try:
+                    current_device = device_preflight(planned)
+                except Exception as error:
+                    report["checks"].append(
+                        _check(
+                            check_type="device_selection",
+                            status="blocked",
+                            code=str(
+                                getattr(error, "code", "device_currently_unavailable")
+                            ),
+                            message=str(error),
+                            blocking=True,
+                            node_uuid=node_uuid,
+                            node_name=node_name,
+                            details={
+                                "resources": list(getattr(error, "resources", ()))
+                            },
                         )
-                    },
+                    )
+                else:
+                    report["checks"].append(
+                        _check(
+                            check_type="device_selection",
+                            status="passed",
+                            code="device_currently_ready",
+                            message="当前设备在线、健康、具备动作能力且未被占用",
+                            node_uuid=node_uuid,
+                            node_name=node_name,
+                            details=dict(current_device),
+                        )
+                    )
+            else:
+                report["checks"].append(
+                    _check(
+                        check_type="device_selection",
+                        status="deferred",
+                        code="device_instance_selected_at_dispatch",
+                        message="未装配设备注册读取端口，将在派发门禁复核",
+                        node_uuid=node_uuid,
+                        node_name=node_name,
+                    )
                 )
-            )
         material_uuid = planned.get("material_uuid")
         if kind == "device_action" and isinstance(material_uuid, str):
             material = (
@@ -253,7 +281,7 @@ def build_run_preflight_report(
                         node_name=node_name,
                     )
                 )
-            else:
+            elif device_preflight is None:
                 report["checks"].append(
                     _check(
                         check_type="device",

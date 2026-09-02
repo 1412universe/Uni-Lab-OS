@@ -15,6 +15,9 @@ from typing import Any
 MATERIAL_TRANSFER_RECONCILIATION_REQUIRED = (
     "material_transfer_inventory_reconciliation_required"
 )
+MATERIAL_CONTENT_RECONCILIATION_REQUIRED = (
+    "material_content_inventory_reconciliation_required"
+)
 _NON_SUCCESS_OUTCOMES = frozenset({"failed", "canceled", "timeout"})
 
 
@@ -94,7 +97,12 @@ def plan_terminal_settlement(
         error_info=error_info,
     )
     change_kind = expected_change_set.get("kind")
-    if change_kind not in {None, "no_inventory_change", "material_transfer"}:
+    if change_kind not in {
+        None,
+        "no_inventory_change",
+        "material_transfer",
+        "material_content_aliquot",
+    }:
         raise PhysicalSettlementPolicyError(
             f"不支持的预期物料变化类型：{change_kind}"
         )
@@ -109,11 +117,16 @@ def plan_terminal_settlement(
         return TerminalSettlementPlan(updated_control, None)
     return TerminalSettlementPlan(
         updated_control,
-        MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
+        (
+            MATERIAL_CONTENT_RECONCILIATION_REQUIRED
+            if change_kind == "material_content_aliquot"
+            else MATERIAL_TRANSFER_RECONCILIATION_REQUIRED
+        ),
     )
 
 
 __all__ = [
+    "MATERIAL_CONTENT_RECONCILIATION_REQUIRED",
     "MATERIAL_TRANSFER_RECONCILIATION_REQUIRED",
     "PhysicalSettlementPolicyError",
     "TerminalSettlementPlan",

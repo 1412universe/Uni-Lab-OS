@@ -227,9 +227,14 @@ class DispatchedJob:
     device_action_key: str
     dispatched_at: float = field(default_factory=time.time)
     device_id: str = ""
+    device_material_uuid: str = ""
     action_name: str = ""
     # 人工确认节点在批准前保存已解析参数；批准后用同一 Job 身份下发真实动作。
     resolved_args: Dict[str, Any] = field(default_factory=dict)
+    # 派发意图越过 Gate 8 时冻结的七类凭据；人工确认继续真实动作时必须原样复用。
+    dispatch_credentials: Dict[str, Any] = field(default_factory=dict)
+    # 重启恢复人工确认时按原 Claim 重建同一组资源占用，不重新仲裁或换 Fence。
+    resource_lock_keys: set[str] = field(default_factory=set)
     manual_action_dispatched: bool = False
     # 下发时刻的预估执行时长（泳道图预估终点）与来源（declared/historical/default）
     estimated_s: float = 0.0

@@ -36,6 +36,7 @@ class CommittedJobOutcome:
     error_info: List[Any]
     unknown_command_ids: List[str]
     inventory_consumptions: List[Dict[str, Any]] = field(default_factory=list)
+    material_aliquot_receipts: List[Dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> Dict[str, Any]:
         """返回与 Backend Edge outcome 请求一致的可序列化值。
@@ -51,6 +52,9 @@ class CommittedJobOutcome:
             "unknown_command_ids": list(self.unknown_command_ids),
             "inventory_consumptions": [
                 dict(consumption) for consumption in self.inventory_consumptions
+            ],
+            "material_aliquot_receipts": [
+                dict(receipt) for receipt in self.material_aliquot_receipts
             ],
         }
 

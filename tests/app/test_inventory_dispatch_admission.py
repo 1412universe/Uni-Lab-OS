@@ -3,22 +3,37 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
+from unilabos.app.scheduler.inventory.backend_contract import (
+    MATERIAL_ACTIVE_CLAIM_CONFLICT,
+    BackendContractError,
+    BackendResourceService,
+)
 from unilabos.app.scheduler.inventory.dispatch_admission import (
+    AliquotDispatchCondition,
     DispatchAdmissionRequest,
+    DispatchAdmissionConflict,
     DispatchResource,
+    InventoryMutationConflict,
+    OperateInPlaceCondition,
     TransferDispatchCondition,
 )
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.app.scheduler.inventory.station_resource import (
+    AliquotReceipt,
+    MaterialAliquotCommand,
+    MaterialTransferCommand,
     StationResourceError,
     TransferResourceRequest,
 )
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.content_contract import (
+    BackendContainerContentService,
+)
 
 SOURCE_SITE = "10000000-0000-4000-8000-000000000101"
 TARGET_SITE = "10000000-0000-4000-8000-000000000102"
@@ -237,6 +252,103 @@ def test_transfer_conditions_and_all_claims_commit_in_one_inventory_transaction(
     ) == {"state": "prepared", "parameter_hash": "sha256:test-parameters"}
 
 
+def test_transfer_endpoint_warehouses_lock_their_device_ancestors(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """仓库拥有库位时，门禁应校验其真实设备祖先而非把仓库当设备。"""
+
+    store, service, identities = station_inventory
+    source_warehouse = "20000000-0000-4000-8000-000000000101"
+    target_warehouse = "20000000-0000-4000-8000-000000000102"
+    with store.transaction() as connection:
+        for uuid, parent_uuid, name in (
+            (source_warehouse, identities["source_device"], "来源仓库"),
+            (target_warehouse, identities["target_device"], "目标仓库"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO material(
+                    uuid,create_time,update_time,deleted_at,description,meta_data,
+                    resource_template_uuid,parent_uuid,class,type,barcode,name,
+                    config,data
+                )
+                SELECT ?,create_time,update_time,NULL,description,'{}',
+                       resource_template_uuid,?,class,'warehouse',?,?,'{}','{}'
+                FROM material WHERE uuid=?
+                """,
+                (uuid, parent_uuid, f"WAREHOUSE-{uuid[-3:]}", name, parent_uuid),
+            )
+        connection.execute(
+            "UPDATE site SET material_uuid=? WHERE uuid=?",
+            (source_warehouse, SOURCE_SITE),
+        )
+        connection.execute(
+            "UPDATE site SET material_uuid=? WHERE uuid=?",
+            (target_warehouse, TARGET_SITE),
+        )
+
+    request = _request(identities)
+    endpoint_site_keys = {
+        f"material/{identities['source_device']}/site/{SOURCE_SITE}/exclusive",
+        f"material/{identities['target_device']}/site/{TARGET_SITE}/exclusive",
+    }
+    resources = tuple(
+        resource
+        for resource in request.resources
+        if resource.lock_key not in endpoint_site_keys
+    ) + (
+        DispatchResource(
+            lock_key=f"material/{source_warehouse}/site/{SOURCE_SITE}/exclusive",
+            scope="material_site",
+            material_uuid=source_warehouse,
+            site_uuid=SOURCE_SITE,
+        ),
+        DispatchResource(
+            lock_key=f"material/{target_warehouse}/site/{TARGET_SITE}/exclusive",
+            scope="material_site",
+            material_uuid=target_warehouse,
+            site_uuid=TARGET_SITE,
+        ),
+    )
+    request = replace(
+        request,
+        resources=resources,
+        transfer=replace(
+            request.transfer,
+            source_owner_material_uuid=source_warehouse,
+            target_owner_material_uuid=target_warehouse,
+        ),
+    )
+
+    permit = service.station_resources.acquire_dispatch_permit(request)
+
+    assert permit.acquired is True
+    assert len(permit.fences) == 7
+
+
+def test_transfer_expected_change_must_match_condition_snapshot(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """转运条件与预期变化不一致时不得创建 Claim。"""
+
+    store, service, identities = station_inventory
+    request = replace(
+        _request(identities),
+        expected_change_set={
+            "kind": "material_transfer",
+            "material_uuid": identities["vessel"],
+            "source_site_uuid": SOURCE_SITE,
+            "target_site_uuid": "wrong-target-site",
+        },
+    )
+
+    with pytest.raises(DispatchAdmissionConflict) as raised:
+        service.station_resources.acquire_dispatch_permit(request)
+
+    assert "ChangeSet" in str(raised.value)
+    assert store.query_all("SELECT * FROM station_execution_claim") == []
+
+
 def test_changed_target_fact_rolls_back_whole_claim(
     station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:
@@ -378,6 +490,392 @@ def test_competing_job_cannot_claim_any_member_of_an_active_resource_set(
     assert second.wait_code == "resource_claimed"
     assert second.blocking_job_uuid == "40000000-0000-4000-8000-000000000101"
     assert len(store.query_all("SELECT * FROM station_execution_claim")) == 1
+
+
+def test_public_site_placement_cannot_bypass_active_claim(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """公共 Backend 物料接口不得在活动 Claim 存活时移除或改放物料。
+
+    参数：``station_inventory`` 提供已占用来源库位。返回：无；断言公共
+    ``update_material(site_placement=remove)`` 在同一库存事务内发现活动 Lease，
+    返回稳定冲突码且来源占用不变。异常：未阻止时测试保持 RED。
+    """
+
+    store, service, identities = station_inventory
+    permit = service.station_resources.acquire_dispatch_permit(_request(identities))
+    assert permit.acquired is True
+
+    with pytest.raises(BackendContractError) as raised:
+        BackendResourceService(store).update_material(
+            identities["vessel"],
+            {"site_placement": {"action": "remove"}},
+        )
+
+    assert raised.value.code == MATERIAL_ACTIVE_CLAIM_CONFLICT
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (SOURCE_SITE,),
+    ) == {"occupied_material_uuid": identities["vessel"]}
+
+
+def test_legacy_inventory_move_cannot_bypass_active_claim(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """旧 InventoryService 写入口也必须服从同一活动 Claim 防线。
+
+    参数：``station_inventory`` 提供共享规范表和兼容视图。返回：无；断言
+    ``move_instance`` 在写物料/库位前抛稳定领域冲突，且目标仍为空。异常：公开
+    命令绕过 Claim 时测试保持 RED。
+    """
+
+    store, service, identities = station_inventory
+    permit = service.station_resources.acquire_dispatch_permit(_request(identities))
+    assert permit.acquired is True
+
+    with pytest.raises(InventoryMutationConflict):
+        service.move_instance(
+            identities["vessel"],
+            identities["target_device"],
+            "IN",
+            actor="public-command",
+        )
+
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (TARGET_SITE,),
+    ) == {"occupied_material_uuid": None}
+
+
+def test_physical_settlement_is_the_only_claim_authorized_inventory_writer(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """Scheduler 只有携带完整 Permit 的 PhysicalSettlement 能提交物理事实。
+
+    参数：``station_inventory`` 提供活动 Claim。返回：无；断言同一 Claim 的
+    effect/job/attempt/parameter hash/ChangeSet/Fence 全部匹配后，来源与目标库位在
+    一个事务内切换。异常：任何凭据缺失或漂移必须关闭式失败。
+    """
+
+    store, service, identities = station_inventory
+    request = _request(identities)
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.permit is not None
+    permit = decision.permit
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="reserved",
+    )
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="running",
+    )
+
+    settled = service.station_resources.settle_material_transfer(
+        MaterialTransferCommand(
+            material_uuid=identities["vessel"],
+            target_owner_material_uuid=identities["target_device"],
+            target_site_uuid=TARGET_SITE,
+            target_site_name="IN",
+            actor="station_scheduler.physical_settlement",
+            causation_id=request.job_uuid,
+            effect_uuid=permit.effect_uuid,
+            claim_uuid=permit.claim_uuid,
+            job_uuid=request.job_uuid,
+            attempt=request.attempt,
+            parameter_hash=request.parameter_hash,
+            expected_change_set=request.expected_change_set,
+            fences=permit.fences,
+        )
+    )
+
+    assert settled["edge_uuid"] == identities["vessel"]
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (SOURCE_SITE,),
+    ) == {"occupied_material_uuid": None}
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (TARGET_SITE,),
+    ) == {"occupied_material_uuid": identities["vessel"]}
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="released",
+    )
+    assert service.station_resources.settle_material_transfer(
+        MaterialTransferCommand(
+            material_uuid=identities["vessel"],
+            target_owner_material_uuid=identities["target_device"],
+            target_site_uuid=TARGET_SITE,
+            target_site_name="IN",
+            actor="station_scheduler.physical_settlement",
+            causation_id=request.job_uuid,
+            effect_uuid=permit.effect_uuid,
+            claim_uuid=permit.claim_uuid,
+            job_uuid=request.job_uuid,
+            attempt=request.attempt,
+            parameter_hash=request.parameter_hash,
+            expected_change_set=request.expected_change_set,
+            fences=permit.fences,
+        )
+    ) == settled
+
+
+def test_released_claim_without_settlement_evidence_cannot_first_write(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """已释放 Claim 只允许读取既有 effect 证据，不能首次修改库存。"""
+
+    store, service, identities = station_inventory
+    request = _request(identities)
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.permit is not None
+    permit = decision.permit
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="reserved",
+    )
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="released",
+    )
+
+    with pytest.raises(DispatchAdmissionConflict, match="禁止首次修改库存"):
+        service.station_resources.settle_material_transfer(
+            MaterialTransferCommand(
+                material_uuid=identities["vessel"],
+                target_owner_material_uuid=identities["target_device"],
+                target_site_uuid=TARGET_SITE,
+                target_site_name="IN",
+                effect_uuid=permit.effect_uuid,
+                claim_uuid=permit.claim_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=permit.fences,
+            )
+        )
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (SOURCE_SITE,),
+    ) == {"occupied_material_uuid": identities["vessel"]}
+
+
+def test_physical_settlement_rejects_stale_fence_without_partial_write(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """PhysicalSettlement 的任一 Fence 漂移都不得留下部分库存变化。"""
+
+    store, service, identities = station_inventory
+    request = _request(identities)
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.permit is not None
+    permit = decision.permit
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="reserved",
+    )
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid,
+        target_state="running",
+    )
+    stale_fences = (
+        replace(permit.fences[0], fencing_token=permit.fences[0].fencing_token + 1),
+        *permit.fences[1:],
+    )
+
+    with pytest.raises(DispatchAdmissionConflict, match="Fence"):
+        service.station_resources.settle_material_transfer(
+            MaterialTransferCommand(
+                material_uuid=identities["vessel"],
+                target_owner_material_uuid=identities["target_device"],
+                target_site_uuid=TARGET_SITE,
+                target_site_name="IN",
+                effect_uuid=permit.effect_uuid,
+                claim_uuid=permit.claim_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=stale_fences,
+            )
+        )
+
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (SOURCE_SITE,),
+    ) == {"occupied_material_uuid": identities["vessel"]}
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (TARGET_SITE,),
+    ) == {"occupied_material_uuid": None}
+
+
+def test_operate_in_place_gate_rechecks_device_site_and_material_together(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """原位操作必须原子证明物料仍占用实际执行设备内的精确库位。"""
+
+    _store, service, identities = station_inventory
+    request = DispatchAdmissionRequest(
+        effect_uuid="50000000-0000-4000-8000-000000000199",
+        task_uuid="30000000-0000-4000-8000-000000000199",
+        job_uuid="40000000-0000-4000-8000-000000000199",
+        attempt=1,
+        parameter_hash="sha256:operate-in-place",
+        expected_change_set={"kind": "no_inventory_change"},
+        resources=(
+            DispatchResource(
+                lock_key=f"/devices/{identities['source_device']}",
+                scope="device",
+                material_uuid=identities["source_device"],
+            ),
+            DispatchResource(
+                lock_key=f"material/{identities['vessel']}/exclusive",
+                scope="material",
+                material_uuid=identities["vessel"],
+            ),
+            DispatchResource(
+                lock_key=(
+                    f"material/{identities['source_device']}/site/"
+                    f"{SOURCE_SITE}/exclusive"
+                ),
+                scope="material_site",
+                material_uuid=identities["source_device"],
+                site_uuid=SOURCE_SITE,
+            ),
+        ),
+        operate_in_place=OperateInPlaceCondition(
+            material_uuid=identities["vessel"],
+            site_owner_material_uuid=identities["source_device"],
+            site_uuid=SOURCE_SITE,
+            device_material_uuid=identities["source_device"],
+        ),
+    )
+
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.acquired is True
+    service.station_resources.transition_dispatch_permit(
+        decision.claim_uuid,
+        target_state="released",
+    )
+
+    wrong_device = replace(
+        request,
+        effect_uuid="50000000-0000-4000-8000-000000000198",
+        job_uuid="40000000-0000-4000-8000-000000000198",
+        operate_in_place=replace(
+            request.operate_in_place,
+            device_material_uuid=identities["target_device"],
+        ),
+    )
+    with pytest.raises(DispatchAdmissionConflict, match="实际执行设备"):
+        service.station_resources.acquire_dispatch_permit(wrong_device)
+
+
+def test_aliquot_claim_and_full_receipt_settle_source_and_targets_atomically(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """分装必须锁定来源和全部目标，成功回执在一个库存事务内完成内容转移。"""
+
+    store, service, identities = station_inventory
+    backend = BackendResourceService(store)
+    vessel_template = store.query_one(
+        "SELECT resource_template_uuid FROM material WHERE uuid=?",
+        (identities["vessel"],),
+    )["resource_template_uuid"]
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE resource_template SET tags='[\"container\"]' WHERE uuid=?",
+            (vessel_template,),
+        )
+    targets = tuple(
+        backend.create_material(
+            {
+                "resource_template_uuid": vessel_template,
+                "barcode": f"ALIQUOT-{index}",
+                "name": f"分装目标 {index}",
+            }
+        )["uuid"]
+        for index in (1, 2)
+    )
+    BackendContainerContentService(store).create_current_substance(
+        {
+            "material_uuid": identities["vessel"],
+            "name": "母液",
+            "components": [],
+            "quantity": 10,
+            "quantity_unit": "mL",
+            "physical_state": "liquid",
+        }
+    )
+    effect_uuid = "50000000-0000-4000-8000-000000000299"
+    request = DispatchAdmissionRequest(
+        effect_uuid=effect_uuid,
+        task_uuid="30000000-0000-4000-8000-000000000299",
+        job_uuid="40000000-0000-4000-8000-000000000299",
+        attempt=1,
+        parameter_hash="sha256:aliquot",
+        expected_change_set={
+            "kind": "material_content_aliquot",
+            "source_material_uuid": identities["vessel"],
+            "target_material_uuids": list(targets),
+        },
+        resources=tuple(
+            DispatchResource(
+                lock_key=f"material/{material_uuid}/exclusive",
+                scope="material",
+                material_uuid=material_uuid,
+            )
+            for material_uuid in (identities["vessel"], *targets)
+        ),
+        aliquot=AliquotDispatchCondition(
+            source_material_uuid=identities["vessel"],
+            target_material_uuids=targets,
+        ),
+    )
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.permit is not None
+    permit = decision.permit
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid, target_state="reserved"
+    )
+    command = MaterialAliquotCommand(
+        source_material_uuid=identities["vessel"],
+        receipts=(
+            AliquotReceipt(targets[0], 2.5, "mL"),
+            AliquotReceipt(targets[1], 1.5, "mL"),
+        ),
+        effect_uuid=permit.effect_uuid,
+        claim_uuid=permit.claim_uuid,
+        job_uuid=request.job_uuid,
+        attempt=request.attempt,
+        parameter_hash=request.parameter_hash,
+        expected_change_set=request.expected_change_set,
+        fences=permit.fences,
+    )
+    settled = service.station_resources.settle_material_aliquot(command)
+
+    assert settled["source_quantity"] == 6.0
+    rows = store.query_all(
+        "SELECT material_uuid,quantity FROM current_substance ORDER BY material_uuid"
+    )
+    assert {row["material_uuid"]: row["quantity"] for row in rows} == {
+        identities["vessel"]: 6.0,
+        targets[0]: 2.5,
+        targets[1]: 1.5,
+    }
+
+    service.station_resources.transition_dispatch_permit(
+        permit.claim_uuid, target_state="released"
+    )
+    assert service.station_resources.settle_material_aliquot(command) == settled
+    assert store.query_one(
+        "SELECT COUNT(*) AS amount FROM inventory_ledger "
+        "WHERE causation_id=? AND op_type LIKE 'current_substance.aliquot_%'",
+        (effect_uuid,),
+    ) == {"amount": 3}
 
 
 def test_startup_releases_only_unprojected_prepared_permits(

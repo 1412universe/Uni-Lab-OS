@@ -316,6 +316,101 @@ def try_acquire_execution_locks(
     )
 
 
+def mirror_execution_locks_from_permit(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    job_uuid: str,
+    requests: Sequence[Mapping[str, Any]] | None,
+    claim_uuid: str,
+    fencing_tokens: Mapping[str, int],
+) -> ExecutionLockDecision:
+    """只镜像库存 Permit，不在工作流库再次进行资源仲裁。"""
+
+    normalized = normalize_execution_lock_requests(requests)
+    provided_fences = {str(key): int(value) for key, value in fencing_tokens.items()}
+    requested_keys = {request.lock_key for request in normalized}
+    if not claim_uuid or set(provided_fences) != requested_keys:
+        raise StoreConflict("库存 Permit Fence 与完整执行锁集合不一致")
+    if any(token <= 0 for token in provided_fences.values()):
+        raise StoreConflict("库存 Permit Fence 必须是正整数")
+    existing = connection.execute(
+        "SELECT * FROM execution_lock_lease WHERE workflow_node_job_uuid=? "
+        "AND deleted_at IS NULL ORDER BY lock_key",
+        (job_uuid,),
+    ).fetchall()
+    if existing:
+        actual = {
+            str(row["lock_key"]): (str(row["claim_uuid"]), int(row["fencing_token"]))
+            for row in existing
+        }
+        expected = {
+            key: (claim_uuid, token) for key, token in provided_fences.items()
+        }
+        if actual != expected:
+            raise StoreConflict(f"工作流 Permit 镜像发生漂移：{job_uuid}")
+        claim = required_active_claim(connection, job_uuid=job_uuid)
+        if str(claim["claim_uuid"]) != claim_uuid:
+            raise StoreConflict(f"持久 Claim 与库存 Permit 不一致：{job_uuid}")
+        _release_waiters(connection, job_uuid=job_uuid)
+        _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
+        return ExecutionLockDecision(
+            acquired=True,
+            claim_uuid=claim_uuid,
+            fencing_tokens=tuple(sorted(provided_fences.items())),
+        )
+    acquired_at = utc_now()
+    ensure_execution_claim(
+        connection,
+        task_uuid=task_uuid,
+        job_uuid=job_uuid,
+        resource_keys=tuple(sorted(requested_keys)),
+        acquired_at=acquired_at,
+        claim_uuid=claim_uuid,
+    )
+    for request in normalized:
+        connection.execute(
+            """
+            INSERT INTO execution_lock_lease(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_job_uuid,
+                lock_key, scope, material_uuid, site_uuid, state,
+                acquired_at, released_at, claim_uuid, fencing_token
+            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?,
+                      'reserved', ?, NULL, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                acquired_at,
+                acquired_at,
+                encode_json(
+                    {
+                        "semantic_scope": request.scope,
+                        "acquired_by_job_uuid": job_uuid,
+                        "authority": "inventory_dispatch_permit",
+                    },
+                    sort_keys=True,
+                ).decode("utf-8"),
+                task_uuid,
+                job_uuid,
+                request.lock_key,
+                request.scope,
+                request.material_uuid,
+                request.site_uuid,
+                acquired_at,
+                claim_uuid,
+                provided_fences[request.lock_key],
+            ),
+        )
+    _release_waiters(connection, job_uuid=job_uuid, released_at=acquired_at)
+    _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
+    return ExecutionLockDecision(
+        acquired=True,
+        claim_uuid=claim_uuid,
+        fencing_tokens=tuple(sorted(provided_fences.items())),
+    )
+
+
 def record_execution_lock_wait(
     connection: sqlite3.Connection,
     *,
@@ -803,4 +898,5 @@ __all__ = [
     "release_execution_locks",
     "release_task_execution_locks",
     "try_acquire_execution_locks",
+    "mirror_execution_locks_from_permit",
 ]

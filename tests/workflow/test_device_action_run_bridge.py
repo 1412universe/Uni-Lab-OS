@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from unilabos.app.scheduler.dispatch import CallbackDispatcher, RecordingDispatcher
+from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
 from unilabos.app.scheduler.inventory.dispatch_admission import (
     DispatchAdmissionDecision,
     DispatchFence,
@@ -143,6 +144,10 @@ def test_bridge_commits_standard_job_before_physical_dispatch(tmp_path: Any) -> 
     scheduler = EdgeScheduler(
         dispatcher=CallbackDispatcher(observe_dispatch),
         station_resources=inventory,  # type: ignore[arg-type]
+        device_target_resolver=lambda selector, _action, _busy: ResolvedDeviceTarget(
+            local_device_id=str(selector["local_device_id"]),
+            material_uuid=str(selector.get("material_uuid") or ""),
+        ),
     )
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:

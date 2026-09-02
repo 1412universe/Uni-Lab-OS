@@ -41,7 +41,14 @@ def normalize_action_resource_contract(
         return {}
     if not isinstance(value, Mapping):
         _fail("invalid_action_resource_contract", "/", "动作资源合同必须是对象")
-    allowed = {"version", "required_device_params", "device_tenancy", "transfer"}
+    allowed = {
+        "version",
+        "required_device_params",
+        "device_tenancy",
+        "transfer",
+        "operate_in_place",
+        "aliquot",
+    }
     unknown = set(value) - allowed
     if unknown:
         _fail(
@@ -68,6 +75,12 @@ def normalize_action_resource_contract(
         normalized["device_tenancy"] = _device_tenancy(value["device_tenancy"])
     if value.get("transfer") is not None:
         normalized["transfer"] = _transfer(value["transfer"])
+    if value.get("operate_in_place") is not None:
+        normalized["operate_in_place"] = _operate_in_place(
+            value["operate_in_place"]
+        )
+    if value.get("aliquot") is not None:
+        normalized["aliquot"] = _aliquot(value["aliquot"])
     if len(normalized) == 1:
         _fail(
             "empty_action_resource_contract",
@@ -143,6 +156,23 @@ def validate_action_resource_contract_schema(
                     f"/transfer/{field}",
                     f"库位参数 {name} 必须是字符串",
                 )
+    operate_in_place = contract.get("operate_in_place")
+    if isinstance(operate_in_place, Mapping):
+        resource_fields.append(
+            (
+                str(operate_in_place["material_param"]),
+                "/operate_in_place/material_param",
+            )
+        )
+    aliquot = contract.get("aliquot")
+    if isinstance(aliquot, Mapping):
+        resource_fields.append(
+            (str(aliquot["source_material_param"]), "/aliquot/source_material_param")
+        )
+        for index, name in enumerate(aliquot["target_material_params"]):
+            resource_fields.append(
+                (str(name), f"/aliquot/target_material_params/{index}")
+            )
     for name, path in resource_fields:
         schema = goal_properties.get(name)
         if not isinstance(schema, Mapping):
@@ -296,6 +326,59 @@ def _transfer(value: Any) -> dict[str, str]:
         "target_site_uuid_param": site_uuid_param,
         "target_site_name_param": site_name_param,
         "gripper_site_role": gripper_role,
+    }
+
+
+def _operate_in_place(value: Any) -> dict[str, str]:
+    """规范“物料必须仍在实际执行设备内”的动作资源语义。"""
+
+    if not isinstance(value, Mapping):
+        _fail(
+            "invalid_operate_in_place_contract",
+            "/operate_in_place",
+            "operate_in_place 必须是对象",
+        )
+    if set(value) != {"material_param"}:
+        _fail(
+            "invalid_operate_in_place_contract",
+            "/operate_in_place",
+            "operate_in_place 只能且必须声明 material_param",
+        )
+    return {
+        "material_param": _parameter_name(
+            value.get("material_param"),
+            "/operate_in_place/material_param",
+        )
+    }
+
+
+def _aliquot(value: Any) -> dict[str, Any]:
+    """规范一次来源容器向全部声明目标容器分装的资源合同。"""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "source_material_param",
+        "target_material_params",
+    }:
+        _fail(
+            "invalid_aliquot_contract",
+            "/aliquot",
+            "aliquot 必须且只能声明 source_material_param 与 target_material_params",
+        )
+    source = _parameter_name(
+        value.get("source_material_param"), "/aliquot/source_material_param"
+    )
+    targets = _parameter_names(
+        value.get("target_material_params"), "/aliquot/target_material_params"
+    )
+    if not targets or source in targets:
+        _fail(
+            "invalid_aliquot_contract",
+            "/aliquot/target_material_params",
+            "aliquot 至少需要一个与来源不同的目标参数",
+        )
+    return {
+        "source_material_param": source,
+        "target_material_params": list(targets),
     }
 
 

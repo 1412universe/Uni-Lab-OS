@@ -20,6 +20,10 @@ from unilabos.app.scheduler.inventory.content_rules import (
     require_container,
 )
 from unilabos.app.scheduler.inventory.domain import new_event_id
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    InventoryMutationConflict,
+    assert_inventory_mutation_unclaimed,
+)
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.scheduler.inventory.workflow_quantity import (
     WorkflowQuantityReservationError,
@@ -354,6 +358,14 @@ class BackendContainerContentService:
         try:
             with self.store.transaction() as conn:
                 require_container(conn, normalized["material_uuid"])
+                try:
+                    assert_inventory_mutation_unclaimed(
+                        conn, material_uuids=(normalized["material_uuid"],)
+                    )
+                except InventoryMutationConflict as error:
+                    raise BackendContractError(
+                        RESOURCE_DATA_CONFLICT, str(error)
+                    ) from error
                 ensure_container_empty(conn, normalized["material_uuid"])
                 composition = self._build_composition(
                     conn, values.get("components") or []
@@ -478,6 +490,14 @@ class BackendContainerContentService:
         now = _now()
         with self.store.transaction() as conn:
             try:
+                assert_inventory_mutation_unclaimed(
+                    conn, material_uuids=(current["material_uuid"],)
+                )
+            except InventoryMutationConflict as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
+            try:
                 assert_workflow_quantity_mutation_allowed(
                     conn,
                     inventory_type="current_substance",
@@ -539,6 +559,14 @@ class BackendContainerContentService:
         current = self.get_current_substance(identity)
         now = _now()
         with self.store.transaction() as conn:
+            try:
+                assert_inventory_mutation_unclaimed(
+                    conn, material_uuids=(current["material_uuid"],)
+                )
+            except InventoryMutationConflict as error:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT, str(error)
+                ) from error
             try:
                 assert_workflow_quantity_mutation_allowed(
                     conn,
