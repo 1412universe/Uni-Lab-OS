@@ -11,6 +11,7 @@ from unilabos.app.scheduler.device_target import (
     ResolvedDeviceTarget,
     make_registered_device_target_resolver,
     resolve_registered_device_target,
+    resolve_registered_fixed_device_target,
 )
 from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
 from unilabos.app.scheduler.inventory.service import InventoryService
@@ -285,6 +286,51 @@ def test_fixed_device_target_uses_same_online_health_and_capability_gate(
         assert caught.value.resources[0]["wait_code"] == (
             "device_requires_reconciliation"
         )
+    finally:
+        store.close()
+
+
+def test_fixed_device_target_accepts_execution_plan_material_uuid_alias(
+    tmp_path: Path,
+) -> None:
+    """执行计划把物料 UUID 作为 device_id 时，仍解析为注册中的本地设备 ID。"""
+
+    store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        backend = BackendResourceService(store)
+        template = backend.sync_resource_templates(
+            [{"id": "test.plan-device", "display_name": "计划设备", "registry_type": "device", "class": {}}]
+        )["templates"][0]
+        device = backend.create_material(
+            {
+                "resource_template_uuid": template["uuid"],
+                "barcode": "PLAN-DEVICE-1",
+                "name": "计划设备 1",
+            }
+        )
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE material SET type='device' WHERE uuid=?", (device["uuid"],)
+            )
+
+        selected = resolve_registered_fixed_device_target(
+            {
+                "connected": True,
+                "devices": [
+                    {
+                        "local_id": "plan-device-1",
+                        "material_uuid": device["uuid"],
+                        "actions": [{"name": "heat"}],
+                    }
+                ],
+            },
+            local_device_id=device["uuid"],
+            material_uuid=device["uuid"],
+            action_name="heat",
+            busy_keys=set(),
+        )
+
+        assert selected == ResolvedDeviceTarget("plan-device-1", device["uuid"])
     finally:
         store.close()
 

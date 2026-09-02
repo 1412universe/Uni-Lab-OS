@@ -1262,7 +1262,11 @@ class WorkflowService:
                     # against an empty contract after every save.
                     current_unilab = dict(current["meta_data"]["unilab"] or {})
                     if isinstance(requested_unilab, Mapping):
-                        for contract_key in ("input_contract", "output_contract"):
+                        for contract_key in (
+                            "input_contract",
+                            "output_contract",
+                            "output_bindings",
+                        ):
                             contract = requested_unilab.get(contract_key)
                             if isinstance(contract, Mapping):
                                 current_unilab[contract_key] = deepcopy(contract)
@@ -3284,6 +3288,10 @@ class WorkflowService:
                 except Exception:
                     raise WorkflowError("internal_error") from None
             if isinstance(error, TaskSchedulerBridgeError):
+                logger.exception(
+                    "工作流任务已创建，但提交本地调度器失败 task=%s",
+                    task_uuid,
+                )
                 raise WorkflowError("internal_error") from None
             if isinstance(error, StoreConflict) and backend_task_uuid is not None:
                 raise WorkflowConflict("conflict", message=str(error)) from None

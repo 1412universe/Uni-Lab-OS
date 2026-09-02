@@ -1258,8 +1258,8 @@ export async function updateExperimentOperation(payload: {
   name: string
   description: string
   categoryUuid?: string
-  actions: Array<{ nodeUuid?: string; templateUuid?: string; name: string; description?: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
-  controls?: Array<{ nodeUuid: string; templateUuid: string; name: string; description?: string; param: Record<string, unknown> }>
+  actions: Array<{ draftId?: string; nodeUuid?: string; templateUuid?: string; name: string; description?: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  controls?: Array<{ draftId?: string; nodeUuid?: string; templateUuid: string; nodeType?: string; name: string; description?: string; param: Record<string, unknown> }>
   inputContract?: Record<string, unknown>
   outputContract?: Record<string, unknown>
 }) {
@@ -1273,7 +1273,7 @@ export async function updateExperimentOperation(payload: {
   })
   const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`)
   const edits = new Map(payload.actions.filter((action) => action.nodeUuid).map((action) => [action.nodeUuid!, action]))
-  const controlEdits = new Map((payload.controls || []).map((control) => [control.nodeUuid, control]))
+  const controlEdits = new Map((payload.controls || []).filter((control) => control.nodeUuid).map((control) => [control.nodeUuid!, control]))
   const nodes = (Array.isArray(graph.nodes) ? graph.nodes : []).map((node: RawRecord) => {
     const edit = edits.get(String(node.uuid))
     const controlEdit = controlEdits.get(String(node.uuid))
@@ -1339,54 +1339,290 @@ export async function updateExperimentOperation(payload: {
   return { workflowUuid: payload.workflowUuid, status: 'source' as const }
 }
 
-export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; description?: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
+type OperationActionInput = {
+  draftId?: string
+  templateUuid: string
+  materialUuid?: string
+  deviceId: string
+  name: string
+  description?: string
+  param?: Record<string, unknown>
+  inputBindings?: Record<string, { parameter: string }>
+}
+
+type OperationControlInput = {
+  draftId?: string
+  nodeUuid?: string
+  templateUuid: string
+  nodeType?: string
+  name: string
+  description?: string
+  param: Record<string, unknown>
+}
+
+/** 将控制节点参数中的前端草稿 ID 换成 OS 已创建的真实节点 UUID。 */
+function resolveControlParam(param: Record<string, unknown>, nodeUuids: Map<string, string>): Record<string, unknown> {
+  const resolveRef = (value: unknown): unknown => typeof value === 'string' ? nodeUuids.get(value) || value : value
+  const resolveList = (value: unknown): unknown => Array.isArray(value) ? value.map(resolveRef) : value
+  const clone = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(clone)
+    if (!value || typeof value !== 'object') return resolveRef(value)
+    const record = value as RawRecord
+    const next: RawRecord = {}
+    Object.entries(record).forEach(([key, child]) => {
+      if (key === 'node_uuid') next[key] = resolveRef(child)
+      else if (['node_uuids', 'entry_node_uuids', 'exit_node_uuids', 'predecessor_node_uuids', 'successor_node_uuids'].includes(key)) next[key] = resolveList(child)
+      else next[key] = clone(child)
+    })
+    return next
+  }
+  return clone(param) as Record<string, unknown>
+}
+
+/** 从控制区域提取成员关系，用于给动作节点写入 parent_uuid。 */
+function controlMembership(param: Record<string, unknown>): string[] {
+  const refs: string[] = []
+  const append = (value: unknown) => { if (Array.isArray(value)) value.forEach((item) => { if (typeof item === 'string' && item) refs.push(item) }) }
+  append(param.node_uuids)
+  const branches = Array.isArray(param.branches) ? param.branches : []
+  branches.forEach((branch) => { if (branch && typeof branch === 'object') append((branch as RawRecord).node_uuids) })
+  return [...new Set(refs)]
+}
+
+/** 只在同一控制区域内建立 ready 顺序边；控制节点本身由 Scheduler 生成依赖边。 */
+async function createOperationReadyEdges(workflowUuid: string, groups: string[][], nodeByUuid: Map<string, RawRecord>) {
+  const existingGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+  const existingPairs = new Set((Array.isArray(existingGraph.edges) ? existingGraph.edges : []).map((edge: RawRecord) => `${edge.source_node_uuid}:${edge.target_node_uuid}`))
+  const detailCache = new Map<string, RawRecord>()
+  const handlesFor = async (nodeUuid: string) => {
+    const node = nodeByUuid.get(nodeUuid)
+    if (!node || String(node.type || '').toLowerCase() === 'condition' || String(node.type || '').toLowerCase() === 'repeat_until') return undefined
+    const templateUuid = String(node.workflow_node_template_uuid || '')
+    if (!templateUuid) return undefined
+    let detail = detailCache.get(templateUuid)
+    if (!detail) { detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`); detailCache.set(templateUuid, detail) }
+    const handles = Array.isArray(detail.handles) ? detail.handles : []
+    return {
+      source: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source'),
+      target: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target'),
+    }
+  }
+  for (const group of groups) {
+    for (let index = 1; index < group.length; index += 1) {
+      const sourceUuid = String(group[index - 1] || '')
+      const targetUuid = String(group[index] || '')
+      if (!sourceUuid || !targetUuid || sourceUuid === targetUuid || existingPairs.has(`${sourceUuid}:${targetUuid}`)) continue
+      const sourceHandles = await handlesFor(sourceUuid)
+      const targetHandles = await handlesFor(targetUuid)
+      // 一个区域可以只包含控制节点；这种关系由 Scheduler 的参数生成，不能
+      // 强行套用设备 Action 的 ready 句柄。普通 Action 缺少 ready 句柄则是
+      // 模板合同错误，必须阻止保存，避免生成无法调度的实验操作。
+      const sourceIsControl = ['condition', 'repeat_until'].includes(String(nodeByUuid.get(sourceUuid)?.type || '').toLowerCase())
+      const targetIsControl = ['condition', 'repeat_until'].includes(String(nodeByUuid.get(targetUuid)?.type || '').toLowerCase())
+      if (sourceIsControl || targetIsControl) continue
+      if (!sourceHandles?.source?.uuid || !targetHandles?.target?.uuid) throw new Error('动作模板缺少 ready 控制句柄，无法建立顺序依赖')
+      await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, {
+        source_node_uuid: sourceUuid, target_node_uuid: targetUuid,
+        source_handle_uuid: sourceHandles.source.uuid, target_handle_uuid: targetHandles.target.uuid,
+        description: '实验操作区域内顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } },
+      })
+      existingPairs.add(`${sourceUuid}:${targetUuid}`)
+    }
+  }
+}
+
+/**
+ * 生成首次建图时使用的临时控制参数。
+ *
+ * 工作流的输入合同要在“有节点的图”落地后再写入：OS 会拒绝一个空图引用
+ * 尚未存在的工作流参数。因此首次建图只保留拓扑，把依赖工作流输入的条件
+ * 临时替换为字面量；随后写入合同，再用最终参数重编译一次完整图。
+ */
+function stagedControlParam(param: Record<string, unknown>, nodeType: string): Record<string, unknown> {
+  const cloneBindingMap = (value: unknown, fallback: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value as RawRecord).map(([key, binding]) => {
+      if (binding && typeof binding === 'object' && !Array.isArray(binding) && (binding as RawRecord).kind === 'workflow_input') {
+        return [key, { kind: 'literal', value: fallback }]
+      }
+      return [key, binding]
+    }))
+  }
+  if (nodeType === 'condition') {
+    const branches = Array.isArray(param.branches)
+      ? param.branches.map((branch, index) => {
+        if (!branch || typeof branch !== 'object' || Array.isArray(branch)) return branch
+        const next = { ...(branch as RawRecord) }
+        // 保留最后一个兜底分支；其它分支暂用 true，只验证区域拓扑。
+        if (index < (param.branches as unknown[]).length - 1) next.condition = { lit: true }
+        else next.condition = null
+        return next
+      })
+      : []
+    return { ...param, bindings: {}, branches }
+  }
+  if (nodeType === 'repeat_until') {
+    return {
+      ...param,
+      until: { lit: true },
+      bindings: {},
+      initial_carry: cloneBindingMap(param.initial_carry, false),
+      next_carry: cloneBindingMap(param.next_carry, true),
+    }
+  }
+  return { ...param }
+}
+
+export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: OperationActionInput[]; controls?: OperationControlInput[] }) {
   let workflowUuid = ''
   try {
     const workflow = await writeData<RawRecord>('POST', '/workflows', {
       name: payload.name, description: payload.description, tags: ['experiment-operation'], workflow_type: 'experiment_operation',
-      operation_category_uuid: payload.categoryUuid || undefined, meta_data: { unilab: { input_contract: payload.inputContract || {}, output_contract: payload.outputContract || {} } },
+      operation_category_uuid: payload.categoryUuid || undefined,
+      // 领域包模式先创建空合同；输入/输出合同会在首个有节点图落地后写入，
+      // 避免 OS 在空图阶段无法编译含必填参数的工作流。
+      meta_data: {},
     })
     workflowUuid = String(workflow.uuid || '')
     if (!workflowUuid) throw new Error('OS 创建实验操作后未返回工作流 UUID')
-    // OS 的创建接口会先生成空的输入/输出合同；必须在首个节点写入前
-    // 用工作流更新接口落盘合同，否则节点 input_bindings 会按“0 个参数”被拒绝。
-    await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}`, {
-      name: payload.name,
-      description: payload.description,
-      tags: ['experiment-operation'],
-      workflow_type: 'experiment_operation',
-      operation_category_uuid: payload.categoryUuid || null,
-      meta_data: { unilab: { input_contract: payload.inputContract || {}, output_contract: payload.outputContract || {} } },
-    })
-    const createdNodes: Array<{ uuid: string; readySource?: string; readyTarget?: string }> = []
+    const draftToUuid = new Map<string, string>()
+    const actionNodes: Array<{ uuid: string; draftId?: string; readySource?: string; readyTarget?: string; action: OperationActionInput; template: RawRecord; handles: RawRecord[] }> = []
+    const controlInputs = payload.controls || []
+    // 全图一次提交，避免“先建控制节点但成员尚未挂 parent_uuid”导致 OS
+    // 在中间状态拒绝图。草稿 ID 只在前端存在，PUT graph 前全部换成 UUID。
     for (let index = 0; index < payload.actions.length; index += 1) {
       const action = payload.actions[index]
       const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(action.templateUuid)}`)
       const handles = Array.isArray(detail.handles) ? detail.handles : []
-      const createdNode = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/nodes`, {
-        workflow_node_template_uuid: action.templateUuid,
-        material_uuid: action.materialUuid || undefined,
-        name: action.name, description: action.description || action.name,
-        pose: { x: 120 + index * 220, y: 180 },
-        param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
-      })
-      if (!createdNode?.uuid) throw new Error(`动作“${action.name}”已提交，但后端未返回新节点身份`)
-      createdNodes.push({
-        uuid: String(createdNode.uuid),
+      const template = detail.template && typeof detail.template === 'object'
+        ? detail.template as RawRecord
+        : detail
+      const actionUuid = crypto.randomUUID()
+      if (action.draftId) draftToUuid.set(action.draftId, actionUuid)
+      actionNodes.push({
+        uuid: actionUuid,
+        draftId: action.draftId,
+        action,
+        template,
+        handles,
         readySource: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source')?.uuid,
         readyTarget: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target')?.uuid,
       })
     }
-    for (let index = 1; index < createdNodes.length; index += 1) {
-      const source = createdNodes[index - 1]
-      const target = createdNodes[index]
-      if (!source.readySource || !target.readyTarget) throw new Error('动作模板缺少 ready 控制句柄，无法建立顺序依赖')
-      await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, {
-        source_node_uuid: source.uuid, target_node_uuid: target.uuid,
-        source_handle_uuid: source.readySource, target_handle_uuid: target.readyTarget,
-        description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } },
+    controlInputs.forEach((control) => { if (control.draftId) draftToUuid.set(control.draftId, crypto.randomUUID()) })
+    const parentByDraft = new Map<string, string>()
+    controlInputs.forEach((control) => {
+      const controlDraftId = control.draftId
+      if (!controlDraftId) return
+      controlMembership(control.param || {}).forEach((member) => {
+        const previous = parentByDraft.get(member)
+        if (previous && previous !== controlDraftId) throw new Error(`节点“${member}”不能同时属于两个控制区域`)
+        parentByDraft.set(member, controlDraftId)
       })
+    })
+    const actionGraphNodes = actionNodes.map((item, index) => {
+      const action = item.action
+      const parentUuid = action.draftId ? draftToUuid.get(parentByDraft.get(action.draftId) || '') : undefined
+      return {
+        uuid: item.uuid, workflow_node_template_uuid: action.templateUuid,
+        parent_uuid: parentUuid || null, material_uuid: action.materialUuid || null,
+        name: action.name, type: String(item.template.node_type || item.template.nodeType || item.template.type || 'compute'),
+        icon: item.template.icon || null, pose: { x: 140 + index * 250, y: 170 },
+        param: action.param || {}, footer: item.template.footer || null,
+        action_name: String(item.template.name || action.name),
+        action_type: String(item.template.type || 'UniLabJsonCommand'), execution_policy: {}, disabled: false,
+        minimized: false, script: null, description: action.description || action.name,
+        meta_data: { unilab: { sequence_index: index, authoring_source_order: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
+      }
+    })
+    const controlGraphNodes = controlInputs.map((control, index) => {
+      const controlUuid = (control.draftId ? draftToUuid.get(control.draftId) : undefined) || crypto.randomUUID()
+      const parentUuid = control.draftId ? draftToUuid.get(parentByDraft.get(control.draftId) || '') : undefined
+      return {
+        uuid: controlUuid, workflow_node_template_uuid: control.templateUuid,
+        parent_uuid: parentUuid || null, material_uuid: null, name: control.name,
+        type: control.nodeType || 'control', icon: null, pose: { x: 220 + index * 280, y: 430 },
+        param: resolveControlParam(control.param || {}, draftToUuid), footer: null,
+        action_name: control.nodeType || 'control', action_type: 'UniLabControl',
+        execution_policy: {}, disabled: false, minimized: false, script: null,
+        description: control.description || control.name,
+        meta_data: { unilab: { executor_kind: control.nodeType || 'control', authoring_source_order: payload.actions.length + index, generated_by: 'operation-builder' } },
+      }
+    })
+    let rawGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+    const graphNodes = [...actionGraphNodes, ...controlGraphNodes]
+    const inputContract = payload.inputContract || { version: 1, parameters: [] }
+    const outputContract = payload.outputContract || { version: 1, outputs: [] }
+    // 输出合同中的字段名直接对应动作模板的 source handle data_key。这样
+    // 前端只需填写“要对外展示的输出名”，服务端即可得到稳定的节点输出绑定；
+    // 找不到同名输出时提前给出明确错误，避免 OS 在源码生成阶段返回模糊的
+    // candidate_invalid/code=3003。
+    const outputBindings: RawRecord = {}
+    const declaredOutputs = Array.isArray((outputContract as RawRecord).outputs)
+      ? ((outputContract as RawRecord).outputs as unknown[])
+      : []
+    for (const output of declaredOutputs) {
+      if (!output || typeof output !== 'object' || Boolean((output as RawRecord).implicit)) continue
+      const outputName = String((output as RawRecord).name || '').trim()
+      if (!outputName) continue
+      const match = actionNodes
+        .flatMap((node) => node.handles.map((handle) => ({ node, handle })))
+        .find(({ handle }) => handle.io_type === 'source' && handle.handle_key !== 'ready' && String(handle.data_key || '') === outputName)
+      if (!match?.handle.uuid) throw new Error(`输出参数“${outputName}”没有对应的节点输出，请使用 Action 的输出名称`)
+      outputBindings[outputName] = {
+        kind: 'node_output',
+        workflow_node_uuid: match.node.uuid,
+        source_handle_uuid: match.handle.uuid,
+      }
     }
+    const hasContracts = (Array.isArray((inputContract as RawRecord).parameters) && ((inputContract as RawRecord).parameters as unknown[]).length > 0)
+      || (Array.isArray((outputContract as RawRecord).outputs) && ((outputContract as RawRecord).outputs as unknown[]).length > 0)
+      || actionGraphNodes.some((node) => Object.keys((node.meta_data?.unilab as RawRecord)?.input_bindings as RawRecord || {}).length > 0)
+      || controlGraphNodes.some((node) => JSON.stringify(node.param).includes('workflow_input'))
+    if (hasContracts) {
+      // 先写只有拓扑的临时图，再写合同，最后提交带真实参数绑定的图。
+      const stagedNodes = graphNodes.map((node) => {
+        const unilab = (node.meta_data?.unilab || {}) as RawRecord
+        const inputBindings = !['condition', 'repeat_until'].includes(String(node.type || '').toLowerCase())
+          ? unilab.input_bindings
+          : undefined
+        const stagedParam = ['condition', 'repeat_until'].includes(String(node.type || '').toLowerCase())
+          ? stagedControlParam(node.param || {}, String(node.type || '').toLowerCase())
+          : node.param
+        return {
+          ...node,
+          param: stagedParam,
+          meta_data: { ...(node.meta_data || {}), unilab: { ...unilab, ...(inputBindings ? { input_bindings: {} } : {}) } },
+        }
+      })
+      await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}/graph`, {
+        revision: Number(rawGraph.workflow?.revision), nodes: stagedNodes, edges: [],
+      })
+      await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}`, {
+        name: payload.name,
+        description: payload.description,
+        tags: ['experiment-operation'],
+        workflow_type: 'experiment_operation',
+        operation_category_uuid: payload.categoryUuid || null,
+        meta_data: { unilab: { input_contract: inputContract, output_contract: outputContract, output_bindings: outputBindings } },
+      })
+      rawGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+    }
+    await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}/graph`, {
+      revision: Number(rawGraph.workflow?.revision), nodes: graphNodes, edges: [],
+    })
+    const nodeByUuid = new Map(graphNodes.map((node: RawRecord) => [String(node.uuid), node]))
+    const memberRefs = new Set<string>()
+    const controlGroups = controlInputs.map((control) => {
+      const refs = controlMembership(control.param || {}).map((ref) => draftToUuid.get(ref) || ref)
+      refs.forEach((ref) => memberRefs.add(ref))
+      return refs
+    })
+    const topLevelActions = actionNodes.filter((node) => !memberRefs.has(node.uuid)).map((node) => node.uuid)
+    // 控制节点的前后关系写在其 param（predecessor/successor）中；只在没有
+    // 控制区域时建立整条线性 Action ready 链，避免把分支成员错误串成一条线。
+    const readyGroups = controlInputs.length ? controlGroups : [topLevelActions]
+    await createOperationReadyEdges(workflowUuid, readyGroups, nodeByUuid)
     const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
     const revision = Number(graph.workflow?.revision)
     if (!Number.isFinite(revision)) throw new Error('子工作流已写入，但无法读取当前修订，未执行发布')

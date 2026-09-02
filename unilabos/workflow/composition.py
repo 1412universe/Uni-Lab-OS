@@ -559,6 +559,27 @@ def compose_local_workflow_template_runtime(
             """
 
             nonlocal published_generation
+            # 发布运行中新增的实验操作后，来源注册会先写入进程内定义目录。
+            # 不能只复用启动时冻结的 ``active_registrations``，否则父工作流
+            # 随后引用新发布的子工作流时，编译目录仍看不到它的模板。
+            initial_registration_by_uuid = {
+                str(registration["workflow_uuid"]): registration
+                for registration in active_registrations
+            }
+            current_registrations = []
+            for registration in publication_store.list_source_registrations():
+                current = dict(registration)
+                initial = initial_registration_by_uuid.get(
+                    str(current["workflow_uuid"])
+                )
+                if initial is not None:
+                    # 启动发现计划中的静态模块/符号/哈希更可信；动态导入
+                    # 来源没有这些字段，build 函数会从已应用源码快照补齐。
+                    for field in ("module", "symbol", "definition_content_hash"):
+                        value = initial.get(field)
+                        if value is not None:
+                            current[field] = value
+                current_registrations.append(current)
             base_node_uuid_by_key = {
                 (str(node["resource_template_uuid"]), str(node["name"])): str(
                     node["uuid"]
@@ -589,7 +610,7 @@ def compose_local_workflow_template_runtime(
             previous_snapshot = publication_template_provider.replace(base_snapshot)
             try:
                 generation = build_published_workflow_generation(
-                    registrations=active_registrations,
+                    registrations=tuple(current_registrations),
                     snapshot_provider=publication_store,
                     base_node_templates=base_nodes,
                 )

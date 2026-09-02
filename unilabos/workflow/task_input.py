@@ -361,7 +361,16 @@ def _bind_active_plan(
         node_uuid = str(handle.get("node_uuid") or "")
         node = plan_nodes.get(node_uuid)
         job = jobs_by_node.get(node_uuid)
-        if node is None or job is None:
+        if node is None:
+            raise TaskInputError("计划连接点未归属唯一活动作业")
+        # RepeatUntil 的后代节点是“每轮作业模板”，不会在 Task 创建阶段生成
+        # 首轮 Job；它们的冻结参数会在调度器物化每一轮时复制。普通节点仍必须
+        # 在同一事务中拥有唯一 Job，不能用该例外掩盖计划损坏。
+        deferred_job_template = job is None and _is_repeat_template_node(
+            node_uuid,
+            plan_nodes=plan_nodes,
+        )
+        if job is None and not deferred_job_template:
             raise TaskInputError("计划连接点未归属唯一活动作业")
         template_handle_uuid = str(handle.get("template_handle_uuid") or "")
         binding = input_bindings.get(node_uuid, {}).get(template_handle_uuid)
@@ -379,8 +388,10 @@ def _bind_active_plan(
         if not data_key:
             raise TaskInputError("计划目标连接点缺少参数键")
         node_param = node.get("param")
-        job_param = job.get("param")
-        if not isinstance(node_param, dict) or not isinstance(job_param, dict):
+        job_param = job.get("param") if job is not None else None
+        if not isinstance(node_param, dict) or (
+            job is not None and not isinstance(job_param, dict)
+        ):
             raise TaskInputError("计划节点或作业参数不是对象")
         incoming_edges = incoming.get(handle_uuid, [])
         static_provider = data_key in node_param and node_param[data_key] is not None
@@ -412,7 +423,42 @@ def _bind_active_plan(
         if parameter not in resolved_input:
             raise TaskInputError("计划输入绑定引用未解析参数")
         node_param[data_key] = clone_json(resolved_input[parameter])
-        job_param[data_key] = clone_json(resolved_input[parameter])
+        if isinstance(job_param, dict):
+            job_param[data_key] = clone_json(resolved_input[parameter])
+
+
+def _is_repeat_template_node(
+    node_uuid: str,
+    *,
+    plan_nodes: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """判断计划节点是否属于 RepeatUntil 的动态作业模板。
+
+    参数：``node_uuid`` 是待判断节点身份，``plan_nodes`` 是同一执行计划节点索引。
+    返回：节点存在 RepeatUntil 祖先且自身不是控制区域时为真。异常：父节点缺失或
+    父子关系成环时抛 ``TaskInputError``，避免把损坏的计划当作可延迟作业。
+    """
+
+    current = node_uuid
+    visited: set[str] = set()
+    while current not in visited:
+        visited.add(current)
+        node = plan_nodes.get(current)
+        if node is None:
+            raise TaskInputError("计划节点父子关系引用未知节点")
+        parent_uuid = node.get("parent_uuid")
+        if not isinstance(parent_uuid, str) or not parent_uuid:
+            return False
+        parent = plan_nodes.get(parent_uuid)
+        if parent is None:
+            raise TaskInputError("计划节点父子关系引用未知父节点")
+        if str(parent.get("kind") or "") == "repeat_until":
+            return str(node.get("kind") or "") not in {
+                "condition",
+                "repeat_until",
+            }
+        current = parent_uuid
+    raise TaskInputError("计划节点父子关系包含环")
 
 
 def _freeze_site_selections(
@@ -444,11 +490,17 @@ def _freeze_site_selections(
         ):
             raise TaskInputError("计划库位选择器必须是对象列表")
         job = jobs_by_node.get(node_uuid)
-        if job is None:
+        deferred_job_template = job is None and _is_repeat_template_node(
+            node_uuid,
+            plan_nodes=plan_nodes,
+        )
+        if job is None and not deferred_job_template:
             raise TaskInputError("计划库位选择器未归属唯一活动作业")
         node_param = node.get("param")
-        job_param = job.get("param")
-        if not isinstance(node_param, dict) or not isinstance(job_param, dict):
+        job_param = job.get("param") if job is not None else None
+        if not isinstance(node_param, dict) or (
+            job is not None and not isinstance(job_param, dict)
+        ):
             raise TaskInputError("计划库位选择器参数不是对象")
         for raw_selector in raw_selectors:
             parameter = str(raw_selector.get("parameter") or "").strip()
@@ -521,8 +573,10 @@ def _freeze_site_selections(
             if len(set(site_uuids)) != len(site_uuids):
                 raise TaskInputError("库位选择权威返回了重复 UUID")
             policy = node.get("execution_policy")
-            job_policy = job.get("execution_policy")
-            if not isinstance(policy, dict) or not isinstance(job_policy, dict):
+            job_policy = job.get("execution_policy") if job is not None else None
+            if not isinstance(policy, dict) or (
+                job is not None and not isinstance(job_policy, dict)
+            ):
                 raise TaskInputError("计划库位选择执行策略不是对象")
             existing = policy.get("target_site_group")
             if existing is not None and list(existing) != site_uuids:
@@ -538,12 +592,14 @@ def _freeze_site_selections(
             }
             policy["target_site_group"] = site_uuids
             policy["target_site_selection"] = selection
-            job_policy["target_site_group"] = clone_json(site_uuids)
-            job_policy["target_site_selection"] = clone_json(selection)
+            if isinstance(job_policy, dict):
+                job_policy["target_site_group"] = clone_json(site_uuids)
+                job_policy["target_site_selection"] = clone_json(selection)
             # 设备驱动只在派发时接收最终选中的规范库位名；Task 快照不把人类
             # 引用误当成物理动作参数，也避免与冻结候选组形成双选择器。
             node_param.pop(parameter, None)
-            job_param.pop(parameter, None)
+            if isinstance(job_param, dict):
+                job_param.pop(parameter, None)
 
 
 def _incoming_edges(

@@ -23,7 +23,7 @@ from typing import (
     Protocol,
     Tuple,
 )
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from unilabos.workflow import source_bootstrap
 from unilabos.workflow.authoring_candidate_hash import (
@@ -1161,7 +1161,9 @@ class WorkflowStore:
                     # the device-action catalog snapshot. Resolve only that
                     # persisted projection; unknown ordinary templates still
                     # fail closed.
-                    persisted = self._published_template_entities(template_reference)
+                    persisted = self._published_template_entities_for_reference(
+                        template_reference
+                    )
                     if persisted is None:
                         raise StoreNotFound(
                             f"workflow node template {template_reference} not found"
@@ -1216,6 +1218,50 @@ class WorkflowStore:
             [self._handle_template_row(handle) for handle in handles],
         )
 
+    def _published_template_entities_for_reference(
+        self,
+        reference: str,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+        """按外部 UUID 或历史名称键读取已发布组合模板。
+
+        参数：``reference`` 是工作流节点保存的模板引用，既可能是发布合同固定的
+        UUID，也可能是早期目录把组合模板转换成的 ``设备名.workflow:工作流 UUID``
+        名称键。返回：模板及连接点投影；引用未知或不是组合名称键时返回
+        ``None``。异常：SQLite 读取错误原样传播。
+        """
+
+        persisted = self._published_template_entities(reference)
+        if persisted is not None:
+            return persisted
+        if not isinstance(reference, str) or ".workflow:" not in reference:
+            return None
+        _owner, workflow_uuid_text = reference.rsplit(".workflow:", 1)
+        try:
+            workflow_uuid = str(UUID(workflow_uuid_text))
+        except (AttributeError, TypeError, ValueError):
+            return None
+        try:
+            rows = self._conn.execute(
+                """
+                SELECT node_template_uuid
+                FROM published_workflow_contract
+                WHERE workflow_uuid = ? AND deleted_at IS NULL
+                ORDER BY version DESC, create_time DESC, uuid DESC
+                """,
+                (workflow_uuid,),
+            ).fetchall()
+        except sqlite3.OperationalError as error:
+            if "no such table: published_workflow_contract" not in str(error):
+                raise
+            return None
+        for row in rows:
+            persisted = self._published_template_entities(
+                str(row["node_template_uuid"])
+            )
+            if persisted is not None:
+                return persisted
+        return None
+
     def _public_node_row(
         self,
         row: sqlite3.Row,
@@ -1242,11 +1288,18 @@ class WorkflowStore:
             try:
                 external_uuid = current_snapshot.template_uuid_for_key(reference)
             except AuthoringCatalogError as error:
-                if self._published_template_entities(reference) is None:
+                published_projection = self._published_template_entities_for_reference(
+                    reference
+                )
+                if published_projection is None:
                     raise StoreNotFound(
                         f"workflow node template {reference} not found"
                     ) from error
-                external_uuid = reference
+                # Composite templates were historically persisted using a
+                # ``<device>.workflow:<workflow_uuid>`` key.  Once the child
+                # workflow is published, expose the stable projected UUID so
+                # callers can round-trip the graph through the public contract.
+                external_uuid = str(published_projection[0]["uuid"])
         result["workflow_node_template_uuid"] = external_uuid
         return result
 
@@ -1708,14 +1761,16 @@ class WorkflowStore:
                 )
                 template_reference = snapshot.template_key_for_uuid(template_reference)
             except AuthoringCatalogError as error:
-                if self._published_template_entities(template_reference) is None:
+                persisted = self._published_template_entities_for_reference(
+                    template_reference
+                )
+                if persisted is None:
                     raise StoreNotFound(
                         f"workflow node template {template_reference} not found"
                     ) from error
-                # Keep the immutable published UUID in the parent graph. Unlike
-                # an action-catalog template it has no source key in the runtime
-                # catalog, and the persisted publication projection is its
-                # authoritative identity.
+                # 早期版本曾把组合模板 UUID 转成名称键后保存。恢复时立即规范化
+                # 为发布合同固定 UUID，避免下一次目录重建只能看到设备基础目录。
+                template_reference = persisted[0]["uuid"]
         values = (
             node.description,
             _json(meta_data),
@@ -1791,7 +1846,7 @@ class WorkflowStore:
                     node.workflow_node_template_uuid
                 ).template
             except AuthoringCatalogError:
-                persisted = self._published_template_entities(
+                persisted = self._published_template_entities_for_reference(
                     node.workflow_node_template_uuid
                 )
                 if persisted is None:
@@ -1878,13 +1933,34 @@ class WorkflowStore:
         *,
         enabled: bool,
     ) -> Dict[str, Any]:
+        """合并公开节点元数据，并保留服务端维护的源码顺序。
+
+        参数：``submitted`` 是调用方提交的节点元数据，``existing_json`` 是同一
+        节点原有的 JSON；``enabled`` 为真表示公共 Graph 接口。返回：公开字段与
+        已有系统元数据合并后的对象。异常：非法 JSON 由上层统一转换。公共调用只
+        接受非负整数 ``authoring_source_order`` 作为新节点的创建顺序，其余
+        ``unilab`` 字段仍由服务端保留，避免客户端伪造执行绑定或目录事实。
+        """
+
         result = dict(submitted)
         if not enabled:
             return result
-        result.pop("unilab", None)
+        submitted_unilab = result.pop("unilab", None)
         existing = _load(existing_json, {}) if existing_json is not None else {}
         if isinstance(existing, dict) and "unilab" in existing:
             result["unilab"] = existing["unilab"]
+            return result
+        # 完整 Graph PUT 由前端一次性提交新控制节点，公共接口不能依赖逐节点
+        # POST 的服务端顺序分配。只允许这一项创建顺序穿过保护边界；执行器绑定、
+        # 组合调用等系统事实仍不可由客户端写入。
+        if isinstance(submitted_unilab, Mapping):
+            source_order = submitted_unilab.get("authoring_source_order")
+            if (
+                isinstance(source_order, int)
+                and not isinstance(source_order, bool)
+                and source_order >= 0
+            ):
+                result["unilab"] = {"authoring_source_order": source_order}
         return result
 
     @staticmethod
