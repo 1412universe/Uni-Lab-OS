@@ -213,10 +213,21 @@ export function WorkflowsPage({
     const contractUuid = String(contract.uuid || '')
     if (!contractUuid) { onNotify('引用失败：发布合同缺少 UUID'); return }
     try {
+      const requirements = Array.isArray(contract.executor_requirements) ? contract.executor_requirements : []
+      const deviceBindings = Object.fromEntries(requirements.map((requirement: Record<string, unknown>) => {
+        const templateUuid = String(requirement.resource_template_uuid || '')
+        const device = materials.find((material) => material.resourceTemplateUuid === templateUuid)
+        return [String(requirement.key || ''), device?.uuid || '']
+      }).filter(([key, value]) => key && value))
+      if (requirements.length && Object.keys(deviceBindings).length !== requirements.length) {
+        onNotify('引用失败：当前工作区没有满足子工作流要求的设备实例')
+        return
+      }
       await insertCompositeWorkflow({
         parentWorkflowUuid: detail.uuid,
         revision: detail.revision,
         contractUuid,
+        deviceBindings,
         pose: { x: 120 + graphNodes.length * 220, y: 180 },
       })
       setChildPickerOpen(false)

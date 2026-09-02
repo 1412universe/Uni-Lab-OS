@@ -68,6 +68,7 @@ export interface WorkflowGraphNode {
   workflow_node_template_uuid?: string
   material_uuid?: string
   param?: Record<string, any>
+  pose?: Record<string, any>
   meta_data?: Record<string, any>
   parentUuid?: string
   deviceId?: string
@@ -89,6 +90,9 @@ export interface WorkflowGraph {
   workflow: WorkflowDefinition
   nodes: WorkflowGraphNode[]
   edges: WorkflowGraphEdge[]
+  /** 完整图返回的模板快照，包含发布子工作流的合成节点句柄。 */
+  nodeTemplates?: Array<Record<string, any>>
+  handleTemplates?: Array<Record<string, any>>
 }
 
 export interface ContractField {
@@ -206,6 +210,7 @@ export interface ActionTemplateRecord {
   uuid: string
   name: string
   displayName: string
+  description?: string
   type: string
   nodeType: string
   resourceTemplate: { uuid: string; name: string; displayName: string }

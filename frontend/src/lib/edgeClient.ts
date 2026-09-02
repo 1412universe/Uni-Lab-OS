@@ -253,6 +253,7 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
       : undefined,
     material_uuid: raw.material_uuid ? String(raw.material_uuid) : undefined,
     param: raw.param && typeof raw.param === 'object' ? raw.param : undefined,
+    pose: raw.pose && typeof raw.pose === 'object' ? raw.pose : undefined,
     meta_data: raw.meta_data && typeof raw.meta_data === 'object' ? raw.meta_data : undefined,
     parentUuid: raw.parent_uuid ? String(raw.parent_uuid) : undefined,
     deviceId: unilab.executor_binding?.device_id
@@ -937,7 +938,7 @@ export async function verifyMaterialBarcode(barcode: string, signal?: AbortSigna
 export async function loadActionTemplates(signal?: AbortSignal): Promise<ActionTemplateRecord[]> {
   const page = await requestAllPages<RawRecord>('/workflow-node-templates', signal)
   return page.items.map((raw) => ({
-    uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid),
+    uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid), description: raw.description ? String(raw.description) : undefined,
     type: String(raw.type || ''), nodeType: String(raw.node_type || ''),
     resourceTemplate: { uuid: String(raw.resource_template?.uuid || ''), name: String(raw.resource_template?.name || ''), displayName: String(raw.resource_template?.display_name || raw.resource_template?.name || '') },
   }))
@@ -1130,6 +1131,97 @@ export async function insertCompositeWorkflow(payload: {
   })
 }
 
+export async function patchWorkflowNode(nodeUuid: string, patch: { pose?: Record<string, unknown>; param?: Record<string, unknown>; metaData?: Record<string, unknown> }) {
+  return writeData<RawRecord>('PATCH', `/workflow-nodes/${encodeURIComponent(nodeUuid)}`, {
+    ...(patch.pose ? { pose: patch.pose } : {}),
+    ...(patch.param ? { param: patch.param } : {}),
+    ...(patch.metaData ? { meta_data: patch.metaData } : {}),
+  })
+}
+
+/**
+ * Ensure the visible top-level nodes form the authoring sequence. Composite
+ * invocations are expanded by OS together with their private child graph, so
+ * the only nodes that may be connected here are the invocation roots and the
+ * parent's ordinary action nodes (parent_uuid is absent).
+ */
+export async function ensureWorkflowSequenceEdges(workflowUuid: string, orderedNodeUuids: string[]) {
+  if (orderedNodeUuids.length < 2) return
+  let graph = await loadWorkflowGraph(workflowUuid)
+  let revision = graph.workflow.revision
+  const nodesByUuid = new Map(graph.nodes.map((node) => [String(node.uuid), node]))
+  const existingPairs = new Set(graph.edges.map((edge) => `${edge.sourceNodeUuid}:${edge.targetNodeUuid}`))
+  const graphHandles = Array.isArray(graph.handleTemplates) ? graph.handleTemplates : []
+  const templateDetails = new Map<string, RawRecord>()
+  async function publishedReadyHandle(templateUuid: string, ioType: 'source' | 'target') {
+    const hex = templateUuid.replace(/-/g, '')
+    if (!/^[0-9a-f]{32}$/i.test(hex) || !globalThis.crypto?.subtle) return undefined
+    const namespace = new Uint8Array(hex.match(/.{2}/g)!.map((value) => Number.parseInt(value, 16)))
+    const name = new TextEncoder().encode(`published-handle:${ioType}:ready`)
+    const bytes = new Uint8Array(namespace.length + name.length)
+    bytes.set(namespace); bytes.set(name, namespace.length)
+    const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-1', bytes))
+    digest[6] = (digest[6] & 0x0f) | 0x50; digest[8] = (digest[8] & 0x3f) | 0x80
+    const formatted = Array.from(digest.slice(0, 16)).map((value) => value.toString(16).padStart(2, '0')).join('')
+    return `${formatted.slice(0, 8)}-${formatted.slice(8, 12)}-${formatted.slice(12, 16)}-${formatted.slice(16, 20)}-${formatted.slice(20)}`
+  }
+  async function handlesFor(nodeUuid: string) {
+    const node = nodesByUuid.get(nodeUuid)
+    const templateUuid = String(node?.workflow_node_template_uuid || '')
+    if (!templateUuid) throw new Error(`节点 ${nodeUuid} 缺少模板身份，无法建立子工作流连线`)
+    let detail = templateDetails.get(templateUuid)
+    if (!detail) {
+      const handles = graphHandles.filter((handle) => String(handle.workflow_node_template_uuid || '') === templateUuid)
+      if (handles.length) detail = { handles }
+      else {
+        try { detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`) }
+        catch (error) {
+          // Published composite templates are framework-owned and may not be
+          // listed by the device catalog endpoint. Their ready handle UUID is
+          // deterministic (UUIDv5), so derive it locally from the contract
+          // template identity rather than making the user unable to connect.
+          const nodeMeta = nodesByUuid.get(nodeUuid)?.meta_data?.unilab
+          if (!nodeMeta?.composite) throw error
+          const [source, target] = await Promise.all([
+            publishedReadyHandle(templateUuid, 'source'), publishedReadyHandle(templateUuid, 'target'),
+          ])
+          if (!source || !target) throw error
+          detail = { handles: [{ uuid: source, handle_key: 'ready', io_type: 'source' }, { uuid: target, handle_key: 'ready', io_type: 'target' }] }
+        }
+      }
+      templateDetails.set(templateUuid, detail)
+    }
+    const handles = Array.isArray(detail.handles) ? detail.handles : []
+    return {
+      source: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source'),
+      target: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target'),
+    }
+  }
+  for (let index = 1; index < orderedNodeUuids.length; index += 1) {
+    const sourceUuid = String(orderedNodeUuids[index - 1] || '')
+    const targetUuid = String(orderedNodeUuids[index] || '')
+    if (!sourceUuid || !targetUuid || sourceUuid === targetUuid || existingPairs.has(`${sourceUuid}:${targetUuid}`)) continue
+    const sourceHandles = await handlesFor(sourceUuid)
+    const targetHandles = await handlesFor(targetUuid)
+    if (!sourceHandles.source?.uuid || !targetHandles.target?.uuid) {
+      throw new Error('子工作流或 Action 模板缺少 ready 控制句柄，无法建立顺序连线')
+    }
+    const updated = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, {
+      source_node_uuid: sourceUuid,
+      target_node_uuid: targetUuid,
+      source_handle_uuid: sourceHandles.source.uuid,
+      target_handle_uuid: targetHandles.target.uuid,
+      description: '实验操作顺序依赖',
+      meta_data: { unilab: { generated_by: 'operation-builder', composite_boundary: true } },
+    })
+    revision = Number(updated?.workflow?.revision || updated?.revision || revision + 1)
+    existingPairs.add(`${sourceUuid}:${targetUuid}`)
+    graph = await loadWorkflowGraph(workflowUuid)
+    revision = graph.workflow.revision || revision
+  }
+  return revision
+}
+
 export async function publishExperimentOperation(workflowUuid: string, revision: number) {
   return writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/publications`, { revision })
 }
@@ -1143,7 +1235,7 @@ export async function updateExperimentOperation(payload: {
   name: string
   description: string
   categoryUuid?: string
-  actions: Array<{ nodeUuid?: string; templateUuid?: string; name: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  actions: Array<{ nodeUuid?: string; templateUuid?: string; name: string; description?: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
   inputContract?: Record<string, unknown>
   outputContract?: Record<string, unknown>
 }) {
@@ -1165,7 +1257,10 @@ export async function updateExperimentOperation(payload: {
       name: edit.name,
       material_uuid: edit.materialUuid,
       param: edit.param,
-      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: edit.inputBindings, executor_binding: { mode: 'fixed', device_id: edit.deviceId } } },
+      // OS treats the material instance UUID as the authoritative fixed
+      // executor identity.  Older UI state used sourceNodeId here, which
+      // made an otherwise valid edit fail compilation on the next save.
+      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: edit.inputBindings, executor_binding: { mode: 'fixed', device_id: edit.materialUuid || edit.deviceId } } },
     }
   })
   await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`, {
@@ -1189,6 +1284,7 @@ export async function updateExperimentOperation(payload: {
     const handles = Array.isArray(detail.handles) ? detail.handles : []
     const created = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.workflowUuid)}/nodes`, {
       workflow_node_template_uuid: action.templateUuid, material_uuid: action.materialUuid || undefined, name: action.name,
+      description: action.description || action.name,
       pose: { x: 120 + (nodes.length + index) * 220, y: 180 }, param: action.param || {}, execution_policy: {},
       meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
     })
@@ -1213,7 +1309,7 @@ export async function updateExperimentOperation(payload: {
   return { workflowUuid: payload.workflowUuid, status: 'source' as const }
 }
 
-export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
+export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; description?: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
   let workflowUuid = ''
   try {
     const workflow = await writeData<RawRecord>('POST', '/workflows', {
@@ -1230,7 +1326,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
       const createdNode = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/nodes`, {
         workflow_node_template_uuid: action.templateUuid,
         material_uuid: action.materialUuid || undefined,
-        name: action.name,
+        name: action.name, description: action.description || action.name,
         pose: { x: 120 + index * 220, y: 180 },
         param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
       })
@@ -1559,6 +1655,8 @@ export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSign
     workflow: adaptWorkflow({ ...graph.workflow, nodes: graph.nodes }),
     nodes,
     edges: Array.isArray(graph.edges) ? graph.edges.map(adaptWorkflowGraphEdge) : [],
+    nodeTemplates: Array.isArray(graph.node_templates) ? graph.node_templates : [],
+    handleTemplates: Array.isArray(graph.handle_templates) ? graph.handle_templates : [],
   }
 }
 

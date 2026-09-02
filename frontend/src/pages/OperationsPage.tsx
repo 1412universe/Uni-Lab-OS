@@ -1,12 +1,23 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, ChevronLeft, ChevronRight, Eye, FileInput, FileJson, FlaskConical, GripVertical, Pencil, Plus, Save, Search, Send, Sparkles, Trash2, Workflow } from 'lucide-react'
-import { createExperimentOperation, deleteExperimentOperation, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadActionParameters, loadActionTemplates, loadExperimentOperations, loadOperationCategories, loadPublishedWorkflowContracts, loadWorkflowGraph, publishExperimentOperation, updateExperimentOperation } from '../lib/edgeClient'
+import { createExperimentOperation, deleteExperimentOperation, ensureWorkflowSequenceEdges, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadActionParameters, loadActionTemplates, loadExperimentOperations, loadOperationCategories, loadPublishedWorkflowContracts, loadWorkflowGraph, patchWorkflowNode, publishExperimentOperation, updateExperimentOperation } from '../lib/edgeClient'
 import type { ActionParameterRecord, ActionTemplateRecord, ContractField, MaterialRecord, WorkflowDefinition } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 
-interface DraftAction { id: string; nodeUuid?: string; templateUuid: string; materialUuid: string; deviceId: string; name: string; fields: ActionParameterRecord[]; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }
-interface ChildWorkflowRef { contractUuid: string; workflowUuid: string; name: string; revision: number }
+interface DraftAction { id: string; nodeUuid?: string; templateUuid: string; materialUuid: string; deviceId: string; name: string; description?: string; fields: ActionParameterRecord[]; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }
+interface ChildWorkflowRequirement { key: string; resourceTemplateUuid: string; displayName: string }
+interface ChildWorkflowRef {
+  contractUuid: string
+  workflowUuid: string
+  name: string
+  revision: number
+  invocationUuid?: string
+  x: number
+  y: number
+  requirements: ChildWorkflowRequirement[]
+  deviceBindings: Record<string, string>
+}
 interface EditableContractField {
   id: string
   name: string
@@ -137,7 +148,23 @@ function actionValue(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value)
 }
 
-export function OperationsPage({ materials, connected, onNotify }: { materials: MaterialRecord[]; connected: boolean; onNotify: (message: string) => void }) {
+function contractTypeForActionSchema(schema: Record<string, unknown>): string {
+  if (schema.$slot) return 'ResourceSlot'
+  const rawType = schema.type
+  const type = Array.isArray(rawType) ? rawType.find((item) => item !== 'null') : rawType
+  return typeof type === 'string' && CONTRACT_TYPES.some((item) => item.value === type) ? type : 'string'
+}
+
+function contractFieldForActionParameter(field: ActionParameterRecord, name: string): EditableContractField {
+  const type = contractTypeForActionSchema(field.schema)
+  return { id: crypto.randomUUID(), name, type, required: field.required, defaultText: '', title: field.displayName, description: '', schema: { ...field.schema } }
+}
+
+export function OperationsPage({ materials: inputMaterials, connected, onNotify }: { materials: MaterialRecord[]; connected: boolean; onNotify: (message: string) => void }) {
+  // Edge treats a material instance UUID as the authoritative fixed executor.
+  // Older snapshots may omit source_node_id; expose a local fallback so the
+  // device selectors (including child-workflow bindings) remain usable.
+  const materials = useMemo(() => inputMaterials.map((material) => ({ ...material, sourceNodeId: material.sourceNodeId || material.uuid })), [inputMaterials])
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [editingUuid, setEditingUuid] = useState('')
@@ -177,13 +204,43 @@ export function OperationsPage({ materials, connected, onNotify }: { materials: 
     const needle = query.trim().toLowerCase()
     return (selectedDevice?.actions || []).filter((action) => !needle || [action.displayName, action.name].join(' ').toLowerCase().includes(needle))
   }, [query, selectedDevice])
+  const materialsForResourceTemplate = (resourceTemplateUuid: string) => materials.filter((material) => material.resourceTemplateUuid === resourceTemplateUuid)
   const missingBinding = draft.some((action) => !action.materialUuid || !action.deviceId)
+  const missingChildBinding = childWorkflowRefs.some((child) => child.requirements.some((requirement) => !child.deviceBindings[requirement.key] && !materialsForResourceTemplate(requirement.resourceTemplateUuid).length))
   const missingParameter = draft.some((action) => action.fields.some((field) => field.required && action.param[field.key] === undefined && !action.inputBindings[field.handleUuid]?.parameter))
   const duplicateContractName = [...inputContractFields, ...outputContractFields].some((field, index, all) => field.name.trim() && all.findIndex((candidate) => candidate.name.trim() === field.name.trim()) !== index)
   const emptyContractName = [...inputContractFields, ...outputContractFields].some((field) => !field.name.trim() || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(field.name.trim()))
   const contractProblem = emptyContractName ? '工作流参数名称必须是字母、数字或下划线，且不能以数字开头' : duplicateContractName ? '输入和输出参数名称不能重复' : ''
   const workflowParameters = [...new Set(draft.flatMap((action) => Object.values(action.inputBindings).map((binding) => binding.parameter).filter(Boolean)))]
-  const saveProblem = !name.trim() ? '请填写操作名称' : !draft.length && !childWorkflowRefs.length ? '请从左侧加入至少一个 Action，或引用一个已发布子工作流' : missingBinding ? '存在未绑定设备实例的步骤' : missingParameter ? '存在未配置的必填节点参数' : contractProblem
+  const missingWorkflowContract = workflowParameters.some((parameter) => !inputContractFields.some((field) => field.name.trim() === parameter.trim()))
+  const incompatibleWorkflowContract = draft.some((action) => action.fields.some((field) => {
+    const parameter = action.inputBindings[field.handleUuid]?.parameter?.trim()
+    if (!parameter) return false
+    const contract = inputContractFields.find((candidate) => candidate.name.trim() === parameter)
+    return Boolean(contract && contract.type !== contractTypeForActionSchema(field.schema))
+  }))
+  const workflowContractProblem = missingWorkflowContract
+    ? '节点绑定的工作流参数尚未加入输入参数合同'
+    : incompatibleWorkflowContract
+      ? '工作流参数类型与节点输入类型不兼容'
+      : ''
+  const saveProblem = !name.trim() ? '请填写操作名称' : !draft.length && !childWorkflowRefs.length ? '请从左侧加入至少一个 Action，或引用一个已发布子工作流' : missingBinding ? '存在未绑定设备实例的步骤' : missingChildBinding ? '子工作流存在未绑定的执行设备' : missingParameter ? '存在未配置的必填节点参数' : workflowContractProblem || contractProblem
+
+  function ensureInputContractForBinding(parameterName: string, field: ActionParameterRecord) {
+    const parameter = parameterName.trim()
+    if (!parameter || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(parameter)) return
+    setInputContractFields((current) => {
+      const existing = current.find((candidate) => candidate.name.trim() === parameter)
+      if (existing) {
+        // Keep a user-edited type authoritative; the preflight above reports
+        // an incompatible reuse instead of silently corrupting another node.
+        return field.required && !existing.required
+          ? current.map((candidate) => candidate.id === existing.id ? { ...candidate, required: true } : candidate)
+          : current
+      }
+      return [...current, contractFieldForActionParameter(field, parameter)]
+    })
+  }
 
   function beginCreate() { setCreating(true); setEditingUuid(''); setSelectedOperation(null); setName(''); setDescription(''); setCategoryUuid(''); setInputContractFields([]); setOutputContractFields([]); setChildWorkflowRefs([]); setChildPickerOpen(false); setDraft([]) }
   async function viewOperation(operation: WorkflowDefinition) {
@@ -199,10 +256,20 @@ export function OperationsPage({ materials, connected, onNotify }: { materials: 
     try {
       const graph = await loadWorkflowGraph(operation.uuid)
       const actions = await Promise.all(graph.nodes.filter((node) => node.workflow_node_template_uuid && !node.meta_data?.unilab?.composite).map(async (node) => ({
-        id: crypto.randomUUID(), nodeUuid: String(node.uuid), templateUuid: String(node.workflow_node_template_uuid), materialUuid: String(node.material_uuid || ''), deviceId: String(node.meta_data?.unilab?.executor_binding?.device_id || ''), name: String(node.name || ''),
+        id: crypto.randomUUID(), nodeUuid: String(node.uuid), templateUuid: String(node.workflow_node_template_uuid), materialUuid: String(node.material_uuid || ''),
+        // 老版本导入的节点可能没有 executor_binding；OS 的权威固定执行器
+        // 身份就是 material_uuid，用它补齐，避免保存被前端提前拦截。
+        deviceId: String(node.meta_data?.unilab?.executor_binding?.device_id || node.material_uuid || ''), name: String(node.name || ''), description: String(node.description || node.name || ''),
         fields: await loadActionParameters(String(node.workflow_node_template_uuid)), param: { ...(node.param || {}) }, inputBindings: { ...(node.meta_data?.unilab?.input_bindings || {}) },
       })))
-      setEditingUuid(operation.uuid); setCreating(true); setSelectedOperation(null); setName(operation.name); setDescription(operation.description); setCategoryUuid(operation.operationCategoryUuid || ''); setInputContractFields((operation.inputContract || []).map((field) => editableField(field, 'input'))); setOutputContractFields((operation.outputContract || []).map((field) => editableField(field, 'output'))); setChildWorkflowRefs([]); setChildPickerOpen(false); setDraft(actions)
+      const children: ChildWorkflowRef[] = graph.nodes.filter((node) => !node.parentUuid && node.meta_data?.unilab?.composite).map((node, index) => {
+        const composite = node.meta_data?.unilab?.composite || {}
+        const rawPose = (node as unknown as { pose?: Record<string, unknown> }).pose || {}
+        const requirements = Array.isArray(composite.executor_requirements) ? composite.executor_requirements.map((item: Record<string, unknown>) => ({ key: String(item.key || ''), resourceTemplateUuid: String(item.resource_template_uuid || ''), displayName: String(item.display_name || item.key || '执行设备') })).filter((item: ChildWorkflowRequirement) => item.key) : []
+        const bindings = composite.device_bindings && typeof composite.device_bindings === 'object' ? Object.fromEntries(Object.entries(composite.device_bindings).map(([key, value]) => [key, String(value)])) : {}
+        return { contractUuid: String(composite.contract_uuid || ''), workflowUuid: String(composite.child_workflow_uuid || ''), name: String(node.name || composite.child_workflow_uuid || '子工作流'), revision: Number(composite.child_workflow_revision || 1), invocationUuid: String(node.uuid), x: Number(rawPose.x || 120 + index * 220), y: Number(rawPose.y || 180), requirements, deviceBindings: bindings }
+      }).filter((child) => child.contractUuid && child.invocationUuid)
+      setEditingUuid(operation.uuid); setCreating(true); setSelectedOperation(null); setName(operation.name); setDescription(operation.description); setCategoryUuid(operation.operationCategoryUuid || ''); setInputContractFields((operation.inputContract || []).map((field) => editableField(field, 'input'))); setOutputContractFields((operation.outputContract || []).map((field) => editableField(field, 'output'))); setChildWorkflowRefs(children); setChildPickerOpen(false); setDraft(actions)
     } catch (error) { onNotify(`读取实验操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
   async function addAction(templateUuid: string) {
@@ -213,7 +280,7 @@ export function OperationsPage({ materials, connected, onNotify }: { materials: 
       const fields = await loadActionParameters(templateUuid)
       const id = crypto.randomUUID()
       const param = Object.fromEntries(fields.filter((field) => field.schema.default !== undefined).map((field) => [field.key, field.schema.default]))
-      setDraft((current) => [...current, { id, templateUuid, materialUuid: device?.uuid || '', deviceId: device?.sourceNodeId || '', name: template.displayName, fields, param, inputBindings: {} }])
+      setDraft((current) => [...current, { id, templateUuid, materialUuid: device?.uuid || '', deviceId: device?.uuid || '', name: template.displayName, description: template.description || template.displayName, fields, param, inputBindings: {} }])
       setExpandedActionId(id)
     } catch (error) { onNotify(`读取 Action 参数失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
@@ -222,33 +289,73 @@ export function OperationsPage({ materials, connected, onNotify }: { materials: 
     if (nextIndex < 0 || nextIndex >= draft.length) return
     setDraft((current) => { const next = [...current]; [next[index], next[nextIndex]] = [next[nextIndex], next[index]]; return next })
   }
+  function moveChild(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction
+    if (nextIndex < 0 || nextIndex >= childWorkflowRefs.length) return
+    setChildWorkflowRefs((current) => {
+      const next = [...current]
+      ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+      return next.map((child, childIndex) => ({ ...child, x: 120 + childIndex * 220 }))
+    })
+  }
   async function submit() {
     if (saveProblem) { onNotify(saveProblem); return }
     setSaving(true)
+    let createdNewWorkflow = false
+    let savedWorkflowUuid = editingUuid
     try {
       let inputContract: Record<string, unknown>; let outputContract: Record<string, unknown>
       try { inputContract = serialiseInputContract(inputContractFields); outputContract = serialiseOutputContract(outputContractFields) } catch { throw new Error('工作流参数默认值不是有效 JSON，请检查对象或数组参数') }
-      let savedWorkflowUuid = editingUuid
       let savedRevision = 1
       if (editingUuid) {
-        await updateExperimentOperation({ workflowUuid: editingUuid, name: name.trim(), description: description.trim(), categoryUuid: categoryUuid || undefined, inputContract, outputContract, actions: draft.map(({ nodeUuid, templateUuid, materialUuid, deviceId, name: actionName, param, inputBindings }) => ({ nodeUuid, templateUuid, materialUuid, deviceId, name: actionName, param, inputBindings })) })
+        await updateExperimentOperation({ workflowUuid: editingUuid, name: name.trim(), description: description.trim(), categoryUuid: categoryUuid || undefined, inputContract, outputContract, actions: draft.map(({ nodeUuid, templateUuid, materialUuid, deviceId, name: actionName, description: actionDescription, param, inputBindings }) => ({ nodeUuid, templateUuid, materialUuid, deviceId, name: actionName, description: actionDescription, param, inputBindings })) })
         const savedGraph = await loadWorkflowGraph(editingUuid)
         savedRevision = savedGraph.workflow.revision
         onNotify(`实验操作“${name}”已保存，状态已退回 source`)
       } else {
-        const created = await createExperimentOperation({ name: name.trim(), description: description.trim(), categoryUuid: categoryUuid || undefined, inputContract, outputContract, actions: draft.map(({ templateUuid, materialUuid, deviceId, name: actionName, param, inputBindings }) => ({ templateUuid, materialUuid, deviceId, name: actionName, param, inputBindings })) })
+        const created = await createExperimentOperation({ name: name.trim(), description: description.trim(), categoryUuid: categoryUuid || undefined, inputContract, outputContract, actions: draft.map(({ templateUuid, materialUuid, deviceId, name: actionName, description: actionDescription, param, inputBindings }) => ({ templateUuid, materialUuid, deviceId, name: actionName, description: actionDescription, param, inputBindings })) })
         savedWorkflowUuid = created.workflowUuid
+        createdNewWorkflow = true
         savedRevision = created.revision
         onNotify(`实验操作“${name}”已保存为 source，可确认后发布`)
       }
-      for (const child of childWorkflowRefs) {
-        const inserted = await insertCompositeWorkflow({ parentWorkflowUuid: savedWorkflowUuid, revision: savedRevision, contractUuid: child.contractUuid, pose: { x: 120 + (draft.length + 1) * 220, y: 180 } })
+      for (const [childIndex, child] of childWorkflowRefs.entries()) {
+        const childPose = { x: 120 + childIndex * 220, y: child.y }
+        const resolvedBindings = { ...child.deviceBindings }
+        for (const requirement of child.requirements) {
+          if (!resolvedBindings[requirement.key]) {
+            const device = materials.find((material) => material.resourceTemplateUuid === requirement.resourceTemplateUuid)
+            if (device) resolvedBindings[requirement.key] = device.uuid
+          }
+        }
+        if (child.invocationUuid) {
+          const patched = await patchWorkflowNode(child.invocationUuid, { pose: childPose })
+          savedRevision = Number(patched?.workflow?.revision || patched?.revision || savedRevision + 1)
+          continue
+        }
+        const invocationUuid = crypto.randomUUID()
+        const inserted = await insertCompositeWorkflow({ parentWorkflowUuid: savedWorkflowUuid, revision: savedRevision, contractUuid: child.contractUuid, invocationUuid, deviceBindings: resolvedBindings, pose: childPose })
+        child.invocationUuid = invocationUuid
         savedRevision = Number(inserted?.workflow?.revision || inserted?.revision || savedRevision + 1)
       }
+      const childNodeUuids = childWorkflowRefs.map((child) => child.invocationUuid).filter((uuid): uuid is string => Boolean(uuid))
+      const savedGraph = await loadWorkflowGraph(savedWorkflowUuid)
+      const actionNodeUuids = [...savedGraph.nodes]
+        .filter((node) => !node.parentUuid && !node.meta_data?.unilab?.composite)
+        .sort((left, right) => Number(left.meta_data?.unilab?.sequence_index ?? Number.MAX_SAFE_INTEGER) - Number(right.meta_data?.unilab?.sequence_index ?? Number.MAX_SAFE_INTEGER))
+        .map((node) => String(node.uuid))
+      await ensureWorkflowSequenceEdges(savedWorkflowUuid, [...childNodeUuids, ...actionNodeUuids])
       setCreating(false); setDraft([])
       await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] })
       await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
-    } catch (error) { onNotify(`保存失败：${error instanceof Error ? error.message : '未知错误'}`) } finally { setSaving(false) }
+    } catch (error) {
+      // 创建流程是多步提交；子工作流/连线失败时回滚刚创建的父流程，
+      // 防止列表残留一个没有节点的空实验操作。
+      if (createdNewWorkflow && savedWorkflowUuid) {
+        try { await deleteExperimentOperation(savedWorkflowUuid) } catch { /* 保留原始错误 */ }
+      }
+      onNotify(`保存失败：${error instanceof Error ? error.message : '未知错误'}`)
+    } finally { setSaving(false) }
   }
 
   async function publish(operation: WorkflowDefinition) {
@@ -285,14 +392,14 @@ export function OperationsPage({ materials, connected, onNotify }: { materials: 
         <div className="device-template-list">{deviceGroups.map((device) => <button key={device.uuid} className={selectedDevice?.uuid === device.uuid ? 'active' : ''} onClick={() => { setSelectedDeviceUuid(device.uuid); setQuery('') }}><span><FlaskConical size={15} /></span><div><strong>{device.name}</strong><small>{device.actions.length} 个 Action</small></div><ChevronRight size={13} /></button>)}</div>
         {selectedDevice ? <section className="device-actions"><header><strong>{selectedDevice.name}</strong><span>{visibleActions.length} 个 Action</span></header>{visibleActions.map((action) => <button key={action.uuid} disabled={!creating} onClick={() => creating ? void addAction(action.uuid) : undefined}><div><strong>{action.displayName}</strong><code>{action.name}</code></div>{creating ? <Plus size={14} /> : null}</button>)}</section> : null}
       </Panel>
-      {creating ? <Panel className="operation-builder"><div className="builder-heading"><div><span>EXPERIMENT OPERATION EDITOR</span><h2>{editingUuid ? '编辑实验操作' : '创建实验操作'}</h2>{editingUuid ? <code>{editingUuid}</code> : null}<p>{editingUuid ? '保存修改后状态退回 source，需要重新发布。' : '选择设备 Action 或引用已发布实验操作，组成可复用子工作流。'}</p></div><div className="builder-heading-actions"><strong>{draft.length + childWorkflowRefs.length} 个节点</strong><Button tone="primary" icon={<Save size={15} />} disabled={Boolean(saveProblem) || saving} title={saveProblem} onClick={() => void submit()}>{saving ? '正在保存…' : '保存实验操作'}</Button></div></div>
+      {creating ? <Panel className="operation-builder"><div className="builder-heading"><div><span>EXPERIMENT OPERATION EDITOR</span><h2>{editingUuid ? '编辑实验操作' : '创建实验操作'}</h2>{editingUuid ? <code>{editingUuid}</code> : null}<p>{editingUuid ? '保存修改后状态退回 source，需要重新发布。' : '选择设备 Action 或引用已发布实验操作，组成可复用子工作流。'}</p></div><div className="builder-heading-actions"><strong>{draft.length + childWorkflowRefs.length} 个节点</strong><Button tone="primary" icon={<Save size={15} />} disabled={saving} title={saveProblem || undefined} onClick={() => void submit()}>{saving ? '正在保存…' : '保存实验操作'}</Button></div></div>
         <div className="operation-meta"><label><span>操作名称</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：S09 移液并混匀" /></label><label><span>操作类别</span><select value={categoryUuid} onChange={(event) => setCategoryUuid(event.target.value)}><option value="">未分类</option>{categoriesQuery.data?.map((category) => <option key={category.uuid} value={category.uuid}>{category.name}</option>)}</select></label><label className="wide"><span>说明</span><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="描述该实验操作的目的和约束" /></label></div>
         <div className="save-requirements" data-ready={!saveProblem || undefined}>{saveProblem || `配置完整 · ${workflowParameters.length} 个工作流参数`}</div>
         <section className="workflow-contract-editor"><header><div><strong>工作流参数</strong><span>对外暴露给父工作流的输入和输出合同</span></div><span className="contract-editor-hint">参数名称需唯一；保存时由 OS 做最终校验</span></header><div className="workflow-contract-editors"><ContractEditor kind="input" fields={inputContractFields} setFields={setInputContractFields} /><ContractEditor kind="output" fields={outputContractFields} setFields={setOutputContractFields} /></div></section>
-        <section className="child-reference-section"><header><div><strong>子工作流引用</strong><small>仅可引用已发布的实验操作，保存后作为一个组合节点加入画布。</small></div><Button icon={<Workflow size={14} />} onClick={() => setChildPickerOpen((open) => !open)}>引用已发布子工作流</Button></header>{childPickerOpen ? <div className="child-reference-picker">{publishedChildrenQuery.isFetching ? <p>正在读取已发布实验操作…</p> : publishedChildrenQuery.data?.length ? publishedChildrenQuery.data.map((contract) => { const contractUuid = String(contract.uuid || ''); const exists = childWorkflowRefs.some((child) => child.contractUuid === contractUuid); return <button type="button" key={contractUuid} disabled={exists} onClick={() => { setChildWorkflowRefs((current) => [...current, { contractUuid, workflowUuid: String(contract.workflow_uuid || ''), name: String(contract.name || contract.workflow_uuid), revision: Number(contract.workflow_revision || contract.version || 1) }]); setChildPickerOpen(false) }}><Workflow size={14} /><span><strong>{String(contract.name || contract.workflow_uuid)}</strong><small>{String(contract.workflow_uuid || '')} · r{String(contract.workflow_revision || contract.version || '')}</small></span><em>{exists ? '已添加' : '添加'}</em></button> }) : <p>暂无可引用的已发布实验操作。</p>}</div> : null}{childWorkflowRefs.length ? <div className="child-reference-list">{childWorkflowRefs.map((child) => <div key={child.contractUuid}><Workflow size={13} /><span><strong>{child.name}</strong><small>{child.workflowUuid} · r{child.revision}</small></span><button type="button" aria-label={`移除子工作流 ${child.name}`} onClick={() => setChildWorkflowRefs((current) => current.filter((item) => item.contractUuid !== child.contractUuid))}>×</button></div>)}</div> : null}</section>
+        <section className="child-reference-section"><header><div><strong>子工作流引用</strong><small>仅可引用已发布的实验操作；执行器绑定和画布顺序会随父工作流保存。</small></div><Button icon={<Workflow size={14} />} onClick={() => setChildPickerOpen((open) => !open)}>引用已发布子工作流</Button></header>{childPickerOpen ? <div className="child-reference-picker">{publishedChildrenQuery.isFetching ? <p>正在读取已发布实验操作…</p> : publishedChildrenQuery.data?.length ? publishedChildrenQuery.data.map((contract) => { const contractUuid = String(contract.uuid || ''); const exists = childWorkflowRefs.some((child) => child.contractUuid === contractUuid); return <button type="button" key={contractUuid} disabled={exists} onClick={() => { const requirements = Array.isArray(contract.executor_requirements) ? contract.executor_requirements.map((item: Record<string, unknown>) => ({ key: String(item.key || ''), resourceTemplateUuid: String(item.resource_template_uuid || ''), displayName: String(item.display_name || item.key || '执行设备') })).filter((item: ChildWorkflowRequirement) => item.key) : []; const bindings = Object.fromEntries(requirements.map((requirement) => { const device = materials.find((material) => material.resourceTemplateUuid === requirement.resourceTemplateUuid && material.sourceNodeId); return [requirement.key, device?.uuid || ''] })); setChildWorkflowRefs((current) => [...current, { contractUuid, workflowUuid: String(contract.workflow_uuid || ''), name: String(contract.name || contract.workflow_uuid), revision: Number(contract.workflow_revision || contract.version || 1), x: 120 + current.length * 220, y: 180, requirements, deviceBindings: bindings }]); setChildPickerOpen(false) }}><Workflow size={14} /><span><strong>{String(contract.name || contract.workflow_uuid)}</strong><small>{String(contract.workflow_uuid || '')} · r{String(contract.workflow_revision || contract.version || '')} · {Array.isArray(contract.executor_requirements) ? contract.executor_requirements.length : 0} 个执行设备</small></span><em>{exists ? '已添加' : '添加'}</em></button> }) : <p>暂无可引用的已发布实验操作。</p>}</div> : null}{childWorkflowRefs.length ? <div className="child-reference-list">{childWorkflowRefs.map((child, childIndex) => <div key={child.contractUuid}><Workflow size={13} /><span><strong>{child.name}</strong><small>{child.workflowUuid} · r{child.revision}</small>{child.requirements.map((requirement) => <label className="child-binding" key={requirement.key}><span>{requirement.displayName}</span><select aria-label={`${child.name} ${requirement.displayName}`} value={child.deviceBindings[requirement.key] || ''} onChange={(event) => setChildWorkflowRefs((current) => current.map((item) => item.contractUuid === child.contractUuid ? { ...item, deviceBindings: { ...item.deviceBindings, [requirement.key]: event.target.value } } : item))}><option value="">选择设备实例</option>{materials.filter((material) => material.resourceTemplateUuid === requirement.resourceTemplateUuid && material.sourceNodeId).map((material) => <option key={material.uuid} value={material.uuid}>{material.name}</option>)}</select></label>)}</span><div className="child-reference-controls"><button type="button" disabled={childIndex === 0} aria-label={`子工作流 ${child.name} 上移`} onClick={() => setChildWorkflowRefs((current) => { const next = [...current]; [next[childIndex - 1], next[childIndex]] = [next[childIndex], next[childIndex - 1]]; return next })}>↑</button><button type="button" disabled={childIndex === childWorkflowRefs.length - 1} aria-label={`子工作流 ${child.name} 下移`} onClick={() => setChildWorkflowRefs((current) => { const next = [...current]; [next[childIndex], next[childIndex + 1]] = [next[childIndex + 1], next[childIndex]]; return next })}>↓</button><button type="button" aria-label={`移除子工作流 ${child.name}`} onClick={() => setChildWorkflowRefs((current) => current.filter((item) => item.contractUuid !== child.contractUuid))}>×</button></div></div>)}</div> : null}</section>
         {workflowParameters.length ? <div className="workflow-parameter-summary"><strong>节点绑定的工作流参数</strong>{workflowParameters.map((parameter) => <code key={parameter}>{parameter}</code>)}</div> : null}
-        <div className="operation-canvas" aria-label="实验操作节点画布">{childWorkflowRefs.map((child, index) => <div className="operation-canvas-item" key={child.contractUuid}><article className="operation-canvas-node child-workflow-node"><header><span>{String(index + 1).padStart(2, '0')}</span><Workflow size={13} /><div className="step-controls"><button aria-label={`移除子工作流 ${child.name}`} onClick={() => setChildWorkflowRefs((current) => current.filter((item) => item.contractUuid !== child.contractUuid))}>×</button></div></header><div className="node-body"><Workflow size={17} /><strong>{child.name}</strong><small>已发布实验操作 · 子工作流节点</small><span>对外暴露输入/输出参数</span></div><span className="node-port">子工作流</span></article></div>)}{draft.map((item, index) => { const template = actionsQuery.data?.find((action) => action.uuid === item.templateUuid); const devices = materials.filter((material) => material.resourceTemplateUuid === template?.resourceTemplate.uuid && material.sourceNodeId); const requiredCount = item.fields.filter((field) => field.required).length; const position = childWorkflowRefs.length + index; return <div className="operation-canvas-item" key={item.id}><article className={`operation-canvas-node ${expandedActionId === item.id ? 'selected' : ''}`}><header><span>{String(position + 1).padStart(2, '0')}</span><GripVertical size={13} /><div className="step-controls"><button aria-label={`上移 ${item.name}`} disabled={index === 0} onClick={() => moveAction(index, -1)}>←</button><button aria-label={`下移 ${item.name}`} disabled={index === draft.length - 1} onClick={() => moveAction(index, 1)}>→</button><button aria-label={`删除节点 ${item.name}`} onClick={() => setDraft((current) => current.filter((action) => action.id !== item.id))}>×</button></div></header><button className="node-body" onClick={() => setExpandedActionId(item.id)}><FlaskConical size={17} /><strong>{item.name}</strong><small>{template?.resourceTemplate.displayName || '未知设备模板'}</small><span>{requiredCount} 必填 · {item.fields.length - requiredCount} 选填</span></button><select aria-label={`设备实例 ${item.name}`} value={item.materialUuid} onChange={(event) => { const device = devices.find((candidate) => candidate.uuid === event.target.value); setDraft((current) => current.map((action) => action.id === item.id ? { ...action, materialUuid: device?.uuid || '', deviceId: device?.sourceNodeId || '' } : action)) }}><option value="">选择设备实例</option>{devices.map((device) => <option value={device.uuid} key={device.uuid}>{device.name}</option>)}</select><button className="node-port" aria-label={`配置参数 ${item.name}`} onClick={() => setExpandedActionId(item.id)}>参数</button></article>{position < childWorkflowRefs.length + draft.length - 1 ? <span className="canvas-edge"><ArrowRight size={16} /><small>ready</small></span> : null}</div> })}{!draft.length && !childWorkflowRefs.length ? <EmptyState title="尚未添加工作流节点" description="从左侧选择设备，再点击设备下的 Action 加入实验操作。" /> : null}</div>
-        {expandedAction ? <div className="node-parameter-editor"><header><div><strong>{expandedAction.name} · 节点参数</strong><span>固定值或绑定工作流参数</span></div><button aria-label="关闭节点参数" onClick={() => setExpandedActionId('')}>×</button></header>{expandedAction.fields.length ? expandedAction.fields.map((field) => { const binding = expandedAction.inputBindings[field.handleUuid]; const source = binding ? 'workflow' : 'literal'; return <div className="node-parameter-row" key={field.handleUuid}><label><span>{field.displayName}<em data-required={field.required}>{field.required ? '必填' : '选填'}</em></span><code>{field.key}</code></label><select value={source} onChange={(event) => setDraft((current) => current.map((action) => { if (action.id !== expandedAction.id) return action; const nextBindings = { ...action.inputBindings }; if (event.target.value === 'workflow') nextBindings[field.handleUuid] = { parameter: field.key }; else delete nextBindings[field.handleUuid]; return { ...action, inputBindings: nextBindings } }))}><option value="literal">固定值</option><option value="workflow">工作流参数</option></select>{source === 'workflow' ? <input aria-label={`工作流参数 ${field.key}`} value={binding?.parameter || ''} onChange={(event) => setDraft((current) => current.map((action) => action.id === expandedAction.id ? { ...action, inputBindings: { ...action.inputBindings, [field.handleUuid]: { parameter: event.target.value } } } : action))} placeholder={field.required ? '必填：参数名称' : '选填：参数名称'} /> : (field.schema.type === 'object' || field.schema.type === 'array' || field.schema.$slot) ? <textarea aria-label={`节点参数 ${field.key}`} value={paramDrafts[`${expandedAction.id}:${field.key}`] ?? actionValue(expandedAction.param[field.key])} onChange={(event) => setParamDrafts((current) => ({ ...current, [`${expandedAction.id}:${field.key}`]: event.target.value }))} onBlur={(event) => { try { const value = parseParameterValue(event.target.value, field.schema); setDraft((current) => current.map((action) => action.id === expandedAction.id ? { ...action, param: { ...action.param, [field.key]: value } } : action)) } catch { onNotify(`参数 ${field.key} 不是有效 JSON`) } }} placeholder={`${field.required ? '必填' : '选填'} · JSON`} /> : <input aria-label={`节点参数 ${field.key}`} value={actionValue(expandedAction.param[field.key])} onChange={(event) => { try { const value = parseParameterValue(event.target.value, field.schema); setDraft((current) => current.map((action) => action.id === expandedAction.id ? { ...action, param: { ...action.param, [field.key]: value } } : action)) } catch { /* 保留上一个有效值 */ } }} placeholder={`${field.required ? '必填' : '选填'} · ${String(field.schema.type || field.schema.$slot || 'string')}`} />}</div> }) : <EmptyState title="该 Action 没有输入参数" description="输出端口和 ready 控制依赖由模板定义。" />}</div> : null}
+        <div className="operation-canvas" aria-label="实验操作节点画布">{childWorkflowRefs.map((child, index) => <div className="operation-canvas-item" key={child.contractUuid}><article className="operation-canvas-node child-workflow-node"><header><span>{String(index + 1).padStart(2, '0')}</span><Workflow size={13} /><div className="step-controls"><button aria-label={`上移子工作流 ${child.name}`} disabled={index === 0} onClick={() => moveChild(index, -1)}>←</button><button aria-label={`下移子工作流 ${child.name}`} disabled={index === childWorkflowRefs.length - 1} onClick={() => moveChild(index, 1)}>→</button><button aria-label={`移除子工作流 ${child.name}`} onClick={() => setChildWorkflowRefs((current) => current.filter((item) => item.contractUuid !== child.contractUuid))}>×</button></div></header><div className="node-body"><Workflow size={17} /><strong>{child.name}</strong><small>已发布实验操作 · 子工作流节点</small><span>{child.requirements.length} 个执行器 · 输入/输出已暴露</span></div><span className="node-port">子工作流 ready</span></article>{index < childWorkflowRefs.length + draft.length - 1 ? <span className="canvas-edge"><ArrowRight size={16} /><small>ready</small></span> : null}</div>)}{draft.map((item, index) => { const template = actionsQuery.data?.find((action) => action.uuid === item.templateUuid); const devices = materials.filter((material) => material.resourceTemplateUuid === template?.resourceTemplate.uuid && material.sourceNodeId); const requiredCount = item.fields.filter((field) => field.required).length; const position = childWorkflowRefs.length + index; return <div className="operation-canvas-item" key={item.id}><article className={`operation-canvas-node ${expandedActionId === item.id ? 'selected' : ''}`}><header><span>{String(position + 1).padStart(2, '0')}</span><GripVertical size={13} /><div className="step-controls"><button aria-label={`上移 ${item.name}`} disabled={index === 0} onClick={() => moveAction(index, -1)}>←</button><button aria-label={`下移 ${item.name}`} disabled={index === draft.length - 1} onClick={() => moveAction(index, 1)}>→</button><button aria-label={`删除节点 ${item.name}`} onClick={() => setDraft((current) => current.filter((action) => action.id !== item.id))}>×</button></div></header><button className="node-body" onClick={() => setExpandedActionId(item.id)}><FlaskConical size={17} /><strong>{item.name}</strong><small>{template?.resourceTemplate.displayName || '未知设备模板'}</small><span>{requiredCount} 必填 · {item.fields.length - requiredCount} 选填</span></button><select aria-label={`设备实例 ${item.name}`} value={item.materialUuid} onChange={(event) => { const device = devices.find((candidate) => candidate.uuid === event.target.value); setDraft((current) => current.map((action) => action.id === item.id ? { ...action, materialUuid: device?.uuid || '', deviceId: device?.sourceNodeId || '' } : action)) }}><option value="">选择设备实例</option>{devices.map((device) => <option value={device.uuid} key={device.uuid}>{device.name}</option>)}</select><button className="node-port" aria-label={`配置参数 ${item.name}`} onClick={() => setExpandedActionId(item.id)}>参数</button></article>{position < childWorkflowRefs.length + draft.length - 1 ? <span className="canvas-edge"><ArrowRight size={16} /><small>ready</small></span> : null}</div> })}{!draft.length && !childWorkflowRefs.length ? <EmptyState title="尚未添加工作流节点" description="从左侧选择设备，再点击设备下的 Action 加入实验操作。" /> : null}</div>
+        {expandedAction ? <div className="node-parameter-editor"><header><div><strong>{expandedAction.name} · 节点参数</strong><span>固定值或绑定工作流参数</span></div><button aria-label="关闭节点参数" onClick={() => setExpandedActionId('')}>×</button></header>{expandedAction.fields.length ? expandedAction.fields.map((field) => { const binding = expandedAction.inputBindings[field.handleUuid]; const source = binding ? 'workflow' : 'literal'; return <div className="node-parameter-row" key={field.handleUuid}><label><span>{field.displayName}<em data-required={field.required}>{field.required ? '必填' : '选填'}</em></span><code>{field.key}</code></label><select value={source} onChange={(event) => { if (event.target.value === 'workflow') ensureInputContractForBinding(field.key, field); setDraft((current) => current.map((action) => { if (action.id !== expandedAction.id) return action; const nextBindings = { ...action.inputBindings }; if (event.target.value === 'workflow') nextBindings[field.handleUuid] = { parameter: field.key }; else delete nextBindings[field.handleUuid]; return { ...action, inputBindings: nextBindings } })) }}><option value="literal">固定值</option><option value="workflow">工作流参数</option></select>{source === 'workflow' ? <input aria-label={`工作流参数 ${field.key}`} value={binding?.parameter || ''} onChange={(event) => { ensureInputContractForBinding(event.target.value, field); setDraft((current) => current.map((action) => action.id === expandedAction.id ? { ...action, inputBindings: { ...action.inputBindings, [field.handleUuid]: { parameter: event.target.value } } } : action)) }} placeholder={field.required ? '必填：参数名称' : '选填：参数名称'} /> : (field.schema.type === 'object' || field.schema.type === 'array' || field.schema.$slot) ? <textarea aria-label={`节点参数 ${field.key}`} value={paramDrafts[`${expandedAction.id}:${field.key}`] ?? actionValue(expandedAction.param[field.key])} onChange={(event) => setParamDrafts((current) => ({ ...current, [`${expandedAction.id}:${field.key}`]: event.target.value }))} onBlur={(event) => { try { const value = parseParameterValue(event.target.value, field.schema); setDraft((current) => current.map((action) => action.id === expandedAction.id ? { ...action, param: { ...action.param, [field.key]: value } } : action)) } catch { onNotify(`参数 ${field.key} 不是有效 JSON`) } }} placeholder={`${field.required ? '必填' : '选填'} · JSON`} /> : <input aria-label={`节点参数 ${field.key}`} value={actionValue(expandedAction.param[field.key])} onChange={(event) => { try { const value = parseParameterValue(event.target.value, field.schema); setDraft((current) => current.map((action) => action.id === expandedAction.id ? { ...action, param: { ...action.param, [field.key]: value } } : action)) } catch { /* 保留上一个有效值 */ } }} placeholder={`${field.required ? '必填' : '选填'} · ${String(field.schema.type || field.schema.$slot || 'string')}`} />}</div> }) : <EmptyState title="该 Action 没有输入参数" description="输出端口和 ready 控制依赖由模板定义。" />}</div> : null}
       </Panel> : <Panel className="operation-library operation-home"><PanelHeader title="实验操作" description={`${operationsQuery.data?.length || 0} 个可复用子工作流`} action={<Workflow size={17} />} /><div className="operation-list">{operationsQuery.data?.map((operation) => <article key={operation.uuid} className={selectedOperation?.uuid === operation.uuid ? 'selected' : ''}><span><Workflow size={16} /></span><div><strong>{operation.name}</strong><small>r{operation.revision} · {operation.status === 'published' ? '已发布' : 'source'}</small><code>{operation.uuid}</code></div><div className="operation-row-actions"><button title="查看" aria-label={`查看 ${operation.name} ${operation.uuid}`} onClick={() => void viewOperation(operation)}><Eye size={13} /></button><button title="编辑" aria-label={`编辑 ${operation.name} ${operation.uuid}`} onClick={() => void beginEdit(operation)}><Pencil size={13} /></button>{operation.status !== 'published' ? <button title="发布" aria-label={`发布 ${operation.name} ${operation.uuid}`} onClick={() => void publish(operation)}><Send size={13} /></button> : null}<button className="danger" title="删除" aria-label={`删除 ${operation.name} ${operation.uuid}`} onClick={() => void remove(operation)}><Trash2 size={13} /></button></div></article>)}{!operationsQuery.data?.length ? <EmptyState title="暂无实验操作" description="点击右上角“创建实验操作”，从设备 Action 开始编排。" /> : null}</div>{selectedOperation ? <aside className="operation-detail"><header><div><small>实验操作详情</small><h3>{selectedOperation.name}</h3><code>{selectedOperation.uuid}</code></div><button aria-label="关闭详情" onClick={() => setSelectedOperation(null)}>×</button></header><dl><div><dt>状态</dt><dd>{selectedOperation.status}</dd></div><div><dt>修订</dt><dd>r{selectedOperation.revision}</dd></div><div><dt>节点</dt><dd>{selectedOperation.nodeCount}</dd></div><div><dt>类别</dt><dd>{selectedOperation.operationCategoryUuid || '未分类'}</dd></div></dl><p>{selectedOperation.description || '暂无说明'}</p><section className="operation-detail-nodes"><strong>节点明细</strong>{selectedOperationNodes.map((node, index) => <div key={node.uuid}><span>{String(index + 1).padStart(2, '0')}</span><p><strong>{node.name}</strong><code>{node.uuid}</code><small>{node.materialUuid || '未绑定设备实例'}</small></p></div>)}</section><footer><Button icon={<Pencil size={13} />} onClick={() => void beginEdit(selectedOperation)}>编辑</Button>{selectedOperation.status !== 'published' ? <Button tone="primary" icon={<Send size={13} />} onClick={() => void publish(selectedOperation)}>发布</Button> : null}<Button icon={<Trash2 size={13} />} onClick={() => void remove(selectedOperation)}>删除</Button></footer></aside> : null}</Panel>}
     </div>
   </div>
