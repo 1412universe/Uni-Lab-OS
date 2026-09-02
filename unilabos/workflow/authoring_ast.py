@@ -210,6 +210,9 @@ def parse_authoring_source(
     functions: list[ast.FunctionDef] = []
     result_records: list[ast.ClassDef] = []
     for statement in declarations:
+        # 允许模块级文档字符串；它只用于说明，不参与工作流定义。
+        if isinstance(statement, ast.Expr) and isinstance(getattr(statement, "value", None), ast.Constant) and isinstance(statement.value.value, str):
+            continue
         if isinstance(statement, ast.AnnAssign):
             devices.append(_device_declaration(statement, imports))
         elif isinstance(statement, ast.FunctionDef):

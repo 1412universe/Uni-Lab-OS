@@ -136,10 +136,25 @@ async function postData<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   })
   const body = await response.json().catch(() => null)
-  if (!response.ok) {
-    throw new Error(body?.error?.msg || body?.detail || `Edge API 请求失败（${response.status}）`)
-  }
+  if (!response.ok) throw new Error(formatApiError(body, response.status))
   return unwrapEnvelope(body as EdgeEnvelope<T>)
+}
+
+function formatApiError(body: unknown, status: number): string {
+  const record = body && typeof body === 'object' ? body as RawRecord : {}
+  const error = record.error && typeof record.error === 'object' ? record.error as RawRecord : {}
+  const detail = record.detail
+  if (typeof detail === 'string' && detail) return `${detail}（HTTP ${status}）`
+  if (Array.isArray(detail)) {
+    const fields = detail.map((item) => {
+      const value = item && typeof item === 'object' ? item as RawRecord : {}
+      const location = Array.isArray(value.loc) ? value.loc.join('.') : ''
+      return `${location ? `${location}: ` : ''}${String(value.msg || '字段校验失败')}`
+    }).join('；')
+    if (fields) return `${fields}（HTTP ${status}）`
+  }
+  const message = error.msg || error.message || record.message
+  return `${typeof message === 'string' && message ? message : `Edge API 请求失败（${status}）`}`
 }
 
 async function writeData<T>(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: string, payload?: unknown): Promise<T> {
@@ -149,7 +164,7 @@ async function writeData<T>(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: s
     body: payload === undefined ? undefined : JSON.stringify(payload),
   })
   const body = await response.json().catch(() => null)
-  if (!response.ok) throw new Error(`${body?.error?.msg || body?.detail || `Edge API 请求失败（${response.status}）`}（${method} ${path}）`)
+  if (!response.ok) throw new Error(`${formatApiError(body, response.status)}（${method} ${path}）`)
   if (body?.code === 0 && body.data === undefined) return undefined as T
   try { return unwrapEnvelope(body as EdgeEnvelope<T>) } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : 'Edge API 业务错误'}（${method} ${path}）`)

@@ -9,14 +9,14 @@
     {
       "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       "workflow_node_template_uuid": "e28fa36f-4e9e-59f0-b408-8364a9f6cd07",
+      "material_uuid": "60f712c6-b1a9-58df-8548-9ca411425486",
       "name": "导入测试节点",
-      "type": "ILab",
       "param": {
         "command_id": "110"
       },
       "pose": {},
       "execution_policy": {},
-      "meta_data": {}
+      "meta_data": {"unilab": {"executor_binding": {"mode": "fixed", "device_id": "host_node"}}}
     }
   ],
   "edges": [],
