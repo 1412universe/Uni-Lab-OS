@@ -11,7 +11,10 @@ from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 
-from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
+from unilabos.app.scheduler.device_target import (
+    DeviceTargetUnavailable,
+    ResolvedDeviceTarget,
+)
 from unilabos.app.scheduler.dispatch import CancelDispatchState, DispatchPayload
 from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
 from unilabos.app.scheduler.inventory.service import InventoryService
@@ -344,6 +347,67 @@ class CoreRuntime:
         task = self.persist(**values)
         return self.bridge.submit(task)
 
+    def submit_manual(
+        self,
+        *,
+        task_name: str,
+        device_id: str = "reactor-a",
+        timeout_seconds: int = 3600,
+    ) -> tuple[dict[str, Any], str]:
+        """提交一个包装真实设备动作的人工确认节点。"""
+
+        node_uuid = stable_uuid(f"manual-node:{task_name}")
+        job_uuid = stable_uuid(f"manual-job:{task_name}")
+        node = {
+            "uuid": node_uuid,
+            "parent_uuid": None,
+            "kind": "manual_confirm",
+            "device_id": device_id,
+            "material_uuid": self.device_materials[device_id],
+            "action_name": "run",
+            "action_type": "UniLabJsonCommand",
+            "param": {"temperature": 25},
+            "param_schema": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "object",
+                        "properties": {"temperature": {"type": "number"}},
+                        "required": ["temperature"],
+                        "additionalProperties": False,
+                    }
+                },
+                "required": ["goal"],
+                "additionalProperties": False,
+            },
+            "manual_confirmation": {"timeout_seconds": timeout_seconds},
+            "execution_policy": {},
+            "action_resource_contract": {},
+            "material_requirements": [],
+        }
+        job = {
+            "uuid": job_uuid,
+            "workflow_node_uuid": node_uuid,
+            "topological_index": 0,
+            "executor_kind": "manual_confirm",
+            "execution_policy": {},
+            "execution_timeout_seconds": 0,
+            "param": {},
+        }
+        aggregate = self.submit_frozen(
+            task_name=task_name,
+            execution_plan={
+                "version": 1,
+                "run_mode": "normal",
+                "target_node_uuid": None,
+                "nodes": [node],
+                "handles": [],
+                "edges": [],
+            },
+            jobs=[job],
+        )
+        return aggregate, job_uuid
+
     def submit_frozen(
         self,
         *,
@@ -376,6 +440,7 @@ def build_core_runtime(
     max_in_flight_jobs: int = 100,
     max_active_tasks: int = 500,
     max_tasks_per_workflow: int = 100,
+    device_available: Callable[[str], bool] | None = None,
 ) -> CoreRuntime:
     """装配可配置容量的双 SQLite 调度核心组合根。"""
 
@@ -425,6 +490,8 @@ def build_core_runtime(
         """把冻结本地设备身份解析为同一库存中的 Device Material。"""
 
         local_id = str(selector.get("local_device_id") or "")
+        if device_available is not None and not device_available(local_id):
+            raise DeviceTargetUnavailable("device_offline", "虚拟设备当前离线")
         material_uuid = device_materials[local_id]
         frozen_material = str(selector.get("material_uuid") or "")
         if frozen_material and frozen_material != material_uuid:

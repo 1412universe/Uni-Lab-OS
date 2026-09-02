@@ -308,6 +308,7 @@ function jobNodeStatus(
   node: RawRecord,
 ): NodePresentationStatus {
   if (job) {
+    if (job.manual_confirmation?.status === 'pending') return 'attention'
     const status = String(job.status)
     if (job.uncertainty_reason) return 'attention'
     if (job.wait_reason?.code || job.wait_reason?.message) return 'waiting'
@@ -738,6 +739,13 @@ export function adaptTask(
         errorInfo: Array.isArray(job.error_info) ? job.error_info : [],
         startedAt: job.started_at ? String(job.started_at) : undefined,
         finishedAt: job.finished_at ? String(job.finished_at) : undefined,
+        manualConfirmation: job.manual_confirmation ? {
+          status: String(job.manual_confirmation.status) as 'pending' | 'approved' | 'rejected' | 'timed_out' | 'canceled',
+          deadlineAt: String(job.manual_confirmation.deadline_at || ''),
+          actions: Array.isArray(job.manual_confirmation.actions)
+            ? job.manual_confirmation.actions.filter((action: unknown) => action === 'approve' || action === 'reject')
+            : [],
+        } : undefined,
       } : undefined,
     }
   })
@@ -1850,4 +1858,14 @@ export async function createWorkflowTask({
     description,
     meta_data: { source: 'unilabos-frontend' },
   })
+}
+
+export async function decideManualConfirmation(
+  jobUuid: string,
+  action: 'approve' | 'reject',
+): Promise<RawRecord> {
+  return postData<RawRecord>(
+    `/workflow-node-jobs/${encodeURIComponent(jobUuid)}/manual-confirmation`,
+    { action },
+  )
 }

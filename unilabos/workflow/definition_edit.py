@@ -27,6 +27,7 @@ _PATCHABLE_NODE_FIELDS = {
     "name",
     "pose",
     "param",
+    "manual_confirmation",
     "execution_policy",
     "disabled",
     "minimized",
@@ -135,6 +136,9 @@ def create_node(
         "material_uuid": _optional_uuid(payload.get("material_uuid"), "material_uuid"),
         **derived,
         "pose": normalize_json_object(payload.get("pose")),
+        "manual_confirmation": normalize_json_object(
+            payload.get("manual_confirmation")
+        ),
         "execution_policy": normalize_json_object(payload.get("execution_policy")),
         "disabled": bool(payload.get("disabled", False)),
         "minimized": bool(payload.get("minimized", False)),
@@ -155,7 +159,13 @@ def patch_node(node: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, A
             result[field] = _optional_uuid(value, field)
         elif field == "name":
             result[field] = _required_text(value, field)
-        elif field in {"pose", "param", "execution_policy", "meta_data"}:
+        elif field in {
+            "pose",
+            "param",
+            "manual_confirmation",
+            "execution_policy",
+            "meta_data",
+        }:
             result[field] = normalize_json_object(value)
         elif field in {"disabled", "minimized"}:
             if not isinstance(value, bool):

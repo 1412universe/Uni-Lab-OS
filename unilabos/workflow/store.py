@@ -235,6 +235,7 @@ CREATE TABLE IF NOT EXISTS workflow_node (
     icon TEXT,
     pose TEXT NOT NULL,
     param TEXT NOT NULL,
+    manual_confirmation TEXT NOT NULL DEFAULT '{}',
     footer TEXT,
     action_name TEXT,
     action_type TEXT,
@@ -560,6 +561,19 @@ class WorkflowStore:
                                     )
                                 """
                             )
+                    workflow_node_columns = {
+                        row["name"]
+                        for row in self._conn.execute(
+                            "PRAGMA table_info(workflow_node)"
+                        ).fetchall()
+                    }
+                    if "manual_confirmation" not in workflow_node_columns:
+                        self._conn.execute(
+                            """
+                            ALTER TABLE workflow_node
+                            ADD COLUMN manual_confirmation TEXT NOT NULL DEFAULT '{}'
+                            """
+                        )
                     ensure_device_action_run_schema(self._conn)
                     ensure_station_task_submission_schema(self._conn)
                     from unilabos.workflow.workflow_boundary import (
@@ -1627,6 +1641,7 @@ class WorkflowStore:
             node.icon,
             _json(node.pose),
             _json(effective_param),
+            _json(node.manual_confirmation),
             node.footer,
             node.action_name,
             node.action_type,
@@ -1642,10 +1657,16 @@ class WorkflowStore:
                     uuid, create_time, update_time, deleted_at, description,
                     meta_data, workflow_uuid, workflow_node_template_uuid,
                     parent_uuid, material_uuid, name, status, type, icon, pose,
-                    param, footer, action_name, action_type, execution_policy,
+                    param, manual_confirmation, footer, action_name, action_type,
+                    execution_policy,
                     disabled, minimized, script
-                ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?)
+                ) VALUES (
+                    ?, ?, ?, NULL,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?
+                )
                 """,
                 (node.uuid, now, now, *values),
             )
@@ -1657,8 +1678,8 @@ class WorkflowStore:
                 meta_data = ?, workflow_uuid = ?,
                 workflow_node_template_uuid = ?, parent_uuid = ?,
                 material_uuid = ?, name = ?, status = ?, type = ?, icon = ?,
-                pose = ?, param = ?, footer = ?, action_name = ?,
-                action_type = ?, execution_policy = ?, disabled = ?,
+                pose = ?, param = ?, manual_confirmation = ?, footer = ?,
+                action_name = ?, action_type = ?, execution_policy = ?, disabled = ?,
                 minimized = ?, script = ?
             WHERE uuid = ?
             """,
@@ -4027,6 +4048,9 @@ class WorkflowStore:
             "disabled": bool(row["disabled"]),
             "minimized": bool(row["minimized"]),
         }
+        manual_confirmation = _load(row["manual_confirmation"], {})
+        if manual_confirmation:
+            result["manual_confirmation"] = manual_confirmation
         cls._add_optional(
             result,
             row,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from unilabos.app.workflow_api import create_workflow_app
@@ -55,8 +57,8 @@ def test_empty_workflow_preflight_is_read_only_and_runnable_now(tmp_path) -> Non
     store.close()
 
 
-def test_manual_confirmation_preflight_requires_confirmation(tmp_path) -> None:
-    """包含人工确认节点的可执行图须明确提示人工确认而不是误报阻塞。"""
+def test_pure_manual_gate_without_device_action_is_invalid(tmp_path: Path) -> None:
+    """人工确认必须包装真实设备动作，不再兼容纯人工闸门。"""
 
     client, store = _client(tmp_path)
     workflow = client.post(
@@ -75,6 +77,7 @@ def test_manual_confirmation_preflight_requires_confirmation(tmp_path) -> None:
                     "type": "manual_confirm",
                     "pose": {},
                     "param": {},
+                    "manual_confirmation": {"timeout_seconds": 7200},
                     "execution_policy": {},
                     "disabled": False,
                     "minimized": False,
@@ -84,17 +87,23 @@ def test_manual_confirmation_preflight_requires_confirmation(tmp_path) -> None:
             "edges": [],
         },
     )
+    saved_graph = client.get(
+        f"/api/v1/workflows/{workflow['uuid']}/graph"
+    ).json()["data"]
+    assert saved_graph["nodes"][0]["manual_confirmation"] == {
+        "timeout_seconds": 7200
+    }
 
     report = client.get(
         f"/api/v1/workflows/{workflow['uuid']}/run-preflight"
     ).json()["data"]
-    assert report["status"] == "runnable_now"
-    assert report["can_run"] is True
-    confirmation = next(
-        check for check in report["checks"] if check["type"] == "manual_confirmation"
+    assert report["status"] == "invalid"
+    assert report["can_run"] is False
+    invalid = next(
+        check for check in report["checks"] if check["type"] == "execution_plan"
     )
-    assert confirmation["status"] == "confirmation_required"
-    assert confirmation["node_uuid"] == node_uuid
+    assert invalid["code"] == "execution_plan_invalid"
+    assert "真实设备动作" in invalid["message"]
     store.close()
 
 
@@ -113,7 +122,7 @@ def test_manual_confirmation_device_continuation_uses_device_preflight(
                     {
                         "uuid": node_uuid,
                         "kind": "manual_confirm",
-                        "continues_device_action": True,
+                        "manual_confirmation": {"timeout_seconds": 3600},
                         "device_id": "reactor-a",
                         "material_uuid": "device-material-a",
                         "action_name": "heat",
@@ -140,7 +149,7 @@ def test_manual_confirmation_device_continuation_uses_device_preflight(
         },
     )
 
-    assert observed[0]["continues_device_action"] is True
+    assert observed[0]["manual_confirmation"] == {"timeout_seconds": 3600}
     device_check = next(
         item for item in report["checks"] if item["type"] == "device_selection"
     )

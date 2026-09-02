@@ -317,6 +317,7 @@ class WorkflowNodeCreateRequest(_StrictModel):
     type: str = ""
     pose: Dict[str, Any] = Field(default_factory=dict)
     param: Optional[Dict[str, Any]] = None
+    manual_confirmation: Dict[str, Any] = Field(default_factory=dict)
     execution_policy: Dict[str, Any] = Field(default_factory=dict)
     disabled: bool = False
     minimized: bool = False
@@ -324,7 +325,13 @@ class WorkflowNodeCreateRequest(_StrictModel):
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("pose", "execution_policy", "meta_data", mode="before")
+    @field_validator(
+        "pose",
+        "manual_confirmation",
+        "execution_policy",
+        "meta_data",
+        mode="before",
+    )
     @classmethod
     def _json_object(cls, value: Any) -> Dict[str, Any]:
         return normalize_json_object(value)
@@ -338,6 +345,7 @@ class WorkflowNodePatchRequest(_StrictModel):
     name: Optional[str] = None
     pose: Optional[Dict[str, Any]] = None
     param: Optional[Dict[str, Any]] = None
+    manual_confirmation: Optional[Dict[str, Any]] = None
     execution_policy: Optional[Dict[str, Any]] = None
     disabled: Optional[bool] = None
     minimized: Optional[bool] = None
@@ -660,11 +668,7 @@ class DeviceActionRunCreateRequest(_StrictModel):
 class ManualConfirmationDecisionRequest(_StrictModel):
     """人工确认批准或拒绝的公共 DTO。"""
 
-    action: str
-    confirmed_by: str
-    comment: Optional[str] = None
-    idempotency_key: str
-    param: Optional[Dict[str, Any]] = None
+    action: Literal["approve", "reject"]
 
 
 class WorkflowInterventionDecisionRequest(_StrictModel):
@@ -1652,10 +1656,6 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def list_workflow_node_jobs(task_uuid: str) -> JSONResponse:
         return _success(service.list_workflow_node_jobs(task_uuid))
 
-    @router.get("/workflow-tasks/{task_uuid}/manual-confirmations")
-    def list_task_manual_confirmations(task_uuid: str) -> JSONResponse:
-        return _success(service.list_task_manual_confirmations(task_uuid))
-
     @router.get("/workflow-tasks/{task_uuid}/events")
     def list_workflow_task_runtime_events(
         task_uuid: str,
@@ -1740,25 +1740,28 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             )
         )
 
-    @router.get("/workflow-manual-confirmations/{confirmation_uuid}")
-    def get_manual_confirmation(confirmation_uuid: str) -> JSONResponse:
-        return _success(service.get_manual_confirmation(confirmation_uuid))
-
-    @router.post("/workflow-manual-confirmations/{confirmation_uuid}/decision")
+    @router.post("/workflow-node-jobs/{job_uuid}/manual-confirmation")
     def decide_manual_confirmation(
-        confirmation_uuid: str,
+        job_uuid: str,
         body: ManualConfirmationDecisionRequest,
     ) -> JSONResponse:
-        return _success(
-            service.decide_manual_confirmation(
-                confirmation_uuid,
-                action=body.action,
-                confirmed_by=body.confirmed_by,
-                comment=body.comment,
-                idempotency_key=body.idempotency_key,
-                param=body.param,
+        try:
+            return _success(
+                service.decide_manual_confirmation(
+                    job_uuid,
+                    action=body.action,
+                )
             )
-        )
+        except WorkflowError as error:
+            status = (
+                400
+                if error.code == "invalid_input"
+                else (404 if error.code == "not_found" else 409)
+            )
+            return _BackendJSONResponse(
+                status_code=status,
+                content={"code": status, "error": {"msg": error.message}},
+            )
 
     @router.get("/workflow-interventions")
     def list_workflow_interventions(
@@ -1948,6 +1951,11 @@ def install_workflow_api(
             "/api/v1/events",
             "/api/v1/authoring",
         )
+        if request.url.path.endswith("/manual-confirmation"):
+            return _BackendJSONResponse(
+                status_code=400,
+                content={"code": 400, "error": {"msg": "请求参数错误"}},
+            )
         if any(
             request.url.path == prefix or request.url.path.startswith(f"{prefix}/")
             for prefix in workflow_prefixes

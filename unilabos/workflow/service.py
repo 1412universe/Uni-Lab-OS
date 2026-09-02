@@ -410,10 +410,9 @@ class WorkflowTaskSchedulerBridge(Protocol):
         self,
         job_uuid: str,
         *,
-        approved: bool,
-        param: Mapping[str, Any] | None,
+        action: str,
     ) -> dict[str, Any]:
-        """恢复或拒绝一个已经持久开启的人工确认。"""
+        """批准人工确认，或通过既有 Task Cancel 流程拒绝。"""
 
         ...
 
@@ -3839,12 +3838,29 @@ class WorkflowService:
         jobs_by_task = self._store.list_jobs_for_tasks(
             str(task["uuid"]) for task in result["items"]
         )
+        confirmations_by_task = self._manual_confirmation_store().list_by_tasks(
+            str(task["uuid"]) for task in result["items"]
+        )
         return {
             **result,
             "items": [
                 {
                     **task,
-                    "jobs": jobs_by_task.get(str(task["uuid"]), []),
+                    "jobs": [
+                        {
+                            **job,
+                            **(
+                                {"manual_confirmation": confirmation}
+                                if (
+                                    confirmation := confirmations_by_task.get(
+                                        str(task["uuid"]), {}
+                                    ).get(str(job["uuid"]))
+                                )
+                                else {}
+                            ),
+                        }
+                        for job in jobs_by_task.get(str(task["uuid"]), [])
+                    ],
                 }
                 for task in result["items"]
             ],
@@ -3852,7 +3868,21 @@ class WorkflowService:
 
     def list_workflow_node_jobs(self, task_uuid: str) -> list[dict[str, Any]]:
         identity = self.get_workflow_task(task_uuid)["uuid"]
-        return self._store.list_jobs(identity)
+        confirmations = {
+            item["workflow_node_job_uuid"]: item
+            for item in self._manual_confirmation_store().list_by_task(identity)
+        }
+        return [
+            {
+                **job,
+                **(
+                    {"manual_confirmation": confirmations[job["uuid"]]}
+                    if job["uuid"] in confirmations
+                    else {}
+                ),
+            }
+            for job in self._store.list_jobs(identity)
+        ]
 
     def list_workflow_task_runtime_events(
         self,
@@ -3892,7 +3922,12 @@ class WorkflowService:
         except ValueError:
             raise WorkflowError("invalid_input") from None
         try:
-            return self._store.get_job(identity)
+            job = self._store.get_job(identity)
+            try:
+                confirmation = self._manual_confirmation_store().get_by_job(identity)
+            except StoreNotFound:
+                return job
+            return {**job, "manual_confirmation": confirmation}
         except StoreNotFound:
             raise WorkflowError("not_found") from None
 
@@ -3924,11 +3959,11 @@ class WorkflowService:
 
         return TaskRuntimeProjection(self._store).get_execution_wait_graph()
 
-    def get_manual_confirmation(self, confirmation_uuid: str) -> dict[str, Any]:
+    def get_manual_confirmation(self, job_uuid: str) -> dict[str, Any]:
         """读取一条人工确认事实。"""
 
         try:
-            identity = validate_uuid(confirmation_uuid)
+            identity = validate_uuid(job_uuid)
             return self._manual_confirmation_store().get(identity)
         except ValueError:
             raise WorkflowError("invalid_input") from None
@@ -4043,37 +4078,20 @@ class WorkflowService:
 
     def decide_manual_confirmation(
         self,
-        confirmation_uuid: str,
+        job_uuid: str,
         *,
         action: str,
-        confirmed_by: str,
-        comment: str | None,
-        idempotency_key: str,
-        param: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        """幂等批准或拒绝人工确认，并恢复同一工作流作业。"""
+        """按 Job UUID 幂等批准或拒绝，并返回最新 Task 聚合。"""
 
         try:
-            identity = validate_uuid(confirmation_uuid)
-            confirmation, _created = self._manual_confirmation_store().decide(
+            identity = validate_uuid(job_uuid)
+            if self._task_scheduler_bridge is None:
+                raise WorkflowConflict("conflict")
+            return self._task_scheduler_bridge.decide_manual_confirmation(
                 identity,
                 action=action,
-                confirmed_by=confirmed_by,
-                comment=comment,
-                idempotency_key=idempotency_key,
-                param=param,
             )
-            if self._task_scheduler_bridge is not None:
-                self._task_scheduler_bridge.decide_manual_confirmation(
-                    confirmation["workflow_node_job_uuid"],
-                    approved=confirmation["status"] == "approved",
-                    param=(
-                        confirmation["param"]
-                        if confirmation["status"] == "approved"
-                        else None
-                    ),
-                )
-            return self._manual_confirmation_store().get(identity)
         except ValueError:
             raise WorkflowError("invalid_input") from None
         except StoreNotFound:
@@ -6231,6 +6249,10 @@ class WorkflowService:
             value = WorkflowNodeWrite.model_validate(item).model_dump(
                 exclude_none=True,
             )
+            # 普通节点的缺省人工确认配置不属于既有作者图语义。数据库读取会
+            # 省略空对象，这里也保持同一 wire 形状，避免源码往返被误判成改图。
+            if not value.get("manual_confirmation"):
+                value.pop("manual_confirmation", None)
             persisted = applied_nodes.get(value["uuid"], {})
             nodes.append(
                 {

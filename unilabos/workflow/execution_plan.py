@@ -20,6 +20,9 @@ from unilabos.workflow.execution_resource_policy import (
     merge_action_resource_policy,
     validate_static_device_tenancy_order,
 )
+from unilabos.workflow.manual_confirmation import (
+    normalize_manual_confirmation_config,
+)
 
 PLAN_VERSION = 1
 CONTROL_PLAN_VERSION = 2
@@ -369,9 +372,12 @@ class ExecutionPlanBuilder:
                     node_uuid=node_uuid,
                 )
                 planned_node["param_schema"] = action_contract
-            elif kind == "manual_confirm" and self._has_fixed_executor_binding(node):
-                # 人工确认既可以是纯人工闸门，也可以包装一个设备动作。只有后者
-                # 才冻结设备执行合同；纯闸门批准后直接完成本节点。
+            elif kind == "manual_confirm":
+                if not self._has_fixed_executor_binding(node):
+                    raise ExecutionPlanBuildError(
+                        "invalid_executor_binding",
+                        "人工确认节点必须绑定一个真实设备动作",
+                    )
                 planned_node.update(
                     self._device_action_contract(node, template=template)
                 )
@@ -379,7 +385,17 @@ class ExecutionPlanBuilder:
                     template,
                     node_uuid=node_uuid,
                 )
-                planned_node["continues_device_action"] = True
+                try:
+                    planned_node["manual_confirmation"] = (
+                        normalize_manual_confirmation_config(
+                            node.get("manual_confirmation")
+                        )
+                    )
+                except StoreConflict as error:
+                    raise ExecutionPlanBuildError(
+                        "invalid_manual_confirmation",
+                        str(error),
+                    ) from error
             if node.get("material_uuid") is not None:
                 planned_node["material_uuid"] = node["material_uuid"]
             if node.get("script") is not None:
@@ -908,6 +924,10 @@ class ExecutionPlanBuilder:
         受信物料转移动作。
         """
 
+        # ``manual_confirm`` 是工作流节点对底层设备动作模板施加的运行包装，
+        # 因此必须优先于模板自身的 ``device_action`` 执行种类。
+        if str(node.get("type") or "").strip().lower() == "manual_confirm":
+            return "manual_confirm"
         template_metadata = template.get("meta_data")
         template_unilab = (
             template_metadata.get("unilab")

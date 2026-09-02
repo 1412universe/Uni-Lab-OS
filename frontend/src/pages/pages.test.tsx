@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
 import styles from '../styles.css?inline'
@@ -442,6 +442,66 @@ describe('WorkflowsPage', () => {
 })
 
 describe('TasksPage', () => {
+  it('highlights pending manual confirmation and submits approve by Job UUID', async () => {
+    const onNotify = vi.fn()
+    const task = {
+      ...demoTasks[0],
+      nodes: [{
+        ...demoTasks[0].nodes[0],
+        uuid: 'manual-node',
+        name: '请检查设备现场',
+        kind: 'manual_confirm',
+        status: 'attention' as const,
+        job: {
+          uuid: 'manual-job-1',
+          attempt: 1,
+          param: { temperature: 25 },
+          feedbackData: {},
+          returnInfo: {},
+          errorInfo: [],
+          manualConfirmation: {
+            status: 'pending' as const,
+            deadlineAt: '2099-01-01T00:00:00Z',
+            actions: ['approve' as const, 'reject' as const],
+          },
+        },
+      }],
+    }
+    const fetchMock = vi.fn(async () => response({
+      code: 0,
+      data: { task: { uuid: task.uuid }, jobs: [] },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        onRefresh={vi.fn()}
+        onNotify={onNotify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const marker = screen.getByRole('button', { name: /请检查设备现场，需要人工确认/ })
+    expect(marker.closest('.matrix-node')).toHaveClass('matrix-node-attention')
+    expect(screen.getByText(/剩余 \d+s/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '批准' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/workflow-node-jobs/manual-job-1/manual-confirmation',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }),
+    ))
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith(
+      '人工确认已批准，设备动作将继续执行。',
+    ))
+  })
+
   it('distinguishes successful, running, waiting, failed, and not-run nodes in the matrix', () => {
     const style = document.createElement('style')
     style.textContent = styles
@@ -475,8 +535,8 @@ describe('TasksPage', () => {
 
     const nodes = statuses.map((status) => {
       const node = screen.getByRole('button', { name: new RegExp(`状态节点 ${status}，`) })
-      expect(node).toHaveClass(`matrix-node-${status}`)
-      return node
+      expect(node.closest('.matrix-node')).toHaveClass(`matrix-node-${status}`)
+      return node.closest('.matrix-node') as HTMLElement
     })
     const backgroundColors = nodes.map((node) => getComputedStyle(node).backgroundColor)
     expect(backgroundColors).not.toContain('rgba(0, 0, 0, 0)')

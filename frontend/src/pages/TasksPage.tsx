@@ -18,7 +18,7 @@ import {
   ShieldAlert,
   X,
 } from 'lucide-react'
-import { createWorkflowTask } from '../lib/edgeClient'
+import { createWorkflowTask, decideManualConfirmation } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTarget, WorkflowTask } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
@@ -53,11 +53,13 @@ function NodeMarker({
   index,
   selected,
   onSelect,
+  onNotify,
 }: {
   node?: TaskNode
   index: number
   selected: boolean
   onSelect: () => void
+  onNotify: (message: string) => void
 }) {
   const status = node?.status || 'pending'
   const waitReason = node?.waitReason
@@ -65,6 +67,23 @@ function NodeMarker({
   const tooltipId = useId()
   const [tooltipVisible, setTooltipVisible] = useState(false)
   const [tooltipPosition, setTooltipPosition] = useState({ left: 0, top: 0, above: false })
+  const [now, setNow] = useState(() => Date.now())
+  const queryClient = useQueryClient()
+  const confirmation = node?.job?.manualConfirmation
+  const awaitingConfirmation = confirmation?.status === 'pending'
+  const decision = useMutation({
+    mutationFn: (action: 'approve' | 'reject') => decideManualConfirmation(node?.job?.uuid || '', action),
+    onSuccess: (_result, action) => {
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+      onNotify(action === 'approve' ? '人工确认已批准，设备动作将继续执行。' : '人工确认已拒绝，任务正在取消。')
+    },
+    onError: (error) => onNotify(error instanceof Error ? error.message : '人工确认提交失败'),
+  })
+  useEffect(() => {
+    if (!awaitingConfirmation) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [awaitingConfirmation])
   const showTooltip = useCallback(() => {
     if (!markerRef.current) return
     const rect = markerRef.current.getBoundingClientRect()
@@ -90,37 +109,57 @@ function NodeMarker({
   }, [tooltipVisible])
 
   const label = `${node?.name || `节点 ${index + 1}`}，${nodeStatusLabels[status]}`
+  const remainingSeconds = awaitingConfirmation && confirmation.deadlineAt
+    ? Math.max(0, Math.ceil((new Date(confirmation.deadlineAt).getTime() - now) / 1000))
+    : 0
   return (
-    <button
-      type="button"
-      ref={markerRef}
-      className={`matrix-node matrix-node-${status} ${selected ? 'matrix-node-selected' : ''}`}
-      aria-label={label}
-      aria-pressed={selected}
-      aria-describedby={tooltipVisible ? tooltipId : undefined}
-      onClick={(event) => {
-        event.stopPropagation()
-        onSelect()
-      }}
-      onMouseEnter={showTooltip}
-      onMouseLeave={() => setTooltipVisible(false)}
-      onFocus={showTooltip}
-      onBlur={() => setTooltipVisible(false)}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') setTooltipVisible(false)
-      }}
+    <div
+      className={`matrix-node matrix-node-${status} ${awaitingConfirmation ? 'matrix-node-manual-confirmation' : ''} ${selected ? 'matrix-node-selected' : ''}`}
     >
-      <span className="matrix-node-marker">
-        {status === 'succeeded' || status === 'skipped'
-          ? <Check size={13} />
-          : status === 'running' || status === 'canceling'
-            ? <LoaderCircle size={13} />
-            : status === 'failed' || status === 'canceled' || status === 'attention'
-              ? <X size={13} />
-              : index + 1}
-      </span>
-      <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {nodeStatusLabels[status]}</small>
-      <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
+      <button
+        type="button"
+        ref={markerRef}
+        className="matrix-node-select"
+        aria-label={label}
+        aria-pressed={selected}
+        aria-describedby={tooltipVisible ? tooltipId : undefined}
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect()
+        }}
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltipVisible(false)}
+        onFocus={showTooltip}
+        onBlur={() => setTooltipVisible(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setTooltipVisible(false)
+        }}
+      >
+        <span className="matrix-node-marker">
+          {status === 'succeeded' || status === 'skipped'
+            ? <Check size={13} />
+            : status === 'running' || status === 'canceling'
+              ? <LoaderCircle size={13} />
+              : status === 'failed' || status === 'canceled'
+                ? <X size={13} />
+              : status === 'attention' && awaitingConfirmation
+                  ? <ShieldAlert size={13} />
+                  : status === 'attention'
+                    ? <X size={13} />
+                    : index + 1}
+        </span>
+        <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {nodeStatusLabels[status]}</small>
+        <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
+      </button>
+      {awaitingConfirmation ? (
+        <div className="manual-confirmation-actions" onClick={(event) => event.stopPropagation()}>
+          <small>剩余 {remainingSeconds}s</small>
+          <span>
+            <button type="button" disabled={decision.isPending} onClick={() => decision.mutate('reject')}>拒绝</button>
+            <button type="button" disabled={decision.isPending} onClick={() => decision.mutate('approve')}>批准</button>
+          </span>
+        </div>
+      ) : null}
       {tooltipVisible && typeof document !== 'undefined' && createPortal(
         <div
           id={tooltipId}
@@ -143,7 +182,7 @@ function NodeMarker({
         </div>,
         document.body,
       )}
-    </button>
+    </div>
   )
 }
 
@@ -154,6 +193,7 @@ function TaskMatrix({
   onSelect,
   onSelectNode,
   onOpenWorkflow,
+  onNotify,
 }: {
   tasks: WorkflowTask[]
   selectedId: string
@@ -161,6 +201,7 @@ function TaskMatrix({
   onSelect: (id: string) => void
   onSelectNode: (taskUuid: string, nodeUuid: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
+  onNotify: (message: string) => void
 }) {
   const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
   const matrixWidth = TASK_IDENTITY_COLUMN_WIDTH
@@ -226,6 +267,7 @@ function TaskMatrix({
                   onSelect={() => {
                     if (node) onSelectNode(task.uuid, node.uuid)
                   }}
+                  onNotify={onNotify}
                 />
               ))}
               <div className="matrix-progress-cell"><strong>{task.progress}%</strong><span><i style={{ width: `${task.progress}%` }} /></span></div>
@@ -626,6 +668,7 @@ export function TasksPage({
             onSelect={selectTask}
             onSelectNode={selectNode}
             onOpenWorkflow={onOpenWorkflow}
+            onNotify={onNotify}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>

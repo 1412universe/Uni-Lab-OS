@@ -1,617 +1,163 @@
-"""人工确认（ManualConfirmation）的公共合同与调度继续行为。"""
+"""人工确认在 Workflow 持久层的终态与重启策略。"""
 
 from __future__ import annotations
 
-import json
-import time
-from typing import Any
+from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
-from unilabos.app.scheduler.dispatch import RecordingDispatcher
-from unilabos.app.scheduler.device_target import (
-    DeviceTargetUnavailable,
-    ResolvedDeviceTarget,
+from tests.scheduler_core.conftest import build_core_runtime, stable_uuid
+from unilabos.app.scheduler.dispatch import CommittedJobOutcome
+from unilabos.workflow.execution_plan import ExecutionPlanBuilder
+from unilabos.workflow.manual_confirmation import (
+    normalize_manual_confirmation_config,
 )
-from unilabos.app.scheduler.models import DispatchedJob, WorkflowNode, WorkflowSpec
-from unilabos.app.scheduler.service import EdgeScheduler
-from unilabos.app.workflow_api import create_workflow_app
-from unilabos.workflow.service import WorkflowConflict, WorkflowService
-from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.store import StoreConflict
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
-from unilabos.workflow.task_scheduler_bridge import (
-    TaskSchedulerBridge,
-    TaskSchedulerBridgeError,
-)
-
-WORKFLOW_UUID = "10000000-0000-4000-8000-000000000201"
-TASK_UUID = "20000000-0000-4000-8000-000000000201"
-NODE_UUID = "30000000-0000-4000-8000-000000000201"
-JOB_UUID = "40000000-0000-4000-8000-000000000201"
-CREATED_AT = "2026-08-26T00:00:00Z"
 
 
-class _DecisionBridge:
-    """记录公共服务越过调度边界的人工决定。"""
+def test_manual_wrapper_overrides_underlying_device_template_executor_kind() -> None:
+    """设备动作模板被标成 manual_confirm 后必须冻结为人工确认作业。"""
 
-    def __init__(self) -> None:
-        self.decisions: list[dict[str, Any]] = []
-
-    def submit(self, task: dict[str, Any]) -> dict[str, Any]:
-        return task
-
-    def close(self) -> None:
-        return None
-
-    def step(
-        self,
-        task_uuid: str,
-        *,
-        target_node_uuid: str | None = None,
-    ) -> dict[str, Any]:
-        return {"task_uuid": task_uuid, "target_node_uuid": target_node_uuid}
-
-    def decide_manual_confirmation(
-        self,
-        job_uuid: str,
-        *,
-        approved: bool,
-        param: dict[str, Any] | None,
-    ) -> dict[str, Any]:
-        decision = {"job_uuid": job_uuid, "approved": approved, "param": param}
-        self.decisions.append(decision)
-        return decision
-
-
-def _seed_manual_job(store: WorkflowStore) -> None:
-    """创建等待人工确认的标准任务与作业。"""
-
-    store.create_workflow(
-        workflow_uuid=WORKFLOW_UUID,
-        name="人工确认测试",
-        tags=[],
-        description=None,
-        meta_data={},
+    workflow_uuid = stable_uuid("workflow:manual-wrapper")
+    node_uuid = stable_uuid("node:manual-wrapper")
+    template_uuid = stable_uuid("template:manual-wrapper")
+    device_uuid = stable_uuid("device:manual-wrapper")
+    action_contract = {
+        "type": "object",
+        "properties": {
+            "goal": {"type": "object", "additionalProperties": True}
+        },
+        "required": ["goal"],
+    }
+    plan, jobs = ExecutionPlanBuilder().build(
+        {
+            "workflow": {"uuid": workflow_uuid, "revision": 1},
+            "nodes": [
+                {
+                    "uuid": node_uuid,
+                    "workflow_node_template_uuid": template_uuid,
+                    "type": "manual_confirm",
+                    "action_name": "heat",
+                    "action_type": "UniLabJsonCommand",
+                    "param": {"temperature": 42},
+                    "manual_confirmation": {"timeout_seconds": 15},
+                    "execution_policy": {},
+                    "meta_data": {
+                        "unilab": {
+                            "executor_binding": {
+                                "mode": "fixed",
+                                "device_id": device_uuid,
+                            }
+                        }
+                    },
+                }
+            ],
+            "edges": [],
+            "node_templates": [
+                {
+                    "uuid": template_uuid,
+                    "node_type": "device_action",
+                    "type": "UniLabJsonCommand",
+                    "meta_data": {
+                        "unilab": {"action_contract_schema": action_contract}
+                    },
+                }
+            ],
+            "handle_templates": [],
+        },
+        run_mode="normal",
+        target_node_uuid=None,
     )
-    with store.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO workflow_task(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_uuid, status, workflow_snapshot,
-                execution_plan, run_mode, target_node_uuid, control_status,
-                cleanup_status, trace_context, input, output, error_info
-            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, 'pending', '{}', '{}',
-                      'normal', NULL, 'active', 'none', '{}', '{}', '{}', '[]')
-            """,
-            (TASK_UUID, CREATED_AT, CREATED_AT, WORKFLOW_UUID),
+
+    assert plan["nodes"][0]["kind"] == "manual_confirm"
+    assert plan["nodes"][0]["manual_confirmation"] == {"timeout_seconds": 15}
+    assert jobs[0]["executor_kind"] == "manual_confirm"
+
+
+def test_approved_confirmation_remains_approved_after_device_outcome(
+    tmp_path: Path,
+) -> None:
+    """设备成功/失败不改写已经批准的人工决定。"""
+
+    runtime = build_core_runtime(tmp_path / "approved")
+    try:
+        _pending, job_uuid = runtime.submit_manual(task_name="approved-outcome")
+        service = WorkflowService(
+            runtime.workflow_store,
+            task_scheduler_bridge=runtime.bridge,
         )
-        connection.execute(
-            """
-            INSERT INTO workflow_node_job(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_task_uuid, workflow_node_uuid,
-                feedback_sequence, topological_index, executor_kind,
-                execution_policy, execution_timeout_seconds, status,
-                attempt, param, feedback_data, return_info, control_data,
-                error_info
-            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 0, 0,
-                      'manual_confirm', '{}', 0, 'pending', 1, ?, '{}',
-                      '{}', '{}', '[]')
-            """,
-            (
-                JOB_UUID,
-                CREATED_AT,
-                CREATED_AT,
-                TASK_UUID,
-                NODE_UUID,
-                '{"prompt":"请检查容器","timeout_seconds":60}',
+        service.decide_manual_confirmation(job_uuid, action="approve")
+
+        runtime.scheduler.on_job_outcome(
+            job_uuid,
+            CommittedJobOutcome(
+                outcome="succeeded",
+                return_info={"completed": True},
+                error_info=[],
+                unknown_command_ids=[],
             ),
         )
 
-
-def test_manual_confirmation_public_api_is_queryable_and_idempotent(tmp_path) -> None:
-    """确认事实可查询；同键重放安全，另一决定冲突。"""
-
-    store = WorkflowStore(tmp_path / "manual-confirmation.db")
-    try:
-        _seed_manual_job(store)
-        TaskRuntimeProjection(store).project_pre_dispatch(
-            task_uuid=TASK_UUID,
-            job_uuid=JOB_UUID,
-        )
-        bridge = _DecisionBridge()
-        client = TestClient(
-            create_workflow_app(
-                WorkflowService(store, task_scheduler_bridge=bridge)
-            )
-        )
-
-        confirmations = client.get(
-            f"/api/v1/workflow-tasks/{TASK_UUID}/manual-confirmations"
-        ).json()["data"]
-        assert len(confirmations) == 1
-        confirmation = confirmations[0]
-        assert confirmation["status"] == "pending"
-        assert confirmation["param"]["prompt"] == "请检查容器"
-
-        body = {
-            "action": "approve",
-            "confirmed_by": "operator-1",
-            "comment": "检查通过",
-            "idempotency_key": "decision-1",
-            "param": {"prompt": "请检查容器", "timeout_seconds": 60},
-        }
-        first = client.post(
-            "/api/v1/workflow-manual-confirmations/"
-            f"{confirmation['uuid']}/decision",
-            json=body,
-        )
-        replay = client.post(
-            "/api/v1/workflow-manual-confirmations/"
-            f"{confirmation['uuid']}/decision",
-            json=body,
-        )
-
-        assert first.status_code == 200
-        assert replay.status_code == 200
-        assert replay.json()["data"]["status"] == "approved"
-        assert bridge.decisions == [
-            {"job_uuid": JOB_UUID, "approved": True, "param": body["param"]},
-            {"job_uuid": JOB_UUID, "approved": True, "param": body["param"]},
-        ]
-        conflict = client.post(
-            "/api/v1/workflow-manual-confirmations/"
-            f"{confirmation['uuid']}/decision",
-            json={
-                "action": "reject",
-                "confirmed_by": "operator-2",
-                "idempotency_key": "decision-2",
-            },
-        )
-        assert conflict.status_code == 200
-        assert conflict.json()["code"] != 0
+        job = service.get_workflow_node_job(job_uuid)
+        assert job["status"] == "succeeded"
+        assert job["manual_confirmation"]["status"] == "approved"
+        replay = service.decide_manual_confirmation(job_uuid, action="approve")
+        replay_job = next(item for item in replay["jobs"] if item["uuid"] == job_uuid)
+        assert replay_job["status"] == "succeeded"
     finally:
-        store.close()
+        runtime.close()
 
 
-def test_scheduler_approval_dispatches_same_manual_job_once() -> None:
-    """批准人工确认后，同一 Job 才越过设备执行边界且不会重复下发。"""
+def test_manual_confirmation_timeout_config_defaults_and_is_strict() -> None:
+    """确认超时使用独立配置，默认一小时，并拒绝越界或扩展字段。"""
 
-    dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(dispatcher=dispatcher)
-    credentials = {
-        "attempt": 2,
-        "command_uuid": "command-manual-1",
-        "claim_uuid": "claim-manual-1",
-        "fences": [{"lock_key": "/devices/reactor-a", "fencing_token": 9}],
-        "effect_uuid": "effect-manual-1",
-        "parameter_hash": "sha256:manual-frozen",
-        "expected_change_set": {"kind": "no_inventory_change"},
+    assert normalize_manual_confirmation_config(None) == {"timeout_seconds": 3600}
+    assert normalize_manual_confirmation_config({"timeout_seconds": 86400}) == {
+        "timeout_seconds": 86400
     }
-
-    def _admit(dispatching: dict[str, Any]) -> bool:
-        dispatching.update(credentials)
-        return True
-
-    scheduler.bind_dispatch_admission_authority(_admit)
-    spec = WorkflowSpec(
-        workflow_id="wf-manual-continuation",
-        nodes=[
-            WorkflowNode(
-                id="manual-node",
-                device_id="reactor-a",
-                action_name="start",
-                action_type="UniLabJsonCommand",
-                param={"speed": 120},
-                node_type="manual_confirm",
-                manual_continues_device_action=True,
-            )
-        ],
-    )
-    submitted = scheduler.submit_workflow(spec)
-    job_id = submitted["dispatched"][0]["job_id"]
-    assert dispatcher.dispatched == []
-
-    first = scheduler.resolve_manual_confirmation(job_id, approved=True)
-    replay = scheduler.resolve_manual_confirmation(job_id, approved=True)
-
-    assert first["dispatched"][0]["job_id"] == job_id
-    assert replay["dispatched"] == []
-    assert [payload["job_id"] for payload in dispatcher.dispatched] == [job_id]
-    assert dispatcher.dispatched[0]["action_args"] == {"speed": 120}
-    assert {
-        key: dispatcher.dispatched[0][key] for key in credentials
-    } == credentials
+    for invalid in (
+        {"timeout_seconds": 0},
+        {"timeout_seconds": 86401},
+        {"timeout_seconds": 1.5},
+        {"timeout_seconds": True},
+        {"timeout_seconds": 60, "unknown": True},
+    ):
+        with pytest.raises(StoreConflict):
+            normalize_manual_confirmation_config(invalid)
 
 
-def test_scheduler_restores_manual_dispatch_credentials_before_approval() -> None:
-    """调度重启后批准人工节点仍使用原 Claim、Fence 与命令身份。"""
-
-    dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(dispatcher=dispatcher)
-    credentials = {
-        "attempt": 3,
-        "command_uuid": "command-manual-restored",
-        "claim_uuid": "claim-manual-restored",
-        "fences": [{"lock_key": "/devices/reactor-a", "fencing_token": 17}],
-        "effect_uuid": "effect-manual-restored",
-        "parameter_hash": "sha256:manual-restored",
-        "expected_change_set": {"kind": "no_inventory_change"},
-    }
-    spec = WorkflowSpec(
-        workflow_id="wf-manual-restored",
-        nodes=[
-            WorkflowNode(
-                id="manual-node",
-                job_id="job-manual-restored",
-                device_id="reactor-a",
-                action_name="start",
-                action_type="UniLabJsonCommand",
-                param={"speed": 120},
-                node_type="manual_confirm",
-                manual_continues_device_action=True,
-            )
-        ],
-    )
-    restored = DispatchedJob(
-        job_id="job-manual-restored",
-        workflow_id=spec.workflow_id,
-        node_id="manual-node",
-        device_action_key="/devices/reactor-a/start",
-        device_id="reactor-a",
-        action_name="start",
-        resolved_args={"speed": 120},
-        dispatch_credentials=credentials,
-        resource_lock_keys=set(),
-    )
-
-    scheduler.restore_workflow(spec, {}, [restored])
-    assert dispatcher.dispatched == []
-    scheduler.resolve_manual_confirmation(
-        "job-manual-restored",
-        approved=True,
-    )
-
-    assert len(dispatcher.dispatched) == 1
-    assert {
-        key: dispatcher.dispatched[0][key] for key in credentials
-    } == credentials
-
-
-def test_manual_approval_cannot_change_frozen_dispatch_parameters() -> None:
-    """批准继续真实动作时不得修改已生成参数哈希对应的动作参数。"""
-
-    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
-    submitted = scheduler.submit_workflow(
-        WorkflowSpec(
-            workflow_id="wf-manual-frozen-param",
-            nodes=[
-                WorkflowNode(
-                    id="manual-node",
-                    device_id="reactor-a",
-                    action_name="start",
-                    param={"speed": 120},
-                    node_type="manual_confirm",
-                    manual_continues_device_action=True,
-                )
-            ],
-        )
-    )
-
-    with pytest.raises(ValueError, match="冻结的派发参数"):
-        scheduler.resolve_manual_confirmation(
-            submitted["dispatched"][0]["job_id"],
-            approved=True,
-            param={"speed": 240},
-        )
-
-
-def test_manual_approval_rechecks_live_device_gate() -> None:
-    """等待期间设备离线时，批准不得越过 live Gate 4 下发真实动作。"""
-
-    dispatcher = RecordingDispatcher()
-    online = True
-
-    def resolve(
-        selector: dict[str, Any],
-        action_name: str,
-        busy_keys: set[str],
-    ) -> ResolvedDeviceTarget:
-        del busy_keys
-        if not online:
-            raise DeviceTargetUnavailable("device_offline", "目标设备当前离线")
-        assert selector["material_uuid"] == "device-material-a"
-        assert action_name == "start"
-        return ResolvedDeviceTarget("reactor-a", "device-material-a")
-
-    scheduler = EdgeScheduler(
-        dispatcher=dispatcher,
-        device_target_resolver=resolve,
-    )
-    credentials = {
-        "attempt": 1,
-        "command_uuid": "command-manual-live-gate",
-        "claim_uuid": "claim-manual-live-gate",
-        "fences": [{"lock_key": "/devices/reactor-a", "fencing_token": 1}],
-        "effect_uuid": "effect-manual-live-gate",
-        "parameter_hash": "sha256:manual-live-gate",
-        "expected_change_set": {"kind": "no_inventory_change"},
-    }
-
-    def admit(dispatching: dict[str, Any]) -> bool:
-        dispatching.update(credentials)
-        return True
-
-    scheduler.bind_dispatch_admission_authority(admit)
-    submitted = scheduler.submit_workflow(
-        WorkflowSpec(
-            workflow_id="wf-manual-live-gate",
-            nodes=[
-                WorkflowNode(
-                    id="manual-node",
-                    device_id="reactor-a",
-                    device_material_uuid="device-material-a",
-                    action_name="start",
-                    param={"speed": 120},
-                    node_type="manual_confirm",
-                    manual_continues_device_action=True,
-                )
-            ],
-        )
-    )
-    job_id = submitted["dispatched"][0]["job_id"]
-    online = False
-
-    with pytest.raises(DeviceTargetUnavailable, match="离线"):
-        scheduler.resolve_manual_confirmation(job_id, approved=True)
-
-    assert dispatcher.dispatched == []
-
-
-def test_scheduler_rejects_manual_confirmation_without_physical_dispatch() -> None:
-    """拒绝人工确认必须明确失败，且不得触发物理动作。"""
-
-    dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(dispatcher=dispatcher)
-    submitted = scheduler.submit_workflow(
-        WorkflowSpec(
-            workflow_id="wf-manual-reject",
-            nodes=[
-                WorkflowNode(
-                    id="manual-node",
-                    device_id="reactor-a",
-                    action_name="start",
-                    node_type="manual_confirm",
-                )
-            ],
-        )
-    )
-    result = scheduler.resolve_manual_confirmation(
-        submitted["dispatched"][0]["job_id"],
-        approved=False,
-    )
-
-    assert dispatcher.dispatched == []
-    assert result["workflow_state"] == "failed"
-
-
-def test_reject_request_cannot_override_frozen_parameters(tmp_path) -> None:
-    """拒绝决定不能携带新的执行参数。"""
-
-    store = WorkflowStore(tmp_path / "manual-reject-param.db")
-    try:
-        _seed_manual_job(store)
-        TaskRuntimeProjection(store).project_pre_dispatch(
-            task_uuid=TASK_UUID,
-            job_uuid=JOB_UUID,
-        )
-        service = WorkflowService(store)
-        confirmation = service.list_task_manual_confirmations(TASK_UUID)[0]
-        with pytest.raises(WorkflowConflict):
-            service.decide_manual_confirmation(
-                confirmation["uuid"],
-                action="reject",
-                confirmed_by="operator-1",
-                comment=None,
-                idempotency_key="reject-1",
-                param={"unexpected": True},
-            )
-    finally:
-        store.close()
-
-
-@pytest.mark.parametrize(
-    ("scheduler_state", "confirmation_status"),
-    [("canceled", "canceled"), ("failed", "timed_out")],
-)
-def test_terminal_job_closes_pending_manual_confirmation(
-    tmp_path,
-    scheduler_state: str,
-    confirmation_status: str,
+def test_runtime_restart_fails_manual_wait_but_releases_no_send_resources(
+    tmp_path: Path,
 ) -> None:
-    """Job 终结与人工确认必须在同一事务收敛，不能遗留 pending 记录。"""
+    """人工等待不恢复；Job 失败、确认关闭，未下发资源可证明安全释放。"""
 
-    store = WorkflowStore(tmp_path / f"manual-{confirmation_status}.db")
+    runtime = build_core_runtime(tmp_path / "restart")
     try:
-        _seed_manual_job(store)
-        projection = TaskRuntimeProjection(store)
-        projection.project_pre_dispatch(task_uuid=TASK_UUID, job_uuid=JOB_UUID)
+        _pending, job_uuid = runtime.submit_manual(task_name="restart-manual")
+        task_uuid = stable_uuid("task:restart-manual")
 
-        projection.project_job_finished(
-            job_uuid=JOB_UUID,
-            scheduler_state=scheduler_state,
-            error_info=(
-                [{"code": "manual_confirmation_timed_out"}]
-                if confirmation_status == "timed_out"
-                else []
-            ),
-            manual_confirmation_status=confirmation_status,
-        )
+        aggregate = TaskRuntimeProjection(
+            runtime.workflow_store
+        ).project_execution_process_restarted(task_uuid)
 
-        confirmation = WorkflowService(store).list_task_manual_confirmations(
-            TASK_UUID
-        )[0]
-        assert confirmation["status"] == confirmation_status
-        assert "decided_at" in confirmation
+        assert aggregate is not None
+        assert aggregate["task"]["status"] == "failed"
+        assert aggregate["task"]["cleanup_status"] == "settled"
+        job = next(item for item in aggregate["jobs"] if item["uuid"] == job_uuid)
+        assert job["status"] == "failed"
+        assert not job.get("uncertainty_reason")
+        confirmation = WorkflowService(
+            runtime.workflow_store
+        ).get_manual_confirmation(job_uuid)
+        assert confirmation["status"] == "canceled"
+        assert confirmation["resolution_reason"] == "runtime_restarted"
+        assert {
+            lock["state"]
+            for lock in TaskRuntimeProjection(
+                runtime.workflow_store
+            ).list_execution_locks(job_uuid)
+        } == {"released"}
     finally:
-        store.close()
-
-
-def test_scheduler_restart_fails_pending_manual_confirmation_task(
-    tmp_path,
-) -> None:
-    """调度进程重启后，运行中的人工等待也随原任务立即失败。
-
-    参数：``tmp_path`` 提供隔离工作流库。返回：无；断言运行中的工作流任务、
-    人工确认作业和确认事实原子关闭，旧 Job 不能在新 runtime 中继续批准。
-    """
-
-    store = WorkflowStore(tmp_path / "manual-restart.db")
-    plan = {
-        "version": 1,
-        "run_mode": "normal",
-        "target_node_uuid": None,
-        "nodes": [
-            {
-                "uuid": NODE_UUID,
-                "kind": "manual_confirm",
-                "device_id": "operator",
-                "action_name": "confirm",
-                "action_type": "manual_confirm",
-                "param": {"prompt": "请确认", "timeout_seconds": 60},
-                "param_schema": None,
-                "material_requirements": [],
-            }
-        ],
-        "handles": [],
-        "edges": [],
-    }
-    try:
-        _seed_manual_job(store)
-        with store.transaction() as connection:
-            connection.execute(
-                "UPDATE workflow_task SET execution_plan = ? WHERE uuid = ?",
-                (json.dumps(plan), TASK_UUID),
-            )
-        projection = TaskRuntimeProjection(store)
-        projection.project_pre_dispatch(task_uuid=TASK_UUID, job_uuid=JOB_UUID)
-        assert store.get_job(JOB_UUID)["status"] == "dispatched"
-
-        bridge = TaskSchedulerBridge(
-            store,
-            scheduler=EdgeScheduler(dispatcher=RecordingDispatcher()),
-        )
-        try:
-            recovered = bridge.recover_active_tasks()
-            assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
-            assert store.get_job(JOB_UUID)["status"] == "failed"
-            confirmation = WorkflowService(store).list_task_manual_confirmations(
-                TASK_UUID
-            )[0]
-            assert confirmation["status"] == "canceled"
-            task = store.get_task(TASK_UUID)
-            assert task["status"] == "failed"
-            assert task["cleanup_status"] == "settled"
-            assert task["control_status"] == "active"
-            with pytest.raises(
-                TaskSchedulerBridgeError,
-                match="人工确认对应的作业不在运行中",
-            ):
-                bridge.decide_manual_confirmation(
-                    JOB_UUID,
-                    approved=True,
-                    param=None,
-                )
-        finally:
-            bridge.close()
-    finally:
-        store.close()
-
-
-def test_manual_confirmation_deadline_fails_job_without_operator_request(
-    tmp_path,
-) -> None:
-    """人工确认截止时间到达后应由本地调度恢复链自动收敛。"""
-
-    store = WorkflowStore(tmp_path / "manual-deadline.db")
-    store.create_workflow(
-        workflow_uuid=WORKFLOW_UUID,
-        name="人工确认超时测试",
-        tags=[],
-        description=None,
-        meta_data={},
-    )
-    plan = {
-        "version": 1,
-        "run_mode": "normal",
-        "target_node_uuid": None,
-        "nodes": [
-            {
-                "uuid": NODE_UUID,
-                "kind": "manual_confirm",
-                "device_id": "operator",
-                "action_name": "confirm",
-                "action_type": "manual_confirm",
-                "param": {"prompt": "请确认", "timeout_seconds": 0.03},
-                "param_schema": None,
-                "material_requirements": [],
-            }
-        ],
-        "handles": [],
-        "edges": [],
-    }
-    with store.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO workflow_task(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_uuid, status, workflow_snapshot,
-                execution_plan, run_mode, target_node_uuid, control_status,
-                cleanup_status, trace_context, input, output, error_info
-            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, 'pending', '{}', ?,
-                      'normal', NULL, 'active', 'none', '{}', '{}', '{}', '[]')
-            """,
-            (TASK_UUID, CREATED_AT, CREATED_AT, WORKFLOW_UUID, json.dumps(plan)),
-        )
-        connection.execute(
-            """
-            INSERT INTO workflow_node_job(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_task_uuid, workflow_node_uuid,
-                feedback_sequence, topological_index, executor_kind,
-                execution_policy, execution_timeout_seconds, status,
-                attempt, param, feedback_data, return_info, control_data,
-                error_info
-            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 0, 0,
-                      'manual_confirm', '{}', 0, 'pending', 1, ?, '{}',
-                      '{}', '{}', '[]')
-            """,
-            (
-                JOB_UUID,
-                CREATED_AT,
-                CREATED_AT,
-                TASK_UUID,
-                NODE_UUID,
-                json.dumps(plan["nodes"][0]["param"]),
-            ),
-        )
-    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
-    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
-    try:
-        bridge.submit(store.get_task(TASK_UUID))
-        deadline = time.monotonic() + 1
-        while store.get_job(JOB_UUID)["status"] != "failed":
-            if time.monotonic() >= deadline:
-                pytest.fail("人工确认截止后 Job 未自动失败")
-            time.sleep(0.01)
-
-        confirmation = WorkflowService(store).list_task_manual_confirmations(
-            TASK_UUID
-        )[0]
-        assert confirmation["status"] == "timed_out"
-        assert store.get_task(TASK_UUID)["status"] == "failed"
-    finally:
-        bridge.close()
-        store.close()
+        runtime.close()

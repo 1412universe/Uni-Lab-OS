@@ -853,7 +853,8 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .task-state-admission_blocked, .task-state-pending, .task-state-paused { background: var(--amber); }
 .task-state-succeeded { background: var(--green); }
 .task-state-failed, .task-state-timeout, .task-state-canceled, .task-state-intervention_required, .task-state-execution_unknown, .task-state-unknown { background: var(--red); }
-.matrix-node { position: relative; display: grid; grid-template-rows: 29px 10px 30px; place-content: center; justify-items: center; gap: 3px; min-width: 0; padding: 10px 8px 8px; color: inherit; background: transparent; border: 0; border-right: 1px solid #f0f2f5; }
+.matrix-node { position: relative; display: grid; place-content: center; justify-items: stretch; gap: 4px; min-width: 0; padding: 8px; color: inherit; background: transparent; border-right: 1px solid #f0f2f5; }
+.matrix-node-select { position: relative; z-index: 1; display: grid; grid-template-rows: 29px 10px 30px; place-content: center; justify-items: center; gap: 3px; min-width: 0; padding: 0; color: inherit; background: transparent; border: 0; cursor: pointer; }
 .matrix-node::before, .matrix-node::after { position: absolute; top: 27px; width: 50%; height: 2px; background: #e4e7ec; content: ''; }
 .matrix-node::before { left: 0; }.matrix-node::after { right: 0; }
 .matrix-node .matrix-node-marker { position: relative; z-index: 1; display: grid; place-items: center; width: 29px; height: 29px; color: #98a2b3; background: #fff; border: 2px solid #d0d5dd; border-radius: 50%; font-size: 8px; font-weight: 700; }
@@ -864,13 +865,14 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .matrix-node-selected { background: #edf2ff; box-shadow: inset 0 -3px #5f7ee8; }
 .matrix-node-selected .matrix-node-marker { box-shadow: 0 0 0 5px rgba(59, 103, 242, .16); }
 .matrix-node-succeeded::before, .matrix-node-succeeded::after, .matrix-node-skipped::before, .matrix-node-skipped::after, .matrix-node-running::before, .matrix-node-canceling::before, .matrix-node-waiting::before, .matrix-node-failed::before, .matrix-node-attention::before { background: #9eb0df; }
-.matrix-node-succeeded span { color: #fff; background: var(--green); border-color: var(--green); }
-.matrix-node-skipped span { color: #667085; background: #f2f4f7; border-color: #98a2b3; }
-.matrix-node-running span, .matrix-node-canceling span { color: #fff; background: var(--blue); border-color: var(--blue); animation: matrix-pulse 1.8s ease-out infinite; }
+.matrix-node-succeeded .matrix-node-marker { color: #fff; background: var(--green); border-color: var(--green); }
+.matrix-node-skipped .matrix-node-marker { color: #667085; background: #f2f4f7; border-color: #98a2b3; }
+.matrix-node-running .matrix-node-marker, .matrix-node-canceling .matrix-node-marker { color: #fff; background: var(--blue); border-color: var(--blue); animation: matrix-pulse 1.8s ease-out infinite; }
 .matrix-node-running svg, .matrix-node-canceling svg { animation: spin 1.8s linear infinite; }
-.matrix-node-waiting span { color: #fff; background: var(--amber); border-color: var(--amber); box-shadow: 0 0 0 4px #fff0ce; }
-.matrix-node-failed span, .matrix-node-canceled span { color: #fff; background: var(--red); border-color: var(--red); box-shadow: 0 0 0 4px #ffe4e8; }
-.matrix-node-attention span { color: #fff; background: #7a271a; border-color: #7a271a; box-shadow: 0 0 0 4px #fee4e2; }
+.matrix-node-waiting .matrix-node-marker { color: #fff; background: var(--amber); border-color: var(--amber); box-shadow: 0 0 0 4px #fff0ce; }
+.matrix-node-failed .matrix-node-marker, .matrix-node-canceled .matrix-node-marker { color: #fff; background: var(--red); border-color: var(--red); box-shadow: 0 0 0 4px #ffe4e8; }
+.matrix-node-attention .matrix-node-marker { color: #fff; background: #7a271a; border-color: #7a271a; box-shadow: 0 0 0 4px #fee4e2; }
+.matrix-node-manual-confirmation .matrix-node-marker { color: #fff; background: #f79009; border-color: #f79009; box-shadow: none; animation: manual-confirmation-pulse 1.35s ease-out infinite; }
 .matrix-node-succeeded { background: #effaf5; }
 .matrix-node-running, .matrix-node-canceling { background: #eef3ff; }
 .matrix-node-waiting, .matrix-node-attention { background: #fff8e8; }
@@ -882,6 +884,13 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .matrix-node-failed:hover, .matrix-node-canceled:hover { background: #ffe4e7; }
 .matrix-node-pending:hover, .matrix-node-skipped:hover { background: #eef0f3; }
 .matrix-node:focus-visible { outline: 2px solid #6d8cf5; outline-offset: -3px; }
+.matrix-node-select:focus-visible { outline: 2px solid #6d8cf5; outline-offset: 2px; border-radius: 6px; }
+.manual-confirmation-actions { position: relative; z-index: 2; display: grid; gap: 3px; justify-items: center; }
+.manual-confirmation-actions > small { color: #b54708; font: 7px 'JetBrains Mono', monospace; }
+.manual-confirmation-actions > span { display: flex; gap: 4px; }
+.manual-confirmation-actions button { min-height: 22px; padding: 0 7px; color: #7a2e0e; background: #fff; border: 1px solid #fdb022; border-radius: 5px; font-size: 7.5px; font-weight: 750; cursor: pointer; }
+.manual-confirmation-actions button:last-child { color: #fff; background: #f79009; }
+.manual-confirmation-actions button:disabled { opacity: .55; cursor: wait; }
 .node-wait-tooltip { position: fixed; z-index: 120; width: 284px; padding: 12px 13px; color: #f8fafc; background: #1d2939; border: 1px solid #344054; border-radius: 10px; box-shadow: 0 12px 30px rgba(16,24,40,.25); pointer-events: none; }
 .node-wait-tooltip-above { transform: translate(-50%, -100%); }
 .node-wait-tooltip-below { transform: translateX(-50%); }
@@ -894,6 +903,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .node-wait-tooltip ul { display: grid; gap: 3px; margin: 8px 0 0; padding: 7px 0 0 15px; color: #d0d5dd; border-top: 1px solid #475467; font-size: 8px; line-height: 1.45; }
 .node-wait-tooltip small { display: block; margin-top: 8px; color: #98a2b3; font: 8px 'JetBrains Mono', monospace; }
 @keyframes matrix-pulse { 0% { box-shadow: 0 0 0 0 rgba(59,103,242,.35); } 70%,100% { box-shadow: 0 0 0 9px rgba(59,103,242,0); } }
+@keyframes manual-confirmation-pulse { 0% { box-shadow: 0 0 0 3px rgba(247,144,9,.32); } 70%,100% { box-shadow: 0 0 0 10px rgba(247,144,9,0); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
 .matrix-progress-cell { display: grid; align-content: center; gap: 6px; padding: 9px 12px; text-align: right; }

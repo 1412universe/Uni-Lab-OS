@@ -79,7 +79,7 @@ def _binding_graph() -> dict[str, Any]:
                 "uuid": NODE_UUID,
                 "workflow_node_template_uuid": TEMPLATE_UUID,
                 "name": "approval",
-                "type": "manual_confirm",
+                "type": "compute",
                 "pose": {},
                 "param": {},
                 "execution_policy": {},
@@ -96,8 +96,8 @@ def _binding_graph() -> dict[str, Any]:
         "node_templates": [
             {
                 "uuid": TEMPLATE_UUID,
-                "node_type": "manual_confirm",
-                "type": "manual_confirm",
+                "node_type": "compute",
+                "type": "compute",
             }
         ],
         "handle_templates": [
@@ -180,7 +180,7 @@ def _create_workflow(client: TestClient, store: WorkflowStore) -> str:
                 {
                     "uuid": NODE_UUID,
                     "name": "approval",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {},
                     "param": {},
                     "execution_policy": {},
@@ -238,10 +238,10 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     action_node = next(
         node
         for node in prepared.execution_plan["nodes"]
-        if node["kind"] == "manual_confirm"
+        if node["kind"] == "compute"
     )
     action_job = next(
-        job for job in prepared.jobs if job["executor_kind"] == "manual_confirm"
+        job for job in prepared.jobs if job["executor_kind"] == "compute"
     )
     assert action_node["param"] == {"count": 3}
     assert action_job["param"] == {"count": 3}
@@ -446,7 +446,7 @@ def test_station_invocation_replay_keeps_first_revision_after_definition_changes
                     {
                         "uuid": NODE_UUID,
                         "name": "approval revision 2",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -508,7 +508,7 @@ def test_station_invocation_pins_published_revision_and_deadline(
                     {
                         "uuid": NODE_UUID,
                         "name": "approval after publication",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -750,7 +750,7 @@ def test_workflow_output_success_does_not_finish_unrelated_branch(
                     {
                         "uuid": NODE_UUID,
                         "name": "unrelated approval",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -780,7 +780,7 @@ def test_workflow_output_success_does_not_finish_unrelated_branch(
 
         assert by_kind["workflow_output"]["status"] == "succeeded"
         assert by_kind["workflow_output"]["return_info"] == {"echo": 9}
-        assert by_kind["manual_confirm"]["status"] == "pending"
+        assert by_kind["compute"]["status"] == "pending"
         assert task["status"] == "pending"
         assert task["output"] == {"echo": 9}
     finally:
@@ -832,7 +832,7 @@ def test_node_output_binding_creates_result_after_source_job_succeeds(
                     "uuid": NODE_UUID,
                     "workflow_node_template_uuid": TEMPLATE_UUID,
                     "name": "measure",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {},
                     "param": {},
                     "execution_policy": {},
@@ -845,8 +845,8 @@ def test_node_output_binding_creates_result_after_source_job_succeeds(
             "node_templates": [
                 {
                     "uuid": TEMPLATE_UUID,
-                    "node_type": "manual_confirm",
-                    "type": "manual_confirm",
+                    "node_type": "compute",
+                    "type": "compute",
                 }
             ],
             "handle_templates": [
@@ -897,7 +897,7 @@ def test_node_output_binding_creates_result_after_source_job_succeeds(
         source_job = next(
             job
             for job in store.list_jobs(task_uuid)
-            if job["executor_kind"] == "manual_confirm"
+            if job["executor_kind"] == "compute"
         )
         store._conn.execute(
             "UPDATE workflow_task SET status = 'running' WHERE uuid = ?",
@@ -999,7 +999,7 @@ def test_http_task_input_and_snapshot_remain_frozen_after_workflow_evolves(
                     {
                         "uuid": NODE_UUID,
                         "name": "renamed approval",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},

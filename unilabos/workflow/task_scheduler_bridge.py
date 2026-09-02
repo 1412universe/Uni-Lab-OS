@@ -29,7 +29,6 @@ from unilabos.app.scheduler.inventory.station_resource import (
 from unilabos.app.scheduler.material_source_resolution import (
     MaterialSourceResolutionCoordinator,
 )
-from unilabos.app.scheduler.models import DispatchedJob
 from unilabos.app.scheduler.resource_wait_policy import (
     is_temporary_resource_condition,
 )
@@ -122,7 +121,7 @@ class TaskSchedulerBridge:
         self._cancel_timers: dict[str, Any] = {}
         self._cancel_timer_lock = threading.RLock()
         self._manual_confirmations = ManualConfirmationStore(store)
-        self._manual_timers: dict[str, Any] = {}
+        self._manual_deadline_timer: Any | None = None
         self._manual_timer_lock = threading.RLock()
         # 关闭时要等待已进入的超时收敛回调完成，避免回调在
         # 外部关闭 SQLite 后继续投影终态。
@@ -157,6 +156,9 @@ class TaskSchedulerBridge:
         self._closed = False
         scheduler.add_admission_retry_listener(self._retry_pending_admissions)
         scheduler.bind_dispatch_admission_authority(self._on_job_pre_dispatch)
+        scheduler.bind_manual_continuation_authority(
+            self._on_manual_continuation_dispatching
+        )
         scheduler.add_job_execution_wait_listener(self._on_job_execution_wait)
         scheduler.add_job_dispatch_accepted_listener(self._on_job_dispatch_accepted)
         scheduler.add_job_dispatch_uncertain_listener(self._on_job_dispatch_uncertain)
@@ -357,7 +359,8 @@ class TaskSchedulerBridge:
             scheduler_state = self._required_text(
                 submission.get("state"), field="scheduler.state"
             )
-            return self._projection.project_submission(task_uuid, scheduler_state)
+            self._projection.project_submission(task_uuid, scheduler_state)
+            return self._aggregate(task_uuid)
         except Exception as error:
             if self._crossed_dispatch_boundary(jobs):
                 raise TaskSchedulerBridgeError(
@@ -424,6 +427,7 @@ class TaskSchedulerBridge:
         task_uuid: str,
         *,
         command_uuid: str | None = None,
+        reason: str = "task_canceled",
     ) -> dict[str, Any]:
         """持久化取消请求并请求本地执行器安全停止设备作业。
 
@@ -454,7 +458,11 @@ class TaskSchedulerBridge:
             command_uuid=normalized_command_uuid,
             ack_deadline_at=self._format_time(ack_deadline),
             complete_deadline_at=self._format_time(complete_deadline),
+            reason=reason,
         )
+        # 外部 Task Cancel 可能关闭当前最早的人工确认；立即重排唯一计时器，
+        # 不让已关闭的 deadline 长时间占据唤醒槽。
+        self._schedule_manual_confirmation_timeout()
         if not self._scheduler.cancel_workflow(normalized_uuid):
             raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
         self._store.stop_debug(normalized_uuid)
@@ -505,25 +513,57 @@ class TaskSchedulerBridge:
         self,
         job_uuid: str,
         *,
-        approved: bool,
-        param: Mapping[str, Any] | None,
+        action: str,
     ) -> dict[str, Any]:
-        """让调度器按同一作业身份继续设备动作或明确拒绝。"""
+        """以 Job UUID 决定人工确认；批准继续同一 Job，拒绝取消 Task。"""
 
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         normalized_job_uuid = self._required_text(job_uuid, field="job_uuid")
         try:
-            result = self._scheduler.resolve_manual_confirmation(
-                normalized_job_uuid,
-                approved=approved,
-                param=param,
+            normalized_action = self._required_text(action, field="action").lower()
+            aggregate, _created = (
+                self._projection.project_manual_confirmation_decision(
+                    normalized_job_uuid,
+                    action=normalized_action,
+                    decided_at=self._format_time(self._clock()),
+                )
             )
-            # 人工决策一旦被调度器接受，原确认截止时间就不再有效。
-            # 对“确认后继续设备动作”的节点也必须立即取消计时器，
-            # 否则设备正在执行时，旧计时器会误触发超时收敛。
             self._cancel_manual_confirmation_timer(normalized_job_uuid)
-            return result
+            task_uuid = self._required_text(
+                aggregate["task"].get("uuid"), field="task.uuid"
+            )
+            if normalized_action == "approve":
+                decided_job = next(
+                    job
+                    for job in aggregate["jobs"]
+                    if str(job.get("uuid")) == normalized_job_uuid
+                )
+                # 决定与后续调度分属两个组合根步骤。同一 approve 重放时，若
+                # 持久 Job 仍停在待派发态，必须补做继续动作；已越过派发边界或
+                # 已终态则只返回当前事实，避免重复物理下发。
+                if (
+                    decided_job.get("status") == "pending"
+                    and decided_job.get("executor_kind") == "device_action"
+                ):
+                    self._scheduler.resolve_manual_confirmation(
+                        normalized_job_uuid,
+                        approved=True,
+                    )
+                return self._aggregate(task_uuid)
+            if aggregate["task"].get("status") in {
+                "succeeded",
+                "failed",
+                "canceled",
+                "timeout",
+            }:
+                return self._aggregate(task_uuid)
+            # 同一 reject 在取消步骤失败后可补做 Task Cancel；取消已经进入终态
+            # 时由上方直接返回，不生成新的取消命令。
+            return self.cancel(
+                task_uuid,
+                reason="manual_confirmation_rejected",
+            )
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
@@ -836,10 +876,7 @@ class TaskSchedulerBridge:
         if not isinstance(jobs, list):
             raise StoreConflict("任务聚合缺少作业数组")
         for job in jobs:
-            if (
-                not isinstance(job, Mapping)
-                or not str(job.get("uncertainty_reason") or "").strip()
-            ):
+            if not isinstance(job, Mapping):
                 continue
             job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
             claim = self._projection.get_execution_claim(job_uuid)
@@ -853,7 +890,11 @@ class TaskSchedulerBridge:
                 continue
             inventory.transition_dispatch_permit(
                 str(claim["claim_uuid"]),
-                target_state="uncertain",
+                target_state=(
+                    "uncertain"
+                    if str(job.get("uncertainty_reason") or "").strip()
+                    else "released"
+                ),
             )
 
     def _register_active_recovery_routes(self) -> None:
@@ -998,26 +1039,10 @@ class TaskSchedulerBridge:
                 task_uuid,
             )
             return aggregate
-        # pending 人工确认尚未下发物理动作：重启后保留原 Job、Claim、Fence
-        # 和截止时间恢复等待，禁止释放后重新仲裁或生成新的派发凭据。
+        # 人工确认不跨 runtime 恢复；有效人工等待会把父 Task 激活为 running，
+        # 已在上方按统一重启失败策略收敛。这里不再保留任何兼容白名单。
         pending_manual_jobs: list[dict[str, Any]] = []
-        for job in jobs:
-            if job.get("executor_kind") == "manual_confirm" and job.get("status") in {
-                "dispatched",
-                "running",
-            }:
-                try:
-                    confirmation = self._manual_confirmations.get_by_job(
-                        self._required_text(job.get("uuid"), field="job.uuid")
-                    )
-                except StoreNotFound:
-                    continue
-                if confirmation.get("status") == "pending":
-                    pending_manual_jobs.append(dict(job))
-        safe_manual_ids = {
-            self._required_text(job.get("uuid"), field="job.uuid")
-            for job in pending_manual_jobs
-        }
+        safe_manual_ids: set[str] = set()
         interrupted_jobs = [
             job
             for job in jobs
@@ -1126,99 +1151,6 @@ class TaskSchedulerBridge:
                 )
             completed_results[node.id] = recovered_result
             recovery_run.mark_finished(node.id, recovered_result)
-        spec_nodes = {node.id: node for node in spec.nodes}
-        restored_manual_jobs: list[DispatchedJob] = []
-        for persisted_job in pending_manual_jobs:
-            job_uuid = self._required_text(persisted_job.get("uuid"), field="job.uuid")
-            node_uuid = self._required_text(
-                persisted_job.get("workflow_node_uuid"),
-                field="job.workflow_node_uuid",
-            )
-            node = spec_nodes.get(node_uuid)
-            if node is None or not node.is_manual_confirm():
-                raise TaskSchedulerBridgeError("人工确认恢复节点与冻结计划不一致")
-            claim = self._projection.get_execution_claim(job_uuid)
-            if claim is None or claim.get("state") not in {"reserved", "running"}:
-                raise TaskSchedulerBridgeError("人工确认恢复缺少活动 Claim")
-            control_data = persisted_job.get("control_data")
-            actual_executor = (
-                control_data.get("actual_executor")
-                if isinstance(control_data, Mapping)
-                else None
-            )
-            device_id = str(
-                (
-                    actual_executor.get("local_device_id")
-                    if isinstance(actual_executor, Mapping)
-                    else ""
-                )
-                or node.device_id
-            ).strip()
-            device_material_uuid = str(
-                (
-                    actual_executor.get("material_uuid")
-                    if isinstance(actual_executor, Mapping)
-                    else ""
-                )
-                or node.device_material_uuid
-            ).strip()
-            persisted_execution_locks = (
-                control_data.get("execution_locks")
-                if isinstance(control_data, Mapping)
-                else None
-            )
-            restored_resource_locks = {
-                str(item.get("lock_key") or "").strip()
-                for item in (
-                    persisted_execution_locks
-                    if isinstance(persisted_execution_locks, list)
-                    else ()
-                )
-                if isinstance(item, Mapping) and str(item.get("lock_key") or "").strip()
-            }
-            credentials = {
-                "attempt": int(persisted_job.get("attempt") or 0),
-                "command_uuid": str(persisted_job.get("edge_command_uuid") or ""),
-                "claim_uuid": str(claim.get("claim_uuid") or ""),
-                "fences": [dict(item) for item in claim.get("fences", ())],
-                "effect_uuid": str(persisted_job.get("dispatch_effect_uuid") or ""),
-                "parameter_hash": str(
-                    persisted_job.get("dispatch_parameter_hash") or ""
-                ),
-                "expected_change_set": dict(
-                    persisted_job.get("expected_change_set") or {}
-                ),
-            }
-            if node.manual_continues_device_action and (
-                credentials["attempt"] <= 0
-                or any(
-                    not credentials[field]
-                    for field in (
-                        "command_uuid",
-                        "claim_uuid",
-                        "fences",
-                        "effect_uuid",
-                        "parameter_hash",
-                    )
-                )
-            ):
-                raise TaskSchedulerBridgeError(
-                    "继续设备动作的人工确认缺少可恢复派发凭据"
-                )
-            restored_manual_jobs.append(
-                DispatchedJob(
-                    job_id=job_uuid,
-                    workflow_id=task_uuid,
-                    node_id=node_uuid,
-                    device_action_key=f"/devices/{device_id}/{node.action_name}",
-                    device_id=device_id,
-                    device_material_uuid=device_material_uuid,
-                    action_name=node.action_name,
-                    resolved_args=dict(persisted_job.get("param") or {}),
-                    dispatch_credentials=credentials,
-                    resource_lock_keys=restored_resource_locks,
-                )
-            )
         recoverable_jobs = [*pending_jobs, *pending_manual_jobs]
         for job in recoverable_jobs:
             job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
@@ -1228,15 +1160,13 @@ class TaskSchedulerBridge:
             restored = self._scheduler.restore_workflow(
                 spec,
                 completed_results,
-                restored_manual_jobs,
+                [],
                 skipped_nodes,
             )
             self._project_scheduler_trace_context(
                 task_uuid,
                 restored.get("trace_context"),
             )
-            for restored_job in restored_manual_jobs:
-                self._schedule_manual_confirmation_timeout(restored_job.job_id)
         except Exception:
             if not self._crossed_dispatch_boundary(jobs):
                 self._submitted_tasks.discard(task_uuid)
@@ -1294,6 +1224,9 @@ class TaskSchedulerBridge:
         self._closed = True
         self._scheduler.remove_admission_retry_listener(self._retry_pending_admissions)
         self._scheduler.unbind_dispatch_admission_authority(self._on_job_pre_dispatch)
+        self._scheduler.unbind_manual_continuation_authority(
+            self._on_manual_continuation_dispatching
+        )
         self._scheduler.remove_job_execution_wait_listener(self._on_job_execution_wait)
         self._scheduler.remove_job_dispatch_accepted_listener(
             self._on_job_dispatch_accepted
@@ -1326,10 +1259,10 @@ class TaskSchedulerBridge:
         for timer in timers:
             timer.cancel()
         with self._manual_timer_lock:
-            manual_timers = tuple(self._manual_timers.values())
-            self._manual_timers.clear()
-        for timer in manual_timers:
-            timer.cancel()
+            manual_timer = self._manual_deadline_timer
+            self._manual_deadline_timer = None
+        if manual_timer is not None:
+            manual_timer.cancel()
         # 与在途超时回调建立关闭栅栏；新回调会看到 ``_closed``
         # 并立即返回，已进入的回调则在此完成持久化后再退出。
         with self._manual_callback_lock:
@@ -1339,8 +1272,8 @@ class TaskSchedulerBridge:
         """返回阻止调度器安全排空的持久作业身份。
 
         参数：无。返回：已经派发、运行、请求取消，或业务已失败但仍持有不确定
-        执行占用的 Job UUID 集合；尚未批准的人工确认与内部物料来源解析不属于设备
-        在途作业。异常：持久库读取失败原样传播，使排空关闭式失败，禁止把读取失败
+        执行占用的 Job UUID 集合；已完整准入的人工确认同样阻止排空，内部物料来源
+        解析除外。异常：持久库读取失败原样传播，使排空关闭式失败，禁止把读取失败
         解释为空闲。
         """
 
@@ -1371,25 +1304,10 @@ class TaskSchedulerBridge:
                         )
                     if not status_is_unsafe and not claim_is_uncertain:
                         continue
-                    if (
-                        job.get("executor_kind") == "manual_confirm"
-                        and job.get("status") == "dispatched"
-                        and self._manual_confirmation_is_waiting(job_uuid)
-                    ):
-                        continue
                     result.add(job_uuid)
             if page * page_size >= int(task_page["total"]):
                 return result
             page += 1
-
-    def _manual_confirmation_is_waiting(self, job_uuid: str) -> bool:
-        """判断人工确认 Job 是否仍停留在尚未派发设备动作的等待阶段。"""
-
-        try:
-            confirmation = self._manual_confirmations.get_by_job(job_uuid)
-        except StoreNotFound:
-            return False
-        return confirmation.get("status") == "pending"
 
     def _retry_pending_admissions(self) -> None:
         """按持久顺序重试明确处于物料来源准入等待的 Task。
@@ -1562,6 +1480,16 @@ class TaskSchedulerBridge:
             projection_kwargs: dict[str, Any] = {}
             if required_device_tenancy is not None:
                 projection_kwargs["required_device_tenancy"] = required_device_tenancy
+            if "manual_confirmation" in dispatching:
+                manual_config = dispatching.get("manual_confirmation")
+                if not isinstance(manual_config, Mapping):
+                    raise StoreConflict(f"人工确认配置必须是对象：{job_uuid}")
+                projection_kwargs.update(
+                    {
+                        "manual_confirmation_config": manual_config,
+                        "projected_at": self._format_time(self._clock()),
+                    }
+                )
             aggregate = self._projection.project_pre_dispatch(
                 task_uuid=task_uuid,
                 job_uuid=job_uuid,
@@ -1582,7 +1510,11 @@ class TaskSchedulerBridge:
             )
             if projected_job is None:
                 raise StoreConflict(f"派发作业投影后消失：{job_uuid}")
-            if projected_job["status"] != "dispatched":
+            is_manual_waiting = (
+                projected_job.get("executor_kind") == "manual_confirm"
+                and projected_job.get("status") == "running"
+            )
+            if projected_job["status"] != "dispatched" and not is_manual_waiting:
                 if inventory_authority is not None and permit is not None:
                     inventory_authority.transition_dispatch_permit(
                         permit.claim_uuid,
@@ -1618,7 +1550,7 @@ class TaskSchedulerBridge:
                         target_state="released",
                     )
             raise
-        if projected_job["status"] == "dispatched":
+        if projected_job["status"] == "dispatched" or is_manual_waiting:
             claim = self._projection.get_execution_claim(job_uuid)
             if claim is None:
                 raise StoreConflict(f"派发作业缺少持久 Claim：{job_uuid}")
@@ -1649,10 +1581,10 @@ class TaskSchedulerBridge:
             )
         if (
             projected_job.get("executor_kind") == "manual_confirm"
-            and projected_job.get("status") == "dispatched"
+            and projected_job.get("status") == "running"
         ):
             self._schedule_manual_confirmation_timeout(job_uuid)
-        return projected_job["status"] == "dispatched"
+        return projected_job["status"] == "dispatched" or is_manual_waiting
 
     def _dispatch_admission_request(
         self,
@@ -1921,6 +1853,16 @@ class TaskSchedulerBridge:
         self._transition_inventory_claim(job_uuid, target_state="running")
         self._projection.project_dispatch_accepted(job_uuid)
 
+    def _on_manual_continuation_dispatching(self, job_uuid: str) -> None:
+        """在人工批准后、物理调用前提交同一 Job 的派发意图。"""
+
+        if job_uuid not in self._task_by_job:
+            raise StoreConflict(f"人工确认继续作业不属于当前运行：{job_uuid}")
+        self._projection.project_manual_continuation_dispatching(
+            job_uuid,
+            dispatched_at=self._format_time(self._clock()),
+        )
+
     def _on_job_dispatch_uncertain(self, job_uuid: str, reason: str) -> None:
         """让库存与工作流 Claim 同时冻结为物理不确定。
 
@@ -2094,58 +2036,61 @@ class TaskSchedulerBridge:
         if timer is not None:
             timer.cancel()
 
-    def _schedule_manual_confirmation_timeout(self, job_uuid: str) -> None:
-        """按持久确认截止时间安排一次到期检查；无截止时间则不建计时器。"""
+    def _schedule_manual_confirmation_timeout(self, _job_uuid: str = "") -> None:
+        """只为全库最早截止时间保留一个可唤醒计时器。"""
 
-        confirmation = self._manual_confirmations.get_by_job(job_uuid)
-        raw_deadline = confirmation.get("deadline_at")
-        if confirmation.get("status") != "pending" or raw_deadline is None:
-            return
-        deadline = self._parse_time(raw_deadline)
-        delay = max(
-            0.0,
-            (deadline - self._clock()).total_seconds(),
-        )
-        timer = self._timer_factory(
-            delay,
-            self._on_manual_confirmation_timeout,
-            kwargs={"job_uuid": job_uuid},
-        )
-        timer.daemon = True
         with self._manual_timer_lock:
-            previous = self._manual_timers.pop(job_uuid, None)
-            self._manual_timers[job_uuid] = timer
-        if previous is not None:
-            previous.cancel()
-        timer.start()
+            previous = self._manual_deadline_timer
+            self._manual_deadline_timer = None
+            if previous is not None:
+                previous.cancel()
+            confirmation = self._manual_confirmations.next_pending_deadline()
+            if confirmation is None or self._closed:
+                return
+            deadline = self._parse_time(confirmation["deadline_at"])
+            delay = max(0.0, (deadline - self._clock()).total_seconds())
+            timer = self._timer_factory(
+                delay,
+                self._on_manual_confirmation_timeout,
+            )
+            timer.daemon = True
+            self._manual_deadline_timer = timer
+            timer.start()
 
-    def _on_manual_confirmation_timeout(self, *, job_uuid: str) -> None:
-        """到期后让调度器以明确超时证据结算人工确认 Job。"""
+    def _on_manual_confirmation_timeout(self) -> None:
+        """批量收敛当前所有到期确认，再安排下一条权威截止时间。"""
 
         with self._manual_callback_lock:
             with self._manual_timer_lock:
-                self._manual_timers.pop(job_uuid, None)
+                self._manual_deadline_timer = None
             if self._closed:
                 return
-            try:
-                confirmation = self._manual_confirmations.get_by_job(job_uuid)
-                if confirmation.get("status") != "pending":
-                    return
-                deadline = self._parse_time(confirmation.get("deadline_at"))
-                if deadline > self._clock():
-                    self._schedule_manual_confirmation_timeout(job_uuid)
-                    return
-                self._scheduler.expire_manual_confirmation(job_uuid)
-            except Exception:
-                logger.exception("人工确认超时收敛失败：%s", job_uuid)
+            now = self._format_time(self._clock())
+            for confirmation in self._manual_confirmations.list_due(now):
+                job_uuid = str(confirmation["workflow_node_job_uuid"])
+                try:
+                    aggregate, created = (
+                        self._projection.project_manual_confirmation_timeout(
+                            job_uuid,
+                            decided_at=now,
+                        )
+                    )
+                    if created:
+                        self.cancel(
+                            str(aggregate["task"]["uuid"]),
+                            reason="manual_confirmation_timeout",
+                        )
+                except (StoreConflict, TaskSchedulerBridgeError):
+                    continue
+                except Exception:
+                    logger.exception("人工确认超时收敛失败：%s", job_uuid)
+            self._schedule_manual_confirmation_timeout()
 
     def _cancel_manual_confirmation_timer(self, job_uuid: str) -> None:
-        """幂等取消一个人工确认截止计时器。"""
+        """决定变更后重排唯一人工确认截止计时器。"""
 
-        with self._manual_timer_lock:
-            timer = self._manual_timers.pop(job_uuid, None)
-        if timer is not None:
-            timer.cancel()
+        del job_uuid
+        self._schedule_manual_confirmation_timeout()
 
     @staticmethod
     def _parse_time(value: Any) -> datetime:
@@ -2162,7 +2107,11 @@ class TaskSchedulerBridge:
 
         if value.tzinfo is None:
             raise ValueError("截止时间缺少时区")
-        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return (
+            value.astimezone(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
 
     def _on_job_feedback(self, job_uuid: str, sample: Mapping[str, Any]) -> None:
         """把 Edge 已提交反馈投影为工作流作业有序历史。"""
@@ -2681,9 +2630,23 @@ class TaskSchedulerBridge:
         异常：任务不存在时传播工作流存储（WorkflowStore）异常。
         """
 
+        confirmations = {
+            item["workflow_node_job_uuid"]: item
+            for item in self._manual_confirmations.list_by_task(task_uuid)
+        }
         return {
             "task": self._store.get_task(task_uuid),
-            "jobs": self._store.list_jobs(task_uuid),
+            "jobs": [
+                {
+                    **job,
+                    **(
+                        {"manual_confirmation": confirmations[job["uuid"]]}
+                        if job["uuid"] in confirmations
+                        else {}
+                    ),
+                }
+                for job in self._store.list_jobs(task_uuid)
+            ],
         }
 
     def _project_scheduler_trace_context(

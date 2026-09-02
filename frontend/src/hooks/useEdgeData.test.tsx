@@ -99,4 +99,34 @@ describe('useEdgeData', () => {
     expect(loadEdgeSnapshot).toHaveBeenCalledTimes(1)
     expect(loadEdgeTasks).toHaveBeenCalledTimes(1)
   })
+
+  it('invalidates the shared task query when the scheduler SSE announces manual confirmation', async () => {
+    class FakeEventSource {
+      static latest: FakeEventSource | undefined
+      listeners = new Map<string, EventListener>()
+      closed = false
+      constructor(public url: string) { FakeEventSource.latest = this }
+      addEventListener(type: string, listener: EventListener) { this.listeners.set(type, listener) }
+      close() { this.closed = true }
+      emit(type: string) { this.listeners.get(type)?.(new Event(type)) }
+    }
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.mocked(loadEdgeSnapshot).mockResolvedValue(authoritativeSnapshot)
+    vi.mocked(loadEdgeTasks).mockResolvedValue([])
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result, unmount } = renderHook(() => useEdgeData(), { wrapper })
+
+    await waitFor(() => expect(result.current.connection).toBe('connected'))
+    await waitFor(() => expect(FakeEventSource.latest?.url).toBe('/api/v1/events'))
+    const callsBeforeEvent = vi.mocked(loadEdgeTasks).mock.calls.length
+    act(() => FakeEventSource.latest?.emit('manual_confirmation.required'))
+    await waitFor(() => expect(loadEdgeTasks).toHaveBeenCalledTimes(callsBeforeEvent + 1))
+
+    const source = FakeEventSource.latest
+    unmount()
+    expect(source?.closed).toBe(true)
+  })
 })

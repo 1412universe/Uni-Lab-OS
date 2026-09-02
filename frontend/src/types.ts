@@ -115,6 +115,11 @@ export interface TaskNodeJobEvidence {
   errorInfo: unknown[]
   startedAt?: string
   finishedAt?: string
+  manualConfirmation?: {
+    status: 'pending' | 'approved' | 'rejected' | 'timed_out' | 'canceled'
+    deadlineAt: string
+    actions: Array<'approve' | 'reject'>
+  }
 }
 
 export interface TaskNode {

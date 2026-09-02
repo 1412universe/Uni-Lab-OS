@@ -769,7 +769,7 @@ class TestCancel:
 
 
 class TestManualConfirmNodes:
-    """manual_confirm 特殊节点：不进执行器、不占设备锁，靠 finish_job 人工放行。"""
+    """manual_confirm 先占资源，批准后才以同一 Job 派发真实设备动作。"""
 
     def _manual_spec(self, workflow_id: str) -> WorkflowSpec:
         manual = WorkflowNode(
@@ -777,8 +777,9 @@ class TestManualConfirmNodes:
             device_id="operator",
             action_name="confirm",
             action_type="goal",
-            param={"prompt": "确认无误后继续"},
+            param={"target_volume": 10},
             node_type="manual_confirm",
+            manual_confirmation={"timeout_seconds": 3600},
         )
         return WorkflowSpec(
             workflow_id=workflow_id,
@@ -786,40 +787,43 @@ class TestManualConfirmNodes:
             edges=[_edge("A", "M"), _edge("M", "B")],
         )
 
-    def test_manual_confirm_parks_without_dispatch(self):
+    def test_manual_confirm_parks_without_dispatch(self) -> None:
         scheduler, dispatcher = _make()
         scheduler.submit_workflow(self._manual_spec("wf-manual"))
         job_a = dispatcher.dispatched[0]["job_id"]
         scheduler.on_job_finished(job_a, True, {}, "normal")
-        # M 已进入 dispatched 停驻，但执行器只收到过 A
+        # M 已占用执行槽并等待人工批准，但执行器只收到过 A。
         assert len(dispatcher.dispatched) == 1
         snap = scheduler.workflow_snapshot("wf-manual")
         assert snap["nodes"]["M"]["state"] == "dispatched"
-        # 快照必须带 job_id，前端凭它调 /jobs/{id}/finish
         manual_job = snap["nodes"]["M"].get("job_id")
         assert manual_job
 
-    def test_manual_confirm_finish_releases_downstream(self):
+    def test_approve_dispatches_same_job_then_device_result_releases_downstream(
+        self,
+    ) -> None:
         scheduler, dispatcher = _make()
         scheduler.submit_workflow(self._manual_spec("wf-manual2"))
         scheduler.on_job_finished(dispatcher.dispatched[0]["job_id"], True, {}, "normal")
         manual_job = scheduler.workflow_snapshot("wf-manual2")["nodes"]["M"]["job_id"]
+        decision = scheduler.resolve_manual_confirmation(manual_job, approved=True)
+        assert decision["dispatched"][0]["job_id"] == manual_job
+        assert dispatcher.dispatched[-1]["job_id"] == manual_job
+        assert dispatcher.dispatched[-1]["action"] == "confirm"
+        assert dispatcher.dispatched[-1]["action_args"] == {"target_volume": 10}
         scheduler.on_job_finished(manual_job, True, {"confirmed": True}, "normal")
-        # 人工放行后 B 正常下发，链路走完工作流成功
         assert dispatcher.dispatched[-1]["action"] == "run"
         scheduler.on_job_finished(dispatcher.dispatched[-1]["job_id"], True, {}, "normal")
         assert scheduler.workflow_snapshot("wf-manual2")["state"] == "success"
 
-    def test_manual_confirm_ignores_device_busy(self):
+    def test_manual_confirmation_waits_for_busy_device(self) -> None:
         scheduler, dispatcher = _make()
-        # 同 key 的设备 job 占着锁
         scheduler.submit_workflow(
             WorkflowSpec(
                 workflow_id="wf-busy",
                 nodes=[_node("A", device="operator", action="confirm")],
             )
         )
-        # manual_confirm 与其同 key，但 always-free：照样立即停驻下发
         manual_only = WorkflowSpec(
             workflow_id="wf-manual3",
             nodes=[
@@ -828,20 +832,19 @@ class TestManualConfirmNodes:
                     device_id="operator",
                     action_name="confirm",
                     node_type="manual_confirm",
+                    manual_confirmation={"timeout_seconds": 3600},
                 )
             ],
         )
         scheduler.submit_workflow(manual_only)
         snap = scheduler.workflow_snapshot("wf-manual3")
-        assert snap["nodes"]["M"]["state"] == "dispatched"
+        assert snap["nodes"]["M"]["state"] == "ready"
+        scheduler.on_job_finished(dispatcher.dispatched[0]["job_id"], True, {}, "normal")
+        assert scheduler.workflow_snapshot("wf-manual3")["nodes"]["M"]["state"] == "dispatched"
 
-    def test_manual_confirm_does_not_occupy_device_for_an_action(self):
-        """证明人工确认节点停驻期间不建立设备级或动作级内存互斥。
+    def test_manual_confirmation_occupies_device_until_action_finishes(self) -> None:
+        """人工节点即使包装 always_free 动作，也必须独占设备直到动作终态。"""
 
-        参数：无；测试先停驻人工确认节点，再提交同设备同动作的普通节点。
-        返回：无；断言普通动作仍可越过执行器（Executor）派发边界。
-        异常：若人工确认被错误计入设备忙碌集合，断言失败。
-        """
         scheduler, dispatcher = _make()
         manual_only = WorkflowSpec(
             workflow_id="wf-manual-free",
@@ -851,19 +854,20 @@ class TestManualConfirmNodes:
                     device_id="operator",
                     action_name="confirm",
                     node_type="manual_confirm",
+                    manual_confirmation={"timeout_seconds": 3600},
+                    always_free=True,
                 )
             ],
         )
-        scheduler.submit_workflow(manual_only)
-        # 普通动作与人工确认复用相同设备和动作身份，仍应立即实际派发。
+        manual_result = scheduler.submit_workflow(manual_only)
+        manual_job = manual_result["dispatched"][0]["job_id"]
         ordinary_result = scheduler.submit_workflow(
             WorkflowSpec(
                 workflow_id="wf-ordinary-after-manual",
                 nodes=[_node("ordinary-node", device="operator", action="confirm")],
             )
         )
-
-        assert len(ordinary_result["dispatched"]) == 1
-        assert [
-            (item["device_id"], item["action"]) for item in dispatcher.dispatched
-        ] == [("operator", "confirm")]
+        assert ordinary_result["dispatched"] == []
+        scheduler.resolve_manual_confirmation(manual_job, approved=True)
+        scheduler.on_job_finished(manual_job, True, {}, "normal")
+        assert dispatcher.dispatched[-1]["node_id"] == "ordinary-node"

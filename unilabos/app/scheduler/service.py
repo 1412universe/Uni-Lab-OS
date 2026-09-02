@@ -322,6 +322,7 @@ class EdgeScheduler:
         self._dispatch_admission_authority: Callable[[dict[str, Any]], bool] | None = (
             None
         )
+        self._manual_continuation_authority: Callable[[str], None] | None = None
         self._job_execution_wait_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._job_dispatch_accepted_listeners: list[Callable[[str], None]] = []
         self._job_dispatch_uncertain_listeners: list[Callable[[str, str], None]] = []
@@ -474,6 +475,26 @@ class EdgeScheduler:
         if self._dispatch_admission_authority != authority:
             raise ExecutionPolicyError("解绑的持久派发准入权威身份不匹配")
         self._dispatch_admission_authority = None
+
+    def bind_manual_continuation_authority(
+        self,
+        authority: Callable[[str], None],
+    ) -> None:
+        """绑定批准后把同一 Job 推进到物理派发意图的持久权威。"""
+
+        if not callable(authority) or self._manual_continuation_authority is not None:
+            raise ExecutionPolicyError("人工确认继续派发权威已经绑定或不可调用")
+        self._manual_continuation_authority = authority
+
+    def unbind_manual_continuation_authority(
+        self,
+        authority: Callable[[str], None],
+    ) -> None:
+        """只允许组合根解绑此前注册的同一权威。"""
+
+        if self._manual_continuation_authority != authority:
+            raise ExecutionPolicyError("人工确认继续派发权威身份不匹配")
+        self._manual_continuation_authority = None
 
     def add_job_execution_wait_listener(
         self,
@@ -1444,16 +1465,10 @@ class EdgeScheduler:
         approved: bool,
         param: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """批准后以同一作业身份下发真实设备动作，拒绝则明确失败。"""
+        """标记持久决定已经批准，并优先尝试同一 Job 的真实设备动作。"""
 
         if not approved:
-            return self.on_job_finished(
-                job_id,
-                False,
-                {"manual_confirmation": "rejected"},
-                "normal",
-            )
-        complete_without_dispatch = False
+            raise ValueError("拒绝人工确认必须走 Task Cancel 流程")
         with self._lock:
             job = self._inflight.get(job_id)
             if job is None:
@@ -1468,136 +1483,107 @@ class EdgeScheduler:
                     "workflow_state": run.state.value,
                     "dispatched": [],
                 }
-            if self._draining and node.manual_continues_device_action:
-                raise ValueError("调度器正在排空，不能批准新的设备动作")
-            if not node.manual_continues_device_action:
-                job.manual_action_dispatched = True
-                complete_without_dispatch = True
-            if complete_without_dispatch:
-                approved_param = {}
-                payload = None
-            else:
-                approved_param = (
-                    dict(param) if param is not None else dict(job.resolved_args)
-                )
-                if approved_param != job.resolved_args:
-                    raise ValueError(
-                        "人工确认不能修改已经冻结的派发参数；请取消后创建新任务"
-                    )
-                approved_locks = self._resource_lock_keys(node, approved_param)
-                held_locks = self._job_resource_locks.get(job_id, set())
-                if approved_locks != held_locks:
-                    raise ValueError("批准参数改变了物料或库位占用范围")
-                if self._device_target_resolver is not None:
-                    other_held_locks: set[str] = set()
-                    for held_job_id, held_keys in self._job_resource_locks.items():
-                        if held_job_id != job_id:
-                            other_held_locks |= held_keys
-                    selected = self._device_target_resolver(
-                        {
-                            "mode": "fixed",
-                            "local_device_id": job.device_id,
-                            "material_uuid": job.device_material_uuid,
-                        },
-                        node.action_name,
-                        self._busy_keys() | other_held_locks,
-                    )
-                    if (
-                        selected.local_device_id != job.device_id
-                        or selected.material_uuid != job.device_material_uuid
-                    ):
-                        raise ValueError("人工确认批准时设备执行身份发生漂移")
-                elif self.physical_dispatch_enabled:
-                    raise ValueError("人工确认批准时缺少当前设备注册状态权威")
-                payload = build_job_start_payload(
-                    job_id=job_id,
-                    task_id=run.spec.task_id,
-                    workflow_id=job.workflow_id,
-                    node_id=job.node_id,
-                    device_id=node.device_id,
-                    action_name=node.action_name,
-                    action_type=node.action_type,
-                    action_args=approved_param,
-                    always_free=node.always_free,
-                )
-                missing_credentials = [
-                    field
-                    for field in (
-                        "attempt",
-                        "command_uuid",
-                        "claim_uuid",
-                        "fences",
-                        "effect_uuid",
-                        "parameter_hash",
-                        "expected_change_set",
-                    )
-                    if field not in job.dispatch_credentials
-                ]
-                if missing_credentials:
-                    raise ValueError(
-                        "人工确认继续动作缺少派发凭据："
-                        + ",".join(sorted(missing_credentials))
-                    )
-                payload.update(deepcopy(job.dispatch_credentials))
-            if complete_without_dispatch:
-                pass
-            else:
-                assert payload is not None
-                try:
-                    self._dispatcher.dispatch(payload)
-                    self._notify_job_dispatch_accepted(job_id)
-                except BaseException:
-                    self._notify_job_dispatch_uncertain(
-                        job_id,
-                        "manual_confirmation_dispatch_acceptance_unknown",
-                    )
-                    raise
-                job.resolved_args = approved_param
-                job.manual_action_dispatched = True
-            dispatched_result = {
+            if param is not None and dict(param) != job.resolved_args:
+                raise ValueError("人工确认不支持修改设备动作参数")
+            job.manual_confirmation_approved = True
+            dispatched = self._try_dispatch_approved_manual_locked(job)
+            return {
                 "workflow_id": job.workflow_id,
                 "workflow_state": run.state.value,
-                "dispatched": (
-                    []
-                    if complete_without_dispatch
-                    else [
-                        {
-                            "job_id": job_id,
-                            "workflow_id": job.workflow_id,
-                            "node_id": job.node_id,
-                            "device_action_key": job.device_action_key,
-                        }
-                    ]
-                ),
+                "dispatched": [dispatched] if dispatched is not None else [],
             }
-        if complete_without_dispatch:
-            return self.on_job_finished(
-                job_id,
-                True,
-                {"manual_confirmation": "approved"},
-                "normal",
+
+    def _try_dispatch_approved_manual_locked(
+        self,
+        job: DispatchedJob,
+    ) -> dict[str, Any] | None:
+        """复用既有资源与凭据派发已批准人工 Job；设备离线时保持等待。"""
+
+        if not job.manual_confirmation_approved or job.manual_action_dispatched:
+            return None
+        run = self._workflows.get(job.workflow_id)
+        node = run.node(job.node_id) if run is not None else None
+        if run is None or node is None or not node.is_manual_confirm():
+            raise ValueError("作业不是人工确认节点")
+        if self._device_target_resolver is not None:
+            other_busy: set[str] = set(self._external_busy_keys)
+            if self._busy_key_provider is not None:
+                other_busy |= set(self._busy_key_provider())
+            for other_job_id, other in self._inflight.items():
+                if other_job_id == job.job_id:
+                    continue
+                other_busy.add(other.device_action_key)
+                other_busy.add(f"/devices/{other.device_material_uuid or other.device_id}")
+            try:
+                selected = self._device_target_resolver(
+                    {
+                        "mode": "fixed",
+                        "local_device_id": job.device_id,
+                        "material_uuid": job.device_material_uuid,
+                    },
+                    node.action_name,
+                    other_busy,
+                )
+            except DeviceTargetUnavailable:
+                return None
+            if (
+                selected.local_device_id != job.device_id
+                or selected.material_uuid != job.device_material_uuid
+            ):
+                raise ValueError("人工确认批准时设备执行身份发生漂移")
+        elif self.physical_dispatch_enabled:
+            raise ValueError("人工确认批准时缺少当前设备注册状态权威")
+        authority = self._manual_continuation_authority
+        if authority is None and self.physical_dispatch_enabled:
+            raise ExecutionPolicyError("人工确认继续派发权威未装配")
+        if authority is not None:
+            authority(job.job_id)
+        missing_credentials = [
+            field
+            for field in (
+                "attempt",
+                "command_uuid",
+                "claim_uuid",
+                "fences",
+                "effect_uuid",
+                "parameter_hash",
+                "expected_change_set",
             )
-        return dispatched_result
-
-    def expire_manual_confirmation(self, job_id: str) -> dict[str, Any]:
-        """按持久截止时间关闭仍在等待的人工确认，不触发物理动作。"""
-
-        with self._lock:
-            job = self._inflight.get(job_id)
-            if job is None:
-                raise ValueError("人工确认对应的作业不在运行中")
-            run = self._workflows.get(job.workflow_id)
-            node = run.node(job.node_id) if run is not None else None
-            if run is None or node is None or not node.is_manual_confirm():
-                raise ValueError("作业不是人工确认节点")
-            if job.manual_action_dispatched:
-                raise ValueError("人工确认已经越过设备派发边界")
-        return self.on_job_finished(
-            job_id,
-            False,
-            {"manual_confirmation": "timed_out"},
-            "manual_confirmation_timeout",
+            if field not in job.dispatch_credentials
+        ]
+        if missing_credentials:
+            raise ValueError(
+                "人工确认继续动作缺少派发凭据："
+                + ",".join(sorted(missing_credentials))
+            )
+        payload = build_job_start_payload(
+            job_id=job.job_id,
+            task_id=run.spec.task_id,
+            workflow_id=job.workflow_id,
+            node_id=job.node_id,
+            device_id=job.device_id,
+            action_name=node.action_name,
+            action_type=node.action_type,
+            action_args=job.resolved_args,
+            always_free=node.always_free,
         )
+        payload.update(deepcopy(job.dispatch_credentials))
+        job.manual_action_dispatched = True
+        try:
+            self._dispatcher.dispatch(payload)
+            self._notify_job_dispatch_accepted(job.job_id)
+        except BaseException:
+            self._notify_job_dispatch_uncertain(
+                job.job_id,
+                "manual_confirmation_dispatch_acceptance_unknown",
+            )
+            raise
+        return {
+            "job_id": job.job_id,
+            "workflow_id": job.workflow_id,
+            "node_id": job.node_id,
+            "device_action_key": job.device_action_key,
+        }
 
     def request_uncertain_resolution(
         self,
@@ -1677,10 +1663,16 @@ class EdgeScheduler:
 
         self._reschedule_count += 1
 
-        # 排空期间仍允许在途作业通过 ``on_job_finished`` 完成状态结算，但不得
-        # 继续派发后继节点。恢复后会主动触发新一轮重排，不丢失 ready 节点。
+        continued = [
+            item
+            for job in tuple(self._inflight.values())
+            if (item := self._try_dispatch_approved_manual_locked(job)) is not None
+        ]
+
+        # 排空期间不接纳新的 Job；已准入并经人工批准的同一 Job 属于在途继续，
+        # 必须允许越过物理边界，否则 drain 会永久阻塞。
         if self._draining:
-            return []
+            return continued
 
         if (
             self.physical_dispatch_enabled
@@ -1764,18 +1756,18 @@ class EdgeScheduler:
                 )
 
         if not ready:
-            return []
+            return continued
 
         busy = self._busy_keys()
         held_resource_locks = self._held_resource_locks()
         ordered = self._orderer.order(ready, OrderingContext(set(busy)))
 
-        dispatched: list[dict[str, Any]] = []
+        dispatched: list[dict[str, Any]] = list(continued)
         for task in ordered:
-            # 人工确认和动作合同声明的 always_free 均不占设备锁；后者仍需通过
-            # 下方物料/库位执行资源键准入，不能借免排队语义绕过资源安全。
+            # 人工确认必须先占完整设备/物料/Site 资源，即使底层动作声明
+            # always_free 也不能绕过设备互斥；这是人员到场确认的安全边界。
             manual_confirm = task.node.is_manual_confirm()
-            bypass_device_lock = manual_confirm or task.node.always_free
+            bypass_device_lock = task.node.always_free and not manual_confirm
             # ``job_id`` 优先复用标准工作流节点作业（WorkflowNodeJob）身份；旧整图
             # 没有提供时才维持历史随机身份行为。等待与派发必须使用同一身份。
             job_id = task.node.job_id or uuid_mod.uuid4().hex
@@ -2317,6 +2309,15 @@ class EdgeScheduler:
                         "operate_in_place_condition": operate_in_place_condition,
                         "aliquot_dispatch_condition": aliquot_dispatch_condition,
                         **(
+                            {
+                                "manual_confirmation": dict(
+                                    task.node.manual_confirmation
+                                )
+                            }
+                            if manual_confirm
+                            else {}
+                        ),
+                        **(
                             {"dispatch_candidates": dispatch_candidates}
                             if len(dispatch_candidates) > 1
                             else {}
@@ -2444,8 +2445,7 @@ class EdgeScheduler:
                     except BaseException as projection_error:
                         raise projection_error from exc
                 raise
-            # 人工确认节点不进入执行器，但仍已在上方登记为在途作业，由统一完成
-            # 接口提交明确结果。
+            # 人工确认节点已完整准入并登记为在途，但批准前不进入执行器。
             action_trace.event(
                 "action.dispatched",
                 {
@@ -3022,7 +3022,7 @@ class EdgeScheduler:
         """合并外部与本地在途作业的动作级、设备级内存忙碌键。
 
         参数：无；外部键来自构造注入集合和可选实时提供者。
-        返回：供一次准入重排使用的忙碌键副本；不会把人工确认节点计入互斥。
+        返回：供一次准入重排使用的忙碌键副本；人工确认等待同样计入互斥。
         异常：外部提供者异常会被记录，并沿用既有降级，仅使用已知本地事实。
 
         该集合不会跨进程重启恢复，也没有占用 UUID 或栅栏令牌，因此不是持久
@@ -3042,14 +3042,8 @@ class EdgeScheduler:
             if device_key is not None:
                 busy.add(device_key)
         for job in self._inflight.values():
-            # 由在途作业身份回到其工作流节点，只为识别不占设备的人工确认节点。
-            run = self._workflows.get(job.workflow_id)
-            node = run.node(job.node_id) if run is not None else None
-            # 人工确认节点只等待操作者输入，不使用设备执行器，也不建立设备互斥。
-            if node is not None and node.is_manual_confirm():
-                continue
             busy.add(job.device_action_key)
-            busy.add(f"/devices/{job.device_id}")
+            busy.add(f"/devices/{job.device_material_uuid or job.device_id}")
         return busy
 
     # ── 泳道图时间线 ─────────────────────────────────────────
@@ -3268,19 +3262,12 @@ class EdgeScheduler:
         }
 
     def _is_device_job_active_locked(self, job: DispatchedJob) -> bool:
-        """判断在途作业是否已经越过设备派发边界。
+        """判断在途作业是否会阻止安全排空。
 
-        参数：``job`` 是调度器在途作业。返回：普通作业恒为真；人工确认作业只在
-        已批准并派发真实设备动作后为真。异常：不主动抛出；调用方须持有调度锁。
+        已完整准入的人工确认持有设备资源，也属于 drain blocker。
         """
 
-        run = self._workflows.get(job.workflow_id)
-        node = run.node(job.node_id) if run is not None else None
-        return not (
-            node is not None
-            and node.is_manual_confirm()
-            and not job.manual_action_dispatched
-        )
+        return True
 
     def workflow_snapshot(self, workflow_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -3343,6 +3330,38 @@ class EdgeScheduler:
             ]
             cancel_method = getattr(self._dispatcher, "cancel", None)
             for job_id in canceling_jobs:
+                current_job = self._inflight.get(job_id)
+                current_run = (
+                    self._workflows.get(current_job.workflow_id)
+                    if current_job is not None
+                    else None
+                )
+                current_node = (
+                    current_run.node(current_job.node_id)
+                    if current_run is not None and current_job is not None
+                    else None
+                )
+                if (
+                    current_job is not None
+                    and current_node is not None
+                    and current_node.is_manual_confirm()
+                    and not current_job.manual_action_dispatched
+                ):
+                    self._notify_job_cancel_no_send(job_id)
+                    self._inflight.pop(job_id, None)
+                    self._job_resource_locks.pop(job_id, None)
+                    action_trace = self._job_spans.pop(job_id, None)
+                    if action_trace is not None:
+                        action_trace.end()
+                    current_run.mark_canceled(current_job.node_id)
+                    self._record_timeline(
+                        current_job,
+                        success=False,
+                        suc_type="canceled",
+                        state="canceled",
+                    )
+                    self._notify_job_settled(job_id, False, None, "canceled")
+                    continue
                 try:
                     state = (
                         cancel_method(

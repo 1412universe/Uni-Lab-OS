@@ -65,7 +65,7 @@ def _create_and_publish(
                 {
                     "uuid": str(uuid4()),
                     "name": f"节点-{name}",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {"x": 0, "y": 0},
                     "param": {},
                     "execution_policy": {},
@@ -172,7 +172,7 @@ def test_product_only_lists_published_normal_workflows(tmp_path: Path) -> None:
                     {
                         "uuid": hidden_node_uuid,
                         "name": "隐藏节点",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {"x": 0, "y": 0},
                         "param": {},
                         "execution_policy": {},

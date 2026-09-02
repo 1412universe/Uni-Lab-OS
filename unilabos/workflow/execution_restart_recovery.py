@@ -85,6 +85,13 @@ def fail_task_after_execution_process_restart(
         job_uuid = str(job["uuid"])
         status = str(job["status"])
         if status in _IN_FLIGHT_JOB_STATES:
+            physical_may_be_in_flight = (
+                str(job["executor_kind"]) != "manual_confirm"
+                or _manual_confirmation_was_approved(
+                    connection,
+                    job_uuid=job_uuid,
+                )
+            )
             changed = connection.execute(
                 """
                 UPDATE workflow_node_job
@@ -100,7 +107,11 @@ def fail_task_after_execution_process_restart(
                 """,
                 (
                     failure_info,
-                    EXECUTION_PROCESS_RESTARTED,
+                    (
+                        EXECUTION_PROCESS_RESTARTED
+                        if physical_may_be_in_flight
+                        else None
+                    ),
                     failed_at,
                     failed_at,
                     job_uuid,
@@ -129,6 +140,7 @@ def fail_task_after_execution_process_restart(
                 job_uuid=job_uuid,
                 status="canceled",
                 decided_at=failed_at,
+                resolution_reason="runtime_restarted",
             )
             continue
         if status == "pending":
@@ -166,6 +178,7 @@ def fail_task_after_execution_process_restart(
                 job_uuid=job_uuid,
                 status="canceled",
                 decided_at=failed_at,
+                resolution_reason="runtime_restarted",
             )
             continue
         if status not in _TERMINAL_JOB_STATES:
@@ -173,22 +186,12 @@ def fail_task_after_execution_process_restart(
 
     # 只有仍可能存在物理动作的任务才保留不确定占用。纯调度窗口（前一节点已
     # 结算、后一节点尚未派发）同样业务失败，但不伪造需要人工清理的设备事实。
-    active_lease = connection.execute(
-        """
-        SELECT 1 FROM execution_lock_lease
-        WHERE workflow_task_uuid = ?
-          AND state IN ('reserved', 'running', 'uncertain')
-          AND deleted_at IS NULL
-        LIMIT 1
-        """,
-        (task_uuid,),
-    ).fetchone()
     physical_in_flight = any(
         str(row["executor_kind"]) != "manual_confirm"
         or _manual_confirmation_was_approved(connection, job_uuid=str(row["uuid"]))
         for row in in_flight
     )
-    requires_attention = active_lease is not None or physical_in_flight
+    requires_attention = physical_in_flight
     target_lease_state = "uncertain" if requires_attention else "released"
     connection.execute(
         """
@@ -299,7 +302,7 @@ def _manual_confirmation_was_approved(
     row = connection.execute(
         """
         SELECT status FROM workflow_manual_confirmation
-        WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
+        WHERE workflow_node_job_uuid = ?
         """,
         (job_uuid,),
     ).fetchone()

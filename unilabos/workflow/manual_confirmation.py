@@ -1,73 +1,99 @@
-"""人工确认（ManualConfirmation）的持久事实与幂等决策。"""
+"""人工确认包装设备动作的持久事实。"""
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import uuid4
 
 from unilabos.workflow.event_writer import append_frontend_event
-from unilabos.workflow.json_codec import decode_json_bytes, encode_json
-from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
+from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore
 
-_FINAL_STATUSES = {"approved", "rejected", "timed_out", "canceled"}
+DEFAULT_MANUAL_CONFIRMATION_TIMEOUT_SECONDS = 3600
+MIN_MANUAL_CONFIRMATION_TIMEOUT_SECONDS = 1
+MAX_MANUAL_CONFIRMATION_TIMEOUT_SECONDS = 86400
+
+_COLUMNS = {
+    "workflow_node_job_uuid",
+    "workflow_task_uuid",
+    "status",
+    "opened_at",
+    "deadline_at",
+    "decided_at",
+    "resolution_reason",
+}
 
 
-def _json(value: Any) -> str:
-    return encode_json(value, sort_keys=True).decode("utf-8")
+def normalize_manual_confirmation_config(value: Any) -> dict[str, int]:
+    """校验独立于设备参数的人工确认配置。"""
 
-
-def _load(value: str) -> Any:
-    return decode_json_bytes(value.encode("utf-8"))
+    if value is None:
+        value = {}
+    if not isinstance(value, Mapping) or set(value) - {"timeout_seconds"}:
+        raise StoreConflict("manual_confirmation 只允许 timeout_seconds")
+    timeout = value.get(
+        "timeout_seconds",
+        DEFAULT_MANUAL_CONFIRMATION_TIMEOUT_SECONDS,
+    )
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, int)
+        or not MIN_MANUAL_CONFIRMATION_TIMEOUT_SECONDS
+        <= timeout
+        <= MAX_MANUAL_CONFIRMATION_TIMEOUT_SECONDS
+    ):
+        raise StoreConflict("manual_confirmation.timeout_seconds 必须在 1..86400")
+    return {"timeout_seconds": timeout}
 
 
 def ensure_manual_confirmation_schema(connection: sqlite3.Connection) -> None:
-    """幂等创建人工确认表及查询索引。"""
+    """创建当前表；旧人工确认表无需兼容，检测到后直接替换。"""
 
+    existing = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='workflow_manual_confirmation'"
+    ).fetchone()
+    if existing is not None:
+        columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(workflow_manual_confirmation)"
+            ).fetchall()
+        }
+        if columns != _COLUMNS:
+            connection.execute("DROP TABLE workflow_manual_confirmation")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS workflow_manual_confirmation (
-            uuid TEXT PRIMARY KEY,
-            create_time TEXT NOT NULL,
-            update_time TEXT NOT NULL,
-            deleted_at TEXT,
-            description TEXT,
-            meta_data TEXT NOT NULL DEFAULT '{}',
+            workflow_node_job_uuid TEXT PRIMARY KEY,
             workflow_task_uuid TEXT NOT NULL,
-            workflow_node_job_uuid TEXT NOT NULL,
             status TEXT NOT NULL CHECK (
                 status IN ('pending', 'approved', 'rejected', 'timed_out', 'canceled')
             ),
-            assignee_user_ids TEXT NOT NULL DEFAULT '[]',
-            confirmed_by TEXT,
-            comment TEXT,
-            param TEXT NOT NULL DEFAULT '{}',
-            decision_idempotency_key TEXT,
             opened_at TEXT NOT NULL,
-            deadline_at TEXT,
+            deadline_at TEXT NOT NULL,
             decided_at TEXT,
+            resolution_reason TEXT,
             FOREIGN KEY(workflow_task_uuid)
                 REFERENCES workflow_task(uuid) ON DELETE RESTRICT,
             FOREIGN KEY(workflow_node_job_uuid)
-                REFERENCES workflow_node_job(uuid) ON DELETE RESTRICT,
-            UNIQUE(workflow_node_job_uuid)
+                REFERENCES workflow_node_job(uuid) ON DELETE RESTRICT
         )
         """
     )
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS ix_manual_confirmation_task
-        ON workflow_manual_confirmation(workflow_task_uuid, opened_at DESC, uuid DESC)
-        WHERE deleted_at IS NULL
+        ON workflow_manual_confirmation(workflow_task_uuid, opened_at DESC,
+                                        workflow_node_job_uuid DESC)
         """
     )
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS ix_manual_confirmation_pending_deadline
-        ON workflow_manual_confirmation(deadline_at, uuid)
-        WHERE deleted_at IS NULL AND status = 'pending'
+        ON workflow_manual_confirmation(deadline_at, workflow_node_job_uuid)
+        WHERE status = 'pending'
         """
     )
 
@@ -76,64 +102,44 @@ def open_manual_confirmation(
     connection: sqlite3.Connection,
     *,
     job_row: sqlite3.Row,
-    param: Mapping[str, Any],
+    config: Mapping[str, Any] | None,
+    opened_at: str,
 ) -> dict[str, Any]:
-    """在作业派发事务中幂等开启一次人工确认。"""
+    """在完整资源准入事务内幂等开启一次人工确认。"""
 
+    normalized = normalize_manual_confirmation_config(config)
     job_uuid = str(job_row["uuid"])
+    task_uuid = str(job_row["workflow_task_uuid"])
     existing = connection.execute(
-        """
-        SELECT * FROM workflow_manual_confirmation
-        WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
-        """,
+        "SELECT * FROM workflow_manual_confirmation "
+        "WHERE workflow_node_job_uuid = ?",
         (job_uuid,),
     ).fetchone()
     if existing is not None:
-        if _load(existing["param"]) != dict(param):
-            raise StoreConflict(f"人工确认冻结参数冲突：{job_uuid}")
         return _row(existing)
-
-    assignees = param.get("assignee_user_ids", [])
-    if not isinstance(assignees, list) or any(
-        not isinstance(value, str) or not value.strip() for value in assignees
-    ):
-        raise StoreConflict("人工确认 assignee_user_ids 必须是非空字符串数组")
-    normalized_assignees = list(dict.fromkeys(value.strip() for value in assignees))
-    timeout = param.get("timeout_seconds", 0)
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0:
-        raise StoreConflict("人工确认 timeout_seconds 必须是非负数")
-    opened_at = utc_now()
-    deadline_at = None
-    if timeout > 0:
-        deadline_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=float(timeout))
-        ).isoformat().replace("+00:00", "Z")
-    confirmation_uuid = str(uuid4())
+    opened = _parse_time(opened_at)
+    deadline_at = _format_time(
+        opened + timedelta(seconds=normalized["timeout_seconds"])
+    )
     connection.execute(
         """
         INSERT INTO workflow_manual_confirmation(
-            uuid, create_time, update_time, deleted_at, description, meta_data,
-            workflow_task_uuid, workflow_node_job_uuid, status,
-            assignee_user_ids, confirmed_by, comment, param,
-            decision_idempotency_key, opened_at, deadline_at, decided_at
-        ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 'pending', ?, NULL, NULL,
-                  ?, NULL, ?, ?, NULL)
+            workflow_node_job_uuid, workflow_task_uuid, status,
+            opened_at, deadline_at, decided_at, resolution_reason
+        ) VALUES (?, ?, 'pending', ?, ?, NULL, NULL)
         """,
-        (
-            confirmation_uuid,
-            opened_at,
-            opened_at,
-            str(job_row["workflow_task_uuid"]),
-            job_uuid,
-            _json(normalized_assignees),
-            _json(dict(param)),
-            opened_at,
-            deadline_at,
-        ),
+        (job_uuid, task_uuid, _format_time(opened), deadline_at),
+    )
+    append_frontend_event(
+        connection,
+        event="manual_confirmation.required",
+        data={"task_uuid": task_uuid, "job_uuid": job_uuid},
+        now=_format_time(opened),
     )
     row = connection.execute(
-        "SELECT * FROM workflow_manual_confirmation WHERE uuid = ?",
-        (confirmation_uuid,),
+        "SELECT * FROM workflow_manual_confirmation "
+        "WHERE workflow_node_job_uuid = ?",
+        (job_uuid,),
     ).fetchone()
     assert row is not None
     return _row(row)
@@ -145,52 +151,57 @@ def close_pending_manual_confirmation(
     job_uuid: str,
     status: str,
     decided_at: str,
-) -> None:
-    """随 Job 终态原子关闭尚未决定的人工确认。"""
+    resolution_reason: str | None = None,
+) -> bool:
+    """随 Task Cancel/重启原子关闭尚未决定的人工确认并发出一次事件。"""
 
     if status not in {"timed_out", "canceled"}:
         raise StoreConflict("人工确认只能按 timed_out 或 canceled 自动关闭")
-    connection.execute(
+    current = connection.execute(
+        "SELECT workflow_task_uuid FROM workflow_manual_confirmation "
+        "WHERE workflow_node_job_uuid = ? AND status = 'pending'",
+        (job_uuid,),
+    ).fetchone()
+    if current is None:
+        return False
+    changed = connection.execute(
         """
         UPDATE workflow_manual_confirmation
-        SET status = ?, decided_at = ?, update_time = ?
-        WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
-          AND status = 'pending'
+        SET status = ?, decided_at = ?, resolution_reason = ?
+        WHERE workflow_node_job_uuid = ? AND status = 'pending'
         """,
-        (status, decided_at, decided_at, job_uuid),
+        (status, decided_at, resolution_reason, job_uuid),
+    ).rowcount
+    if changed != 1:
+        return False
+    append_frontend_event(
+        connection,
+        event="manual_confirmation.resolved",
+        data={
+            "task_uuid": str(current["workflow_task_uuid"]),
+            "job_uuid": job_uuid,
+        },
+        now=decided_at,
     )
+    return True
 
 
 class ManualConfirmationStore:
-    """人工确认查询和决定的单一事务边界。"""
+    """按 Job UUID 查询人工确认；写入由 TaskRuntimeProjection 统一完成。"""
 
     def __init__(self, store: WorkflowStore) -> None:
         self._store = store
         with store.transaction() as connection:
             ensure_manual_confirmation_schema(connection)
 
-    def get(self, confirmation_uuid: str) -> dict[str, Any]:
-        with self._store.read() as connection:
-            row = connection.execute(
-                """
-                SELECT * FROM workflow_manual_confirmation
-                WHERE uuid = ? AND deleted_at IS NULL
-                """,
-                (confirmation_uuid,),
-            ).fetchone()
-        if row is None:
-            raise StoreNotFound(f"manual confirmation {confirmation_uuid} not found")
-        return _row(row)
+    def get(self, job_uuid: str) -> dict[str, Any]:
+        return self.get_by_job(job_uuid)
 
     def get_by_job(self, job_uuid: str) -> dict[str, Any]:
-        """按稳定 Job 身份读取唯一人工确认。"""
-
         with self._store.read() as connection:
             row = connection.execute(
-                """
-                SELECT * FROM workflow_manual_confirmation
-                WHERE workflow_node_job_uuid = ? AND deleted_at IS NULL
-                """,
+                "SELECT * FROM workflow_manual_confirmation "
+                "WHERE workflow_node_job_uuid = ?",
                 (job_uuid,),
             ).fetchone()
         if row is None:
@@ -208,120 +219,100 @@ class ManualConfirmationStore:
             rows = connection.execute(
                 """
                 SELECT * FROM workflow_manual_confirmation
-                WHERE workflow_task_uuid = ? AND deleted_at IS NULL
-                ORDER BY opened_at DESC, uuid DESC
+                WHERE workflow_task_uuid = ?
+                ORDER BY opened_at DESC, workflow_node_job_uuid DESC
                 """,
                 (task_uuid,),
             ).fetchall()
         return [_row(row) for row in rows]
 
-    def decide(
+    def list_by_tasks(
         self,
-        confirmation_uuid: str,
-        *,
-        action: str,
-        confirmed_by: str,
-        comment: str | None,
-        idempotency_key: str,
-        param: Mapping[str, Any] | None,
-    ) -> tuple[dict[str, Any], bool]:
-        """按幂等键批准或拒绝待处理确认，并返回是否首次决定。"""
+        task_uuids: Iterable[str],
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """一次查询返回 Task→Job→Confirmation，避免展示列表 N+1。"""
 
-        normalized_action = action.strip().lower()
-        normalized_actor = confirmed_by.strip()
-        normalized_key = idempotency_key.strip()
-        if normalized_action not in {"approve", "reject"}:
-            raise StoreConflict("人工确认 action 必须是 approve 或 reject")
-        if not normalized_actor or not normalized_key:
-            raise StoreConflict("confirmed_by 和 idempotency_key 不能为空")
-        if normalized_action == "reject" and param is not None:
-            raise StoreConflict("拒绝人工确认时不能提交 param")
-        with self._store.transaction() as connection:
+        identities = tuple(dict.fromkeys(str(value) for value in task_uuids))
+        if not identities:
+            return {}
+        placeholders = ",".join("?" for _ in identities)
+        with self._store.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM workflow_manual_confirmation "
+                f"WHERE workflow_task_uuid IN ({placeholders})",
+                identities,
+            ).fetchall()
+        result: dict[str, dict[str, dict[str, Any]]] = {}
+        for row in rows:
+            task_uuid = str(row["workflow_task_uuid"])
+            job_uuid = str(row["workflow_node_job_uuid"])
+            result.setdefault(task_uuid, {})[job_uuid] = _row(row)
+        return result
+
+    def next_pending_deadline(self) -> dict[str, Any] | None:
+        with self._store.read() as connection:
             row = connection.execute(
                 """
                 SELECT * FROM workflow_manual_confirmation
-                WHERE uuid = ? AND deleted_at IS NULL
-                """,
-                (confirmation_uuid,),
-            ).fetchone()
-            if row is None:
-                raise StoreNotFound(
-                    f"manual confirmation {confirmation_uuid} not found"
-                )
-            target = "approved" if normalized_action == "approve" else "rejected"
-            if row["status"] in _FINAL_STATUSES:
-                if (
-                    row["status"] == target
-                    and row["decision_idempotency_key"] == normalized_key
-                ):
-                    return _row(row), False
-                raise StoreConflict("人工确认已经由另一项决定关闭")
-            now = utc_now()
-            if row["deadline_at"] is not None and now >= str(row["deadline_at"]):
-                connection.execute(
-                    """
-                    UPDATE workflow_manual_confirmation
-                    SET status = 'timed_out', decided_at = ?, update_time = ?
-                    WHERE uuid = ? AND status = 'pending'
-                    """,
-                    (now, now, confirmation_uuid),
-                )
-                raise StoreConflict("人工确认已经超时")
-            approved_param = dict(param) if param is not None else _load(row["param"])
-            connection.execute(
+                WHERE status = 'pending'
+                ORDER BY deadline_at ASC, workflow_node_job_uuid ASC
+                LIMIT 1
                 """
-                UPDATE workflow_manual_confirmation
-                SET status = ?, confirmed_by = ?, comment = ?, param = ?,
-                    decision_idempotency_key = ?, decided_at = ?, update_time = ?
-                WHERE uuid = ? AND status = 'pending'
-                """,
-                (
-                    target,
-                    normalized_actor,
-                    comment.strip() if isinstance(comment, str) and comment.strip() else None,
-                    _json(approved_param),
-                    normalized_key,
-                    now,
-                    now,
-                    confirmation_uuid,
-                ),
-            )
-            decided = connection.execute(
-                "SELECT * FROM workflow_manual_confirmation WHERE uuid = ?",
-                (confirmation_uuid,),
             ).fetchone()
-            assert decided is not None
-            append_frontend_event(
-                connection,
-                event="workflow.runtime.changed",
-                data={"workflow_task_uuid": str(row["workflow_task_uuid"])},
-                now=now,
-            )
-            return _row(decided), True
+        return _row(row) if row is not None else None
+
+    def list_due(self, now: str) -> list[dict[str, Any]]:
+        with self._store.read() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM workflow_manual_confirmation
+                WHERE status = 'pending' AND deadline_at <= ?
+                ORDER BY deadline_at ASC, workflow_node_job_uuid ASC
+                """,
+                (now,),
+            ).fetchall()
+        return [_row(row) for row in rows]
 
 
 def _row(row: sqlite3.Row) -> dict[str, Any]:
-    result = {
-        "uuid": row["uuid"],
-        "create_time": row["create_time"],
-        "update_time": row["update_time"],
-        "meta_data": _load(row["meta_data"]),
-        "workflow_task_uuid": row["workflow_task_uuid"],
-        "workflow_node_job_uuid": row["workflow_node_job_uuid"],
-        "status": row["status"],
-        "assignee_user_ids": _load(row["assignee_user_ids"]),
-        "param": _load(row["param"]),
-        "opened_at": row["opened_at"],
+    result: dict[str, Any] = {
+        "workflow_node_job_uuid": str(row["workflow_node_job_uuid"]),
+        "workflow_task_uuid": str(row["workflow_task_uuid"]),
+        "status": str(row["status"]),
+        "opened_at": str(row["opened_at"]),
+        "deadline_at": str(row["deadline_at"]),
+        "actions": (
+            ["approve", "reject"] if str(row["status"]) == "pending" else []
+        ),
     }
-    for field in ("description", "confirmed_by", "comment", "deadline_at", "decided_at"):
+    for field in ("decided_at", "resolution_reason"):
         if row[field] is not None:
-            result[field] = row[field]
+            result[field] = str(row[field])
     return result
 
 
+def _parse_time(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise StoreConflict("人工确认时间缺少时区")
+    return parsed.astimezone(timezone.utc)
+
+
+def _format_time(value: datetime) -> str:
+    return (
+        value.astimezone(timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
 __all__ = [
+    "DEFAULT_MANUAL_CONFIRMATION_TIMEOUT_SECONDS",
+    "MAX_MANUAL_CONFIRMATION_TIMEOUT_SECONDS",
+    "MIN_MANUAL_CONFIRMATION_TIMEOUT_SECONDS",
     "ManualConfirmationStore",
     "close_pending_manual_confirmation",
     "ensure_manual_confirmation_schema",
+    "normalize_manual_confirmation_config",
     "open_manual_confirmation",
 ]

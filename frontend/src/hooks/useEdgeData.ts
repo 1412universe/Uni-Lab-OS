@@ -1,6 +1,7 @@
+import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
-import { loadEdgeSnapshot, loadEdgeTasks, materialsWithTaskReferences } from '../lib/edgeClient'
+import { EDGE_API_BASE, loadEdgeSnapshot, loadEdgeTasks, materialsWithTaskReferences } from '../lib/edgeClient'
 import type { ConnectionMode, EdgeSnapshot } from '../types'
 
 const demoSnapshot: EdgeSnapshot = {
@@ -46,6 +47,18 @@ export function useEdgeData() {
     staleTime: 15_000,
     refetchInterval: 15_000,
   })
+
+  useEffect(() => {
+    if (!query.isSuccess || typeof EventSource === 'undefined') return undefined
+    const events = new EventSource(`${EDGE_API_BASE}/events`)
+    const refreshTasks = () => {
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+    }
+    events.addEventListener('manual_confirmation.required', refreshTasks)
+    events.addEventListener('manual_confirmation.resolved', refreshTasks)
+    events.addEventListener('workflow.runtime.changed', refreshTasks)
+    return () => events.close()
+  }, [query.isSuccess, queryClient])
 
   let connection: ConnectionMode = 'loading'
   if (query.isSuccess) connection = 'connected'

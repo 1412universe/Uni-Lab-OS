@@ -53,7 +53,7 @@ def _runtime(tmp_path):
                 {
                     "uuid": START_NODE_UUID,
                     "name": "可运行节点",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {"x": 0, "y": 0},
                     "param": {},
                     "execution_policy": {},
@@ -64,7 +64,7 @@ def _runtime(tmp_path):
                 {
                     "uuid": DISABLED_NODE_UUID,
                     "name": "禁用节点",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {"x": 200, "y": 0},
                     "param": {},
                     "execution_policy": {},

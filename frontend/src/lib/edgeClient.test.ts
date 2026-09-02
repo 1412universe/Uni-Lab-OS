@@ -385,6 +385,36 @@ describe('Edge view model adapters', () => {
     })
   })
 
+  it('projects a pending manual confirmation onto the corresponding job and highlights it', () => {
+    const task = adaptTask(
+      {
+        uuid: 'task-manual',
+        workflow_uuid: 'wf-1',
+        status: 'running',
+        execution_plan: {
+          nodes: [{ uuid: 'manual-node', name: '现场确认', kind: 'manual_confirm' }],
+        },
+      },
+      [{
+        uuid: 'manual-job',
+        workflow_node_uuid: 'manual-node',
+        status: 'running',
+        manual_confirmation: {
+          status: 'pending',
+          deadline_at: '2099-01-01T00:00:00Z',
+          actions: ['approve', 'reject'],
+        },
+      }],
+    )
+
+    expect(task.nodes[0].status).toBe('attention')
+    expect(task.nodes[0].job?.manualConfirmation).toEqual({
+      status: 'pending',
+      deadlineAt: '2099-01-01T00:00:00Z',
+      actions: ['approve', 'reject'],
+    })
+  })
+
   it('groups tasks from the same frozen node topology even when snapshot storage metadata differs', () => {
     const base = {
       workflow_uuid: 'wf-1',
