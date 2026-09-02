@@ -2658,6 +2658,21 @@ class TaskSchedulerBridge:
         self._admission_pending_tasks.discard(task_uuid)
         for job in jobs:
             self._task_by_job.pop(str(job.get("uuid") or ""), None)
+        aggregate = self._projection.project_canceled(task_uuid)
+        if self._quantity_inventory is not None:
+            self._quantity_inventory.release_task(
+                task_uuid,
+                reason="workflow_submission_failed",
+            )
+        if any(
+            job.get("executor_kind") == "material_source"
+            for job in aggregate["jobs"]
+        ):
+            self._material_sources.release_terminal_reservations(
+                task_uuid,
+                reason="workflow_submission_failed",
+            )
+        self._projection.project_cleanup_settled(task_uuid)
 
     def _crossed_dispatch_boundary(self, jobs: list[dict[str, Any]]) -> bool:
         """判断标准作业是否已经越过持久派发边界。

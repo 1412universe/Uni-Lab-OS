@@ -14,7 +14,10 @@ from unilabos.app.scheduler.inventory.domain import InsufficientStock
 from unilabos.app.scheduler.models import WorkflowNode, WorkflowSpec
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.store import WorkflowStore
-from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
+from unilabos.workflow.task_scheduler_bridge import (
+    TaskSchedulerBridge,
+    TaskSchedulerBridgeError,
+)
 
 WORKFLOW_UUID = "12000000-0000-4000-8000-000000000001"
 TASK_UUID = "22000000-0000-4000-8000-000000000001"
@@ -400,6 +403,45 @@ def test_source_admission_commits_before_ordinary_action_dispatch(
         )
     ]
     assert dispatcher.dispatched[0]["job_id"] == ACTION_JOB_UUID
+
+
+def test_pre_dispatch_submission_failure_releases_source_reservations(
+    store: WorkflowStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """物理派发前提交失败必须终止 Task，并在声明 settled 前释放来源预留。"""
+
+    task = _seed_task(store, with_action=True, automatic=True)
+
+    class _ObservingInventory(_ToggleInventory):
+        """在释放边界观察 Task 尚未提前声明清理完成。"""
+
+        def release_workflow(self, workflow_uuid: str, *, reason: str) -> None:
+            assert store.get_task(TASK_UUID)["cleanup_status"] == "required"
+            super().release_workflow(workflow_uuid, reason=reason)
+
+    inventory = _ObservingInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+
+    def fail_before_dispatch(_spec: WorkflowSpec) -> dict[str, Any]:
+        raise RuntimeError("调度提交失败")
+
+    monkeypatch.setattr(scheduler, "submit_workflow", fail_before_dispatch)
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        with pytest.raises(TaskSchedulerBridgeError):
+            bridge.submit(task)
+    finally:
+        bridge.close()
+
+    assert store.get_task(TASK_UUID)["status"] == "canceled"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert inventory.release_calls == [
+        (TASK_UUID, "workflow_submission_failed")
+    ]
 
 
 def test_automatic_source_projects_selected_material_before_dispatch(

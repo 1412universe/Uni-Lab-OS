@@ -605,7 +605,7 @@ class TaskRuntimeProjection:
                 """
                 UPDATE workflow_task
                 SET status = 'canceled', control_status = 'active',
-                    cleanup_status = 'settled',
+                    cleanup_status = 'required',
                     wait_reason = '{}', finished_at = ?, update_time = ?
                 WHERE uuid = ? AND deleted_at IS NULL
                 """,
