@@ -2229,6 +2229,146 @@ class WorkflowStore:
             "page_size": page_size,
         }
 
+    def list_task_presentations(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        workflow_uuid: Optional[str] = None,
+        execution_kind: str = "",
+        status: str = "",
+        cleanup_status: str = "",
+    ) -> Dict[str, Any]:
+        """分页读取 Edge 控制台需要的紧凑 Task 冻结事实。
+
+        查询在 SQLite JSON 层裁剪大体积工作流快照与执行计划，避免先把完整图、
+        参数 Schema 和执行策略解码成 Python 对象后再丢弃。返回只读展示投影，
+        筛选和分页语义与 ``list_tasks`` 一致。
+        """
+
+        clauses = ["task.deleted_at IS NULL"]
+        values: List[Any] = []
+        for field, value in (
+            ("workflow_uuid", workflow_uuid),
+            ("execution_kind", execution_kind),
+            ("status", status),
+            ("cleanup_status", cleanup_status),
+        ):
+            if value:
+                clauses.append(f"task.{field} = ?")
+                values.append(value)
+        where = " AND ".join(clauses)
+        offset = (page - 1) * page_size
+        with self._lock:
+            total = self._conn.execute(
+                f"SELECT COUNT(*) FROM workflow_task AS task WHERE {where}",
+                values,
+            ).fetchone()[0]
+            rows = self._conn.execute(
+                f"""
+                SELECT
+                    task.uuid,
+                    task.create_time,
+                    task.update_time,
+                    task.description,
+                    task.meta_data,
+                    task.workflow_uuid,
+                    task.execution_kind,
+                    task.priority,
+                    task.status,
+                    json_object(
+                        'workflow', json_object(
+                            'uuid', json_extract(
+                                task.workflow_snapshot, '$.workflow.uuid'
+                            ),
+                            'name', json_extract(
+                                task.workflow_snapshot, '$.workflow.name'
+                            ),
+                            'revision', json_extract(
+                                task.workflow_snapshot, '$.workflow.revision'
+                            ),
+                            'meta_data', json_object(
+                                'unilab', json_object(
+                                    'input_contract', json_extract(
+                                        task.workflow_snapshot,
+                                        '$.workflow.meta_data.unilab.input_contract'
+                                    )
+                                )
+                            )
+                        )
+                    ) AS workflow_snapshot,
+                    json_object(
+                        'run_mode', json_extract(
+                            task.execution_plan, '$.run_mode'
+                        ),
+                        'target_node_uuid', json_extract(
+                            task.execution_plan, '$.target_node_uuid'
+                        ),
+                        'nodes', json(COALESCE((
+                            SELECT json_group_array(json_object(
+                                'uuid', json_extract(node.value, '$.uuid'),
+                                'name', json_extract(node.value, '$.name'),
+                                'kind', json_extract(node.value, '$.kind'),
+                                'type', json_extract(node.value, '$.type'),
+                                'action_name', json_extract(
+                                    node.value, '$.action_name'
+                                ),
+                                'action_type', json_extract(
+                                    node.value, '$.action_type'
+                                ),
+                                'device_id', json_extract(
+                                    node.value, '$.device_id'
+                                ),
+                                'material_uuid', json_extract(
+                                    node.value, '$.material_uuid'
+                                ),
+                                'topological_index', json_extract(
+                                    node.value, '$.topological_index'
+                                ),
+                                'disabled', json_extract(
+                                    node.value, '$.disabled'
+                                )
+                            ))
+                            FROM json_each(task.execution_plan, '$.nodes') AS node
+                        ), '[]')),
+                        'edges', json(COALESCE((
+                            SELECT json_group_array(json_object(
+                                'uuid', json_extract(edge.value, '$.uuid'),
+                                'source_node_uuid', json_extract(
+                                    edge.value, '$.source_node_uuid'
+                                ),
+                                'target_node_uuid', json_extract(
+                                    edge.value, '$.target_node_uuid'
+                                )
+                            ))
+                            FROM json_each(task.execution_plan, '$.edges') AS edge
+                        ), '[]'))
+                    ) AS execution_plan,
+                    task.run_mode,
+                    task.target_node_uuid,
+                    task.control_status,
+                    task.cleanup_status,
+                    task.wait_reason,
+                    task.trace_context,
+                    task.input,
+                    task.error_info,
+                    task.attention_reason,
+                    task.started_at,
+                    task.finished_at
+                FROM workflow_task AS task
+                WHERE {where}
+                ORDER BY task.create_time DESC, task.uuid
+                LIMIT ? OFFSET ?
+                """,
+                (*values, page_size, offset),
+            ).fetchall()
+        return {
+            "items": [self._task_presentation_row(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
+
     def list_recoverable_tasks(
         self,
         *,
@@ -2269,6 +2409,68 @@ class WorkflowStore:
                 (task_uuid,),
             ).fetchall()
         return [self._job_row(row) for row in rows]
+
+    def list_jobs_for_tasks(
+        self,
+        task_uuids: Iterable[str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """批量读取多个 Task 的 Job，供紧凑运行态投影消除 N+1 查询。
+
+        参数：``task_uuids`` 是已经由任务分页查询验证存在的稳定身份。返回按 Task
+        UUID 分组且保持拓扑顺序的 Job 投影；空集合返回空字典。异常：SQLite 查询
+        或持久 JSON 解码错误原样传播，不把损坏事实伪装成空作业列表。
+        """
+
+        identities = tuple(dict.fromkeys(str(value) for value in task_uuids if value))
+        if not identities:
+            return {}
+        placeholders = ", ".join("?" for _identity in identities)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT
+                    uuid,
+                    create_time,
+                    update_time,
+                    workflow_task_uuid,
+                    workflow_node_uuid,
+                    topological_index,
+                    executor_kind,
+                    status,
+                    attempt,
+                    param,
+                    feedback_data,
+                    return_info,
+                    json_object(
+                        'actual_executor', json_extract(
+                            control_data, '$.actual_executor'
+                        )
+                    ) AS control_data,
+                    error_info,
+                    wait_reason,
+                    json_object(
+                        'material_uuid', json_extract(
+                            expected_change_set, '$.material_uuid'
+                        )
+                    ) AS expected_change_set,
+                    material_uuid,
+                    uncertainty_reason,
+                    started_at,
+                    finished_at
+                FROM workflow_node_job
+                WHERE workflow_task_uuid IN ({placeholders}) AND deleted_at IS NULL
+                ORDER BY workflow_task_uuid, topological_index, create_time, uuid
+                """,
+                identities,
+            ).fetchall()
+        grouped: Dict[str, List[Dict[str, Any]]] = {
+            identity: [] for identity in identities
+        }
+        for row in rows:
+            grouped[str(row["workflow_task_uuid"])].append(
+                self._job_presentation_row(row)
+            )
+        return grouped
 
     def get_job(self, job_uuid: str) -> Dict[str, Any]:
         with self._lock:
@@ -3950,6 +4152,40 @@ class WorkflowStore:
         return result
 
     @classmethod
+    def _task_presentation_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """解码已经由 SQLite 裁剪的 Edge Task 展示行。"""
+
+        result = {
+            "uuid": row["uuid"],
+            "create_time": row["create_time"],
+            "update_time": row["update_time"],
+            "meta_data": _load(row["meta_data"], {}),
+            "workflow_uuid": row["workflow_uuid"],
+            "execution_kind": row["execution_kind"],
+            "priority": _stored_task_priority(row["priority"]),
+            "status": row["status"],
+            "workflow_snapshot": _load(row["workflow_snapshot"], {}),
+            "execution_plan": _load(row["execution_plan"], {}),
+            "run_mode": row["run_mode"],
+            "control_status": row["control_status"],
+            "cleanup_status": row["cleanup_status"],
+            "wait_reason": _load(row["wait_reason"], {}),
+            "trace_context": _load(row["trace_context"], {}),
+            "input": _load(row["input"], {}),
+            "error_info": _load(row["error_info"], []),
+        }
+        cls._add_optional(
+            result,
+            row,
+            "description",
+            "target_node_uuid",
+            "attention_reason",
+            "started_at",
+            "finished_at",
+        )
+        return result
+
+    @classmethod
     def _task_command_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
         result = {
             **cls._base(row),
@@ -3999,6 +4235,38 @@ class WorkflowStore:
             "uncertainty_reason",
             "dispatch_effect_uuid",
             "dispatch_parameter_hash",
+            "started_at",
+            "finished_at",
+        )
+        return result
+
+    @classmethod
+    def _job_presentation_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """解码已经由 SQL 排除执行策略与派发凭据的 Job 展示行。"""
+
+        result = {
+            "uuid": row["uuid"],
+            "create_time": row["create_time"],
+            "update_time": row["update_time"],
+            "workflow_task_uuid": row["workflow_task_uuid"],
+            "workflow_node_uuid": row["workflow_node_uuid"],
+            "topological_index": row["topological_index"],
+            "executor_kind": row["executor_kind"],
+            "status": row["status"],
+            "attempt": row["attempt"],
+            "param": _load(row["param"], {}),
+            "feedback_data": _load(row["feedback_data"], {}),
+            "return_info": _load(row["return_info"], {}),
+            "control_data": _load(row["control_data"], {}),
+            "error_info": _load(row["error_info"], []),
+            "wait_reason": _load(row["wait_reason"], {}),
+            "expected_change_set": _load(row["expected_change_set"], {}),
+        }
+        cls._add_optional(
+            result,
+            row,
+            "material_uuid",
+            "uncertainty_reason",
             "started_at",
             "finished_at",
         )

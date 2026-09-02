@@ -184,10 +184,10 @@ export function WorkflowsPage({
         input: serialiseTaskInput(detail.inputContract, runInput),
       })
     },
-    onSuccess: async (task) => {
+    onMutate: () => onNavigate('tasks'),
+    onSuccess: (task) => {
       onNotify(`任务 ${task.uuid || ''} 已提交到 Edge`)
-      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
-      onNavigate('tasks')
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })

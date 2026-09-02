@@ -1599,6 +1599,32 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             )
         )
 
+    @router.get("/workflow-task-presentations")
+    def list_workflow_task_presentations(
+        page: int = Query(default=1),
+        page_size: int = Query(default=20),
+        workflow_uuid: Optional[str] = Query(default=None),
+        execution_kind: str = Query(default=""),
+        status: str = Query(default=""),
+        cleanup_status: str = Query(default=""),
+    ) -> JSONResponse:
+        """返回 Edge 控制台任务矩阵所需的紧凑只读投影。
+
+        这是明确的 Edge-only 展示接口，不改变共享 ``/workflow-tasks`` 合同；
+        每个 Task 已批量嵌入紧凑 Job 状态，调用方不应再逐任务查询 Job。
+        """
+
+        return _success(
+            service.list_workflow_task_presentations(
+                page=page,
+                page_size=page_size,
+                workflow_uuid=workflow_uuid,
+                execution_kind=execution_kind,
+                status=status,
+                cleanup_status=cleanup_status,
+            )
+        )
+
     @router.get("/workflow-tasks/{task_uuid}")
     def get_workflow_task(task_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_task(task_uuid))

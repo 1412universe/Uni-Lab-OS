@@ -104,6 +104,14 @@ the local debug control plane; it is not started by the production Backend
 control plane and is not part of the Shared Interface.
 _Avoid_: Frontend fallback, Backend-compatible route
 
+**Edge Task Presentation Interface**:
+The local control-console read model exposed at the distinct
+`/workflow-task-presentations` route. It projects the durable Workflow Task and
+its Jobs into one compact response for frequent status refreshes; it never
+changes the Shared Interface meaning of `/workflow-tasks` and owns no writable
+state.
+_Avoid_: Shared-route projection flag, frontend fallback, second task truth
+
 **Authoring Device Catalog**:
 The Local Backend-only diagnostic projection that joins Driver registry and ROS
 facts for installation, activation, and package acceptance. Normal product UI

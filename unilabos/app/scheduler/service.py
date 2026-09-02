@@ -104,6 +104,7 @@ from unilabos.utils.tracing import (
     extract_trace_context,
     span,
     start_detached_span,
+    submit_with_context,
 )
 from unilabos.workflow.execution_resource_policy import (
     ExecutionResourcePolicyError,
@@ -998,12 +999,18 @@ class EdgeScheduler:
                 },
             )
             self._safe_history("record_submitted", spec, run.state.value)
-            dispatched = self._reschedule_locked()
+        # 首次提交与设备完成后的后续推进必须进入同一个串行调度循环。API 工作
+        # 线程只登记 WorkflowRun 并唤醒循环，不能在请求线程直接完成资源判定和
+        # 物理派发，否则并发 Task 会让调度线程亲和性失效。为保持既有返回合同，
+        # 当前调用方仍等待该串行轮次完成，但等待不占用 Scheduler 执行线程。
+        dispatched = self._wake_reconcile()
+        with self._lock:
             notifications = self._collect_terminal_notifications()
+            state = run.state.value
         self._fire_notifications(notifications)
         return {
             "workflow_id": spec.workflow_id,
-            "state": run.state.value,
+            "state": state,
             "dispatched": dispatched,
         }
 
@@ -1618,7 +1625,11 @@ class EdgeScheduler:
         循环线程内同步回调，则只排队并立即返回，避免单线程循环自等待死锁。
         """
 
-        future = _RECONCILE_EXECUTOR.submit(_run_reconcile, self.reschedule)
+        future = submit_with_context(
+            _RECONCILE_EXECUTOR,
+            _run_reconcile,
+            self.reschedule,
+        )
         if bool(getattr(_RECONCILE_THREAD, "active", False)):
             future.add_done_callback(_log_background_reconcile_failure)
             return []

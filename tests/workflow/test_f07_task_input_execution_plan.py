@@ -1024,6 +1024,53 @@ def test_http_task_input_and_snapshot_remain_frozen_after_workflow_evolves(
         store.close()
 
 
+def test_http_task_presentation_batches_compact_plan_and_jobs(
+    tmp_path: Path,
+) -> None:
+    """控制台任务投影应一次返回紧凑冻结拓扑和 Job 状态。
+
+    参数：``tmp_path`` 隔离数据库。返回无。异常：列表重新携带完整工作流快照、
+    丢失矩阵字段或退化成逐 Task Job 请求时由断言暴露。
+    """
+
+    client, store = _client(tmp_path / "task-presentation.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        created = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "run_mode": "normal",
+                "input": {"count": 7},
+                "meta_data": {},
+            },
+        ).json()["data"]
+
+        response = client.get(
+            "/api/v1/workflow-task-presentations",
+            params={
+                "status": "pending",
+                "page": 1,
+                "page_size": 20,
+            },
+        )
+
+        assert response.status_code == 200
+        page = response.json()["data"]
+        assert page["total"] == 1
+        task = page["items"][0]
+        assert task["uuid"] == created["uuid"]
+        assert set(task["workflow_snapshot"]) == {"workflow"}
+        assert task["workflow_snapshot"]["workflow"]["name"] == "task input"
+        assert NODE_UUID in {node["uuid"] for node in task["execution_plan"]["nodes"]}
+        assert task["execution_plan"]["edges"] == []
+        assert NODE_UUID in {job["workflow_node_uuid"] for job in task["jobs"]}
+        assert all("execution_policy" not in job for job in task["jobs"])
+        assert "nodes" in created["workflow_snapshot"]
+    finally:
+        store.close()
+
+
 def test_ephemeral_definition_creates_durable_restart_safe_task(
     tmp_path: Path,
 ) -> None:

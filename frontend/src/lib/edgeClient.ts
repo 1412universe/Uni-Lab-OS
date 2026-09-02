@@ -351,6 +351,12 @@ export interface WaitResourceLabels {
   sites?: Readonly<Record<string, string>>
 }
 
+interface MutableWaitResourceLabels {
+  devices: Record<string, string>
+  materials: Record<string, string>
+  sites: Record<string, string>
+}
+
 function waitResourceScope(value: unknown): WaitResourceScope | undefined {
   const scope = String(value || '')
   return scope === 'device' || scope === 'material' || scope === 'material_site'
@@ -1458,9 +1464,8 @@ function waitResourceLabelsFromCatalog(
   materialGraph: RawRecord,
   deviceRows: RawRecord[],
 ): WaitResourceLabels {
-  const devices: Record<string, string> = Object.create(null)
-  const materials: Record<string, string> = Object.create(null)
-  const sites: Record<string, string> = Object.create(null)
+  const labels = emptyWaitResourceLabels(deviceRows)
+  const { devices, materials, sites } = labels
   const remember = (target: Record<string, string>, identity: unknown, label: unknown) => {
     const normalizedIdentity = String(identity || '').trim()
     const normalizedLabel = String(label || '').trim()
@@ -1489,15 +1494,25 @@ function waitResourceLabelsFromCatalog(
     })
   })
 
+  return labels
+}
+
+function emptyWaitResourceLabels(deviceRows: RawRecord[]): MutableWaitResourceLabels {
+  const labels: MutableWaitResourceLabels = {
+    devices: Object.create(null),
+    materials: Object.create(null),
+    sites: Object.create(null),
+  }
   deviceRows.forEach((device) => {
     const binding = device.binding || {}
     const material = device.material || {}
-    const label = binding.name || material.name || binding.local_id || binding.material_uuid
-    remember(devices, binding.local_id, label)
-    remember(devices, binding.material_uuid, label)
-    remember(devices, material.uuid, label)
+    const label = String(binding.name || material.name || binding.local_id || binding.material_uuid || '').trim()
+    for (const identity of [binding.local_id, binding.material_uuid, material.uuid]) {
+      const normalizedIdentity = String(identity || '').trim()
+      if (normalizedIdentity && label) labels.devices[normalizedIdentity] = label
+    }
   })
-  return { devices, materials, sites }
+  return labels
 }
 
 async function taskWithJobs(
@@ -1506,12 +1521,11 @@ async function taskWithJobs(
   knownMaterialUuids: ReadonlySet<string>,
   traceUiUrl: string,
   waitResourceLabels: WaitResourceLabels,
-  signal?: AbortSignal,
 ) {
-  const jobs = await requestData<RawRecord[]>(
-    `/workflow-tasks/${encodeURIComponent(raw.uuid)}/jobs`,
-    signal,
-  )
+  if (!Array.isArray(raw.jobs)) {
+    throw new Error('Edge 任务展示投影缺少 jobs')
+  }
+  const jobs = raw.jobs as RawRecord[]
   const workflow = workflowsByUuid.get(String(raw.workflow_uuid))
   const frozenInputContract = adaptContractFields(
     raw.workflow_snapshot?.workflow?.meta_data?.unilab?.input_contract?.parameters,
@@ -1542,18 +1556,100 @@ function selectRecentTerminalTasks(pages: PageData<RawRecord>[], limit = 20): Ra
     .slice(0, limit)
 }
 
-export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapshot> {
-  const [readiness, workflowPage, terminalTaskPages, runningTaskPage, pendingTaskPage, cancelingTaskPage, attentionTaskPage, materialPage, materialGraph, deviceRows] = await Promise.all([
-    requestJson<RawRecord>('/readiness', signal),
-    requestAllPages<RawRecord>('/workflows', signal),
+async function loadTaskPresentationRows(signal?: AbortSignal): Promise<RawRecord[]> {
+  const [terminalTaskPages, runningTaskPage, pendingTaskPage, cancelingTaskPage, attentionTaskPage] = await Promise.all([
     Promise.all(terminalTaskStatusValues.map((status) => requestData<PageData<RawRecord>>(
-      `/workflow-tasks?status=${status}&page=1&page_size=20`,
+      `/workflow-task-presentations?status=${status}&page=1&page_size=20`,
       signal,
     ))),
-    requestAllPages<RawRecord>('/workflow-tasks?status=running', signal),
-    requestAllPages<RawRecord>('/workflow-tasks?status=pending', signal),
-    requestAllPages<RawRecord>('/workflow-tasks?status=canceling', signal),
-    requestAllPages<RawRecord>('/workflow-tasks?cleanup_status=requires_attention', signal),
+    requestAllPages<RawRecord>('/workflow-task-presentations?status=running', signal),
+    requestAllPages<RawRecord>('/workflow-task-presentations?status=pending', signal),
+    requestAllPages<RawRecord>('/workflow-task-presentations?status=canceling', signal),
+    requestAllPages<RawRecord>('/workflow-task-presentations?cleanup_status=requires_attention', signal),
+  ])
+  const taskRowsByUuid = new Map<string, RawRecord>()
+  const taskRows = [
+    ...selectRecentTerminalTasks(terminalTaskPages),
+    ...(runningTaskPage.items || []),
+    ...(pendingTaskPage.items || []),
+    ...(cancelingTaskPage.items || []),
+    ...(attentionTaskPage.items || []),
+  ]
+  taskRows.forEach((task) => taskRowsByUuid.set(String(task.uuid), task))
+  return [...taskRowsByUuid.values()]
+}
+
+function waitResourceLabelsFromView(
+  materials: MaterialRecord[],
+  deviceRows: RawRecord[],
+): WaitResourceLabels {
+  const labels = emptyWaitResourceLabels(deviceRows)
+  materials.forEach((material) => {
+    labels.materials[material.uuid] = material.name
+    material.sites.forEach((site) => {
+      labels.sites[site.uuid] = `${material.name} / ${site.name}`
+    })
+  })
+  return labels
+}
+
+export async function loadEdgeTasks(
+  workflows: WorkflowDefinition[],
+  materials: MaterialRecord[],
+  signal?: AbortSignal,
+): Promise<WorkflowTask[]> {
+  const [readiness, taskRows, deviceRows] = await Promise.all([
+    requestJson<RawRecord>('/readiness', signal),
+    loadTaskPresentationRows(signal),
+    requestData<RawRecord[]>('/devices', signal).catch(() => []),
+  ])
+  if (readiness.status !== 'ready') throw new Error('Edge 工作流运行时尚未就绪')
+  const traceUiUrl = typeof readiness.observability?.traceUiUrl === 'string'
+    ? readiness.observability.traceUiUrl
+    : ''
+  const workflowsByUuid = new Map(workflows.map((workflow) => [workflow.uuid, workflow]))
+  const knownMaterialUuids = new Set(materials.map((material) => material.uuid))
+  const waitResourceLabels = waitResourceLabelsFromView(materials, deviceRows)
+  return mapWithConcurrency(taskRows, 6, (task) => taskWithJobs(
+    task,
+    workflowsByUuid,
+    knownMaterialUuids,
+    traceUiUrl,
+    waitResourceLabels,
+  ))
+}
+
+export function materialsWithTaskReferences(
+  materials: MaterialRecord[],
+  tasks: WorkflowTask[],
+): MaterialRecord[] {
+  const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
+  const materialReferences = new Map<string, MaterialRecord['taskReferences']>()
+  tasks.filter((task) => !terminalTaskStatuses.has(task.status)).forEach((task) => {
+    task.materialUuids.forEach((materialUuid) => {
+      const references = materialReferences.get(materialUuid) || []
+      if (!references.some((reference) => reference.taskUuid === task.uuid)) {
+        references.push({
+          taskUuid: task.uuid,
+          taskStatus: task.status,
+          workflowName: task.workflowName,
+          sample: task.sample,
+        })
+      }
+      materialReferences.set(materialUuid, references)
+    })
+  })
+  return materials.map((material) => ({
+    ...material,
+    taskReferences: materialReferences.get(material.uuid) || [],
+  }))
+}
+
+export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapshot> {
+  const [readiness, workflowPage, taskRows, materialPage, materialGraph, deviceRows] = await Promise.all([
+    requestJson<RawRecord>('/readiness', signal),
+    requestAllPages<RawRecord>('/workflows', signal),
+    loadTaskPresentationRows(signal),
     requestAllPages<RawRecord>('/materials', signal),
     requestData<RawRecord>('/materials/graph', signal),
     requestData<RawRecord[]>('/devices', signal).catch(() => []),
@@ -1573,17 +1669,8 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
     materialGraph,
     deviceRows,
   )
-  const taskRowsByUuid = new Map<string, RawRecord>()
-  const taskRows = [
-    ...selectRecentTerminalTasks(terminalTaskPages),
-    ...(runningTaskPage.items || []),
-    ...(pendingTaskPage.items || []),
-    ...(cancelingTaskPage.items || []),
-    ...(attentionTaskPage.items || []),
-  ]
-  taskRows.forEach((task) => taskRowsByUuid.set(String(task.uuid), task))
   const tasks = await mapWithConcurrency(
-    [...taskRowsByUuid.values()],
+    taskRows,
     6,
     (task) => taskWithJobs(
       task,
@@ -1591,25 +1678,8 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
       knownMaterialUuids,
       traceUiUrl,
       waitResourceLabels,
-      signal,
     ),
   )
-  const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
-  const materialReferences = new Map<string, MaterialRecord['taskReferences']>()
-  tasks.filter((task) => !terminalTaskStatuses.has(task.status)).forEach((task) => {
-    task.materialUuids.forEach((materialUuid) => {
-      const references = materialReferences.get(materialUuid) || []
-      if (!references.some((reference) => reference.taskUuid === task.uuid)) {
-        references.push({
-          taskUuid: task.uuid,
-          taskStatus: task.status,
-          workflowName: task.workflowName,
-          sample: task.sample,
-        })
-      }
-      materialReferences.set(materialUuid, references)
-    })
-  })
   const materialLocations = materialLocationsFromGraph(materialGraph)
   const materialSites = materialSitesFromGraph(materialGraph)
   const graphMaterials = new Map<string, RawRecord>()
@@ -1642,14 +1712,15 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
       },
     )
     const enriched = { ...material, sites: materialSites.get(material.uuid) || material.sites }
-    const references = materialReferences.get(material.uuid)
-    return references ? { ...enriched, taskReferences: references } : enriched
+    return enriched
   })
+
+  const materialsWithReferences = materialsWithTaskReferences(materials, tasks)
 
   return {
     workflows,
     tasks,
-    materials,
+    materials: materialsWithReferences,
     materialTotal: Number(materialPage.total ?? materials.length),
     workflowLoaded: Number(readiness.workflowProgress?.loaded ?? workflows.length),
     workflowTotal: Number(readiness.workflowProgress?.total ?? workflows.length),

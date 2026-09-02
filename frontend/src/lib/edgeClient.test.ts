@@ -892,29 +892,7 @@ describe('loadEdgeSnapshot', () => {
           }],
         })
       }
-      if (url.includes('/workflow-tasks/task-waiting/jobs')) {
-        return response({
-          code: 0,
-          data: [{
-            workflow_node_uuid: 'node-transfer',
-            status: 'pending',
-            wait_reason: {
-              code: 'operation_lease',
-              message: '执行资源正在被其他作业使用',
-              resources: [
-                { scope: 'device', device_id: 'device-material-1' },
-                {
-                  scope: 'material_site',
-                  site_uuid: 'site-s08-open',
-                  material_uuid: 'station-s08',
-                },
-                { scope: 'material', material_uuid: 'material-sample' },
-              ],
-            },
-          }],
-        })
-      }
-      if (url.includes('/workflow-tasks?status=running')) {
+      if (url.includes('/workflow-task-presentations?status=running')) {
         return response({
           code: 0,
           data: {
@@ -926,12 +904,29 @@ describe('loadEdgeSnapshot', () => {
                 nodes: [{ uuid: 'node-transfer', name: '转运样品', topological_index: 0 }],
                 edges: [],
               },
+              jobs: [{
+                workflow_node_uuid: 'node-transfer',
+                status: 'pending',
+                wait_reason: {
+                  code: 'operation_lease',
+                  message: '执行资源正在被其他作业使用',
+                  resources: [
+                    { scope: 'device', device_id: 'device-material-1' },
+                    {
+                      scope: 'material_site',
+                      site_uuid: 'site-s08-open',
+                      material_uuid: 'station-s08',
+                    },
+                    { scope: 'material', material_uuid: 'material-sample' },
+                  ],
+                },
+              }],
             }],
             total: 1,
           },
         })
       }
-      if (url.includes('/workflow-tasks?')) {
+      if (url.includes('/workflow-task-presentations?')) {
         return response({ code: 0, data: { items: [], total: 0 } })
       }
       if (url.endsWith('/materials/graph')) {
@@ -970,6 +965,7 @@ describe('loadEdgeSnapshot', () => {
       '库位：S08 工作站 / 开盖位（site-s08-open）',
       '物料：待检样品瓶（material-sample）',
     ])
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/jobs'))).toBe(false)
   })
 
   it('joins authoritative Material Graph locations and exact nonterminal task references', async () => {
@@ -980,6 +976,7 @@ describe('loadEdgeSnapshot', () => {
         status: 'running',
         workflow_snapshot: { workflow: { uuid: 'wf-1', name: '物料流程', revision: 1 }, nodes: [], edges: [] },
         execution_plan: { nodes: [{ uuid: 'node-1', material_uuid: 'material-child' }], edges: [], handles: [] },
+        jobs: [],
       },
       {
         uuid: 'task-succeeded',
@@ -987,6 +984,7 @@ describe('loadEdgeSnapshot', () => {
         status: 'succeeded',
         workflow_snapshot: { workflow: { uuid: 'wf-1', name: '物料流程', revision: 1 }, nodes: [], edges: [] },
         execution_plan: { nodes: [{ uuid: 'node-1', material_uuid: 'material-child' }], edges: [], handles: [] },
+        jobs: [],
       },
     ]
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -996,7 +994,7 @@ describe('loadEdgeSnapshot', () => {
         return response({ code: 0, data: { items: [{ uuid: 'wf-1', name: '物料流程' }], total: 1 } })
       }
       if (url.includes('/workflow-tasks/task-')) return response({ code: 0, data: [] })
-      if (url.includes('/workflow-tasks?')) {
+      if (url.includes('/workflow-task-presentations?')) {
         return response({ code: 0, data: { items: taskRows, total: taskRows.length } })
       }
       if (url.endsWith('/materials/graph')) {
@@ -1056,7 +1054,7 @@ describe('loadEdgeSnapshot', () => {
         })
       }
       if (url.includes('/workflow-tasks/task-frozen/jobs')) return response({ code: 0, data: [] })
-      if (url.includes('/workflow-tasks?status=running')) {
+      if (url.includes('/workflow-task-presentations?status=running')) {
         return response({
           code: 0,
           data: {
@@ -1082,12 +1080,13 @@ describe('loadEdgeSnapshot', () => {
                 edges: [],
               },
               execution_plan: { nodes: [], edges: [], handles: [] },
+              jobs: [],
             }],
             total: 1,
           },
         })
       }
-      if (url.includes('/workflow-tasks?')) return response({ code: 0, data: { items: [], total: 0 } })
+      if (url.includes('/workflow-task-presentations?')) return response({ code: 0, data: { items: [], total: 0 } })
       if (url.endsWith('/materials/graph')) {
         return response({ code: 0, data: { nodes: [{ material: { uuid: 'material-frozen' }, sites: [] }] } })
       }
@@ -1118,7 +1117,7 @@ describe('loadEdgeSnapshot', () => {
       if (url.includes('/workflows?')) {
         return response({ code: 0, data: { items: [{ uuid: 'wf-1', name: '测试工作流' }], total: 1, has_more: false } })
       }
-      if (url.includes('/workflow-tasks?')) {
+      if (url.includes('/workflow-task-presentations?')) {
         return response({ code: 0, data: { items: [], total: 0, has_more: false } })
       }
       if (url.endsWith('/materials/graph')) {
@@ -1149,38 +1148,37 @@ describe('loadEdgeSnapshot', () => {
       expect.any(Object),
     )
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/workflow-tasks?status=running&page=1&page_size=100'),
+      expect.stringContaining('/workflow-task-presentations?status=running&page=1&page_size=100'),
       expect.any(Object),
     )
     for (const status of ['succeeded', 'failed', 'canceled', 'timeout']) {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining(`/workflow-tasks?status=${status}&page=1&page_size=20`),
+        expect.stringContaining(`/workflow-task-presentations?status=${status}&page=1&page_size=20`),
         expect.any(Object),
       )
     }
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/workflow-tasks?cleanup_status=requires_attention&page=1&page_size=100'),
+      expect.stringContaining('/workflow-task-presentations?cleanup_status=requires_attention&page=1&page_size=100'),
       expect.any(Object),
     )
   })
 
-  it('fails the snapshot when an authoritative Job projection cannot be read', async () => {
+  it('fails the snapshot when the authoritative task projection omits Jobs', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/readiness')) return response({ status: 'ready' })
       if (url.includes('/workflows?')) {
         return response({ code: 0, data: { items: [{ uuid: 'wf-1', name: '测试工作流' }], total: 1, has_more: false } })
       }
-      if (url.includes('/workflow-tasks?')) {
+      if (url.includes('/workflow-task-presentations?')) {
         return response({ code: 0, data: { items: [{ uuid: 'task-1', workflow_uuid: 'wf-1', status: 'running' }], total: 1, has_more: false } })
       }
       if (url.endsWith('/materials/graph')) return response({ code: 0, data: { nodes: [] } })
       if (url.includes('/materials?')) return response({ code: 0, data: { items: [], total: 0, has_more: false } })
-      if (url.includes('/workflow-tasks/task-1/jobs')) return response({ code: 5001, error: { msg: 'jobs unavailable' } })
       throw new Error(`Unexpected URL: ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(loadEdgeSnapshot()).rejects.toThrow('jobs unavailable')
+    await expect(loadEdgeSnapshot()).rejects.toThrow('Edge 任务展示投影缺少 jobs')
   })
 })

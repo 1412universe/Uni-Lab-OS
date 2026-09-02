@@ -3726,6 +3726,42 @@ class WorkflowService:
         生命周期。返回分页投影，非法枚举或 UUID 映射为稳定输入错误。
         """
 
+        (
+            page,
+            page_size,
+            workflow_uuid,
+            execution_kind,
+            status,
+            cleanup_status,
+        ) = self._normalize_task_list_filters(
+            page=page,
+            page_size=page_size,
+            workflow_uuid=workflow_uuid,
+            execution_kind=execution_kind,
+            status=status,
+            cleanup_status=cleanup_status,
+        )
+        return self._store.list_tasks(
+            page=page,
+            page_size=page_size,
+            workflow_uuid=workflow_uuid,
+            execution_kind=execution_kind,
+            status=status,
+            cleanup_status=cleanup_status,
+        )
+
+    def _normalize_task_list_filters(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        workflow_uuid: str | None,
+        execution_kind: str,
+        status: str,
+        cleanup_status: str,
+    ) -> tuple[int, int, str | None, str, str, str]:
+        """校验共享任务列表与 Edge 展示列表共用的查询条件。"""
+
         page, page_size = self._normalize_page(page, page_size)
         if workflow_uuid is not None:
             try:
@@ -3758,7 +3794,35 @@ class WorkflowService:
             "requires_attention",
         }:
             raise WorkflowError("invalid_input")
-        return self._store.list_tasks(
+        return (
+            page,
+            page_size,
+            workflow_uuid,
+            execution_kind,
+            status,
+            cleanup_status,
+        )
+
+    def list_workflow_task_presentations(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 20,
+        workflow_uuid: str | None = None,
+        execution_kind: str = "",
+        status: str = "",
+        cleanup_status: str = "",
+    ) -> dict[str, Any]:
+        """分页返回控制台矩阵所需 Task/Jobs 紧凑只读投影。"""
+
+        (
+            page,
+            page_size,
+            workflow_uuid,
+            execution_kind,
+            status,
+            cleanup_status,
+        ) = self._normalize_task_list_filters(
             page=page,
             page_size=page_size,
             workflow_uuid=workflow_uuid,
@@ -3766,6 +3830,27 @@ class WorkflowService:
             status=status,
             cleanup_status=cleanup_status,
         )
+        result = self._store.list_task_presentations(
+            page=page,
+            page_size=page_size,
+            workflow_uuid=workflow_uuid,
+            execution_kind=execution_kind,
+            status=status,
+            cleanup_status=cleanup_status,
+        )
+        jobs_by_task = self._store.list_jobs_for_tasks(
+            str(task["uuid"]) for task in result["items"]
+        )
+        return {
+            **result,
+            "items": [
+                {
+                    **task,
+                    "jobs": jobs_by_task.get(str(task["uuid"]), []),
+                }
+                for task in result["items"]
+            ],
+        }
 
     def list_workflow_node_jobs(self, task_uuid: str) -> list[dict[str, Any]]:
         identity = self.get_workflow_task(task_uuid)["uuid"]

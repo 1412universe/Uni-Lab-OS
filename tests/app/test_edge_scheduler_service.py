@@ -64,6 +64,26 @@ def _make() -> "tuple[EdgeScheduler, RecordingDispatcher]":
     return scheduler, dispatcher
 
 
+def test_submit_only_wakes_reconcile_worker() -> None:
+    """首次提交不得在 API/调用线程直接执行重排和物理派发。"""
+
+    scheduler, _dispatcher = _make()
+    submit_thread = threading.current_thread().ident
+    reconcile_threads: list[int | None] = []
+    original = scheduler._reschedule_locked
+
+    def _recording_reschedule() -> list[dict[str, object]]:
+        reconcile_threads.append(threading.current_thread().ident)
+        return original()
+
+    scheduler._reschedule_locked = _recording_reschedule  # type: ignore[method-assign]
+    submitted = scheduler.submit_workflow(_chain_spec("wf-submit-wakeup"))
+
+    assert [item["node_id"] for item in submitted["dispatched"]] == ["A"]
+    assert reconcile_threads
+    assert all(thread_id != submit_thread for thread_id in reconcile_threads)
+
+
 def test_transfer_node_type_is_canonical_but_not_executable_as_ilab():
     assert "Transfer" in NODE_TYPES
     node = WorkflowNode(id="transfer", node_type=normalize_node_type("transfer"))
@@ -124,7 +144,10 @@ def test_dispatch_admission_authority_is_single_assignment() -> None:
     """
 
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
-    first = lambda _dispatching: True
+
+    def first(_dispatching: object) -> bool:
+        return True
+
     scheduler.bind_dispatch_admission_authority(first)
 
     with pytest.raises(ExecutionPolicyError, match="已经绑定"):
