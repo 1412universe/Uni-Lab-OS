@@ -169,6 +169,21 @@ def validate_graph(
             for node in nodes
         }
     )
+    bindings_by_node = {
+        node_uuid: dict(bindings) for node_uuid, bindings in bindings_by_node.items()
+    }
+    for node in nodes:
+        carry_bindings = _validated_carry_bindings(
+            node,
+            node_meta_data[node.uuid],
+            handles,
+            nodes=node_by_uuid,
+            templates=templates,
+        )
+        overlap = set(bindings_by_node[node.uuid]) & set(carry_bindings)
+        if overlap:
+            raise GraphValidationError("同一目标 Handle 不能同时绑定输入和 carry")
+        bindings_by_node[node.uuid].update(carry_bindings)
     enabled = {
         node.uuid: node
         for node in nodes
@@ -420,6 +435,7 @@ def _node_kind(
         "ilab": "device_action",
         "compute": "compute",
         "condition": "condition",
+        "repeat_until": "repeat_until",
         "script": "script",
         "py_script": "script",
         "group": "group",
@@ -569,6 +585,55 @@ def _validated_input_bindings(
         source = raw_binding.get("source")
         if source is not None and source != "workflow_input":
             raise GraphValidationError("input_binding.source 无效")
+        result[handle_uuid] = dict(raw_binding)
+    return result
+
+
+def _validated_carry_bindings(
+    node: WorkflowNodeWrite,
+    meta_data: Mapping[str, Any],
+    handles: Mapping[str, Dict[str, Any]],
+    *,
+    nodes: Mapping[str, WorkflowNodeWrite],
+    templates: Mapping[str, Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """校验动作输入只引用其祖先 RepeatUntil 区域中的 carry 键。"""
+
+    unilab = meta_data.get("unilab", {})
+    raw_bindings = (
+        unilab.get("carry_bindings", {}) if isinstance(unilab, Mapping) else {}
+    )
+    if not isinstance(raw_bindings, dict):
+        raise GraphValidationError("carry_bindings 必须是对象")
+    result: Dict[str, Dict[str, Any]] = {}
+    for handle_uuid, raw_binding in raw_bindings.items():
+        handle = handles.get(handle_uuid)
+        if (
+            handle is None
+            or handle.get("workflow_node_template_uuid")
+            != node.workflow_node_template_uuid
+            or handle.get("io_type") != "target"
+        ):
+            raise GraphValidationError("carry_binding 未引用本节点的目标 Handle")
+        if not isinstance(raw_binding, dict):
+            raise GraphValidationError("carry_binding 必须是对象")
+        region_uuid = raw_binding.get("control_region_uuid")
+        key = raw_binding.get("key")
+        region = nodes.get(region_uuid) if isinstance(region_uuid, str) else None
+        if region is None or _node_kind(region, templates) != "repeat_until":
+            raise GraphValidationError("carry_binding 未引用 RepeatUntil 区域")
+        current = node.parent_uuid
+        seen: set[str] = set()
+        while isinstance(current, str) and current not in seen and current != region_uuid:
+            seen.add(current)
+            parent = nodes.get(current)
+            current = parent.parent_uuid if parent is not None else None
+        if current != region_uuid:
+            raise GraphValidationError("carry_binding 只能引用祖先循环区域")
+        params = region.param if isinstance(region.param, Mapping) else {}
+        initial_carry = params.get("initial_carry")
+        if not isinstance(key, str) or not isinstance(initial_carry, Mapping) or key not in initial_carry:
+            raise GraphValidationError("carry_binding 引用了未知 carry 键")
         result[handle_uuid] = dict(raw_binding)
     return result
 

@@ -760,6 +760,7 @@ def executor_kind(node_type: str) -> str:
         "device_action",
         "compute",
         "condition",
+        "repeat_until",
         "script",
         "group",
         "tool_call",

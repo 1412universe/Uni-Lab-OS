@@ -330,7 +330,10 @@ class EdgeScheduler:
             Callable[[str, CommittedJobOutcome], None]
         ] = []
         self._job_settled_listeners: list[Callable[[str, bool, Any, str], None]] = []
-        self._local_control_listeners: list[Callable[[dict[str, Any]], None]] = []
+        # 观察者返回 None；唯一持久投影监听器可返回经事务确认的替代决定。
+        self._local_control_listeners: list[
+            Callable[[dict[str, Any]], dict[str, Any] | None]
+        ] = []
         self._execution_process_restarted_listeners: list[
             Callable[[tuple[str, ...]], None]
         ] = []
@@ -748,7 +751,7 @@ class EdgeScheduler:
 
     def add_local_control_listener(
         self,
-        listener: Callable[[dict[str, Any]], None],
+        listener: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> None:
         """注册调度器本地条件结算监听器。"""
 
@@ -756,7 +759,7 @@ class EdgeScheduler:
 
     def remove_local_control_listener(
         self,
-        listener: Callable[[dict[str, Any]], None],
+        listener: Callable[[dict[str, Any]], dict[str, Any] | None],
     ) -> None:
         """幂等移除调度器本地条件结算监听器。"""
 
@@ -893,11 +896,15 @@ class EdgeScheduler:
         for listener in tuple(self._job_settled_listeners):
             listener(job_id, success, ret_value, suc_type)
 
-    def _notify_local_control(self, evaluation: dict[str, Any]) -> None:
-        """在任何后继设备派发前同步提交本地控制结算事实。"""
+    def _notify_local_control(self, evaluation: dict[str, Any]) -> dict[str, Any]:
+        """同步投影本地控制事实，并返回权威确认或改写后的决定。"""
 
+        effective = deepcopy(evaluation)
         for listener in tuple(self._local_control_listeners):
-            listener(deepcopy(evaluation))
+            projected = listener(deepcopy(effective))
+            if isinstance(projected, dict):
+                effective = deepcopy(projected)
+        return effective
 
     # ── 触发点 1：任务进来 ────────────────────────────────────
 
@@ -1718,8 +1725,10 @@ class EdgeScheduler:
                         for node_id in evaluation.get("skipped_node_ids", ())
                     ],
                 }
-                self._notify_local_control(event)
-                run.commit_local_control(evaluation)
+                event = self._notify_local_control(event)
+                # 监听器可以把“物化失败”原子改写为同一控制节点的失败决定；
+                # 提交已投影的事件副本，保证持久状态与内存 DAG 不会分叉。
+                run.commit_local_control(event)
                 if run.state is not WorkflowState.RUNNING:
                     break
             if run.state is not WorkflowState.RUNNING:

@@ -11,6 +11,7 @@ from typing import Any
 from unilabos.app.scheduler.inventory.domain import MaterialRequirement
 from unilabos.app.scheduler.models import (
     Handle,
+    RepeatUntilRegion,
     WorkflowEdge,
     WorkflowNode,
     WorkflowSpec,
@@ -27,6 +28,7 @@ from unilabos.workflow._workflow_spec_snapshot import (
 from unilabos.workflow.execution_plan import (
     CONTROL_PLAN_CAPABILITIES,
     CONTROL_PLAN_VERSION,
+    DYNAMIC_ITERATION_CAPABILITY,
     PLAN_VERSION,
 )
 
@@ -76,7 +78,11 @@ class WorkflowSpecCompiler:
             )
         if version == CONTROL_PLAN_VERSION:
             capabilities = plan.get("capabilities")
-            if capabilities != list(CONTROL_PLAN_CAPABILITIES):
+            supported_capabilities = [
+                list(CONTROL_PLAN_CAPABILITIES),
+                [*CONTROL_PLAN_CAPABILITIES, DYNAMIC_ITERATION_CAPABILITY],
+            ]
+            if capabilities not in supported_capabilities:
                 raise WorkflowSpecCompilationError(
                     "unsupported_execution_plan_capability",
                     "控制执行计划能力声明不完整",
@@ -109,6 +115,7 @@ class WorkflowSpecCompiler:
             field="execution_plan.handles",
         )
         jobs_by_node = index_jobs(jobs, nodes=nodes)
+        repeat_members = self._repeat_members(nodes)
         compiled_nodes = self._compile_nodes(
             ordered_node_uuids=ordered_node_uuids,
             nodes=nodes,
@@ -121,7 +128,11 @@ class WorkflowSpecCompiler:
                 else {}
             ),
             control_enabled=version == CONTROL_PLAN_VERSION,
+            repeat_member_uuids=repeat_members,
         )
+        top_level_nodes = [
+            node for node in compiled_nodes if node.id not in repeat_members
+        ]
         active_node_uuids = {node.id for node in compiled_nodes}
         # ``coordinator_node_uuids`` 在执行计划中保留图身份，但不会进入旧调度器。
         coordinator_node_uuids = {
@@ -144,12 +155,28 @@ class WorkflowSpecCompiler:
             planned_node_uuids=set(nodes),
             handles=handles,
         )
+        repeat_regions = self._compile_repeat_regions(
+            nodes=nodes,
+            compiled_nodes=compiled_nodes,
+            compiled_edges=compiled_edges,
+            compiled_handles=compiled_handles,
+        )
+        top_level_node_uuids = {node.id for node in top_level_nodes}
         return WorkflowSpec(
             workflow_id=task_uuid,
             task_id=task_uuid,
-            nodes=compiled_nodes,
-            edges=compiled_edges,
-            handles=compiled_handles,
+            nodes=top_level_nodes,
+            edges=[
+                edge
+                for edge in compiled_edges
+                if edge.source_node_id in top_level_node_uuids
+                and edge.target_node_id in top_level_node_uuids
+            ],
+            handles=[
+                handle
+                for handle in compiled_handles
+                if handle.node_id in top_level_node_uuids
+            ],
             priority=task.get("priority", 1.0),
             submitted_at=self._submitted_at(task.get("create_time")),
             lab_id=str(task.get("lab_id") or "").strip(),
@@ -159,6 +186,7 @@ class WorkflowSpecCompiler:
                 if isinstance(task.get("trace_context"), Mapping)
                 else None
             ),
+            repeat_regions=repeat_regions,
         )
 
     @staticmethod
@@ -187,6 +215,7 @@ class WorkflowSpecCompiler:
         jobs_by_node: Mapping[str, Mapping[str, Any]],
         task_input: Mapping[str, Any],
         control_enabled: bool,
+        repeat_member_uuids: set[str],
     ) -> list[WorkflowNode]:
         """编译执行计划中的设备动作节点。
 
@@ -201,12 +230,18 @@ class WorkflowSpecCompiler:
             node = nodes[node_uuid]
             kind = str(node.get("kind") or "").strip()
             job = jobs_by_node.get(node_uuid)
-            if job is None:
+            is_repeat_template = node_uuid in repeat_member_uuids
+            if job is None and not is_repeat_template:
                 raise WorkflowSpecCompilationError(
                     "missing_workflow_node_job",
                     f"执行计划节点缺少持久作业身份：{node_uuid}",
                 )
             if kind in {"material_source", "workflow_input", "workflow_output"}:
+                if job is None:
+                    raise WorkflowSpecCompilationError(
+                        "missing_workflow_node_job",
+                        f"协调器计划节点缺少持久作业身份：{node_uuid}",
+                    )
                 # ``executor_kind`` 明确证明该作业属于协调器，不能伪装成动作节点。
                 if str(job.get("executor_kind") or "") != kind:
                     raise WorkflowSpecCompilationError(
@@ -214,25 +249,93 @@ class WorkflowSpecCompiler:
                         f"协调器作业执行种类非法：{node_uuid}",
                     )
                 continue
+            if kind == "repeat_until":
+                if not control_enabled or (job is None and not is_repeat_template):
+                    raise WorkflowSpecCompilationError(
+                        "unsupported_executor_kind",
+                        f"执行计划不能激活 RepeatUntil 作业：{node_uuid}",
+                    )
+                if (
+                    job is not None
+                    and str(job.get("executor_kind") or "") != "repeat_until"
+                ):
+                    raise WorkflowSpecCompilationError(
+                        "unsupported_executor_kind",
+                        f"RepeatUntil 作业执行种类非法：{node_uuid}",
+                    )
+                planned_param = node.get("control_region")
+                if not isinstance(planned_param, Mapping):
+                    raise WorkflowSpecCompilationError(
+                        "invalid_execution_plan",
+                        f"RepeatUntil 区域冻结参数无效：{node_uuid}",
+                    )
+                repeat_param = deepcopy(dict(planned_param))
+                repeat_variables: dict[str, Any] = {}
+                for source_group in (
+                    repeat_param.get("initial_carry", {}),
+                    repeat_param.get("bindings", {}),
+                ):
+                    if not isinstance(source_group, Mapping):
+                        raise WorkflowSpecCompilationError(
+                            "invalid_execution_plan",
+                            f"RepeatUntil 输入来源无效：{node_uuid}",
+                        )
+                    for binding in source_group.values():
+                        if (
+                            isinstance(binding, Mapping)
+                            and binding.get("kind") == "workflow_input"
+                        ):
+                            parameter = str(binding.get("parameter") or "")
+                            if parameter in task_input:
+                                repeat_variables[parameter] = deepcopy(
+                                    task_input[parameter]
+                                )
+                repeat_param["variables"] = repeat_variables
+                compiled.append(
+                    WorkflowNode(
+                        id=node_uuid,
+                        result_name=str(node.get("result_name") or ""),
+                        job_id=(
+                            canonical_uuid(
+                                job.get("uuid"),
+                                "invalid_job_identity",
+                                f"jobs[{node_uuid}].uuid",
+                            )
+                            if job is not None
+                            else ""
+                        ),
+                        device_id="scheduler-control",
+                        action_name="repeat_until",
+                        action_type="repeat_until",
+                        param=repeat_param,
+                        executor_kind="repeat_until",
+                        node_type="repeat_until",
+                    )
+                )
+                continue
             if kind == "condition":
                 if not control_enabled:
                     raise WorkflowSpecCompilationError(
                         "unsupported_executor_kind",
                         f"版本 1 执行计划不支持条件作业：{node_uuid}",
                     )
-                if str(job.get("executor_kind") or "") != "condition":
+                if job is not None and str(job.get("executor_kind") or "") != "condition":
                     raise WorkflowSpecCompilationError(
                         "unsupported_executor_kind",
                         f"条件作业执行种类非法：{node_uuid}",
                     )
-                job_uuid = canonical_uuid(
-                    job.get("uuid"),
-                    "invalid_job_identity",
-                    f"jobs[{node_uuid}].uuid",
+                job_uuid = (
+                    canonical_uuid(
+                        job.get("uuid"),
+                        "invalid_job_identity",
+                        f"jobs[{node_uuid}].uuid",
+                    )
+                    if job is not None
+                    else ""
                 )
                 planned_param = node.get("control_region")
                 public_param = node.get("param")
-                job_param = job.get("param", {})
+                job_param = job.get("param", {}) if job is not None else {}
                 if (
                     not isinstance(planned_param, Mapping)
                     or not isinstance(public_param, Mapping)
@@ -302,14 +405,19 @@ class WorkflowSpecCompiler:
                 )
             if (
                 kind == "material_transfer"
+                and job is not None
                 and str(job.get("executor_kind") or "") != "material_transfer"
             ):
                 raise WorkflowSpecCompilationError(
                     "unsupported_executor_kind",
                     f"物料转移作业执行种类非法：{node_uuid}",
                 )
-            job_uuid = canonical_uuid(
-                job.get("uuid"), "invalid_job_identity", f"jobs[{node_uuid}].uuid"
+            job_uuid = (
+                canonical_uuid(
+                    job.get("uuid"), "invalid_job_identity", f"jobs[{node_uuid}].uuid"
+                )
+                if job is not None
+                else ""
             )
             continues_device_action = bool(node.get("continues_device_action", False))
             device_id = str(node.get("device_id") or "").strip()
@@ -351,7 +459,33 @@ class WorkflowSpecCompiler:
                 raise WorkflowSpecCompilationError(
                     "invalid_execution_plan", f"计划节点参数必须是对象：{node_uuid}"
                 )
-            job_param = job.get("param", {})
+            resolved_planned_param = deepcopy(dict(planned_param))
+            raw_input_bindings = node.get("input_bindings", {})
+            planned_inputs = node.get("inputs", [])
+            if not isinstance(raw_input_bindings, Mapping) or not isinstance(
+                planned_inputs, Sequence
+            ):
+                raise WorkflowSpecCompilationError(
+                    "invalid_execution_plan", f"计划节点输入绑定无效：{node_uuid}"
+                )
+            inputs_by_handle = {
+                str(item.get("handle_uuid") or ""): str(item.get("data_key") or "")
+                for item in planned_inputs
+                if isinstance(item, Mapping)
+            }
+            for handle_uuid, binding in raw_input_bindings.items():
+                if not isinstance(binding, Mapping):
+                    raise WorkflowSpecCompilationError(
+                        "invalid_execution_plan", f"工作流输入绑定无效：{node_uuid}"
+                    )
+                parameter = str(binding.get("parameter") or "")
+                data_key = inputs_by_handle.get(str(handle_uuid), "")
+                if parameter not in task_input or not data_key:
+                    raise WorkflowSpecCompilationError(
+                        "invalid_execution_plan", f"工作流输入绑定无法解析：{node_uuid}"
+                    )
+                resolved_planned_param[data_key] = deepcopy(task_input[parameter])
+            job_param = job.get("param", {}) if job is not None else {}
             if not isinstance(job_param, Mapping):
                 raise WorkflowSpecCompilationError(
                     "invalid_job_param", f"作业最终参数必须是对象：{job_uuid}"
@@ -372,7 +506,7 @@ class WorkflowSpecCompiler:
                     device_selector=device_selector,
                     action_name=action_name,
                     action_type=action_type,
-                    param=self._merge_final_param(planned_param, job_param),
+                    param=self._merge_final_param(resolved_planned_param, job_param),
                     param_schema=param_schema,
                     executor_kind=kind,
                     execution_policy=deepcopy(dict(node.get("execution_policy") or {})),
@@ -386,9 +520,132 @@ class WorkflowSpecCompiler:
                     disabled=False,
                     always_free=bool(node.get("always_free", False)),
                     material_requirements=requirements,
+                    carry_bindings=deepcopy(dict(node.get("carry_bindings") or {})),
                 )
             )
         return compiled
+
+    @staticmethod
+    def _repeat_members(nodes: Mapping[str, Mapping[str, Any]]) -> set[str]:
+        """返回所有冻结 RepeatUntil 区域拥有的模板节点身份。"""
+
+        result: set[str] = set()
+        for node in nodes.values():
+            if str(node.get("kind") or "") != "repeat_until":
+                continue
+            region = node.get("control_region")
+            members = region.get("node_uuids") if isinstance(region, Mapping) else None
+            if not isinstance(members, Sequence) or isinstance(members, (str, bytes)):
+                raise WorkflowSpecCompilationError(
+                    "invalid_execution_plan", "RepeatUntil 模板成员必须是数组"
+                )
+            result.update(str(value) for value in members)
+        return result
+
+    @staticmethod
+    def _compile_repeat_regions(
+        *,
+        nodes: Mapping[str, Mapping[str, Any]],
+        compiled_nodes: Sequence[WorkflowNode],
+        compiled_edges: Sequence[WorkflowEdge],
+        compiled_handles: Sequence[Handle],
+    ) -> dict[str, RepeatUntilRegion]:
+        """把计划中的冻结循环体从顶层 DAG 分离成惰性物化模板。"""
+
+        compiled_by_id = {node.id: node for node in compiled_nodes}
+        repeat_uuids = {
+            node_uuid
+            for node_uuid, node in nodes.items()
+            if str(node.get("kind") or "") == "repeat_until"
+        }
+
+        def nearest_repeat_owner(node_uuid: str) -> str | None:
+            visited: set[str] = set()
+            parent = nodes[node_uuid].get("parent_uuid")
+            while isinstance(parent, str) and parent and parent not in visited:
+                if parent in repeat_uuids:
+                    return parent
+                visited.add(parent)
+                candidate = nodes.get(parent)
+                parent = candidate.get("parent_uuid") if candidate is not None else None
+            return None
+
+        owner_by_node = {
+            node_uuid: nearest_repeat_owner(node_uuid) for node_uuid in nodes
+        }
+
+        def is_descendant_of(node_uuid: str, region_uuid: str) -> bool:
+            visited: set[str] = set()
+            current: str | None = node_uuid
+            while current is not None and current not in visited:
+                visited.add(current)
+                parent = nodes[current].get("parent_uuid")
+                if parent == region_uuid:
+                    return True
+                current = parent if isinstance(parent, str) and parent in nodes else None
+            return False
+
+        all_regions: dict[str, RepeatUntilRegion] = {}
+        for region_uuid, planned_node in nodes.items():
+            if str(planned_node.get("kind") or "") != "repeat_until":
+                continue
+            control_region = planned_node.get("control_region")
+            raw_members = (
+                control_region.get("node_uuids")
+                if isinstance(control_region, Mapping)
+                else None
+            )
+            if not isinstance(raw_members, Sequence) or isinstance(
+                raw_members, (str, bytes)
+            ):
+                raise WorkflowSpecCompilationError(
+                    "invalid_execution_plan", "RepeatUntil 模板成员必须是数组"
+                )
+            declared_members = {str(value) for value in raw_members}
+            if not declared_members <= set(compiled_by_id):
+                raise WorkflowSpecCompilationError(
+                    "invalid_execution_plan", "RepeatUntil 模板引用未知节点"
+                )
+            member_uuids = {
+                node_uuid
+                for node_uuid, owner_uuid in owner_by_node.items()
+                if owner_uuid == region_uuid
+            }
+            if not member_uuids or any(
+                not is_descendant_of(node_uuid, region_uuid)
+                for node_uuid in declared_members
+            ):
+                raise WorkflowSpecCompilationError(
+                    "invalid_execution_plan", "RepeatUntil 模板成员归属无效"
+                )
+            all_regions[region_uuid] = RepeatUntilRegion(
+                control_node_id=region_uuid,
+                nodes=[
+                    deepcopy(compiled_by_id[node_uuid])
+                    for node_uuid in compiled_by_id
+                    if node_uuid in member_uuids
+                ],
+                edges=[
+                    deepcopy(edge)
+                    for edge in compiled_edges
+                    if edge.source_node_id in member_uuids
+                    and edge.target_node_id in member_uuids
+                ],
+                handles=[
+                    deepcopy(handle)
+                    for handle in compiled_handles
+                    if handle.node_id in member_uuids
+                ],
+            )
+        for child_uuid, child_region in all_regions.items():
+            owner_uuid = owner_by_node.get(child_uuid)
+            if owner_uuid is not None:
+                all_regions[owner_uuid].repeat_regions[child_uuid] = child_region
+        return {
+            region_uuid: region
+            for region_uuid, region in all_regions.items()
+            if owner_by_node.get(region_uuid) is None
+        }
 
     @staticmethod
     def _condition_variable_names(param: Mapping[str, Any]) -> set[str]:

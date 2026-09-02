@@ -125,6 +125,8 @@ class WorkflowNode:
     always_free: bool = False
     # 可选物料需求（向后兼容：空列表 = 无物料，行为与旧 workflow 完全一致）
     material_requirements: List[MaterialRequirement] = field(default_factory=list)
+    # 目标 Handle UUID 到祖先 RepeatUntil carry 键的冻结绑定；每轮物化时解析。
+    carry_bindings: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     @property
     def device_action_key(self) -> str:
@@ -187,6 +189,7 @@ class WorkflowSpec:
     run_mode: str = "normal"  # normal / step / single_node
     # 恢复时以上一次 workflow span 为父上下文，使 Trace ID 跨进程重启稳定。
     trace_context: Dict[str, str] = field(default_factory=dict)
+    repeat_regions: Dict[str, "RepeatUntilRegion"] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.task_id:
@@ -208,6 +211,18 @@ class HandlePair:
     source_node_id: str
     source_handle: Handle
     target_handle: Handle
+
+
+@dataclass
+class RepeatUntilRegion:
+    """一个 RepeatUntil 控制节点拥有的冻结循环体模板。"""
+
+    control_node_id: str
+    nodes: List[WorkflowNode]
+    edges: List[WorkflowEdge] = field(default_factory=list)
+    handles: List[Handle] = field(default_factory=list)
+    # 只保存本区域直接拥有的嵌套循环；每次物化父轮次时同步改写其控制身份。
+    repeat_regions: Dict[str, "RepeatUntilRegion"] = field(default_factory=dict)
 
 
 @dataclass
@@ -311,6 +326,14 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
             MaterialRequirement.from_dict(r)
             for r in (data.get("material_requirements") or [])
         ],
+        carry_bindings={
+            str(handle_uuid): {
+                "control_region_uuid": str(binding.get("control_region_uuid") or ""),
+                "key": str(binding.get("key") or ""),
+            }
+            for handle_uuid, binding in (data.get("carry_bindings") or {}).items()
+            if isinstance(binding, Mapping)
+        },
     )
 
 
@@ -364,6 +387,7 @@ __all__ = [
     "NodeState",
     "PRIORITY_WEIGHTS",
     "ReadyTask",
+    "RepeatUntilRegion",
     "WorkflowEdge",
     "WorkflowNode",
     "WorkflowSpec",

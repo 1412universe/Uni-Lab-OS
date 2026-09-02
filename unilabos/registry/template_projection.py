@@ -530,11 +530,52 @@ class RegistryTemplateProjection:
                             resource_name=resource_name,
                             resource_display_name=resource_display_name,
                         ),
+                        self._compile_repeat_until(
+                            resource_template_uuid=resource_template_uuid,
+                            resource_name=resource_name,
+                            resource_display_name=resource_display_name,
+                        ),
                     ]
                 )
             except TemplateIdentityError as error:
                 raise RegistryTemplateProjectionError(str(error)) from error
         return nodes, handles
+
+    @staticmethod
+    def _compile_repeat_until(
+        *,
+        resource_template_uuid: str,
+        resource_name: str,
+        resource_display_name: str,
+    ) -> dict[str, Any]:
+        """编译宿主节点唯一拥有的 RepeatUntil 控制区域模板。"""
+
+        return {
+            "uuid": action_template_uuid(resource_name, "repeat_until"),
+            "resource_template_uuid": resource_template_uuid,
+            "name": "repeat_until",
+            "display_name": "重复直到",
+            "description": "由调度器逐轮执行并在严格布尔条件满足时退出。",
+            "class": "unilabos.workflow.authoring:repeat_until",
+            "goal": {},
+            "goal_default": {},
+            "feedback": {},
+            "result": {},
+            "schema": None,
+            "type": "repeat_until",
+            "node_type": "repeat_until",
+            "meta_data": {
+                "unilab": {
+                    "framework_owner_only": True,
+                    "executor_kind": "repeat_until",
+                    "resource_template": {
+                        "uuid": resource_template_uuid,
+                        "name": resource_name,
+                        "display_name": resource_display_name,
+                    },
+                }
+            },
+        }
 
     @staticmethod
     def _compile_condition(

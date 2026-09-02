@@ -49,6 +49,8 @@ _AUTHORING_MARKERS = {
     "device": "unilabos.workflow.authoring:device",
     "group": "unilabos.workflow.authoring:group",
     "parallel": "unilabos.workflow.authoring:parallel",
+    "repeat_until": "unilabos.workflow.authoring:repeat_until",
+    "until": "unilabos.workflow.authoring:until",
     "workflow": "unilabos.workflow.authoring:workflow",
     "workflow_definition": "unilabos.workflow.authoring:workflow_definition",
     "workflow_output": "unilabos.workflow.authoring:workflow_output",
@@ -155,6 +157,25 @@ class ConditionDeclaration:
 
 
 @dataclass(frozen=True, slots=True)
+class RepeatUntilDeclaration:
+    """先执行循环体、再由调度器本地判断退出的结构化区域。"""
+
+    node_uuid: str
+    title: str | None
+    description: str | None
+    loop_variable: str
+    max_iterations: int
+    initial_carry: tuple[tuple[str, ValueBinding], ...]
+    next_carry: tuple[tuple[str, ValueBinding], ...]
+    until_condition: dict[str, Any]
+    bindings: tuple[tuple[str, dict[str, str]], ...]
+    node_uuids: tuple[str, ...]
+    entry_node_uuids: tuple[str, ...]
+    exit_node_uuids: tuple[str, ...]
+    source_node: ast.With
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowProgram:
     """作者源码静态子集解析后的不可变中间表示。"""
 
@@ -179,6 +200,7 @@ class WorkflowProgram:
     ]
     groups: tuple[GroupDeclaration, ...]
     conditions: tuple[ConditionDeclaration, ...]
+    repeats: tuple[RepeatUntilDeclaration, ...]
     parent_by_node: tuple[tuple[str, str], ...]
     order_dependencies: tuple[tuple[str, str], ...]
     source_order: tuple[str, ...]
@@ -207,11 +229,13 @@ class _BodyState:
     actions: list[ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration]
     groups: list[GroupDeclaration]
     conditions: list[ConditionDeclaration]
+    repeats: list[RepeatUntilDeclaration]
     parent_by_node: dict[str, str]
     order_dependencies: list[tuple[str, str]]
     source_order: list[str]
     material_results: set[str]
     control_depth: int
+    loop_carry_scopes: dict[str, tuple[str, frozenset[str]]]
 
 
 def parse_authoring_source(
@@ -302,6 +326,7 @@ def parse_authoring_source(
         actions,
         groups,
         conditions,
+        repeats,
         parent_by_node,
         order_dependencies,
         authoring_source_order,
@@ -316,7 +341,7 @@ def parse_authoring_source(
     )
     used_anchor_lines = {
         declaration.source_node.lineno - 1
-        for declaration in (*actions, *groups, *conditions)
+        for declaration in (*actions, *groups, *conditions, *repeats)
     }
     if set(anchors) != used_anchor_lines:
         _fail("invalid_node_anchor", "节点 UUID 锚点必须紧邻一个动作声明")
@@ -339,6 +364,7 @@ def parse_authoring_source(
         actions=tuple(actions),
         groups=tuple(groups),
         conditions=tuple(conditions),
+        repeats=tuple(repeats),
         parent_by_node=tuple(sorted(parent_by_node.items())),
         order_dependencies=tuple(order_dependencies),
         source_order=tuple(authoring_source_order),
@@ -427,7 +453,12 @@ def author_source_map(
     lines = source_lines(python_source)
     declarations = {
         declaration.node_uuid: declaration
-        for declaration in (*program.actions, *program.groups)
+        for declaration in (
+            *program.actions,
+            *program.groups,
+            *program.conditions,
+            *program.repeats,
+        )
     }
     if set(program.source_order) != set(declarations):
         raise ValueError("作者程序的节点顺序与声明不一致")
@@ -894,6 +925,7 @@ def _workflow_body(
     list[ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration],
     list[GroupDeclaration],
     list[ConditionDeclaration],
+    list[RepeatUntilDeclaration],
     dict[str, str],
     list[tuple[str, str]],
     list[str],
@@ -931,11 +963,13 @@ def _workflow_body(
         actions=[],
         groups=[],
         conditions=[],
+        repeats=[],
         parent_by_node={},
         order_dependencies=[],
         source_order=[],
         material_results=set(),
         control_depth=0,
+        loop_carry_scopes={},
     )
     # ``known_results`` 只在递归边界复制，保证同级并行分支互不可见。
     known_results: set[str] = set()
@@ -956,6 +990,7 @@ def _workflow_body(
         state.actions,
         state.groups,
         state.conditions,
+        state.repeats,
         state.parent_by_node,
         state.order_dependencies,
         state.source_order,
@@ -1040,16 +1075,18 @@ def _parse_statement(
                 parallel_order=None,
             )
         if marker == "parallel":
-            if parent_uuid is not None:
-                _fail(
-                    "unsupported_authoring_syntax",
-                    "并行结构不能嵌套在展示分组中",
-                    statement,
-                )
             return _parse_parallel(
                 statement,
                 state=state,
                 available_results=available_results,
+                parent_uuid=parent_uuid,
+            )
+        if marker == "repeat_until":
+            return _parse_repeat_until(
+                statement,
+                state=state,
+                available_results=available_results,
+                parent_uuid=parent_uuid,
             )
         _fail("unsupported_authoring_syntax", "工作流不支持该 with 语句", statement)
 
@@ -1062,6 +1099,7 @@ def _parse_statement(
         material_results=state.material_results & available_results,
         anchors=state.anchors,
         node_metadata=state.node_metadata,
+        carry_scopes=state.loop_carry_scopes,
     )
     if action.result_name in available_results or any(
         existing.result_name == action.result_name for existing in state.actions
@@ -1139,6 +1177,7 @@ def _parse_condition(
                 test,
                 input_names=state.input_names,
                 known_results=available_results,
+                carry_scopes=state.loop_carry_scopes,
             )
         )
         branches.append(
@@ -1197,6 +1236,7 @@ def _condition_expression(
     *,
     input_names: set[str],
     known_results: set[str],
+    carry_scopes: Mapping[str, tuple[str, frozenset[str]]] | None = None,
 ) -> dict[str, Any]:
     """把条件 AST 编译为 pTLC 兼容的封闭结构化表达式。"""
 
@@ -1216,20 +1256,39 @@ def _condition_expression(
                 expression.value,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
             "name": expression.attr,
         }
     if isinstance(expression, ast.Subscript):
+        if (
+            carry_scopes is not None
+            and isinstance(expression.value, ast.Attribute)
+            and expression.value.attr == "carry"
+            and isinstance(expression.value.value, ast.Name)
+            and expression.value.value.id in carry_scopes
+            and isinstance(expression.slice, ast.Constant)
+            and isinstance(expression.slice.value, str)
+        ):
+            region_uuid, keys = carry_scopes[expression.value.value.id]
+            if expression.slice.value not in keys:
+                _fail("invalid_loop_carry", "循环 carry 引用了未知键", expression)
+            return {
+                "carry": expression.slice.value,
+                "control_region_uuid": region_uuid,
+            }
         return {
             "index": _condition_expression(
                 expression.value,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
             "key": _condition_expression(
                 expression.slice,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
         }
     if isinstance(expression, ast.BoolOp):
@@ -1239,6 +1298,7 @@ def _condition_expression(
                 value,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             )
             for value in expression.values
         ]
@@ -1267,11 +1327,13 @@ def _condition_expression(
                 expression.left,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
             "right": _condition_expression(
                 expression.comparators[0],
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
         }
     if isinstance(expression, ast.BinOp):
@@ -1292,11 +1354,13 @@ def _condition_expression(
                 expression.left,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
             "right": _condition_expression(
                 expression.right,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
         }
     if isinstance(expression, ast.UnaryOp):
@@ -1315,6 +1379,7 @@ def _condition_expression(
                 expression.operand,
                 input_names=input_names,
                 known_results=known_results,
+                carry_scopes=carry_scopes,
             ),
         }
     if isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name):
@@ -1330,6 +1395,7 @@ def _condition_expression(
                     argument,
                     input_names=input_names,
                     known_results=known_results,
+                    carry_scopes=carry_scopes,
                 )
                 for argument in expression.args
             ],
@@ -1365,15 +1431,258 @@ def _with_marker(statement: ast.With, imports: dict[str, str]) -> str | None:
     可信作者子集，直接返回 ``None`` 交由调用者产生稳定诊断。
     """
 
-    if len(statement.items) != 1 or statement.items[0].optional_vars is not None:
+    if len(statement.items) != 1:
         return None
     context = statement.items[0].context_expr
     if not isinstance(context, ast.Call):
         return None
-    for marker_name in ("group", "parallel"):
+    for marker_name in ("group", "parallel", "repeat_until"):
         if _is_marker(context.func, imports, marker_name):
+            if marker_name == "repeat_until":
+                return (
+                    marker_name
+                    if isinstance(statement.items[0].optional_vars, ast.Name)
+                    else None
+                )
+            if statement.items[0].optional_vars is not None:
+                return None
             return marker_name
     return None
+
+
+def _parse_repeat_until(
+    statement: ast.With,
+    *,
+    state: _BodyState,
+    available_results: set[str],
+    parent_uuid: str | None,
+) -> _Flow:
+    """解析 ``repeat_until``、显式 carry/next 与末尾 until。"""
+
+    if state.control_depth >= _MAX_CONTROL_NESTING_DEPTH:
+        _fail("control_nesting_too_deep", "控制区域嵌套深度不能超过 8", statement)
+    context = statement.items[0].context_expr
+    loop_target = statement.items[0].optional_vars
+    assert isinstance(context, ast.Call) and isinstance(loop_target, ast.Name)
+    if context.args or any(item.arg is None for item in context.keywords):
+        _fail("invalid_repeat_until", "repeat_until 只接受命名参数", context)
+    keyword_values = {str(item.arg): item.value for item in context.keywords}
+    if len(keyword_values) != len(context.keywords) or set(keyword_values) != {
+        "max_iterations",
+        "carry",
+    }:
+        _fail(
+            "invalid_repeat_until",
+            "repeat_until 必须且只能声明 max_iterations 和 carry",
+            context,
+        )
+    maximum = keyword_values["max_iterations"]
+    if (
+        not isinstance(maximum, ast.Constant)
+        or isinstance(maximum.value, bool)
+        or not isinstance(maximum.value, int)
+        or maximum.value < 1
+    ):
+        _fail("invalid_repeat_until", "max_iterations 必须是正整数字面量", maximum)
+    carry_expression = keyword_values["carry"]
+    if not isinstance(carry_expression, ast.Dict):
+        _fail("invalid_loop_carry", "carry 必须是字符串键字典", carry_expression)
+    node_uuid = state.anchors.get(statement.lineno - 1)
+    if node_uuid is None:
+        _fail("invalid_node_anchor", "每个循环区域前必须有相邻节点 UUID 锚点", statement)
+    if (
+        loop_target.id in state.input_names
+        or loop_target.id in available_results
+        or loop_target.id in state.loop_carry_scopes
+    ):
+        _fail("invalid_repeat_until", "循环绑定名称与已有变量冲突", loop_target)
+
+    initial_carry: list[tuple[str, ValueBinding]] = []
+    carry_keys: set[str] = set()
+    for key, value in zip(carry_expression.keys, carry_expression.values, strict=True):
+        if not isinstance(key, ast.Constant) or not isinstance(key.value, str):
+            _fail("invalid_loop_carry", "carry 键必须是非空字符串字面量", key)
+        carry_key = key.value
+        if not carry_key or carry_key in carry_keys:
+            _fail("invalid_loop_carry", "carry 键必须唯一且非空", key)
+        carry_keys.add(carry_key)
+        initial_carry.append(
+            (
+                carry_key,
+                _value_binding(
+                    value,
+                    input_names=state.input_names,
+                    known_results=available_results,
+                    material_results=state.material_results & available_results,
+                    carry_scopes=state.loop_carry_scopes,
+                ),
+            )
+        )
+    if not statement.body or not _is_until_statement(statement.body[-1], state.imports):
+        _fail("invalid_repeat_until", "until(...) 必须是循环体最后一条语句", statement)
+
+    metadata = state.node_metadata.get(statement.lineno - 1)
+    if parent_uuid is not None:
+        state.parent_by_node[node_uuid] = parent_uuid
+    state.source_order.append(node_uuid)
+    body_start = len(state.source_order)
+    state.control_depth += 1
+    state.loop_carry_scopes[loop_target.id] = (node_uuid, frozenset(carry_keys))
+    body_results = set(available_results)
+    first_entries: tuple[str, ...] = ()
+    previous_exits: tuple[str, ...] = ()
+    next_carry: list[tuple[str, ValueBinding]] | None = None
+    try:
+        for body_statement in statement.body[:-1]:
+            next_call = _loop_next_call(body_statement, loop_target.id)
+            if next_call is not None:
+                if next_carry is not None:
+                    _fail(
+                        "invalid_loop_carry",
+                        "每个循环只能声明一次 loop.next",
+                        body_statement,
+                    )
+                next_carry = _parse_loop_next(
+                    next_call,
+                    expected_keys=carry_keys,
+                    state=state,
+                    available_results=body_results,
+                )
+                continue
+            segment = _parse_statement(
+                body_statement,
+                state=state,
+                available_results=body_results,
+                parent_uuid=node_uuid,
+            )
+            if segment.entries:
+                if previous_exits:
+                    state.order_dependencies.extend(
+                        (source_uuid, target_uuid)
+                        for source_uuid in previous_exits
+                        for target_uuid in segment.entries
+                    )
+                elif not first_entries:
+                    first_entries = segment.entries
+                previous_exits = segment.exits
+            body_results.update(segment.result_names)
+        if not first_entries:
+            _fail("invalid_repeat_until", "循环体至少包含一个工作流节点", statement)
+        if carry_keys and next_carry is None:
+            _fail("invalid_loop_carry", "非空 carry 必须声明 loop.next", statement)
+        if not carry_keys and next_carry is None:
+            next_carry = []
+        until_statement = statement.body[-1]
+        assert isinstance(until_statement, ast.Expr)
+        until_call = until_statement.value
+        assert isinstance(until_call, ast.Call)
+        if len(until_call.args) != 1 or until_call.keywords:
+            _fail("invalid_repeat_until", "until 必须接收唯一退出条件", until_statement)
+        until_condition = _condition_expression(
+            until_call.args[0],
+            input_names=state.input_names,
+            known_results=body_results,
+            carry_scopes=state.loop_carry_scopes,
+        )
+    finally:
+        state.loop_carry_scopes.pop(loop_target.id, None)
+        state.control_depth -= 1
+
+    body_node_uuids = tuple(state.source_order[body_start:])
+    result_nodes = {
+        declaration.result_name: declaration.node_uuid
+        for declaration in state.actions
+        if declaration.result_name in body_results
+    }
+    bindings: list[tuple[str, dict[str, str]]] = []
+    for name in sorted(_condition_variable_names(until_condition)):
+        if name in state.input_names:
+            bindings.append((name, {"kind": "workflow_input", "parameter": name}))
+        elif name in result_nodes:
+            bindings.append(
+                (name, {"kind": "node_result", "node_uuid": result_nodes[name]})
+            )
+        else:
+            _fail("invalid_condition_expression", "循环条件变量缺少稳定来源", statement)
+    state.repeats.append(
+        RepeatUntilDeclaration(
+            node_uuid=node_uuid,
+            title=metadata[0] if metadata is not None else None,
+            description=metadata[1] if metadata is not None else None,
+            loop_variable=loop_target.id,
+            max_iterations=maximum.value,
+            initial_carry=tuple(initial_carry),
+            next_carry=tuple(next_carry or []),
+            until_condition=until_condition,
+            bindings=tuple(bindings),
+            node_uuids=body_node_uuids,
+            entry_node_uuids=first_entries,
+            exit_node_uuids=previous_exits,
+            source_node=statement,
+        )
+    )
+    return _Flow(
+        entries=(node_uuid,),
+        exits=(node_uuid,),
+        # 循环体结果只在本区域的 until/next 中可见；循环外必须通过稳定 carry
+        # 或未来显式控制输出访问，不能绑定某个动态轮次的模板节点结果。
+        result_names=frozenset(),
+    )
+
+
+def _is_until_statement(statement: ast.stmt, imports: Mapping[str, str]) -> bool:
+    """判断语句是否是显式导入的 ``until`` 标记。"""
+
+    return (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and _is_marker(statement.value.func, dict(imports), "until")
+    )
+
+
+def _loop_next_call(statement: ast.stmt, loop_name: str) -> ast.Call | None:
+    """识别当前循环绑定上的 ``loop.next(...)`` 声明。"""
+
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        return None
+    call = statement.value
+    if (
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr == "next"
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == loop_name
+    ):
+        return call
+    return None
+
+
+def _parse_loop_next(
+    call: ast.Call,
+    *,
+    expected_keys: set[str],
+    state: _BodyState,
+    available_results: set[str],
+) -> list[tuple[str, ValueBinding]]:
+    """解析下一轮 carry，并要求键集合与初始 carry 完全一致。"""
+
+    if call.args or any(item.arg is None for item in call.keywords):
+        _fail("invalid_loop_carry", "loop.next 只接受命名参数", call)
+    names = [str(item.arg) for item in call.keywords]
+    if len(names) != len(set(names)) or set(names) != expected_keys:
+        _fail("invalid_loop_carry", "loop.next 必须完整且唯一地提交 carry 键", call)
+    return [
+        (
+            str(item.arg),
+            _value_binding(
+                item.value,
+                input_names=state.input_names,
+                known_results=available_results,
+                material_results=state.material_results & available_results,
+                carry_scopes=state.loop_carry_scopes,
+            ),
+        )
+        for item in call.keywords
+    ]
 
 
 def _parse_group(
@@ -1388,13 +1697,16 @@ def _parse_group(
     """解析一个真实展示分组节点并递归解析其动作子节点。
 
     参数说明：``statement`` 是 ``with group``；``state`` 收集节点；
-    ``available_results`` 是进入分组前可见结果；``parent_uuid`` 用于拒绝当前未支持
-    的嵌套分组；``parallel_scope``/``parallel_order`` 标记可选并行同级关系。
+    ``available_results`` 是进入分组前可见结果；``parent_uuid`` 允许控制区域拥有
+    展示分组，但仍拒绝分组直接嵌套分组；``parallel_scope``/``parallel_order``
+    标记可选并行同级关系。
     返回：忽略分组节点本身后的真实动作入口/出口。异常：名称、锚点、空分组或
     嵌套不合法时失败关闭。
     """
 
-    if parent_uuid is not None:
+    if parent_uuid is not None and parent_uuid in {
+        group.node_uuid for group in state.groups
+    }:
         _fail("unsupported_authoring_syntax", "暂不支持嵌套展示分组", statement)
     context = statement.items[0].context_expr
     assert isinstance(context, ast.Call)
@@ -1427,6 +1739,8 @@ def _parse_group(
     )
     state.groups.append(declaration)
     state.source_order.append(node_uuid)
+    if parent_uuid is not None:
+        state.parent_by_node[node_uuid] = parent_uuid
     child_results = set(available_results)
     flow = _parse_sequence(
         list(statement.body),
@@ -1444,6 +1758,7 @@ def _parse_parallel(
     *,
     state: _BodyState,
     available_results: set[str],
+    parent_uuid: str | None,
 ) -> _Flow:
     """解析由直接展示分组构成的并行结构且隔离同级结果作用域。
 
@@ -1482,7 +1797,7 @@ def _parse_parallel(
             branch,
             state=state,
             available_results=branch_results,
-            parent_uuid=None,
+            parent_uuid=parent_uuid,
             parallel_scope=parallel_scope,
             parallel_order=branch_order,
         )
@@ -1506,6 +1821,7 @@ def _action_declaration(
     material_results: set[str],
     anchors: dict[int, str],
     node_metadata: dict[int, tuple[str, str]],
+    carry_scopes: Mapping[str, tuple[str, frozenset[str]]],
 ) -> ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration:
     """解析一条 ``result = device.action(...)`` 动作声明。
 
@@ -1572,6 +1888,7 @@ def _action_declaration(
                         input_names=input_names,
                         known_results=known_results,
                         material_results=material_results,
+                        carry_scopes=carry_scopes,
                     ),
                 )
             )
@@ -1623,6 +1940,7 @@ def _action_declaration(
                     input_names=input_names,
                     known_results=known_results,
                     material_results=material_results,
+                    carry_scopes=carry_scopes,
                 ),
             )
         )
@@ -1761,6 +2079,7 @@ def _value_binding(
     known_results: set[str],
     material_results: set[str],
     allow_literal: bool = True,
+    carry_scopes: Mapping[str, tuple[str, frozenset[str]]] | None = None,
 ) -> ValueBinding:
     """把参数表达式解析为字面量、工作流输入或节点输出绑定。
 
@@ -1777,6 +2096,23 @@ def _value_binding(
         and expression.value.id in known_results
     ):
         return ValueBinding("node_output", expression.attr, expression.value.id)
+    if (
+        carry_scopes is not None
+        and isinstance(expression, ast.Subscript)
+        and isinstance(expression.value, ast.Attribute)
+        and expression.value.attr == "carry"
+        and isinstance(expression.value.value, ast.Name)
+        and expression.value.value.id in carry_scopes
+        and isinstance(expression.slice, ast.Constant)
+        and isinstance(expression.slice.value, str)
+    ):
+        region_uuid, keys = carry_scopes[expression.value.value.id]
+        if expression.slice.value not in keys:
+            _fail("invalid_loop_carry", "循环 carry 引用了未知键", expression)
+        return ValueBinding(
+            "loop_carry",
+            {"control_region_uuid": region_uuid, "key": expression.slice.value},
+        )
     if allow_literal:
         try:
             return ValueBinding("literal", ast.literal_eval(expression))
@@ -1840,6 +2176,7 @@ __all__ = [
     "CompositeDeclaration",
     "DeviceDeclaration",
     "GroupDeclaration",
+    "RepeatUntilDeclaration",
     "ValueBinding",
     "WorkflowProgram",
     "author_source_map",

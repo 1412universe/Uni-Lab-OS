@@ -13,7 +13,14 @@ class WorkflowDefinitionInvalid(ValueError):
     """增量编辑输入不能形成合法的完整工作流图。"""
 
 
-_STANDALONE_NODE_TYPES = {"compute", "condition", "script", "group", "tool_call"}
+_STANDALONE_NODE_TYPES = {
+    "compute",
+    "condition",
+    "repeat_until",
+    "script",
+    "group",
+    "tool_call",
+}
 _PATCHABLE_NODE_FIELDS = {
     "parent_uuid",
     "material_uuid",

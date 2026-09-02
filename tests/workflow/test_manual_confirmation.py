@@ -20,7 +20,10 @@ from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowConflict, WorkflowService
 from unilabos.workflow.store import WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
-from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
+from unilabos.workflow.task_scheduler_bridge import (
+    TaskSchedulerBridge,
+    TaskSchedulerBridgeError,
+)
 
 WORKFLOW_UUID = "10000000-0000-4000-8000-000000000201"
 TASK_UUID = "20000000-0000-4000-8000-000000000201"
@@ -456,14 +459,13 @@ def test_terminal_job_closes_pending_manual_confirmation(
         store.close()
 
 
-def test_scheduler_restart_restores_pending_manual_confirmation_task(
+def test_scheduler_restart_fails_pending_manual_confirmation_task(
     tmp_path,
 ) -> None:
-    """调度进程重启后以原作业身份恢复尚未派发设备的人工等待。
+    """调度进程重启后，运行中的人工等待也随原任务立即失败。
 
-    参数：``tmp_path`` 提供隔离工作流库。返回：无；断言运行中的工作流任务
-    （WorkflowTask）、人工确认作业和确认事实保持活动，随后仍可按同一 Job
-    明确批准。异常：恢复误判为执行中断会使断言失败。
+    参数：``tmp_path`` 提供隔离工作流库。返回：无；断言运行中的工作流任务、
+    人工确认作业和确认事实原子关闭，旧 Job 不能在新 runtime 中继续批准。
     """
 
     store = WorkflowStore(tmp_path / "manual-restart.db")
@@ -504,22 +506,24 @@ def test_scheduler_restart_restores_pending_manual_confirmation_task(
         try:
             recovered = bridge.recover_active_tasks()
             assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
-            assert store.get_job(JOB_UUID)["status"] == "dispatched"
+            assert store.get_job(JOB_UUID)["status"] == "failed"
             confirmation = WorkflowService(store).list_task_manual_confirmations(
                 TASK_UUID
             )[0]
-            assert confirmation["status"] == "pending"
+            assert confirmation["status"] == "canceled"
             task = store.get_task(TASK_UUID)
-            assert task["status"] == "running"
-            assert task["cleanup_status"] == "none"
+            assert task["status"] == "failed"
+            assert task["cleanup_status"] == "settled"
             assert task["control_status"] == "active"
-            bridge.decide_manual_confirmation(
-                JOB_UUID,
-                approved=True,
-                param=None,
-            )
-            assert store.get_job(JOB_UUID)["status"] == "succeeded"
-            assert store.get_task(TASK_UUID)["status"] == "succeeded"
+            with pytest.raises(
+                TaskSchedulerBridgeError,
+                match="人工确认对应的作业不在运行中",
+            ):
+                bridge.decide_manual_confirmation(
+                    JOB_UUID,
+                    approved=True,
+                    param=None,
+                )
         finally:
             bridge.close()
     finally:

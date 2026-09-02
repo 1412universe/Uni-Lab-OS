@@ -27,6 +27,7 @@ CONTROL_PLAN_CAPABILITIES = (
     "condition_expression_v1",
     "control_regions_v1",
 )
+DYNAMIC_ITERATION_CAPABILITY = "dynamic_iteration_jobs_v1"
 
 
 class ExecutionPlanBuilder:
@@ -59,6 +60,7 @@ class ExecutionPlanBuilder:
             )
             for node_uuid, node in nodes.items()
         }
+        self._validate_control_nesting(nodes=nodes, kinds=kinds)
         # ``material_sources`` 是由协调器承担的物料来源解析作业，不进入设备派发图。
         material_sources = {
             node_uuid: node
@@ -76,10 +78,11 @@ class ExecutionPlanBuilder:
             if node.get("disabled") is not True
             and kinds[node_uuid] not in {"group", "material_source", "workflow"}
         }
-        disabled_conditions = {
+        disabled_control_regions = {
             node_uuid
             for node_uuid, node in nodes.items()
-            if kinds[node_uuid] == "condition" and node.get("disabled") is True
+            if kinds[node_uuid] in {"condition", "repeat_until"}
+            and node.get("disabled") is True
         }
         for active_uuid in active:
             current = active_uuid
@@ -87,10 +90,10 @@ class ExecutionPlanBuilder:
             while current not in seen:
                 seen.add(current)
                 parent = nodes.get(current, {}).get("parent_uuid")
-                if parent in disabled_conditions:
+                if parent in disabled_control_regions:
                     raise ExecutionPlanBuildError(
                         "invalid_control_region",
-                        "禁用条件区域仍包含启用的分支节点",
+                        "禁用控制区域仍包含启用的分支或循环体节点",
                     )
                 if not isinstance(parent, str):
                     break
@@ -124,7 +127,13 @@ class ExecutionPlanBuilder:
             kinds=kinds,
             active_node_uuids=set(active),
         )
+        repeat_edges = self._repeat_control_edges(
+            nodes=nodes,
+            kinds=kinds,
+            active_node_uuids=set(active),
+        )
         planned_edges.extend(control_edges)
+        planned_edges.extend(repeat_edges)
         graph_order = graph_normalizer.topological_order(
             planned_graph_nodes,
             planned_edges,
@@ -220,6 +229,7 @@ class ExecutionPlanBuilder:
             node_handles = handles_by_node.get(node_uuid, [])
             planned_node: dict[str, Any] = {
                 "uuid": node_uuid,
+                "parent_uuid": node.get("parent_uuid"),
                 "topological_index": index,
                 "kind": kind,
                 "param": planned_param,
@@ -254,7 +264,35 @@ class ExecutionPlanBuilder:
             )
             if isinstance(result_name, str) and result_name:
                 planned_node["result_name"] = result_name
-            if kind == "condition":
+            carry_bindings = (
+                node_unilab.get("carry_bindings")
+                if isinstance(node_unilab, Mapping)
+                else None
+            )
+            if isinstance(carry_bindings, Mapping) and carry_bindings:
+                planned_node["carry_bindings"] = {
+                    runtime_handle_ids[(node_uuid, str(handle_uuid))]: deepcopy(
+                        dict(binding)
+                    )
+                    for handle_uuid, binding in carry_bindings.items()
+                    if (node_uuid, str(handle_uuid)) in runtime_handle_ids
+                    and isinstance(binding, Mapping)
+                }
+            input_bindings = (
+                node_unilab.get("input_bindings")
+                if isinstance(node_unilab, Mapping)
+                else None
+            )
+            if isinstance(input_bindings, Mapping) and input_bindings:
+                planned_node["input_bindings"] = {
+                    runtime_handle_ids[(node_uuid, str(handle_uuid))]: deepcopy(
+                        dict(binding)
+                    )
+                    for handle_uuid, binding in input_bindings.items()
+                    if (node_uuid, str(handle_uuid)) in runtime_handle_ids
+                    and isinstance(binding, Mapping)
+                }
+            if kind in {"condition", "repeat_until"}:
                 planned_node["control_region"] = deepcopy(planned_param)
             if kind in {"device_action", "material_transfer"}:
                 planned_node.update(
@@ -299,17 +337,22 @@ class ExecutionPlanBuilder:
                     node_uuid
                 ]
             planned_nodes.append(planned_node)
-            jobs.append(
-                {
-                    "uuid": str(uuid4()),
-                    "workflow_node_uuid": node_uuid,
-                    "topological_index": index,
-                    "executor_kind": kind,
-                    "execution_policy": policy,
-                    "execution_timeout_seconds": 0,
-                    "param": planned_param,
-                }
-            )
+            if not self._has_repeat_ancestor(
+                node_uuid,
+                nodes=nodes,
+                kinds=kinds,
+            ):
+                jobs.append(
+                    {
+                        "uuid": str(uuid4()),
+                        "workflow_node_uuid": node_uuid,
+                        "topological_index": index,
+                        "executor_kind": kind,
+                        "execution_policy": policy,
+                        "execution_timeout_seconds": 0,
+                        "param": planned_param,
+                    }
+                )
         try:
             validate_static_device_tenancy_order(planned_nodes)
         except ExecutionResourcePolicyError as error:
@@ -317,7 +360,10 @@ class ExecutionPlanBuilder:
                 "static_resource_deadlock",
                 str(error),
             ) from error
-        has_control_regions = bool(control_edges)
+        has_repeat_regions = any(
+            kinds[node_uuid] == "repeat_until" for node_uuid in active
+        )
+        has_control_regions = bool(control_edges or repeat_edges)
         plan: dict[str, Any] = {
             "version": CONTROL_PLAN_VERSION if has_control_regions else PLAN_VERSION,
             "run_mode": run_mode,
@@ -327,9 +373,232 @@ class ExecutionPlanBuilder:
         }
         if has_control_regions:
             plan["capabilities"] = list(CONTROL_PLAN_CAPABILITIES)
+            if has_repeat_regions:
+                plan["capabilities"].append(DYNAMIC_ITERATION_CAPABILITY)
         if target_node_uuid is not None:
             plan["target_node_uuid"] = target_node_uuid
         return plan, jobs
+
+    @staticmethod
+    def _validate_control_nesting(
+        *,
+        nodes: Mapping[str, Mapping[str, Any]],
+        kinds: Mapping[str, str],
+    ) -> None:
+        """统一限制 condition/repeat_until 混合控制区域的最大深度。"""
+
+        control_kinds = {"condition", "repeat_until"}
+        for node_uuid, kind in kinds.items():
+            if kind not in control_kinds or nodes[node_uuid].get("disabled") is True:
+                continue
+            depth = 1
+            current = node_uuid
+            seen: set[str] = set()
+            while current not in seen:
+                seen.add(current)
+                parent = nodes.get(current, {}).get("parent_uuid")
+                if not isinstance(parent, str):
+                    break
+                if kinds.get(parent) in control_kinds:
+                    depth += 1
+                current = parent
+            else:
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "控制区域父子关系包含环"
+                )
+            if depth > 8:
+                raise ExecutionPlanBuildError(
+                    "control_nesting_too_deep", "控制区域嵌套深度不能超过 8"
+                )
+
+    @staticmethod
+    def _has_repeat_ancestor(
+        node_uuid: str,
+        *,
+        nodes: Mapping[str, Mapping[str, Any]],
+        kinds: Mapping[str, str],
+    ) -> bool:
+        """判断冻结节点是否属于任意 RepeatUntil 模板体。"""
+
+        current = node_uuid
+        seen: set[str] = set()
+        while current not in seen:
+            seen.add(current)
+            parent = nodes.get(current, {}).get("parent_uuid")
+            if not isinstance(parent, str):
+                return False
+            if kinds.get(parent) == "repeat_until":
+                return True
+            current = parent
+        raise ExecutionPlanBuildError("invalid_control_region", "控制区域父子关系包含环")
+
+    @staticmethod
+    def _repeat_control_edges(
+        *,
+        nodes: Mapping[str, Mapping[str, Any]],
+        kinds: Mapping[str, str],
+        active_node_uuids: set[str],
+    ) -> list[dict[str, Any]]:
+        """校验 RepeatUntil 冻结模板并投影无数据的区域边界依赖。"""
+
+        result: list[dict[str, Any]] = []
+        seen_pairs: set[tuple[str, str]] = set()
+        repeat_uuids = {
+            node_uuid
+            for node_uuid in active_node_uuids
+            if kinds.get(node_uuid) == "repeat_until"
+        }
+
+        def is_descendant(node_uuid: str, region_uuid: str) -> bool:
+            """只沿冻结 parent_uuid 证明循环模板成员关系。"""
+
+            current = node_uuid
+            seen: set[str] = set()
+            while current not in seen:
+                seen.add(current)
+                parent = nodes.get(current, {}).get("parent_uuid")
+                if parent == region_uuid:
+                    return True
+                if not isinstance(parent, str):
+                    return False
+                current = parent
+            raise ExecutionPlanBuildError(
+                "invalid_control_region", "循环区域父子关系包含环"
+            )
+
+        def add_edge(region_uuid: str, source_uuid: str, target_uuid: str, role: str) -> None:
+            """按区域身份与语义角色加入确定性的 dependency_only 边。"""
+
+            pair = (source_uuid, target_uuid)
+            if pair in seen_pairs:
+                return
+            seen_pairs.add(pair)
+            result.append(
+                {
+                    "uuid": str(uuid5(UUID(region_uuid), f"repeat-{role}:{source_uuid}:{target_uuid}")),
+                    "source_node_uuid": source_uuid,
+                    "target_node_uuid": target_uuid,
+                    "source_handle_uuid": "",
+                    "target_handle_uuid": "",
+                    "dependency_only": True,
+                }
+            )
+
+        for region_uuid in sorted(repeat_uuids):
+            node = nodes[region_uuid]
+            params = node.get("param")
+            if not isinstance(params, Mapping):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "RepeatUntil 参数必须是对象"
+                )
+            maximum = params.get("max_iterations")
+            initial_carry = params.get("initial_carry")
+            next_carry = params.get("next_carry")
+            until_expression = params.get("until")
+            bindings = params.get("bindings")
+            members = params.get("node_uuids")
+            entries = params.get("entry_node_uuids")
+            exits = params.get("exit_node_uuids")
+            if (
+                isinstance(maximum, bool)
+                or not isinstance(maximum, int)
+                or maximum < 1
+                or not isinstance(initial_carry, Mapping)
+                or not isinstance(next_carry, Mapping)
+                or set(initial_carry) != set(next_carry)
+                or not isinstance(until_expression, Mapping)
+                or not isinstance(bindings, Mapping)
+                or not isinstance(members, Sequence)
+                or isinstance(members, (str, bytes))
+                or not members
+                or not isinstance(entries, Sequence)
+                or isinstance(entries, (str, bytes))
+                or not entries
+                or not isinstance(exits, Sequence)
+                or isinstance(exits, (str, bytes))
+                or not exits
+            ):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "RepeatUntil 冻结合同无效"
+                )
+            member_uuids = {str(value) for value in members}
+            descendants = {
+                candidate_uuid
+                for candidate_uuid in active_node_uuids
+                if candidate_uuid != region_uuid
+                and is_descendant(candidate_uuid, region_uuid)
+            }
+            if (
+                len(member_uuids) != len(members)
+                or member_uuids != descendants
+                or not {str(value) for value in entries} <= member_uuids
+                or not {str(value) for value in exits} <= member_uuids
+            ):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "循环模板没有完整覆盖区域后代"
+                )
+            for binding in initial_carry.values():
+                if not isinstance(binding, Mapping):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "初始 carry 来源必须是对象"
+                    )
+                if binding.get("kind") == "node_result":
+                    source_uuid = str(binding.get("node_uuid") or "")
+                    if source_uuid not in active_node_uuids or source_uuid in member_uuids:
+                        raise ExecutionPlanBuildError(
+                            "invalid_control_region", "初始 carry 必须来自循环区域外"
+                        )
+                    add_edge(region_uuid, source_uuid, region_uuid, "initial-carry")
+            for binding in next_carry.values():
+                if not isinstance(binding, Mapping):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "下一轮 carry 来源必须是对象"
+                    )
+                if binding.get("kind") == "node_result" and str(
+                    binding.get("node_uuid") or ""
+                ) not in member_uuids:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "下一轮 carry 必须来自当前循环体"
+                    )
+            for binding in bindings.values():
+                if not isinstance(binding, Mapping):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "循环条件绑定必须是对象"
+                    )
+                if binding.get("kind") == "node_result" and str(
+                    binding.get("node_uuid") or ""
+                ) not in member_uuids:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "循环条件节点结果必须来自当前轮"
+                    )
+            predecessors = params.get("predecessor_node_uuids", [])
+            successors = params.get("successor_node_uuids", [])
+            if (
+                not isinstance(predecessors, Sequence)
+                or isinstance(predecessors, (str, bytes))
+                or not isinstance(successors, Sequence)
+                or isinstance(successors, (str, bytes))
+            ):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "循环区域前驱或后继必须是数组"
+                )
+            for source_value in predecessors:
+                source_uuid = str(source_value)
+                if source_uuid not in active_node_uuids or source_uuid in member_uuids:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "循环区域前驱引用计划外或区域内节点"
+                    )
+                add_edge(region_uuid, source_uuid, region_uuid, "predecessor")
+            for target_value in entries:
+                add_edge(region_uuid, region_uuid, str(target_value), "entry")
+            for target_value in successors:
+                target_uuid = str(target_value)
+                if target_uuid not in active_node_uuids or target_uuid in member_uuids:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "循环区域后继引用计划外或区域内节点"
+                    )
+                add_edge(region_uuid, region_uuid, target_uuid, "successor")
+        return result
 
     @staticmethod
     def _condition_control_edges(

@@ -2351,6 +2351,443 @@ class TaskRuntimeProjection:
             self._append_invalidation(connection, task_uuid=task_uuid, now=finished_at)
             return self._aggregate(connection, task_uuid)
 
+    def materialize_repeat_iteration(
+        self,
+        *,
+        control_job_uuid: str,
+        iteration_index: int,
+        control_path: str,
+        jobs: Sequence[Mapping[str, Any]],
+        max_task_jobs: int = 10_000,
+    ) -> dict[str, Any]:
+        """在一个事务中幂等创建 RepeatUntil 某轮的独立作业。"""
+
+        if isinstance(iteration_index, bool) or iteration_index < 0:
+            raise StoreConflict("循环轮次索引必须是非负整数")
+        if not control_path or not jobs:
+            raise StoreConflict("循环轮次必须声明控制路径和作业")
+        now = utc_now()
+        with self._store.transaction() as connection:
+            control_job = self._job_row(connection, control_job_uuid)
+            if str(control_job["executor_kind"]) != "repeat_until":
+                raise StoreConflict("循环控制作业类型非法")
+            task_uuid = str(control_job["workflow_task_uuid"])
+            task = self._task_row(connection, task_uuid)
+            if str(task["status"]) not in {"pending", "running"}:
+                raise StoreConflict("父任务状态不允许创建新循环轮次")
+            plan = _decode_json_field(task["execution_plan"], fallback={})
+            planned_nodes = {
+                str(node.get("uuid") or ""): node
+                for node in plan.get("nodes", [])
+                if isinstance(node, Mapping)
+            }
+            existing_count = connection.execute(
+                "SELECT COUNT(*) AS count FROM workflow_node_job "
+                "WHERE workflow_task_uuid = ? AND deleted_at IS NULL",
+                (task_uuid,),
+            ).fetchone()["count"]
+            new_count = 0
+            seen_templates: set[str] = set()
+            for item in jobs:
+                job_uuid = str(item.get("job_uuid") or "")
+                template_uuid = str(item.get("workflow_node_uuid") or "")
+                runtime_node_id = str(item.get("runtime_node_id") or "")
+                if (
+                    not job_uuid
+                    or not runtime_node_id
+                    or template_uuid in seen_templates
+                    or template_uuid not in planned_nodes
+                ):
+                    raise StoreConflict("循环轮次作业身份或模板无效")
+                seen_templates.add(template_uuid)
+                planned = planned_nodes[template_uuid]
+                executor_kind = str(item.get("executor_kind") or "")
+                if executor_kind != str(planned.get("kind") or ""):
+                    raise StoreConflict("循环轮次作业执行种类与冻结模板不一致")
+                idempotency = {
+                    "control_path": control_path,
+                    "iteration_index": iteration_index,
+                    "runtime_node_id": runtime_node_id,
+                }
+                duplicate = connection.execute(
+                    """
+                    SELECT * FROM workflow_node_job
+                    WHERE workflow_task_uuid = ? AND workflow_node_uuid = ?
+                      AND json_extract(meta_data, '$.unilab.control_path') = ?
+                      AND json_extract(meta_data, '$.unilab.iteration_index') = ?
+                      AND deleted_at IS NULL
+                    """,
+                    (task_uuid, template_uuid, control_path, iteration_index),
+                ).fetchone()
+                if duplicate is not None:
+                    duplicate_meta = _decode_json_field(
+                        duplicate["meta_data"], fallback={}
+                    )
+                    expected_control_data = {
+                        "control_path": control_path,
+                        "iteration_index": iteration_index,
+                        "runtime_node_id": runtime_node_id,
+                    }
+                    if (
+                        str(duplicate["uuid"]) != job_uuid
+                        or duplicate_meta.get("unilab") != idempotency
+                        or str(duplicate["executor_kind"]) != executor_kind
+                        or (duplicate["material_uuid"] or None)
+                        != (item.get("material_uuid") or None)
+                        or _decode_json_field(
+                            duplicate["execution_policy"], fallback={}
+                        )
+                        != dict(item.get("execution_policy") or {})
+                        or _decode_json_field(duplicate["param"], fallback={})
+                        != dict(item.get("param") or {})
+                        or _decode_json_field(
+                            duplicate["control_data"], fallback={}
+                        )
+                        != expected_control_data
+                    ):
+                        raise StoreConflict("循环轮次幂等键载荷冲突")
+                    continue
+                connection.execute(
+                    """
+                    INSERT INTO workflow_node_job(
+                        uuid, create_time, update_time, deleted_at, description,
+                        meta_data, workflow_task_uuid, workflow_node_uuid,
+                        material_uuid, feedback_sequence, topological_index,
+                        executor_kind, execution_policy,
+                        execution_timeout_seconds, status, attempt, param,
+                        feedback_data, return_info, control_data, error_info
+                    ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 0, ?, ?, ?,
+                              0, 'pending', 1, ?, '{}', '{}', ?, '[]')
+                    """,
+                    (
+                        job_uuid,
+                        now,
+                        now,
+                        _encode_json_field(
+                            {"unilab": idempotency}, field_name="meta_data"
+                        ),
+                        task_uuid,
+                        template_uuid,
+                        item.get("material_uuid"),
+                        int(planned.get("topological_index") or 0),
+                        executor_kind,
+                        _encode_json_field(
+                            item.get("execution_policy") or {},
+                            field_name="execution_policy",
+                        ),
+                        _encode_json_field(item.get("param") or {}, field_name="param"),
+                        _encode_json_field(
+                            {
+                                "control_path": control_path,
+                                "iteration_index": iteration_index,
+                                "runtime_node_id": runtime_node_id,
+                            },
+                            field_name="control_data",
+                        ),
+                    ),
+                )
+                new_count += 1
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=job_uuid,
+                    kind="job_transition",
+                    from_status=None,
+                    to_status="pending",
+                    now=now,
+                )
+                job_row = self._job_row(connection, job_uuid)
+                append_job_state_event(
+                    connection,
+                    job_row=job_row,
+                    status="pending",
+                    details={
+                        "control_path": control_path,
+                        "iteration_index": iteration_index,
+                    },
+                )
+            if int(existing_count) + new_count > max_task_jobs:
+                raise StoreConflict("workflow_job_budget_exceeded")
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
+            return self._aggregate(connection, task_uuid)
+
+    def project_repeat_evaluation(
+        self,
+        *,
+        control_job_uuid: str,
+        iteration_index: int,
+        condition_result: bool | None,
+        carry: Mapping[str, Any],
+        next_carry: Mapping[str, Any] | None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        skipped_job_uuids: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """持久提交一轮退出判断；仅退出或失败时结算循环控制作业。"""
+
+        if (
+            isinstance(iteration_index, bool)
+            or not isinstance(iteration_index, int)
+            or iteration_index < 0
+        ):
+            raise StoreConflict("循环轮次索引必须是非负整数")
+        if condition_result is not None and type(condition_result) is not bool:
+            raise StoreConflict("循环退出条件必须是严格布尔值")
+        normalized_error = str(error_code or "").strip() or None
+        now = utc_now()
+        with self._store.transaction() as connection:
+            control_job = self._job_row(connection, control_job_uuid)
+            if str(control_job["executor_kind"]) != "repeat_until":
+                raise StoreConflict("循环控制作业类型非法")
+            task_uuid = str(control_job["workflow_task_uuid"])
+            if not normalized_error:
+                task = self._task_row(connection, task_uuid)
+                plan = _decode_json_field(task["execution_plan"], fallback={})
+                planned_nodes = {
+                    str(item.get("uuid") or ""): item
+                    for item in plan.get("nodes", [])
+                    if isinstance(item, Mapping)
+                }
+                control_template_uuid = str(control_job["workflow_node_uuid"])
+
+                def nearest_repeat_owner(node_uuid: str) -> str | None:
+                    seen: set[str] = set()
+                    current = node_uuid
+                    while current not in seen:
+                        seen.add(current)
+                        parent = planned_nodes.get(current, {}).get("parent_uuid")
+                        if not isinstance(parent, str):
+                            return None
+                        parent_node = planned_nodes.get(parent, {})
+                        if str(parent_node.get("kind") or "") == "repeat_until":
+                            return parent
+                        current = parent
+                    raise StoreConflict("循环计划父子关系包含环")
+
+                expected_templates = {
+                    node_uuid
+                    for node_uuid in planned_nodes
+                    if nearest_repeat_owner(node_uuid) == control_template_uuid
+                    and str(planned_nodes[node_uuid].get("kind") or "")
+                    not in {
+                        "group",
+                        "material_source",
+                        "workflow",
+                        "workflow_input",
+                        "workflow_output",
+                    }
+                }
+                control_meta = _decode_json_field(
+                    control_job["meta_data"], fallback={}
+                )
+                unilab_meta = (
+                    control_meta.get("unilab")
+                    if isinstance(control_meta, Mapping)
+                    else None
+                )
+                control_path = (
+                    str(unilab_meta.get("runtime_node_id") or "")
+                    if isinstance(unilab_meta, Mapping)
+                    else ""
+                ) or control_template_uuid
+                iteration_rows = connection.execute(
+                    """
+                    SELECT * FROM workflow_node_job
+                    WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+                      AND json_extract(meta_data, '$.unilab.control_path') = ?
+                      AND json_extract(meta_data, '$.unilab.iteration_index') = ?
+                    """,
+                    (task_uuid, control_path, iteration_index),
+                ).fetchall()
+                if {
+                    str(row["workflow_node_uuid"]) for row in iteration_rows
+                } != expected_templates or any(
+                    str(row["status"]) not in {"succeeded", "skipped"}
+                    for row in iteration_rows
+                ):
+                    raise StoreConflict("循环轮次尚未完整成功结算")
+            existing_control_data = _decode_json_field(
+                control_job["control_data"], fallback={}
+            )
+            control_data = {
+                **(
+                    {
+                        key: existing_control_data[key]
+                        for key in ("control_path", "runtime_node_id")
+                        if key in existing_control_data
+                    }
+                    if isinstance(existing_control_data, Mapping)
+                    else {}
+                ),
+                "iteration_index": iteration_index,
+                "condition_result": condition_result,
+                "carry": dict(carry),
+                "next_carry": dict(next_carry or {}),
+            }
+            existing_iteration = (
+                existing_control_data.get("iteration_index")
+                if isinstance(existing_control_data, Mapping)
+                else None
+            )
+            if (
+                isinstance(existing_iteration, int)
+                and not isinstance(existing_iteration, bool)
+                and existing_iteration > iteration_index
+            ):
+                raise StoreConflict("循环决定不能回退到旧轮次")
+            if existing_iteration == iteration_index and dict(
+                existing_control_data
+            ) != control_data:
+                raise StoreConflict("同一循环轮次决定载荷冲突")
+            if normalized_error or condition_result is True:
+                self._project_local_job_terminal(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_row=control_job,
+                    target_status="failed" if normalized_error else "succeeded",
+                    return_info=(
+                        {}
+                        if normalized_error
+                        else {
+                            "iteration_index": iteration_index,
+                            "carry": dict(carry),
+                        }
+                    ),
+                    error_info=(
+                        [
+                            {
+                                "code": normalized_error,
+                                "message": str(error_message or "循环控制失败"),
+                            }
+                        ]
+                        if normalized_error
+                        else []
+                    ),
+                    now=now,
+                    require_condition=False,
+                )
+                connection.execute(
+                    "UPDATE workflow_node_job SET control_data = ? WHERE uuid = ?",
+                    (
+                        _encode_json_field(control_data, field_name="control_data"),
+                        control_job_uuid,
+                    ),
+                )
+                if normalized_error:
+                    for skipped_uuid in dict.fromkeys(
+                        str(value) for value in skipped_job_uuids
+                    ):
+                        skipped_job = self._job_row(connection, skipped_uuid)
+                        if str(skipped_job["workflow_task_uuid"]) != task_uuid:
+                            raise StoreConflict("循环节点不能跳过其他任务的作业")
+                        self._project_local_job_terminal(
+                            connection,
+                            task_uuid=task_uuid,
+                            job_row=skipped_job,
+                            target_status="skipped",
+                            return_info={},
+                            error_info=[{"code": normalized_error}],
+                            now=now,
+                            require_condition=False,
+                        )
+                    task_row = self._task_row(connection, task_uuid)
+                    current_task_status = str(task_row["status"])
+                    if current_task_status in {"pending", "running"}:
+                        changed = connection.execute(
+                            """
+                            UPDATE workflow_task
+                            SET status = 'failed', finished_at = ?, update_time = ?
+                            WHERE uuid = ? AND status IN ('pending', 'running')
+                              AND deleted_at IS NULL
+                            """,
+                            (now, now, task_uuid),
+                        ).rowcount
+                        if changed != 1:
+                            raise StoreConflict(
+                                f"循环控制任务失败终态发生并发变化：{task_uuid}"
+                            )
+                        append_runtime_event(
+                            connection,
+                            task_uuid=task_uuid,
+                            kind="task_transition",
+                            from_status=current_task_status,
+                            to_status="failed",
+                            now=now,
+                        )
+                        append_task_state_event(
+                            connection,
+                            task_uuid=task_uuid,
+                            status="failed",
+                            details={"finished_at": now},
+                        )
+                    elif current_task_status != "failed":
+                        raise StoreConflict(
+                            f"父任务状态不接受循环失败：{task_uuid}"
+                        )
+                else:
+                    self._project_ready_output(
+                        connection,
+                        task_uuid=task_uuid,
+                        now=now,
+                    )
+                    statuses = [
+                        str(row["status"])
+                        for row in self._job_rows(connection, task_uuid)
+                    ]
+                    task_row = self._task_row(connection, task_uuid)
+                    if (
+                        statuses
+                        and all(
+                            status in {"succeeded", "skipped"}
+                            for status in statuses
+                        )
+                        and str(task_row["status"]) in {"pending", "running"}
+                    ):
+                        changed = connection.execute(
+                            """
+                            UPDATE workflow_task
+                            SET status = 'succeeded', finished_at = ?, update_time = ?
+                            WHERE uuid = ? AND status IN ('pending', 'running')
+                              AND deleted_at IS NULL
+                            """,
+                            (now, now, task_uuid),
+                        ).rowcount
+                        if changed != 1:
+                            raise StoreConflict(
+                                f"循环控制任务终态发生并发变化：{task_uuid}"
+                            )
+                        append_runtime_event(
+                            connection,
+                            task_uuid=task_uuid,
+                            kind="task_transition",
+                            from_status=str(task_row["status"]),
+                            to_status="succeeded",
+                            now=now,
+                        )
+                        append_task_state_event(
+                            connection,
+                            task_uuid=task_uuid,
+                            status="succeeded",
+                            details={"finished_at": now},
+                        )
+            else:
+                if condition_result is not False or not isinstance(next_carry, Mapping):
+                    raise StoreConflict("继续循环必须提交下一版 carry")
+                connection.execute(
+                    """
+                    UPDATE workflow_node_job
+                    SET control_data = ?, update_time = ?
+                    WHERE uuid = ? AND status = 'pending'
+                    """,
+                    (
+                        _encode_json_field(control_data, field_name="control_data"),
+                        now,
+                        control_job_uuid,
+                    ),
+                )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
+            return self._aggregate(connection, task_uuid)
+
     @staticmethod
     def _project_local_job_terminal(
         connection: sqlite3.Connection,

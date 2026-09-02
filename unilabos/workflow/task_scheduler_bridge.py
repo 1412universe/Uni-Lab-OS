@@ -970,6 +970,16 @@ class TaskSchedulerBridge:
 
         task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
         jobs = self._store.list_jobs(task_uuid)
+        if task.get("status") in {"running", "canceling"}:
+            aggregate = self._projection.project_execution_process_restarted(task_uuid)
+            if aggregate is None:
+                raise TaskSchedulerBridgeError("运行中任务未能提交进程重启失败事实")
+            self._mark_inventory_claims_uncertain(aggregate)
+            logger.error(
+                "工作流任务 %s 因工站调度进程重启整体失败，未开始节点不再推进",
+                task_uuid,
+            )
+            return aggregate
         # pending 人工确认尚未下发物理动作：重启后保留原 Job、Claim、Fence
         # 和截止时间恢复等待，禁止释放后重新仲裁或生成新的派发凭据。
         pending_manual_jobs: list[dict[str, Any]] = []
@@ -990,16 +1000,6 @@ class TaskSchedulerBridge:
             self._required_text(job.get("uuid"), field="job.uuid")
             for job in pending_manual_jobs
         }
-        if task.get("status") in {"running", "canceling"} and not pending_manual_jobs:
-            aggregate = self._projection.project_execution_process_restarted(task_uuid)
-            if aggregate is None:
-                raise TaskSchedulerBridgeError("运行中任务未能提交进程重启失败事实")
-            self._mark_inventory_claims_uncertain(aggregate)
-            logger.error(
-                "工作流任务 %s 因工站调度进程重启整体失败，未开始节点不再推进",
-                task_uuid,
-            )
-            return aggregate
         interrupted_jobs = [
             job
             for job in jobs
@@ -2031,12 +2031,112 @@ class TaskSchedulerBridge:
             idempotency_key=sample.get("idempotency_key"),
         )
 
-    def _on_local_control_evaluated(self, event: Mapping[str, Any]) -> None:
+    def _on_local_control_evaluated(
+        self, event: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
         """把条件选择与未选分支作为无物理副作用的标准作业事实落盘。"""
 
         job_uuid = self._required_text(event.get("job_id"), field="control.job_id")
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
+            return
+        if event.get("control_type") == "repeat_until":
+            phase = str(event.get("phase") or "")
+            iteration_index = event.get("iteration_index")
+            if isinstance(iteration_index, bool) or not isinstance(
+                iteration_index, int
+            ):
+                raise TaskSchedulerBridgeError("循环控制缺少合法轮次索引")
+            if phase == "materialize":
+                raw_jobs = event.get("iteration_jobs")
+                if not isinstance(raw_jobs, list) or any(
+                    not isinstance(item, Mapping) for item in raw_jobs
+                ):
+                    raise TaskSchedulerBridgeError("循环轮次作业结构非法")
+                try:
+                    self._projection.materialize_repeat_iteration(
+                        control_job_uuid=job_uuid,
+                        iteration_index=iteration_index,
+                        control_path=self._required_text(
+                            event.get("node_id"), field="control.node_id"
+                        ),
+                        jobs=raw_jobs,
+                    )
+                except StoreConflict as error:
+                    # 物化必须先于内存轮次提交。失败时把同一个可变事件改写为
+                    # 循环失败决定，使调度器在监听器返回后立即收敛而不派发幽灵
+                    # 作业；持久层与内存层共享同一个稳定错误码。
+                    if not isinstance(event, dict):
+                        raise
+                    error_code = (
+                        "workflow_job_budget_exceeded"
+                        if str(error) == "workflow_job_budget_exceeded"
+                        else "repeat_iteration_materialization_failed"
+                    )
+                    self._projection.project_repeat_evaluation(
+                        control_job_uuid=job_uuid,
+                        iteration_index=iteration_index,
+                        condition_result=None,
+                        carry=(
+                            event.get("carry")
+                            if isinstance(event.get("carry"), Mapping)
+                            else {}
+                        ),
+                        next_carry=None,
+                        error_code=error_code,
+                        error_message=str(error),
+                    )
+                    event["phase"] = "evaluate"
+                    event["condition_result"] = None
+                    event["next_carry"] = None
+                    event["error"] = error_code
+                    event["message"] = str(error)
+                    event.pop("iteration_jobs", None)
+                    self._task_by_job.pop(job_uuid, None)
+                    return event
+                for item in raw_jobs:
+                    iteration_job_uuid = self._required_text(
+                        item.get("job_uuid"), field="control.iteration_jobs[].job_uuid"
+                    )
+                    self._task_by_job[iteration_job_uuid] = task_uuid
+                return
+            if phase != "evaluate":
+                raise TaskSchedulerBridgeError("循环控制阶段非法")
+            carry = event.get("carry")
+            next_carry = event.get("next_carry")
+            if not isinstance(carry, Mapping) or (
+                next_carry is not None and not isinstance(next_carry, Mapping)
+            ):
+                raise TaskSchedulerBridgeError("循环控制 carry 结构非法")
+            raw_skipped_jobs = event.get("skipped_jobs", [])
+            if not isinstance(raw_skipped_jobs, list) or any(
+                not isinstance(item, Mapping) for item in raw_skipped_jobs
+            ):
+                raise TaskSchedulerBridgeError("循环结算 skipped_jobs 结构非法")
+            self._projection.project_repeat_evaluation(
+                control_job_uuid=job_uuid,
+                iteration_index=iteration_index,
+                condition_result=(
+                    event.get("condition_result")
+                    if type(event.get("condition_result")) is bool
+                    else None
+                ),
+                carry=carry,
+                next_carry=next_carry,
+                error_code=(str(event["error"]) if event.get("error") else None),
+                error_message=(
+                    str(event["message"]) if event.get("message") else None
+                ),
+                skipped_job_uuids=[
+                    self._required_text(
+                        item.get("job_id"),
+                        field="control.skipped_jobs[].job_id",
+                    )
+                    for item in raw_skipped_jobs
+                ],
+            )
+            if event.get("error") or event.get("condition_result") is True:
+                self._task_by_job.pop(job_uuid, None)
             return
         skipped_jobs = event.get("skipped_jobs")
         if not isinstance(skipped_jobs, list):

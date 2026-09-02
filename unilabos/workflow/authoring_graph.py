@@ -16,6 +16,7 @@ from unilabos.workflow.authoring_ast import (
     ConditionDeclaration,
     DeviceDeclaration,
     GroupDeclaration,
+    RepeatUntilDeclaration,
     WorkflowProgram,
 )
 from unilabos.workflow.authoring_graph_semantics import (
@@ -103,6 +104,9 @@ def build_candidate_graph(
     )
     compatible_catalog_replacements: set[str] = set()
     disabled_node_uuids = set(program.disabled_node_uuids)
+    declarations_by_result = {
+        declaration.result_name: declaration for declaration in program.actions
+    }
     for declaration in program.conditions:
         try:
             condition_catalog = catalog.require_action(
@@ -128,6 +132,37 @@ def build_candidate_graph(
                 ],
             )
         )
+    for declaration in program.repeats:
+        try:
+            repeat_catalog = catalog.require_action(
+                "unilabos.workflow.authoring:repeat_until",
+                "repeat_until",
+            )
+        except AuthoringCatalogError as error:
+            raise AuthoringGraphError(
+                "template_catalog_mismatch",
+                "工作流创作目录缺少唯一 RepeatUntil 区域模板",
+            ) from error
+        action_catalog[declaration.node_uuid] = repeat_catalog
+        nodes.append(
+            _repeat_until_node(
+                declaration=declaration,
+                catalog_action=repeat_catalog,
+                parent_uuid=parent_by_node.get(declaration.node_uuid),
+                source_order=source_order[declaration.node_uuid],
+                predecessor_node_uuids=[
+                    source_uuid
+                    for source_uuid, target_uuid in program.order_dependencies
+                    if target_uuid == declaration.node_uuid
+                ],
+                successor_node_uuids=[
+                    target_uuid
+                    for source_uuid, target_uuid in program.order_dependencies
+                    if source_uuid == declaration.node_uuid
+                ],
+                declarations_by_result=declarations_by_result,
+            )
+        )
     for declaration in program.groups:
         try:
             group_catalog = catalog.require_action(
@@ -144,6 +179,7 @@ def build_candidate_graph(
             _group_node(
                 declaration=declaration,
                 catalog_action=group_catalog,
+                parent_uuid=parent_by_node.get(declaration.node_uuid),
                 source_order=source_order[declaration.node_uuid],
             )
         )
@@ -320,6 +356,12 @@ def build_candidate_graph(
         if target_node_uuid in {item.node_uuid for item in program.conditions}:
             # 条件没有数据 Handle；顺序前驱冻结在区域参数中，由执行计划投影为
             # dependency_only 边，避免伪造动作连接点。
+            continue
+        if target_node_uuid in {item.node_uuid for item in program.repeats}:
+            # RepeatUntil 与条件区域一样没有动作 Handle；前驱保存在控制区域参数。
+            continue
+        if source_node_uuid in {item.node_uuid for item in program.repeats}:
+            # 循环区域的出口依赖同样由区域参数投影，不能伪造动作 Handle。
             continue
         source_handle = _require_handle(
             action_catalog[source_node_uuid],
@@ -865,6 +907,7 @@ def _composite_invocation_node(
     action = catalog.require_template(str(node["workflow_node_template_uuid"]))
     params: dict[str, Any] = {}
     input_bindings: dict[str, dict[str, str]] = {}
+    carry_bindings: dict[str, dict[str, str]] = {}
     resource_refs: dict[str, dict[str, str]] = {}
     for name, binding in declaration.arguments:
         handle = _require_handle(action, key=name, io_type="target")
@@ -873,6 +916,15 @@ def _composite_invocation_node(
             params[name] = deepcopy(binding.value)
         elif binding.kind == "workflow_input":
             input_bindings[handle_uuid] = {"parameter": str(binding.value)}
+        elif binding.kind == "loop_carry":
+            if not isinstance(binding.value, Mapping):
+                raise AuthoringGraphError(
+                    "invalid_loop_carry", "循环 carry 绑定必须是对象"
+                )
+            carry_bindings[handle_uuid] = {
+                "control_region_uuid": str(binding.value.get("control_region_uuid")),
+                "key": str(binding.value.get("key")),
+            }
         elif binding.kind == "resource_ref":
             resolved_reference = resolved_resource_references.get(name)
             if not isinstance(resolved_reference, Mapping):
@@ -908,6 +960,8 @@ def _composite_invocation_node(
     )
     if resource_refs:
         unilab["resource_refs"] = dict(sorted(resource_refs.items()))
+    if carry_bindings:
+        unilab["carry_bindings"] = dict(sorted(carry_bindings.items()))
     return node
 
 
@@ -938,6 +992,7 @@ def _group_node(
     *,
     declaration: GroupDeclaration,
     catalog_action: AuthoringCatalogAction,
+    parent_uuid: str | None,
     source_order: int,
 ) -> dict[str, Any]:
     """构造一个不参与执行边的展示分组节点（Presentation Group Node）。
@@ -954,7 +1009,7 @@ def _group_node(
     return {
         "uuid": declaration.node_uuid,
         "workflow_node_template_uuid": str(template["uuid"]),
-        "parent_uuid": None,
+        "parent_uuid": parent_uuid,
         "material_uuid": None,
         "name": declaration.title or declaration.name,
         "type": "group",
@@ -1041,6 +1096,99 @@ def _condition_node(
     }
 
 
+def _repeat_until_node(
+    *,
+    declaration: RepeatUntilDeclaration,
+    catalog_action: AuthoringCatalogAction,
+    parent_uuid: str | None,
+    source_order: int,
+    predecessor_node_uuids: list[str],
+    successor_node_uuids: list[str],
+    declarations_by_result: Mapping[
+        str, ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration
+    ],
+) -> dict[str, Any]:
+    """构造冻结模板、显式 carry/next 与退出表达式的循环控制节点。"""
+
+    template = catalog_action.template
+
+    def serialize_binding(binding: Any) -> dict[str, Any]:
+        """把作者值绑定转换为运行时可解析的冻结来源。"""
+
+        if binding.kind == "literal":
+            return {"kind": "literal", "value": deepcopy(binding.value)}
+        if binding.kind == "workflow_input":
+            return {"kind": "workflow_input", "parameter": str(binding.value)}
+        if binding.kind == "node_output":
+            source = declarations_by_result.get(str(binding.result_name or ""))
+            if source is None:
+                raise AuthoringGraphError(
+                    "invalid_loop_carry", "循环 carry 引用了未知节点结果"
+                )
+            return {
+                "kind": "node_result",
+                "node_uuid": source.node_uuid,
+                "result_path": [str(binding.value)],
+            }
+        if binding.kind == "loop_carry" and isinstance(binding.value, Mapping):
+            return {
+                "kind": "loop_carry",
+                "control_region_uuid": str(binding.value.get("control_region_uuid")),
+                "key": str(binding.value.get("key")),
+            }
+        raise AuthoringGraphError("invalid_loop_carry", "循环 carry 来源不受支持")
+
+    return {
+        "uuid": declaration.node_uuid,
+        "workflow_node_template_uuid": str(template["uuid"]),
+        "parent_uuid": parent_uuid,
+        "material_uuid": None,
+        "name": declaration.title or template.get("display_name") or "重复直到",
+        "type": "repeat_until",
+        "icon": template.get("icon"),
+        "pose": {},
+        "param": {
+            "predecessor_node_uuids": list(dict.fromkeys(predecessor_node_uuids)),
+            "successor_node_uuids": list(dict.fromkeys(successor_node_uuids)),
+            "loop_variable": declaration.loop_variable,
+            "max_iterations": declaration.max_iterations,
+            "initial_carry": {
+                name: serialize_binding(binding)
+                for name, binding in declaration.initial_carry
+            },
+            "next_carry": {
+                name: serialize_binding(binding)
+                for name, binding in declaration.next_carry
+            },
+            "until": deepcopy(declaration.until_condition),
+            "bindings": {
+                name: deepcopy(binding) for name, binding in declaration.bindings
+            },
+            "node_uuids": list(declaration.node_uuids),
+            "entry_node_uuids": list(declaration.entry_node_uuids),
+            "exit_node_uuids": list(declaration.exit_node_uuids),
+        },
+        "footer": template.get("footer"),
+        "action_name": None,
+        "action_type": None,
+        "execution_policy": {},
+        "disabled": False,
+        "minimized": False,
+        "script": None,
+        "description": (
+            declaration.description
+            if declaration.description is not None
+            else template.get("description")
+        ),
+        "meta_data": {
+            "unilab": {
+                "authoring_source_order": source_order,
+                "control_region_kind": "repeat_until",
+            }
+        },
+    }
+
+
 def _apply_authoring_structure(
     node: dict[str, Any],
     *,
@@ -1086,6 +1234,7 @@ def _candidate_node(
 
     params: dict[str, Any] = {}
     input_bindings: dict[str, dict[str, str]] = {}
+    carry_bindings: dict[str, dict[str, str]] = {}
     # ``resource_refs`` 仅保留规范源码往返需要的部署业务 ID，键使用真实目标
     # 连接点（Handle）UUID；实际物料身份单独进入 ``params``。
     resource_refs: dict[str, dict[str, str]] = {}
@@ -1100,6 +1249,15 @@ def _candidate_node(
             params[argument_name] = deepcopy(binding.value)
         elif binding.kind == "workflow_input":
             input_bindings[handle_uuid] = {"parameter": str(binding.value)}
+        elif binding.kind == "loop_carry":
+            if not isinstance(binding.value, Mapping):
+                raise AuthoringGraphError(
+                    "invalid_loop_carry", "循环 carry 绑定必须是对象"
+                )
+            carry_bindings[handle_uuid] = {
+                "control_region_uuid": str(binding.value.get("control_region_uuid")),
+                "key": str(binding.value.get("key")),
+            }
         elif binding.kind == "resource_ref":
             try:
                 # ``resolved_reference`` 是库存权威证明的实际物料与模板身份。
@@ -1126,6 +1284,8 @@ def _candidate_node(
     }
     if resource_refs:
         unilab["resource_refs"] = dict(sorted(resource_refs.items()))
+    if carry_bindings:
+        unilab["carry_bindings"] = dict(sorted(carry_bindings.items()))
     template = catalog_action.template
     if device.device_id is not None:
         unilab["executor_binding"] = {

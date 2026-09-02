@@ -185,11 +185,18 @@ def render_authoring_python(
         for node in ordered_nodes
         if _is_condition(catalog_by_node[str(node["uuid"])])
     ]
+    repeat_nodes = [
+        node
+        for node in ordered_nodes
+        if _is_repeat_until(catalog_by_node[str(node["uuid"])])
+    ]
     marker_imports = "device, workflow"
     if group_nodes:
         marker_imports += ", group"
         if any(_parallel_scope(node) is not None for node in group_nodes):
             marker_imports += ", parallel"
+    if repeat_nodes:
+        marker_imports += ", repeat_until, until"
     if material_sources:
         marker_imports += (
             ", MaterialCustodyPolicy, MaterialFlowRole, material_source, resource_ref"
@@ -318,6 +325,24 @@ def render_authoring_python(
                 for child in condition_nodes
                 if child.get("parent_uuid") == node_uuid
             )
+            rendered_node_uuids.update(
+                str(child["uuid"]) for child in children_by_parent[node_uuid]
+            )
+            continue
+        if _is_repeat_until(action):
+            _append_repeat_until_source(
+                node=node,
+                indent_level=1,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=node_by_uuid,
+                catalog_by_node=catalog_by_node,
+                device_symbols=device_symbols,
+            )
+            rendered_node_uuids.add(node_uuid)
             rendered_node_uuids.update(
                 str(child["uuid"]) for child in children_by_parent[node_uuid]
             )
@@ -554,7 +579,7 @@ def _append_action_source(
 
     node_uuid = str(node["uuid"])
     action = catalog_by_node[node_uuid]
-    if _is_group(action) or _is_condition(action):
+    if _is_group(action) or _is_condition(action) or _is_repeat_until(action):
         raise AuthoringGraphError("candidate_invalid", "控制或展示节点不能作为动作生成")
     indent = "    " * indent_level
     start_line = len(lines) + 1
@@ -651,9 +676,15 @@ def _append_condition_source(
         label = branch.get("label")
         condition = branch.get("condition")
         if index == 0 and label == "if" and isinstance(condition, Mapping):
-            header = f"if {_render_condition_expression(condition)}:"
+            header = (
+                "if "
+                f"{_render_condition_expression(condition, node_by_uuid=node_by_uuid)}:"
+            )
         elif label == f"elif{index - 1}" and isinstance(condition, Mapping):
-            header = f"elif {_render_condition_expression(condition)}:"
+            header = (
+                "elif "
+                f"{_render_condition_expression(condition, node_by_uuid=node_by_uuid)}:"
+            )
         elif index == len(branches) - 1 and label == "else" and condition is None:
             header = "else:"
         else:
@@ -687,6 +718,19 @@ def _append_condition_source(
                     catalog_by_node=catalog_by_node,
                     device_symbols=device_symbols,
                 )
+            elif _is_repeat_until(child_action):
+                _append_repeat_until_source(
+                    node=child,
+                    indent_level=indent_level + 1,
+                    lines=lines,
+                    source_map=source_map,
+                    result_names=result_names,
+                    material_sources=material_sources,
+                    incoming=incoming,
+                    node_by_uuid=node_by_uuid,
+                    catalog_by_node=catalog_by_node,
+                    device_symbols=device_symbols,
+                )
             else:
                 _append_action_source(
                     node=child,
@@ -702,24 +746,264 @@ def _append_condition_source(
                 )
 
 
-def _render_condition_expression(value: Mapping[str, Any]) -> str:
+def _append_repeat_until_source(
+    *,
+    node: Mapping[str, Any],
+    indent_level: int,
+    lines: list[str],
+    source_map: list[dict[str, Any]],
+    result_names: set[str],
+    material_sources: Mapping[str, RenderedMaterialSource],
+    incoming: Mapping[tuple[str, str], tuple[str, str]],
+    node_by_uuid: Mapping[str, dict[str, Any]],
+    catalog_by_node: Mapping[str, AuthoringCatalogAction],
+    device_symbols: Mapping[tuple[str, str | None], str],
+) -> None:
+    """把冻结 RepeatUntil 区域确定性写回 carry/next Python 语法。"""
+
+    node_uuid = str(node["uuid"])
+    action = catalog_by_node[node_uuid]
+    params = node.get("param")
+    if not isinstance(params, Mapping):
+        raise AuthoringGraphError("candidate_invalid", "RepeatUntil 参数必须是对象")
+    loop_variable = params.get("loop_variable")
+    maximum = params.get("max_iterations")
+    initial_carry = params.get("initial_carry")
+    next_carry = params.get("next_carry")
+    until_expression = params.get("until")
+    member_values = params.get("node_uuids")
+    if (
+        not isinstance(loop_variable, str)
+        or _safe_identifier(loop_variable, fallback="invalid") != loop_variable
+        or isinstance(maximum, bool)
+        or not isinstance(maximum, int)
+        or maximum < 1
+        or not isinstance(initial_carry, Mapping)
+        or not isinstance(next_carry, Mapping)
+        or set(initial_carry) != set(next_carry)
+        or not isinstance(until_expression, Mapping)
+        or not isinstance(member_values, list)
+        or not member_values
+    ):
+        raise AuthoringGraphError("candidate_invalid", "RepeatUntil 冻结合同无效")
+    indent = "    " * indent_level
+    child_indent = "    " * (indent_level + 1)
+    start_line = len(lines) + 1
+    metadata_comment = _node_metadata_comment(node=node, action=action)
+    if metadata_comment is not None:
+        lines.append(f"{indent}{metadata_comment}")
+    lines.append(f"{indent}{_node_anchor(node_uuid, node)}")
+    lines.append(f"{indent}with repeat_until(")
+    lines.append(f"{indent}    max_iterations={maximum},")
+    carry_parts = [
+        f"{json.dumps(str(name), ensure_ascii=False)}: "
+        f"{_render_repeat_binding(binding, node_by_uuid=node_by_uuid)}"
+        for name, binding in initial_carry.items()
+    ]
+    lines.append(f"{indent}    carry={{{', '.join(carry_parts)}}},")
+    lines.append(f"{indent}) as {loop_variable}:")
+    source_map.append(
+        CandidateSourceMapEntry(
+            workflow_node_uuid=node_uuid,
+            start_line=start_line,
+            start_column=len(indent) + 1,
+            end_line=len(lines),
+            end_column=utf16_length(lines[-1]) + 1,
+        ).model_dump()
+    )
+    rendered_parallel_scopes: set[str] = set()
+    for child_uuid_value in member_values:
+        child_uuid = str(child_uuid_value)
+        child = node_by_uuid.get(child_uuid)
+        child_action = catalog_by_node.get(child_uuid)
+        if child is not None and child.get("parent_uuid") != node_uuid:
+            continue
+        if child is None or child_action is None:
+            raise AuthoringGraphError(
+                "candidate_invalid", "RepeatUntil 只能包含动作或嵌套控制区域"
+            )
+        if _is_group(child_action):
+            scope = _parallel_scope(child)
+            if scope is None or scope in rendered_parallel_scopes:
+                if scope is not None:
+                    continue
+                group_nodes = [child]
+                group_indent = indent_level + 1
+                action_indent = indent_level + 2
+            else:
+                rendered_parallel_scopes.add(scope)
+                lines.append(f"{child_indent}with parallel():")
+                group_nodes = sorted(
+                    (
+                        candidate
+                        for candidate in node_by_uuid.values()
+                        if candidate.get("parent_uuid") == node_uuid
+                        and _parallel_scope(candidate) == scope
+                    ),
+                    key=_parallel_order,
+                )
+                group_indent = indent_level + 2
+                action_indent = indent_level + 3
+            for group_node in group_nodes:
+                group_uuid = str(group_node["uuid"])
+                _append_group_source(
+                    node=group_node,
+                    indent_level=group_indent,
+                    lines=lines,
+                    source_map=source_map,
+                    action=catalog_by_node[group_uuid],
+                )
+                for grouped_child in node_by_uuid.values():
+                    if grouped_child.get("parent_uuid") != group_uuid:
+                        continue
+                    grouped_action = catalog_by_node.get(str(grouped_child["uuid"]))
+                    if grouped_action is None or (
+                        _is_group(grouped_action)
+                        or _is_condition(grouped_action)
+                        or _is_repeat_until(grouped_action)
+                    ):
+                        raise AuthoringGraphError(
+                            "candidate_invalid",
+                            "并行分组内只能包含动作节点",
+                        )
+                    _append_action_source(
+                        node=grouped_child,
+                        indent_level=action_indent,
+                        lines=lines,
+                        source_map=source_map,
+                        result_names=result_names,
+                        material_sources=material_sources,
+                        incoming=incoming,
+                        node_by_uuid=node_by_uuid,
+                        catalog_by_node=catalog_by_node,
+                        device_symbols=device_symbols,
+                    )
+        elif _is_condition(child_action):
+            _append_condition_source(
+                node=child,
+                indent_level=indent_level + 1,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=node_by_uuid,
+                catalog_by_node=catalog_by_node,
+                device_symbols=device_symbols,
+            )
+        elif _is_repeat_until(child_action):
+            _append_repeat_until_source(
+                node=child,
+                indent_level=indent_level + 1,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=node_by_uuid,
+                catalog_by_node=catalog_by_node,
+                device_symbols=device_symbols,
+            )
+        else:
+            _append_action_source(
+                node=child,
+                indent_level=indent_level + 1,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=node_by_uuid,
+                catalog_by_node=catalog_by_node,
+                device_symbols=device_symbols,
+            )
+    next_parts = [
+        f"{name}={_render_repeat_binding(binding, node_by_uuid=node_by_uuid)}"
+        for name, binding in next_carry.items()
+    ]
+    lines.append(f"{child_indent}{loop_variable}.next({', '.join(next_parts)})")
+    lines.append(
+        f"{child_indent}until("
+        f"{_render_condition_expression(until_expression, node_by_uuid=node_by_uuid)})"
+    )
+
+
+def _render_repeat_binding(
+    value: Any,
+    *,
+    node_by_uuid: Mapping[str, dict[str, Any]],
+) -> str:
+    """渲染冻结的初始或下一轮 carry 来源。"""
+
+    if not isinstance(value, Mapping):
+        raise AuthoringGraphError("candidate_invalid", "循环 carry 来源必须是对象")
+    kind = value.get("kind")
+    if kind == "literal" and set(value) == {"kind", "value"}:
+        return repr(_stable_python_json(value["value"]))
+    if kind == "workflow_input" and isinstance(value.get("parameter"), str):
+        return _safe_identifier(str(value["parameter"]), fallback="invalid")
+    if kind == "node_result" and isinstance(value.get("node_uuid"), str):
+        source = node_by_uuid.get(str(value["node_uuid"]))
+        path = value.get("result_path")
+        if source is None or not isinstance(path, list) or not path:
+            raise AuthoringGraphError("candidate_invalid", "循环节点结果来源无效")
+        expression = _node_result_name(source)
+        for part in path:
+            expression += f".{_safe_identifier(str(part), fallback='invalid')}"
+        return expression
+    if (
+        kind == "loop_carry"
+        and isinstance(value.get("control_region_uuid"), str)
+        and isinstance(value.get("key"), str)
+    ):
+        region = node_by_uuid.get(str(value["control_region_uuid"]))
+        region_params = region.get("param") if isinstance(region, Mapping) else None
+        variable = (
+            region_params.get("loop_variable")
+            if isinstance(region_params, Mapping)
+            else None
+        )
+        if not isinstance(variable, str):
+            raise AuthoringGraphError("candidate_invalid", "循环 carry 区域身份无效")
+        return f"{variable}.carry[{json.dumps(str(value['key']), ensure_ascii=False)}]"
+    raise AuthoringGraphError("candidate_invalid", "循环 carry 来源不受支持")
+
+
+def _render_condition_expression(
+    value: Mapping[str, Any],
+    *,
+    node_by_uuid: Mapping[str, dict[str, Any]] | None = None,
+) -> str:
     """把封闭结构化表达式无损渲染为 Python 条件表达式。"""
 
     if set(value) == {"lit"}:
         return repr(value["lit"])
     if set(value) == {"var"}:
         return _safe_identifier(str(value["var"]), fallback="invalid")
+    if (
+        set(value) == {"carry", "control_region_uuid"}
+        and node_by_uuid is not None
+    ):
+        region = node_by_uuid.get(str(value["control_region_uuid"]))
+        params = region.get("param") if isinstance(region, Mapping) else None
+        variable = params.get("loop_variable") if isinstance(params, Mapping) else None
+        if not isinstance(variable, str):
+            raise AuthoringGraphError("candidate_invalid", "循环条件 carry 来源无效")
+        return f"{variable}.carry[{json.dumps(str(value['carry']), ensure_ascii=False)}]"
     if set(value) == {"field", "name"} and isinstance(value["field"], Mapping):
         name = _safe_identifier(str(value["name"]), fallback="invalid")
-        return f"{_render_condition_expression(value['field'])}.{name}"
+        return (
+            f"{_render_condition_expression(value['field'], node_by_uuid=node_by_uuid)}"
+            f".{name}"
+        )
     if (
         set(value) == {"index", "key"}
         and isinstance(value["index"], Mapping)
         and isinstance(value["key"], Mapping)
     ):
         return (
-            f"{_render_condition_expression(value['index'])}"
-            f"[{_render_condition_expression(value['key'])}]"
+            f"{_render_condition_expression(value['index'], node_by_uuid=node_by_uuid)}"
+            f"[{_render_condition_expression(value['key'], node_by_uuid=node_by_uuid)}]"
         )
     if (
         set(value) == {"binop", "left", "right"}
@@ -745,15 +1029,19 @@ def _render_condition_expression(value: Mapping[str, Any]) -> str:
         }:
             raise AuthoringGraphError("candidate_invalid", "条件二元运算符无效")
         return (
-            f"({_render_condition_expression(value['left'])} {operator_name} "
-            f"{_render_condition_expression(value['right'])})"
+            f"({_render_condition_expression(value['left'], node_by_uuid=node_by_uuid)} "
+            f"{operator_name} "
+            f"{_render_condition_expression(value['right'], node_by_uuid=node_by_uuid)})"
         )
     if set(value) == {"unop", "operand"} and isinstance(value["operand"], Mapping):
         operator_name = str(value["unop"])
         if operator_name == "not":
-            return f"not {_render_condition_expression(value['operand'])}"
+            return (
+                "not "
+                f"{_render_condition_expression(value['operand'], node_by_uuid=node_by_uuid)}"
+            )
         if operator_name == "neg":
-            return f"-{_render_condition_expression(value['operand'])}"
+            return f"-{_render_condition_expression(value['operand'], node_by_uuid=node_by_uuid)}"
         raise AuthoringGraphError("candidate_invalid", "条件一元运算符无效")
     if set(value) == {"call", "args"} and isinstance(value["args"], list):
         name = str(value["call"])
@@ -762,7 +1050,8 @@ def _render_condition_expression(value: Mapping[str, Any]) -> str:
         if any(not isinstance(argument, Mapping) for argument in value["args"]):
             raise AuthoringGraphError("candidate_invalid", "条件函数参数无效")
         arguments = ", ".join(
-            _render_condition_expression(argument) for argument in value["args"]
+            _render_condition_expression(argument, node_by_uuid=node_by_uuid)
+            for argument in value["args"]
         )
         return f"{name}({arguments})"
     raise AuthoringGraphError("candidate_invalid", "条件表达式结构无效")
@@ -896,8 +1185,8 @@ def _authoring_ordered_nodes(
             raise AuthoringGraphError("candidate_invalid", "作者源码节点顺序不能重复")
         source_positions[node_uuid] = value
     has_structured_node = any(
-        str(node.get("type")) in {"group", "condition"}
-        or str(node.get("node_type")) in {"group", "condition"}
+        str(node.get("type")) in {"group", "condition", "repeat_until"}
+        or str(node.get("node_type")) in {"group", "condition", "repeat_until"}
         for node in nodes.values()
     )
     if missing_source_order:
@@ -996,6 +1285,18 @@ def _is_condition(action: AuthoringCatalogAction) -> bool:
     )
 
 
+def _is_repeat_until(action: AuthoringCatalogAction) -> bool:
+    """判断目录动作是否为框架拥有的 RepeatUntil 控制区域模板。"""
+
+    template = action.template
+    return (
+        template.get("type") == "repeat_until"
+        and template.get("node_type") == "repeat_until"
+        and template.get("class") == "unilabos.workflow.authoring:repeat_until"
+        and template.get("name") == "repeat_until"
+    )
+
+
 def _is_published_workflow(action: AuthoringCatalogAction) -> bool:
     """判断目录动作是否为框架发布的工作流调用模板。
 
@@ -1063,6 +1364,7 @@ def _device_symbols(
             _is_material_source(action)
             or _is_group(action)
             or _is_condition(action)
+            or _is_repeat_until(action)
             or _is_published_workflow(action)
         ):
             continue
@@ -1361,6 +1663,9 @@ def _render_action_arguments(
     input_bindings = (
         unilab.get("input_bindings", {}) if isinstance(unilab, Mapping) else {}
     )
+    carry_bindings = (
+        unilab.get("carry_bindings", {}) if isinstance(unilab, Mapping) else {}
+    )
     # ``resource_refs`` 以目标连接点 UUID 保存原部署业务 ID，使实际 UUID 参数
     # 在规范源码中仍能恢复作者声明，而不是退化为匿名字典字面量。
     resource_refs = (
@@ -1419,6 +1724,27 @@ def _render_action_arguments(
             ):
                 raise AuthoringGraphError("candidate_invalid", "节点输入绑定无效")
             expression = str(binding["parameter"])
+        elif handle_uuid in carry_bindings:
+            binding = carry_bindings[handle_uuid]
+            if (
+                not isinstance(binding, Mapping)
+                or not isinstance(binding.get("control_region_uuid"), str)
+                or not isinstance(binding.get("key"), str)
+            ):
+                raise AuthoringGraphError("candidate_invalid", "节点 carry 绑定无效")
+            region = node_by_uuid.get(str(binding["control_region_uuid"]))
+            region_params = region.get("param") if isinstance(region, Mapping) else None
+            loop_variable = (
+                region_params.get("loop_variable")
+                if isinstance(region_params, Mapping)
+                else None
+            )
+            if not isinstance(loop_variable, str):
+                raise AuthoringGraphError("candidate_invalid", "节点 carry 区域无效")
+            expression = (
+                f"{loop_variable}.carry["
+                f"{json.dumps(str(binding['key']), ensure_ascii=False)}]"
+            )
         elif (node_uuid, handle_uuid) in incoming:
             # ``source_node_uuid`` 与 ``source_handle_uuid`` 是候选边冻结的源端点
             # 身份，不能替换成节点顺序或展示名称。

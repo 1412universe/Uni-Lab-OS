@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Mapping, TypeVar
 
 from unilabos.workflow.material_source import (
     MATERIAL_CUSTODY_POLICY_LABELS_ZH,
@@ -67,6 +67,35 @@ class _AuthoringBlock(AbstractContextManager[None]):
         return False
 
 
+@dataclass(frozen=True, slots=True)
+class RepeatUntilBinding(AbstractContextManager["RepeatUntilBinding"]):
+    """仅为编辑器描述 ``repeat_until`` 的 carry/next 创作接口。"""
+
+    carry: Mapping[str, Any]
+
+    def __enter__(self) -> "RepeatUntilBinding":
+        """返回静态循环绑定；真实循环只由 AST 编译器与调度器执行。"""
+
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: Any,
+    ) -> bool:
+        """退出静态循环块且不吞掉异常。"""
+
+        del exc_type, exc_value, traceback
+        return False
+
+    def next(self, **values: Any) -> None:
+        """声明下一轮 carry；运行时执行作者源码时始终失败关闭。"""
+
+        del values
+        raise RuntimeError("工作流创作 loop.next() 只能由静态编译器解析")
+
+
 def workflow(**metadata: Any) -> Callable[[_Function], _Function]:
     """声明工作流定义（Workflow Definition）的规范静态装饰器。
 
@@ -121,6 +150,29 @@ def parallel() -> AbstractContextManager[None]:
     """声明源码并行结构（Parallel）；返回静态上下文标记。"""
 
     return _AuthoringBlock()
+
+
+def repeat_until(
+    *,
+    max_iterations: int,
+    carry: Mapping[str, Any],
+) -> RepeatUntilBinding:
+    """声明先执行一轮、再判断退出的调度器本地循环区域。"""
+
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int):
+        raise ValueError("max_iterations 必须是正整数")
+    if max_iterations < 1:
+        raise ValueError("max_iterations 必须是正整数")
+    if not isinstance(carry, Mapping):
+        raise ValueError("carry 必须是映射")
+    return RepeatUntilBinding(dict(carry))
+
+
+def until(condition: bool) -> None:
+    """声明 ``repeat_until`` 的严格布尔退出条件。"""
+
+    del condition
+    raise RuntimeError("工作流创作 until() 只能由静态编译器解析")
 
 
 def workflow_output(**outputs: Any) -> dict[str, Any]:
@@ -188,12 +240,15 @@ __all__ = [
     "MATERIAL_FLOW_ROLE_LABELS_ZH",
     "MaterialCustodyPolicy",
     "MaterialFlowRole",
+    "RepeatUntilBinding",
     "device",
     "group",
     "material_source",
     "parallel",
+    "repeat_until",
     "resource_ref",
     "workflow",
     "workflow_definition",
     "workflow_output",
+    "until",
 ]
