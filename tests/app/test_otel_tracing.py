@@ -195,6 +195,63 @@ def test_initialization_failure_is_fail_open(monkeypatch):
         tracing._reset_for_test()
 
 
+def test_enabled_otel_rate_limits_exporter_errors_but_keeps_business_errors(
+    monkeypatch,
+):
+    """Collector 缺失时 exporter 同类错误限频，业务错误仍写入本地日志。"""
+
+    tracing._reset_for_test()
+    monkeypatch.setattr(
+        tracing,
+        "_OpenTelemetryBackend",
+        lambda _settings: _RecordingBackend(),
+    )
+    emitted: list[logging.LogRecord] = []
+
+    class RecordingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            emitted.append(record)
+
+    handler = RecordingHandler()
+    exporter_loggers = [
+        logging.getLogger(name)
+        for name in (
+            "opentelemetry.exporter.otlp.proto.grpc.exporter",
+            "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+            "opentelemetry.exporter.otlp.proto.http._log_exporter",
+            "opentelemetry.sdk._shared_internal",
+            "opentelemetry.sdk.trace.export",
+            "opentelemetry.sdk._logs._internal.export",
+        )
+    ]
+    business_logger = logging.getLogger("unilabos.business")
+    for exporter_logger in exporter_loggers:
+        exporter_logger.addHandler(handler)
+    business_logger.addHandler(handler)
+    try:
+        assert tracing.initialize_tracing(
+            tracing.TracingSettings(
+                enabled=True,
+                endpoint="http://missing-signoz:4317",
+            )
+        ) is True
+
+        for exporter_logger in exporter_loggers:
+            for _ in range(3):
+                exporter_logger.error("Failed to export telemetry to missing-signoz")
+        business_logger.error("device operation failed")
+
+        assert [record.getMessage() for record in emitted] == [
+            *(["Failed to export telemetry to missing-signoz"] * 6),
+            "device operation failed",
+        ]
+    finally:
+        for exporter_logger in exporter_loggers:
+            exporter_logger.removeHandler(handler)
+        business_logger.removeHandler(handler)
+        tracing._reset_for_test()
+
+
 def test_runtime_settings_follow_cloud_otel_environment(monkeypatch):
     monkeypatch.setenv("UNILABOS_OTEL_ENABLED", "true")
     monkeypatch.setenv("OTEL_SERVICE_NAME", "uni-lab-edge-test")

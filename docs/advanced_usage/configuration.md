@@ -842,7 +842,14 @@ OTLP/HTTP 配置。
 
 需要认证 header 时使用运行环境的 secret 注入 `OTEL_EXPORTER_OTLP_HEADERS`，不要写入配置文件、日志或版本控制。也可在 `local_config.py` 的 `OTelConfig` 中配置 `enabled`、`endpoint`、`logs_enabled`、`logs_endpoint`、`service_name`、采样率和批处理参数；环境变量优先。设置 `UNILABOS_OTEL_LOGS_ENABLED=false` 或 `OTEL_LOGS_EXPORTER=none` 可只保留 traces。
 
-trace 与日志实现都使用异步批量导出和有界队列。collector 不可用、SDK 缺失、队列溢出或关闭 flush 超时均 fail-open，不阻断调度和仪器控制。OTLP exporter 自身及 gRPC 内部日志不会重新进入日志 exporter，避免递归。默认批处理参数是：
+trace 与日志实现都使用异步批量导出和有界队列。collector 不可用、SDK 缺失、队列溢出或关闭 flush 超时均 fail-open，不阻断调度和仪器控制。OTLP exporter 自身及 gRPC 内部日志不会重新进入日志 exporter，避免递归。
+
+没有部署 SigNoZ 时保持默认关闭即可，也可以显式设置
+`UNILABOS_OTEL_ENABLED=false`。如果部署配置仍然启用了 OTel，但 collector 暂时不在线，
+Edge 仍会正常启动和处理业务；后台 OTLP exporter 的重复连接错误会被静默，业务错误日志
+不受影响。首次 exporter 错误仍会保留用于诊断，同类错误最多每 5 分钟再次输出一次。
+
+默认批处理参数是：
 
 - `max_queue_size = 2048`
 - `max_export_batch_size = 512`

@@ -23,6 +23,7 @@ import os
 import re
 import secrets
 import threading
+import time
 import traceback
 import types
 from dataclasses import dataclass, field
@@ -34,6 +35,20 @@ logger = logging.getLogger(__name__)
 
 _ACTIVE_OTEL_LOG_HANDLER: Optional[logging.Handler] = None
 _ACTIVE_OTEL_LOG_TARGETS: set[logging.Logger] = set()
+
+# OTLP exporter 会在 Collector 不可达时按每个批次反复记录连接错误。Edge 的观测链路
+# 是可选能力：保留首条诊断，但不让后台 exporter 的重复重试淹没本地日志。
+_OTEL_EXPORTER_LOGGER_NAMES = (
+    "opentelemetry.exporter.otlp.proto.grpc.exporter",
+    "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+    "opentelemetry.exporter.otlp.proto.http._log_exporter",
+    # 新版 SDK 的通用批处理器，以及旧版 trace/log 专用批处理器。
+    "opentelemetry.sdk._shared_internal",
+    "opentelemetry.sdk.trace.export",
+    "opentelemetry.sdk._logs._internal.export",
+)
+_OTEL_EXPORTER_LOG_INTERVAL_SECONDS = 300.0
+_ACTIVE_OTEL_EXPORTER_FILTER: Optional[logging.Filter] = None
 
 INSTRUMENTATION_NAME = "unilabos.edge"
 TRACEPARENT = "traceparent"
@@ -415,6 +430,54 @@ class _OtelExporterNoiseFilter(logging.Filter):
         return not record.name.startswith(("opentelemetry", "grpc"))
 
 
+class _RateLimitingOtelExporterFilter(logging.Filter):
+    """保留 exporter 首条诊断，并限制同类后台重试日志的频率。"""
+
+    def __init__(self, interval_seconds: float):
+        super().__init__()
+        self.interval_seconds = interval_seconds
+        self._last_emitted: Dict[tuple[str, int, str], float] = {}
+        self._lock = threading.Lock()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno < logging.WARNING:
+            return True
+        key = (record.name, record.levelno, str(record.msg))
+        now = time.monotonic()
+        with self._lock:
+            previous = self._last_emitted.get(key)
+            if previous is not None and now - previous < self.interval_seconds:
+                return False
+            self._last_emitted[key] = now
+        return True
+
+
+def _install_otel_exporter_log_filter() -> None:
+    """给 OTLP exporter 安装限频器，且不改变业务 logger 的级别。"""
+
+    global _ACTIVE_OTEL_EXPORTER_FILTER
+    if _ACTIVE_OTEL_EXPORTER_FILTER is not None:
+        return
+    rate_limit = _RateLimitingOtelExporterFilter(
+        _OTEL_EXPORTER_LOG_INTERVAL_SECONDS
+    )
+    for name in _OTEL_EXPORTER_LOGGER_NAMES:
+        logging.getLogger(name).addFilter(rate_limit)
+    _ACTIVE_OTEL_EXPORTER_FILTER = rate_limit
+
+
+def _remove_otel_exporter_log_filter() -> None:
+    """移除 exporter 限频器，供测试重置和有序关停使用。"""
+
+    global _ACTIVE_OTEL_EXPORTER_FILTER
+    rate_limit = _ACTIVE_OTEL_EXPORTER_FILTER
+    if rate_limit is None:
+        return
+    for name in _OTEL_EXPORTER_LOGGER_NAMES:
+        logging.getLogger(name).removeFilter(rate_limit)
+    _ACTIVE_OTEL_EXPORTER_FILTER = None
+
+
 class _SanitizingOtelLogHandler(logging.Handler):
     """仅向 OTLP 副本写入脱敏后的日志，不修改其他本地 handler 的记录。"""
 
@@ -793,6 +856,7 @@ def initialize_tracing(
             )
             _backend = None
             return False
+        _install_otel_exporter_log_filter()
         if not _shutdown_registered:
             atexit.register(shutdown_tracing)
             _shutdown_registered = True
@@ -830,6 +894,7 @@ def shutdown_tracing(timeout_ms: Optional[int] = None) -> bool:
                 _sanitize_text(exc, 512),
             )
         finally:
+            _remove_otel_exporter_log_filter()
             done.set()
 
     thread = threading.Thread(
@@ -1384,6 +1449,7 @@ def _reset_for_test() -> None:
         _shutdown_started = False
         _initialization_attempted = False
         _LOCAL_TRACE_ID.set("")
+        _remove_otel_exporter_log_filter()
 
 
 __all__ = [
