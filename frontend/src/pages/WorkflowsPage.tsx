@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
   Check,
-  ChevronRight,
   CircleDot,
   Code2,
   FileInput,
@@ -32,12 +31,6 @@ function tagForWorkflow(workflow: WorkflowDefinition) {
 }
 
 type ReadinessTone = 'ready' | 'warning' | 'error' | 'neutral' | 'loading'
-
-interface ReadinessRow {
-  label: string
-  value: string
-  tone: ReadinessTone
-}
 
 function resourceSlotSchema(field: ContractField): Record<string, any> | undefined {
   const visit = (schema: Record<string, any>): Record<string, any> | undefined => {
@@ -236,6 +229,13 @@ export function WorkflowsPage({
       await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
     } catch (error) { onNotify(`引用失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
+
+  async function runPreflight(openDiagnostics = false) {
+    if (openDiagnostics) setWorkspaceView('diagnostics')
+    const result = await preflightQuery.refetch()
+    onNotify(result.isError ? 'Preflight 读取失败' : 'Preflight 报告已更新')
+  }
+
   const preflightTone: ReadinessTone = preflightQuery.isFetching
     ? 'loading'
     : preflightQuery.isError
@@ -258,32 +258,6 @@ export function WorkflowsPage({
           : preflightQuery.isFetching
             ? '正在读取 Edge 报告'
             : '尚未检查'
-  const readinessRows: ReadinessRow[] = preflight
-    ? [
-        { label: '候选状态', value: preflightStatusLabel, tone: preflightTone },
-        {
-          label: '执行计划',
-          value: `r${preflight.workflowRevision} · ${preflight.summary.executionNodeCount} 个节点`,
-          tone: preflight.status === 'invalid' ? 'error' : 'ready',
-        },
-        {
-          label: '阻塞检查',
-          value: `${preflight.summary.blockingCheckCount} 项`,
-          tone: preflight.summary.blockingCheckCount ? 'error' : 'ready',
-        },
-        {
-          label: '延后与人工门禁',
-          value: `${preflight.summary.deferredCheckCount} 项延后 · ${preflight.summary.confirmationRequiredCount} 项人工确认`,
-          tone: preflight.summary.deferredCheckCount || preflight.summary.confirmationRequiredCount ? 'warning' : 'ready',
-        },
-      ]
-    : [
-        { label: '候选状态', value: preflightStatusLabel, tone: preflightTone },
-        { label: '执行计划', value: '尚未检查', tone: 'neutral' },
-        { label: '资源门禁', value: '尚未检查', tone: 'neutral' },
-        { label: '人工确认', value: '尚未检查', tone: 'neutral' },
-      ]
-
   return (
     <div className="page workflows-page">
       <PageHeader
@@ -344,6 +318,11 @@ export function WorkflowsPage({
                 <div><span className="definition-tag">{tagForWorkflow(detail)}</span><h2>{detail.name}</h2><p>{detail.description}</p></div>
                 <div className="definition-actions">
                   <Button tone="ghost" icon={<Code2 size={15} />} onClick={() => onNotify(detail.sourcePath ? `源文件：${detail.sourcePath}` : '该定义没有可编辑源文件')}>查看源码</Button>
+                  <Button
+                    icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
+                    disabled={!connected || preflightQuery.isFetching}
+                    onClick={() => void runPreflight(true)}
+                  >运行 Preflight</Button>
                   <Button tone="primary" icon={<Play size={15} />} onClick={() => setWorkspaceView('run')}>进入运行准备</Button>
                 </div>
               </div>
@@ -382,7 +361,13 @@ export function WorkflowsPage({
               ) : null}
               {workspaceView === 'diagnostics' ? (
                 <div className="workflow-diagnostics">
-                  <header><div><strong>运行前诊断</strong><small>来自 Edge Preflight 的只读判断，不创建任务或占用资源</small></div><Button icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} disabled={!connected || preflightQuery.isFetching} onClick={() => void preflightQuery.refetch()}>重新检查</Button></header>
+                  <header>
+                    <div><strong>运行前诊断</strong><small>来自 Edge Preflight 的只读判断，不创建任务或占用资源</small></div>
+                    <div className="diagnostic-actions">
+                      <span className={`diagnostic-status readiness-${preflightTone}`} role={preflightQuery.isError ? 'alert' : 'status'}><ReadinessIcon tone={preflightTone} />{preflightStatusLabel}</span>
+                      <Button icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} disabled={!connected || preflightQuery.isFetching} onClick={() => void runPreflight()}>{preflight ? '刷新 Preflight' : '运行 Preflight'}</Button>
+                    </div>
+                  </header>
                   {!preflight ? <EmptyState title="尚未运行 Preflight" description="执行检查后可按节点查看阻断、延后与人工确认项。" /> : (
                     <div className="diagnostic-checks">
                       {preflight.checks.map((check, index) => <div className={`diagnostic-check check-${check.status}`} key={`${check.code}-${index}`}><span><ReadinessIcon tone={check.status === 'passed' ? 'ready' : check.status === 'blocked' ? 'error' : 'warning'} /></span><div><strong>{check.nodeName || check.type}</strong><p>{check.message}</p><code>{check.code}</code></div><em>{check.status}</em></div>)}
@@ -443,34 +428,6 @@ export function WorkflowsPage({
           </div>
         ) : <Panel><EmptyState title="没有工作流定义" description="确认 Edge 已加载工作流运行时。" /></Panel>}
 
-        {workspaceView !== 'run' ? <aside className="workflow-aside">
-          <Panel className="readiness-panel">
-            <PanelHeader title="运行准备" description="Edge 只读快照，不创建 Task 或取得资源" action={<span className={`ready-orb readiness-${preflightTone}`}><ShieldCheck size={15} /></span>} />
-            {readinessRows.map(({ label, value, tone }) => (
-              <div className={`readiness-row readiness-${tone}`} key={label}><span><ReadinessIcon tone={tone} /></span><strong>{label}</strong><small>{value}</small></div>
-            ))}
-            <Button
-              className="full-button"
-              icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}
-              disabled={!connected || !selected || preflightQuery.isFetching}
-              onClick={() => {
-                void preflightQuery.refetch().then((result) => {
-                  onNotify(result.isError ? 'Preflight 读取失败' : 'Preflight 报告已更新')
-                })
-              }}
-            >{preflight ? '刷新 Preflight' : '运行 Preflight'}</Button>
-          </Panel>
-
-          <Panel className="revision-panel">
-            <PanelHeader title="版本信息" description={selectedTaskSnapshotUuid ? 'Task 提交时冻结修订' : '当前加载修订'} />
-            <div className="revision-current"><span>r{detail?.revision || 1}</span><div><strong>{detail ? tagForWorkflow(detail) : '—'}</strong><small>{selectedTaskSnapshotUuid ? 'Task 冻结版本' : 'Edge 当前版本'}</small></div><ChevronRight size={16} /></div>
-            <dl className="property-list compact">
-              <div><dt>状态</dt><dd>{detail?.status || '—'}</dd></div>
-              <div><dt>源码</dt><dd>{detail?.sourcePath?.split('/').at(-1) || 'runtime'}</dd></div>
-              <div><dt>节点</dt><dd>{graphNodes.length || detail?.nodeCount || 0}</dd></div>
-            </dl>
-          </Panel>
-        </aside> : null}
       </div>
     </div>
   )

@@ -184,10 +184,11 @@ describe('WorkflowsPage', () => {
     expect(screen.getByRole('button', { name: new RegExp(`r${target.revision}`) })).toHaveClass('active')
     expect(await screen.findByRole('heading', { name: target.name })).toBeInTheDocument()
     expect(await screen.findByText('冻结修订节点')).toBeInTheDocument()
-    expect(screen.getByText('Task 冻结版本')).toBeInTheDocument()
+    expect(screen.getByText('Task 冻结修订')).toBeInTheDocument()
+    expect(screen.queryByText('版本信息')).not.toBeInTheDocument()
   })
 
-  it('shows a neutral state until it reads the real Edge Preflight report', async () => {
+  it('keeps Preflight as a compact primary action and opens the real Edge report', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/graph')) {
@@ -227,12 +228,14 @@ describe('WorkflowsPage', () => {
       />,
     )
 
-    expect(screen.getAllByText('尚未检查').length).toBeGreaterThan(0)
+    expect(screen.queryByText('版本信息')).not.toBeInTheDocument()
+    expect(screen.queryByText('资源门禁')).not.toBeInTheDocument()
     expect(screen.queryByText('Edge 已就绪')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '运行 Preflight' }))
 
+    expect(await screen.findByText('运行前诊断')).toBeInTheDocument()
     expect(await screen.findByText('当前条件暂不可用')).toBeInTheDocument()
-    expect(screen.getByText('1 项延后 · 0 项人工确认')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '刷新 Preflight' })).toBeInTheDocument()
   })
 
   it('switches between topology, contract and diagnostics workspaces', () => {
