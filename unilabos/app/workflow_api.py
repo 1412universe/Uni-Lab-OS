@@ -756,6 +756,8 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         "source_function_conflict",
         "invalid_composite_child_type",
         "invalid_composite_child_status",
+        "develop_task_conflict",
+        "preflight_failed",
     }
     if error.code in {"invalid_input", "invalid_composite_child_type"}:
         business_code = 1000
@@ -763,14 +765,19 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         business_code = 3002
     elif error.code in conflict_codes:
         business_code = 3003
-    elif error.code == "read_only_mode":
+    elif error.code in {"read_only_mode", "develop_mode_required"}:
         business_code = 1001
     elif error.code == "template_catalog_unavailable":
         business_code = 5001
     else:
         business_code = 1
     error_content = {"msg": error.message}
-    if error.code == "workflow_identity_mismatch":
+    if error.code in {
+        "workflow_identity_mismatch",
+        "develop_mode_required",
+        "develop_task_conflict",
+        "preflight_failed",
+    }:
         # product Backend 包络保持 HTTP 200；该窄符号码让前端区分身份拒绝与
         # 需要重读远端版本的普通 3003 CAS 冲突。
         error_content["code"] = error.code
@@ -850,6 +857,12 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         if not is_workflow_visible(workflow):
             raise WorkflowError("not_found")
         return workflow
+
+    def _require_develop_execution() -> None:
+        """拒绝生产模式中的单步、调试和模式切换写操作。"""
+
+        if get_startup_mode().value != "develop":
+            raise WorkflowError("develop_mode_required")
 
     def _ensure_station_workflow_visible(
         workflow_uuid: str | None,
@@ -1352,6 +1365,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """返回不创建任务、不占用资源的候选运行检查报告。"""
 
         _visible_workflow(workflow_uuid)
+        if run_mode != "normal":
+            _require_develop_execution()
         response = _success(
             service.get_workflow_run_preflight(
                 workflow_uuid,
@@ -1370,6 +1385,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """按候选入口参数与共享数量绑定执行零写入预检。"""
 
         _visible_workflow(workflow_uuid)
+        if body.run_mode != "normal":
+            _require_develop_execution()
         response = _success(
             service.get_workflow_run_preflight(
                 workflow_uuid,
@@ -1443,6 +1460,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """
 
         _visible_workflow(body.workflow_uuid)
+        if body.run_mode != "normal":
+            _require_develop_execution()
         return _success(
             service.create_workflow_task(
                 workflow_uuid=body.workflow_uuid,
@@ -1520,48 +1539,48 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.post("/debug/workflow-tasks")
     def create_debug_workflow_task(
-        body: DebugWorkflowTaskCreateRequest,
+        body: Any = Body(default=None),
     ) -> JSONResponse:
-        """以不可变起始点、断点和任务优先级创建标准工作流任务。
+        """旧 Debug Task 已由标准 WorkflowTask Step 控制取代。"""
 
-        参数：``body`` 携带可见工作流身份、起始节点、断点和任务输入。返回：
-        调试运行任务投影。异常：生产模式下工作流不可见时按 ``not_found`` 拒绝，
-        其他输入或调度错误由统一工作流错误适配器处理。状态不变量：任务创建
-        只能基于当前启动模式允许读取的工作流。
-        """
-
-        _visible_workflow(body.workflow_uuid)
-        return _success(
-            service.create_debug_workflow_task(
-                workflow_uuid=body.workflow_uuid,
-                start_node_uuids=body.start_node_uuids,
-                breakpoint_node_uuids=body.breakpoint_node_uuids,
-                priority=body.priority.value,
-                input_value=body.input,
-                description=body.description,
-                meta_data=body.meta_data,
-            ),
-            status=201,
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": 4100,
+                "error": {
+                    "code": "debug_api_retired",
+                    "msg": "请使用 /api/v1/workflow-tasks 的 step 模式",
+                },
+            },
         )
 
     @router.get("/debug/workflow-tasks/{task_uuid}")
     def get_debug_workflow_task(task_uuid: str) -> JSONResponse:
-        return _success(service.get_debug_workflow_task(task_uuid))
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": 4100,
+                "error": {
+                    "code": "debug_api_retired",
+                    "msg": "请使用标准 WorkflowTask 详情接口",
+                },
+            },
+        )
 
     @router.post("/debug/workflow-tasks/{task_uuid}/commands")
     def command_debug_workflow_task(
         task_uuid: str,
-        body: DebugWorkflowTaskCommandRequest,
+        body: Any = Body(default=None),
     ) -> JSONResponse:
-        return _success(
-            service.command_debug_workflow_task(
-                task_uuid,
-                command_type=body.type,
-                scope_type=body.scope.type,
-                hold_uuid=body.scope.hold_uuid,
-                idempotency_key=body.idempotency_key,
-            ),
-            status=201,
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": 4100,
+                "error": {
+                    "code": "debug_api_retired",
+                    "msg": "请使用标准 WorkflowTask commands 接口",
+                },
+            },
         )
 
     @router.post("/device-action-runs")
@@ -1633,6 +1652,13 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def get_workflow_task(task_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_task(task_uuid))
 
+    @router.get("/workflow-tasks/{task_uuid}/step-state")
+    def get_workflow_task_step_state(task_uuid: str) -> JSONResponse:
+        """返回 Task 详情页使用的权威 Step 候选。"""
+
+        _require_develop_execution()
+        return _success(service.get_workflow_task_step_state(task_uuid))
+
     @router.post("/workflow-tasks/{task_uuid}/commands")
     def command_workflow_task(
         task_uuid: str,
@@ -1640,6 +1666,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """幂等提交一次工作流任务控制命令。"""
 
+        if body.type in {"step", "pause", "resume"}:
+            _require_develop_execution()
         return _success(
             service.command_workflow_task(
                 task_uuid,

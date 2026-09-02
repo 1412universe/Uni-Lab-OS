@@ -148,6 +148,8 @@ export interface WorkflowTask {
   materialUuids: string[]
   workflowRevision?: number
   runMode: string
+  executionMode: 'normal' | 'switching_to_step' | 'step'
+  controlStatus: string
   matrixGroupKey: string
   trace?: {
     traceId?: string
@@ -329,7 +331,26 @@ export interface RunPreflightReport {
   checks: RunPreflightCheck[]
 }
 
+export interface WorkflowStepCandidate {
+  nodeUuid: string
+  name: string
+  kind: string
+  deviceId?: string
+  actionName?: string
+}
+
+export interface WorkflowStepState {
+  workflowTaskUuid: string
+  executionMode: 'normal' | 'switching_to_step' | 'step'
+  controlStatus: string
+  inFlightJobCount: number
+  requiresSelection: boolean
+  canStep: boolean
+  candidates: WorkflowStepCandidate[]
+}
+
 export interface EdgeSnapshot {
+  startupMode: 'develop' | 'product'
   workflows: WorkflowDefinition[]
   tasks: WorkflowTask[]
   materials: MaterialRecord[]

@@ -237,7 +237,7 @@ describe('WorkflowsPage', () => {
     expect(screen.queryByText('版本信息')).not.toBeInTheDocument()
     expect(screen.queryByText('资源门禁')).not.toBeInTheDocument()
     expect(screen.queryByText('Edge 已就绪')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '运行 Preflight' }))
+    fireEvent.click(screen.getAllByRole('button', { name: '运行 Preflight' })[0])
 
     expect(await screen.findByText('运行前诊断')).toBeInTheDocument()
     expect(await screen.findByText('当前条件暂不可用')).toBeInTheDocument()
@@ -278,6 +278,66 @@ describe('WorkflowsPage', () => {
     expect(screen.getByText('运行输入与物料绑定')).toBeInTheDocument()
     expect(screen.getByText('物料上下文')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '提交任务' })).toBeDisabled()
+  })
+
+  it('creates a Step task only after a Step Preflight in develop mode', async () => {
+    const navigate = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/graph')) {
+        return response({ code: 0, data: { workflow: demoWorkflows[0], nodes: [], edges: [] } })
+      }
+      if (url.includes('/run-preflight')) {
+        return response({
+          code: 0,
+          data: {
+            workflow_uuid: demoWorkflows[0].uuid,
+            workflow_revision: demoWorkflows[0].revision,
+            run_mode: 'step',
+            status: 'runnable_now',
+            can_run: true,
+            checked_at: '2026-09-03T00:00:00Z',
+            summary: {},
+            checks: [],
+          },
+        })
+      }
+      if (url.endsWith('/workflow-tasks') && init?.method === 'POST') {
+        return response({ code: 0, data: { uuid: 'step-task-1' } })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithQuery(
+      <WorkflowsPage
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="develop"
+        onNavigate={navigate}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '进入运行准备' }))
+    fireEvent.change(screen.getByRole('combobox', { name: '运行方式' }), { target: { value: 'step' } })
+    await waitFor(() => expect(screen.getAllByRole('button', { name: '运行 Preflight' })[1]).toBeEnabled())
+    fireEvent.click(screen.getAllByRole('button', { name: '运行 Preflight' })[1])
+    await screen.findByText('当前可提交，派发时仍会复核')
+    fireEvent.click(screen.getByRole('button', { name: '提交任务' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/workflow-tasks',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"run_mode":"step"'),
+      }),
+    ))
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/run-preflight'),
+      expect.objectContaining({ body: expect.stringContaining('"run_mode":"step"') }),
+    )
+    expect(navigate).toHaveBeenCalledWith('tasks')
   })
 
   it('projects graph material sources into the composite run context', async () => {
@@ -442,6 +502,79 @@ describe('WorkflowsPage', () => {
 })
 
 describe('TasksPage', () => {
+  it('shows authoritative Step candidates and submits the selected node', async () => {
+    const onNotify = vi.fn()
+    const task = {
+      ...demoTasks[0],
+      status: 'paused' as const,
+      executionMode: 'step' as const,
+      controlStatus: 'paused',
+      nodes: demoTasks[0].nodes.slice(0, 2).map((node, index) => ({
+        ...node,
+        uuid: `step-node-${index + 1}`,
+        name: `候选节点 ${index + 1}`,
+        status: 'pending' as const,
+      })),
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith(`/workflow-tasks/${task.uuid}/step-state`)) {
+        return response({
+          code: 0,
+          data: {
+            workflow_task_uuid: task.uuid,
+            execution_mode: 'step',
+            control_status: 'paused',
+            in_flight_job_count: 0,
+            requires_selection: true,
+            can_step: true,
+            candidates: task.nodes.map((node) => ({ node_uuid: node.uuid, name: node.name, kind: node.kind })),
+          },
+        })
+      }
+      if (url.endsWith(`/workflow-tasks/${task.uuid}/commands`) && init?.method === 'POST') {
+        return response({ code: 0, data: { status: 'succeeded', result: {} } })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const historicalTask = {
+      ...task,
+      uuid: 'historical-step-task',
+      nodes: task.nodes.map((node, index) => ({
+        ...node,
+        name: `历史节点 ${index + 1}`,
+      })),
+    }
+    renderWithQuery(
+      <TasksPage
+        tasks={[task, historicalTask]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="develop"
+        onRefresh={vi.fn()}
+        onNotify={onNotify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const candidates = await screen.findByLabelText('可执行节点')
+    fireEvent.click(within(candidates).getByRole('button', { name: /候选节点 2/ }))
+    fireEvent.click(screen.getByRole('button', { name: '执行下一步' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/workflow-tasks/${task.uuid}/commands`,
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"target_node_uuid":"step-node-2"'),
+      }),
+    ))
+    expect(onNotify).toHaveBeenCalledWith('单步命令已提交')
+    expect(screen.getByRole('button', { name: /候选节点 2，/ }).closest('.matrix-node')).toHaveClass('matrix-node-step-ready')
+    expect(screen.getByRole('button', { name: /历史节点 2，/ }).closest('.matrix-node')).not.toHaveClass('matrix-node-step-ready')
+  })
+
   it('highlights pending manual confirmation and submits approve by Job UUID', async () => {
     const onNotify = vi.fn()
     const task = {
@@ -768,7 +901,8 @@ describe('TasksPage', () => {
     expect(container.querySelector('.matrix-group')).not.toBeInTheDocument()
   })
 
-  it('renders ResourceSlot inputs as Edge material selectors', () => {
+  it('delegates task creation to the workflow run-preparation page', () => {
+    const onOpenWorkflow = vi.fn()
     renderWithQuery(
       <TasksPage
         tasks={demoTasks}
@@ -777,15 +911,16 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
-        onOpenWorkflow={vi.fn()}
+        onOpenWorkflow={onOpenWorkflow}
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
-    fireEvent.change(screen.getByLabelText('工作流'), { target: { value: demoWorkflows[1].uuid } })
+    fireEvent.click(screen.getByRole('button', { name: '前往工作流创建' }))
 
-    expect(screen.getByLabelText(/resource必填/)).toHaveValue('')
-    expect(screen.getAllByRole('option', { name: /500 mL 烧杯/ })).toHaveLength(3)
+    expect(onOpenWorkflow).toHaveBeenCalledWith({
+      workflowUuid: demoWorkflows[0].uuid,
+      revision: demoWorkflows[0].revision,
+    })
   })
 })
 

@@ -490,13 +490,13 @@ def test_persistent_waiter_aging_eventually_beats_fresh_priority(
     assert blocked["jobs"][0]["wait_reason"]["blocking_job_uuid"] == JOB_UUID
 
 
-def test_restart_fails_inflight_job_and_keeps_uncertain_lease(
+def test_restart_fails_inflight_job_and_releases_old_lease(
     store: WorkflowStore,
 ) -> None:
-    """执行进程重启必须失败在途作业，并保留锁等待物理结算。
+    """执行进程重启必须失败在途作业，并释放旧 runtime 的执行权。
 
     参数：``store`` 是隔离工作流写模型。返回无；断言 Job/Task 使用明确失败状态，
-    且未把业务失败误作物理停止证据。异常：恢复实现冲突会使测试失败。
+    且清除旧 Claim/Fence。异常：恢复实现冲突会使测试失败。
     """
 
     _seed_task(store, with_material=False)
@@ -525,10 +525,10 @@ def test_restart_fails_inflight_job_and_keeps_uncertain_lease(
     assert job["error_info"][0]["code"] == "execution_process_restarted"
     task = store.get_task(TASK_UUID)
     assert task["status"] == "failed"
-    assert task["attention_reason"] == "execution_process_restarted"
-    assert task["cleanup_status"] == "requires_attention"
+    assert not task.get("attention_reason")
+    assert task["cleanup_status"] == "settled"
     assert {lease["state"] for lease in projection.list_execution_locks(JOB_UUID)} == {
-        "uncertain"
+        "released"
     }
 
 
@@ -724,10 +724,10 @@ def test_local_cancel_completion_timeout_keeps_uncertain_lock(
         bridge.close()
 
 
-def test_restart_during_local_cancel_fails_task_and_keeps_uncertain_claim(
+def test_restart_during_local_cancel_fails_task_and_releases_old_claim(
     store: WorkflowStore,
 ) -> None:
-    """取消等待设备终态时重启，必须失败任务并保留持久执行占用。
+    """取消等待设备终态时重启，必须失败任务并释放旧执行占用。
 
     参数：``store`` 是隔离工作流写模型。返回无；断言取消中的作业使用明确失败码，
     不再创建执行未知主状态。异常：恢复或占用收敛错误会使测试失败。
@@ -762,12 +762,12 @@ def test_restart_during_local_cancel_fails_task_and_keeps_uncertain_claim(
     assert [aggregate["task"]["uuid"] for aggregate in recovered] == [TASK_UUID]
     job = store.get_job(JOB_UUID)
     assert job["status"] == "failed"
-    assert job["uncertainty_reason"] == "execution_process_restarted"
+    assert not job.get("uncertainty_reason")
     assert job["error_info"][0]["code"] == "execution_process_restarted"
     recovered_task = store.get_task(TASK_UUID)
     assert recovered_task["status"] == "failed"
-    assert recovered_task["cleanup_status"] == "requires_attention"
+    assert recovered_task["cleanup_status"] == "settled"
     assert {
         lease["state"]
         for lease in recovered_bridge._projection.list_execution_locks(JOB_UUID)
-    } == {"uncertain"}
+    } == {"released"}

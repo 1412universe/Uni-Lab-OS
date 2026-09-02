@@ -160,6 +160,9 @@ _ERRORS = {
         403,
         "生产模式只允许查看已发布普通工作流和创建工作流任务",
     ),
+    "develop_mode_required": (403, "单步调度仅在 develop 启动模式可用"),
+    "develop_task_conflict": (409, "develop 模式已有未结束的执行任务"),
+    "preflight_failed": (409, "Step Task 创建前的 Preflight 未通过"),
     "not_found": (404, "请求的资源不存在"),
     "conflict": (409, "资源已发生冲突，请刷新后重试"),
     "workflow_not_found": (404, "工作流不存在或已被删除"),
@@ -3067,6 +3070,8 @@ class WorkflowService:
         run_mode = "normal" if run_mode == "" else run_mode
         if run_mode not in {"normal", "step", "single_node"}:
             raise WorkflowError("invalid_input")
+        if run_mode != "single_node" and target_node_uuid is not None:
+            raise WorkflowError("invalid_input")
         if target_node_uuid is not None:
             try:
                 target_node_uuid = validate_uuid(target_node_uuid)
@@ -3082,6 +3087,21 @@ class WorkflowService:
             raise WorkflowError("invalid_input") from None
         description = self._optional_text(description)
         task_uuid = str(uuid4())
+
+        if run_mode == "step":
+            report = self.get_workflow_run_preflight(
+                workflow_uuid,
+                run_mode=run_mode,
+                target_node_uuid=None,
+                input_value=input_value,
+                inventory_bindings=normalized_inventory_bindings,
+                evaluate_inventory=True,
+            )
+            if not report.get("can_run"):
+                raise WorkflowConflict(
+                    "preflight_failed",
+                    message=str(report.get("status") or "Preflight 未通过"),
+                )
 
         def plan_builder(graph: dict[str, Any]) -> PreparedTaskInput:
             """在创建事务内冻结本次工作流任务（WorkflowTask）输入和计划。
@@ -3170,6 +3190,7 @@ class WorkflowService:
                     request_fingerprint=request_fingerprint,
                     revision_fingerprint=revision_fingerprint,
                     deadline=deadline,
+                    reject_if_nonterminal_task_exists=self._develop_execution_mode(),
                 )
             task_created = bool(task.pop("_station_submission_created", True))
             if not task_created:
@@ -3193,6 +3214,12 @@ class WorkflowService:
                 raise WorkflowError("internal_error") from None
             if isinstance(error, StoreConflict) and backend_task_uuid is not None:
                 raise WorkflowConflict("conflict", message=str(error)) from None
+            if isinstance(error, StoreConflict) and str(error).startswith(
+                "develop_task_conflict:"
+            ):
+                raise WorkflowConflict(
+                    "develop_task_conflict", message=str(error)
+                ) from None
             raise WorkflowError("invalid_input") from None
         except Exception:
             if not task_created:
@@ -3224,24 +3251,14 @@ class WorkflowService:
                 raise WorkflowError("invalid_input")
             if target_node_uuid is not None:
                 target_node_uuid = validate_uuid(target_node_uuid)
+            if command_type != "step" and target_node_uuid is not None:
+                raise WorkflowError("invalid_input")
             normalized_key = str(idempotency_key).strip()
             if not normalized_key:
                 raise WorkflowError("invalid_input")
             meta_data = normalize_json_object(meta_data)
             description = self._optional_text(description)
             task = self._store.get_task(task_uuid)
-            if task.get("status") in {
-                "succeeded",
-                "success",
-                "failed",
-                "canceled",
-                "timeout",
-            }:
-                raise WorkflowError("invalid_input")
-            if command_type == "step" and (
-                task.get("run_mode") != "step" or task.get("control_status") != "paused"
-            ):
-                raise WorkflowError("invalid_input")
             command, created = self._store.create_task_command(
                 task_uuid=task_uuid,
                 command_uuid=str(uuid4()),
@@ -3253,6 +3270,45 @@ class WorkflowService:
             )
             if not created or command["status"] != "pending":
                 return command
+            if task.get("status") in {
+                "succeeded",
+                "success",
+                "failed",
+                "canceled",
+                "timeout",
+            }:
+                return self._store.complete_task_command(
+                    command["uuid"],
+                    status="rejected",
+                    result={"reason": "task_is_terminal"},
+                )
+            execution_mode = str(
+                task.get("execution_mode") or task.get("run_mode") or "normal"
+            )
+            if command_type == "step" and (
+                execution_mode != "step"
+                or task.get("control_status") != "paused"
+            ):
+                return self._store.complete_task_command(
+                    command["uuid"],
+                    status="rejected",
+                    result={"reason": "task_is_not_paused_step"},
+                )
+            if command_type == "pause" and execution_mode != "normal":
+                return self._store.complete_task_command(
+                    command["uuid"],
+                    status="rejected",
+                    result={"reason": "task_is_not_in_normal_mode"},
+                )
+            if command_type == "resume" and (
+                execution_mode != "step"
+                or task.get("control_status") != "paused"
+            ):
+                return self._store.complete_task_command(
+                    command["uuid"],
+                    status="rejected",
+                    result={"reason": "task_is_not_paused_step"},
+                )
             if self._task_scheduler_bridge is None:
                 return self._store.complete_task_command(
                     command["uuid"],
@@ -3600,6 +3656,7 @@ class WorkflowService:
                 idempotency_key=idempotency_key,
                 description=description,
                 meta_data=meta_data,
+                reject_if_nonterminal_task_exists=self._develop_execution_mode(),
             )
             if aggregate["created"] is True and self._task_scheduler_bridge is not None:
                 scheduled = self._task_scheduler_bridge.submit(aggregate["task"])
@@ -3626,10 +3683,22 @@ class WorkflowService:
             raise WorkflowError("invalid_input") from None
         except DeviceActionRunUnavailable:
             raise WorkflowError("template_catalog_unavailable") from None
-        except DeviceActionRunConflict:
+        except DeviceActionRunConflict as error:
+            if str(error).startswith("develop_task_conflict:"):
+                raise WorkflowConflict(
+                    "develop_task_conflict", message=str(error)
+                ) from None
             raise WorkflowConflict("conflict") from None
         except TaskSchedulerBridgeError:
             raise WorkflowError("internal_error") from None
+
+    @staticmethod
+    def _develop_execution_mode() -> bool:
+        """读取进程启动模式，供 Task 创建事务决定是否领取独占槽。"""
+
+        from unilabos.app.startup_mode import OSStartupMode, get_startup_mode
+
+        return get_startup_mode() is OSStartupMode.DEVELOP
 
     def list_task_inventory_consumptions(self, task_uuid: str) -> list[dict[str, Any]]:
         """读取一个工作流任务的数量型库存消费事实。
@@ -3705,6 +3774,80 @@ class WorkflowService:
             return self._store.get_task(identity)
         except StoreNotFound:
             raise WorkflowError("not_found") from None
+
+    def get_workflow_task_step_state(self, task_uuid: str) -> dict[str, Any]:
+        """返回 Task 详情页的权威单步候选和当前模式。"""
+
+        task = self.get_workflow_task(task_uuid)
+        execution_mode = str(
+            task.get("execution_mode") or task.get("run_mode") or "normal"
+        )
+        terminal = task.get("status") in {
+            "succeeded",
+            "success",
+            "failed",
+            "canceled",
+            "timeout",
+        }
+        if terminal or self._task_scheduler_bridge is None:
+            return {
+                "workflow_task_uuid": task_uuid,
+                "execution_mode": execution_mode,
+                "control_status": task.get("control_status"),
+                "in_flight_job_count": 0,
+                "requires_selection": False,
+                "can_step": False,
+                "candidates": [],
+            }
+        try:
+            state = self._task_scheduler_bridge.step_state(task_uuid)
+        except TaskSchedulerBridgeError:
+            return {
+                "workflow_task_uuid": task_uuid,
+                "execution_mode": execution_mode,
+                "control_status": task.get("control_status"),
+                "in_flight_job_count": 0,
+                "requires_selection": False,
+                "can_step": False,
+                "candidates": [],
+            }
+        plan = task.get("execution_plan")
+        raw_nodes = plan.get("nodes") if isinstance(plan, Mapping) else []
+        node_by_uuid = {
+            str(node.get("uuid") or ""): node
+            for node in raw_nodes
+            if isinstance(node, Mapping)
+        }
+        candidates = []
+        for candidate in state.get("candidates", []):
+            node_uuid = str(candidate.get("node_id") or "")
+            planned = node_by_uuid.get(node_uuid, {})
+            candidates.append(
+                {
+                    "node_uuid": node_uuid,
+                    "name": str(
+                        planned.get("name")
+                        or candidate.get("action_name")
+                        or node_uuid
+                    ),
+                    "kind": str(
+                        planned.get("kind")
+                        or candidate.get("executor_kind")
+                        or "device_action"
+                    ),
+                    "device_id": str(candidate.get("device_id") or ""),
+                    "action_name": str(candidate.get("action_name") or ""),
+                }
+            )
+        return {
+            "workflow_task_uuid": task_uuid,
+            "execution_mode": str(state.get("execution_mode") or execution_mode),
+            "control_status": task.get("control_status"),
+            "in_flight_job_count": int(state.get("in_flight_job_count") or 0),
+            "requires_selection": bool(state.get("requires_selection")),
+            "can_step": bool(state.get("can_step")),
+            "candidates": candidates,
+        }
 
     def list_workflow_tasks(
         self,

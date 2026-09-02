@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LucideIcon } from 'lucide-react'
 import {
   Activity,
@@ -13,12 +13,16 @@ import {
   FlaskConical,
   LoaderCircle,
   Plus,
+  Pause,
+  Play,
   RefreshCw,
   Send,
   ShieldAlert,
+  Square,
+  StepForward,
   X,
 } from 'lucide-react'
-import { createWorkflowTask, decideManualConfirmation } from '../lib/edgeClient'
+import { commandWorkflowTask, createWorkflowTask, decideManualConfirmation, loadWorkflowTaskStepState } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTarget, WorkflowTask } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
@@ -52,12 +56,14 @@ function NodeMarker({
   node,
   index,
   selected,
+  ready,
   onSelect,
   onNotify,
 }: {
   node?: TaskNode
   index: number
   selected: boolean
+  ready?: boolean
   onSelect: () => void
   onNotify: (message: string) => void
 }) {
@@ -114,7 +120,7 @@ function NodeMarker({
     : 0
   return (
     <div
-      className={`matrix-node matrix-node-${status} ${awaitingConfirmation ? 'matrix-node-manual-confirmation' : ''} ${selected ? 'matrix-node-selected' : ''}`}
+      className={`matrix-node matrix-node-${status} ${awaitingConfirmation ? 'matrix-node-manual-confirmation' : ''} ${selected ? 'matrix-node-selected' : ''} ${ready ? 'matrix-node-step-ready' : ''}`}
     >
       <button
         type="button"
@@ -194,6 +200,7 @@ function TaskMatrix({
   onSelectNode,
   onOpenWorkflow,
   onNotify,
+  readyNodeUuids = new Set<string>(),
 }: {
   tasks: WorkflowTask[]
   selectedId: string
@@ -202,6 +209,7 @@ function TaskMatrix({
   onSelectNode: (taskUuid: string, nodeUuid: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
   onNotify: (message: string) => void
+  readyNodeUuids?: ReadonlySet<string>
 }) {
   const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
   const matrixWidth = TASK_IDENTITY_COLUMN_WIDTH
@@ -264,6 +272,11 @@ function TaskMatrix({
                   node={node}
                   index={index}
                   selected={Boolean(node && selectedNode?.taskUuid === task.uuid && selectedNode.nodeUuid === node.uuid)}
+                  ready={Boolean(
+                    node
+                    && task.uuid === selectedId
+                    && readyNodeUuids.has(node.uuid)
+                  )}
                   onSelect={() => {
                     if (node) onSelectNode(task.uuid, node.uuid)
                   }}
@@ -564,6 +577,7 @@ export function TasksPage({
   onRefresh,
   onNotify,
   onOpenWorkflow,
+  startupMode = 'product',
 }: {
   tasks: WorkflowTask[]
   workflows: WorkflowDefinition[]
@@ -572,12 +586,13 @@ export function TasksPage({
   onRefresh: () => void
   onNotify: (message: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
+  startupMode?: 'develop' | 'product'
 }) {
+  const queryClient = useQueryClient()
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [selectedId, setSelectedId] = useState(tasks[0]?.uuid || '')
   const [selectedNodeRef, setSelectedNodeRef] = useState<{ taskUuid: string; nodeUuid: string }>()
-  const [createOpen, setCreateOpen] = useState(false)
-  const closeCreateDialog = useCallback(() => setCreateOpen(false), [])
+  const [selectedStepNodeUuid, setSelectedStepNodeUuid] = useState('')
 
   const selectTask = useCallback((taskUuid: string) => {
     setSelectedId(taskUuid)
@@ -608,6 +623,40 @@ export function TasksPage({
     : undefined
   const selectedNode = selectedNodeTask?.nodes.find((node) => node.uuid === selectedNodeRef?.nodeUuid)
   const runningTasks = tasks.filter((task) => task.nodes.some((node) => node.status === 'running' || node.status === 'canceling'))
+  const selectedIsTerminal = Boolean(selected && ['succeeded', 'failed', 'canceled', 'timeout'].includes(selected.status))
+  const stepStateQuery = useQuery({
+    queryKey: ['workflow-task-step-state', selected?.uuid],
+    queryFn: ({ signal }) => loadWorkflowTaskStepState(selected!.uuid, signal),
+    enabled: startupMode === 'develop' && connected && Boolean(selected) && !selectedIsTerminal,
+    refetchInterval: 2_000,
+  })
+  const stepState = stepStateQuery.data
+  const effectiveExecutionMode = stepState?.executionMode || selected?.executionMode || 'normal'
+  const readyNodeUuids = useMemo(
+    () => new Set(stepState?.candidates.map((candidate) => candidate.nodeUuid) || []),
+    [stepState?.candidates],
+  )
+  useEffect(() => {
+    if (!stepState?.requiresSelection) {
+      setSelectedStepNodeUuid(stepState?.candidates[0]?.nodeUuid || '')
+      return
+    }
+    if (!stepState.candidates.some((candidate) => candidate.nodeUuid === selectedStepNodeUuid)) {
+      setSelectedStepNodeUuid('')
+    }
+  }, [stepState, selectedStepNodeUuid])
+  const controlMutation = useMutation({
+    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => (
+      commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid)
+    ),
+    onSuccess: (_command, variables) => {
+      const labels = { step: '单步命令已提交', pause: '已进入单步切换', resume: '已继续自动运行', cancel: '取消命令已提交' }
+      onNotify(labels[variables.type])
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-step-state', selected?.uuid] })
+    },
+    onError: (error) => onNotify(`任务控制失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
 
   const counts: Record<TaskFilter, number> = {
     all: tasks.length,
@@ -632,7 +681,7 @@ export function TasksPage({
         actions={
           <>
             <Button icon={<RefreshCw size={16} />} onClick={onRefresh}>刷新状态</Button>
-            <Button tone="primary" icon={<Plus size={17} />} onClick={() => setCreateOpen(true)}>创建任务</Button>
+            <Button tone="primary" icon={<Plus size={17} />} disabled={!workflows.length} onClick={() => workflows[0] && onOpenWorkflow({ workflowUuid: workflows[0].uuid, revision: workflows[0].revision })}>前往工作流创建</Button>
           </>
         }
       />
@@ -669,6 +718,7 @@ export function TasksPage({
             onSelectNode={selectNode}
             onOpenWorkflow={onOpenWorkflow}
             onNotify={onNotify}
+            readyNodeUuids={selected?.uuid ? readyNodeUuids : new Set<string>()}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>
@@ -689,6 +739,25 @@ export function TasksPage({
                 <div><dt>整体进度</dt><dd>{selected.progress}%</dd></div>
                 <div><dt>更新时间</dt><dd>{selected.updatedAt}</dd></div>
               </dl>
+              {startupMode === 'develop' && !selectedIsTerminal ? (
+                <div className="task-step-control" aria-label="单步调度控制">
+                  <header><div><strong>调度模式</strong><small>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在等待在途 Job 结束' : '单步调试'}</small></div><code>{effectiveExecutionMode}</code></header>
+                  {effectiveExecutionMode === 'step' && stepState?.candidates.length ? (
+                    <div className="step-candidate-list" aria-label="可执行节点">
+                      {stepState.candidates.map((candidate) => (
+                        <button type="button" key={candidate.nodeUuid} className={selectedStepNodeUuid === candidate.nodeUuid ? 'active' : ''} disabled={!stepState.requiresSelection} onClick={() => setSelectedStepNodeUuid(candidate.nodeUuid)}><span><strong>{candidate.name}</strong><small>{candidate.kind}{candidate.deviceId ? ` · ${candidate.deviceId}` : ''}</small></span><code>{candidate.nodeUuid}</code></button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? <small className="step-control-note">当前没有可执行节点</small> : null}
+                  <div className="task-step-actions">
+                    {effectiveExecutionMode === 'normal' ? <Button icon={<Pause size={14} />} disabled={controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button> : null}
+                    {effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={14} />} disabled>等待切换</Button> : null}
+                    {effectiveExecutionMode === 'step' ? <><Button tone="primary" icon={<StepForward size={14} />} disabled={controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>{stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}</Button><Button icon={<Play size={14} />} disabled={controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button></> : null}
+                    <Button tone="danger" icon={<Square size={14} />} disabled={controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
+                  </div>
+                </div>
+              ) : null}
               {selected.trace ? (
                 <a
                   className="selected-task-trace-link"
@@ -727,7 +796,6 @@ export function TasksPage({
         </Panel>
       </section>
 
-      {createOpen ? <CreateTaskDialog workflows={workflows} materials={materials} connected={connected} onClose={closeCreateDialog} onNotify={onNotify} /> : null}
     </div>
   )
 }

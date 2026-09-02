@@ -20,6 +20,7 @@ from unilabos.workflow.station_status_projection import (
 from unilabos.workflow.store import StoreConflict, StoreNotFound, utc_now
 
 EXECUTION_PROCESS_RESTARTED = "execution_process_restarted"
+TASK_ABORTED_BY_RUNTIME_RESTART = "task_aborted_by_runtime_restart"
 _IN_FLIGHT_JOB_STATES = frozenset({"dispatched", "running", "cancel_requested"})
 _TERMINAL_JOB_STATES = frozenset(
     {"succeeded", "failed", "skipped", "canceled", "timeout"}
@@ -32,17 +33,16 @@ def fail_task_after_execution_process_restart(
     task_uuid: str,
     now: str | None = None,
 ) -> bool:
-    """原子终结仍有设备侧在途作业的工作流任务。
+    """原子终结 runtime 重启时仍非终态的工作流任务。
 
     参数：``connection`` 是调用方持有的工作流写事务；``task_uuid`` 是稳定任务
-    UUID；``now`` 是可选统一结算时间。返回：任务已经进入 ``running`` 或
-    ``canceling`` 并完成失败收敛时为 ``True``；仍是 ``pending`` 时为 ``False``，
-    允许以原身份恢复。异常：任务或作业缺失时抛
+    UUID；``now`` 是可选统一结算时间。返回：任务处于 ``pending``、``running``
+    或 ``canceling`` 并完成失败收敛时为 ``True``；终态任务返回 ``False``。
+    异常：任务或作业缺失时抛
     ``StoreNotFound``/``StoreConflict``，SQLite 写入错误原样传播。
 
-    该事务只确定业务失败，不声称设备已经停止。仍可能对应物理动作的占用转为
-    ``uncertain``，任务清理进入 ``requires_attention``；若崩溃发生在两个作业
-    之间且没有物理在途事实，则任务同样失败，但清理可直接为 ``settled``。
+    已完成节点保持终态；在途节点失败；未开始节点取消且永不恢复。所有旧 Claim、
+    Lease 与 Fence 通过释放租约失效，任务清理直接收敛为 ``settled``。
     """
 
     task = connection.execute(
@@ -61,9 +61,8 @@ def fail_task_after_execution_process_restart(
     ).fetchall()
     if not jobs:
         raise StoreConflict(f"工作流任务没有可恢复作业：{task_uuid}")
-    if str(task["status"]) not in {"running", "canceling"}:
+    if str(task["status"]) not in {"pending", "running", "canceling"}:
         return False
-    in_flight = [row for row in jobs if str(row["status"]) in _IN_FLIGHT_JOB_STATES]
 
     failed_at = now or utc_now()
     failure_details = [
@@ -73,30 +72,23 @@ def fail_task_after_execution_process_restart(
         }
     ]
     failure_info = _json(failure_details)
-    skipped_details = [
+    canceled_details = [
         {
-            "code": "upstream_execution_process_restarted",
-            "message": "工作流任务已因设备执行进程重启终止，节点未执行",
+            "code": TASK_ABORTED_BY_RUNTIME_RESTART,
+            "message": "runtime 重启导致工作流任务终止，节点未执行",
         }
     ]
-    skipped_info = _json(skipped_details)
+    canceled_info = _json(canceled_details)
 
     for job in jobs:
         job_uuid = str(job["uuid"])
         status = str(job["status"])
         if status in _IN_FLIGHT_JOB_STATES:
-            physical_may_be_in_flight = (
-                str(job["executor_kind"]) != "manual_confirm"
-                or _manual_confirmation_was_approved(
-                    connection,
-                    job_uuid=job_uuid,
-                )
-            )
             changed = connection.execute(
                 """
                 UPDATE workflow_node_job
                 SET status = 'failed', error_info = ?, wait_reason = '{}',
-                    uncertainty_reason = ?, cancel_ack_deadline_at = NULL,
+                    uncertainty_reason = NULL, cancel_ack_deadline_at = NULL,
                     cancel_complete_deadline_at = NULL, finished_at = ?,
                     update_time = ?
                 WHERE uuid = ?
@@ -107,11 +99,6 @@ def fail_task_after_execution_process_restart(
                 """,
                 (
                     failure_info,
-                    (
-                        EXECUTION_PROCESS_RESTARTED
-                        if physical_may_be_in_flight
-                        else None
-                    ),
                     failed_at,
                     failed_at,
                     job_uuid,
@@ -147,29 +134,29 @@ def fail_task_after_execution_process_restart(
             changed = connection.execute(
                 """
                 UPDATE workflow_node_job
-                SET status = 'skipped', error_info = ?, wait_reason = '{}',
+                SET status = 'canceled', error_info = ?, wait_reason = '{}',
                     finished_at = ?, update_time = ?
                 WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
                 """,
-                (skipped_info, failed_at, failed_at, job_uuid),
+                (canceled_info, failed_at, failed_at, job_uuid),
             ).rowcount
             if changed != 1:
-                raise StoreConflict(f"作业重启跳过状态发生并发变化：{job_uuid}")
+                raise StoreConflict(f"作业重启取消状态发生并发变化：{job_uuid}")
             _append_job_transition(
                 connection,
                 task_uuid=task_uuid,
                 job_uuid=job_uuid,
                 from_status="pending",
-                to_status="skipped",
+                to_status="canceled",
                 now=failed_at,
-                data={"reason": "upstream_execution_process_restarted"},
+                data={"reason": TASK_ABORTED_BY_RUNTIME_RESTART},
             )
             append_job_state_event(
                 connection,
                 job_row=job,
-                status="skipped",
+                status="canceled",
                 details={
-                    "error_info": skipped_details,
+                    "error_info": canceled_details,
                     "finished_at": failed_at,
                 },
             )
@@ -184,27 +171,15 @@ def fail_task_after_execution_process_restart(
         if status not in _TERMINAL_JOB_STATES:
             raise StoreConflict(f"作业存在无法收敛的重启状态：{job_uuid}/{status}")
 
-    # 只有仍可能存在物理动作的任务才保留不确定占用。纯调度窗口（前一节点已
-    # 结算、后一节点尚未派发）同样业务失败，但不伪造需要人工清理的设备事实。
-    physical_in_flight = any(
-        str(row["executor_kind"]) != "manual_confirm"
-        or _manual_confirmation_was_approved(connection, job_uuid=str(row["uuid"]))
-        for row in in_flight
-    )
-    requires_attention = physical_in_flight
-    target_lease_state = "uncertain" if requires_attention else "released"
     connection.execute(
         """
         UPDATE execution_lock_lease
-        SET state = ?, released_at = CASE WHEN ? = 'released' THEN ? ELSE released_at END,
-            update_time = ?
+        SET state = 'released', released_at = ?, update_time = ?
         WHERE workflow_task_uuid = ?
           AND state IN ('reserved', 'running', 'uncertain')
           AND deleted_at IS NULL
         """,
         (
-            target_lease_state,
-            target_lease_state,
             failed_at,
             failed_at,
             task_uuid,
@@ -222,14 +197,11 @@ def fail_task_after_execution_process_restart(
     connection.execute(
         """
         UPDATE execution_claim
-        SET state = ?, released_at = CASE WHEN ? = 'released' THEN ? ELSE released_at END,
-            update_time = ?
+        SET state = 'released', released_at = ?, update_time = ?
         WHERE workflow_task_uuid = ?
           AND state IN ('reserved', 'running', 'uncertain')
         """,
         (
-            target_lease_state,
-            target_lease_state,
             failed_at,
             failed_at,
             task_uuid,
@@ -247,8 +219,8 @@ def fail_task_after_execution_process_restart(
           AND deleted_at IS NULL
         """,
         (
-            "requires_attention" if requires_attention else "settled",
-            EXECUTION_PROCESS_RESTARTED if requires_attention else None,
+            "settled",
+            None,
             failure_info,
             failed_at,
             failed_at,
@@ -272,9 +244,7 @@ def fail_task_after_execution_process_restart(
         status="failed",
         details={
             "failure_code": EXECUTION_PROCESS_RESTARTED,
-            "cleanup_status": (
-                "requires_attention" if requires_attention else "settled"
-            ),
+            "cleanup_status": "settled",
             "finished_at": failed_at,
         },
     )
@@ -285,28 +255,6 @@ def fail_task_after_execution_process_restart(
         now=failed_at,
     )
     return True
-
-
-def _manual_confirmation_was_approved(
-    connection: sqlite3.Connection,
-    *,
-    job_uuid: str,
-) -> bool:
-    """判断人工确认节点是否已经越过纯等待阶段。
-
-    参数：当前工作流事务与节点作业 UUID。返回：确认状态为 ``approved`` 时为真；
-    记录不存在或仍 pending 时为假。异常：SQLite 查询错误原样传播。批准后可能已
-    派发连续设备动作，因此重启必须保守要求物理清理。
-    """
-
-    row = connection.execute(
-        """
-        SELECT status FROM workflow_manual_confirmation
-        WHERE workflow_node_job_uuid = ?
-        """,
-        (job_uuid,),
-    ).fetchone()
-    return row is not None and str(row["status"]) == "approved"
 
 
 def _append_job_transition(
@@ -350,5 +298,6 @@ def _json(value: Sequence[dict[str, str]]) -> str:
 
 __all__ = [
     "EXECUTION_PROCESS_RESTARTED",
+    "TASK_ABORTED_BY_RUNTIME_RESTART",
     "fail_task_after_execution_process_restart",
 ]

@@ -361,6 +361,7 @@ def test_create_new_fails_closed_without_task_or_material_graph_change(
 
 def test_shared_source_allows_two_live_tasks_and_serializes_actions(
     runtime: _Runtime,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """共享来源应允许同一工作流并行建任务，并在动作阶段互斥。
 
@@ -370,6 +371,13 @@ def test_shared_source_allows_two_live_tasks_and_serializes_actions(
     接口、绑定事务或动作锁失败均由断言暴露。
     """
 
+    # 共享来源并发是 product 调度能力；develop 模式的全局单任务调试槽由
+    # startup-mode 合同测试单独覆盖。
+    monkeypatch.setattr(
+        WorkflowService,
+        "_develop_execution_mode",
+        staticmethod(lambda: False),
+    )
     material_template_uuid = _create_resource_template(
         runtime.client,
         resource_id="lab.shared-reagent",

@@ -117,6 +117,8 @@ function demoTask(
     nodes: nodes(activeIndex, status),
     materialUuids: [],
     runMode: 'normal',
+    executionMode: 'normal',
+    controlStatus: 'active',
     matrixGroupKey: 'single-sample-atomic-v3',
   }
 }

@@ -36,6 +36,10 @@ from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.dispatch_permit_saga import (
     freeze_projected_dispatch_permit,
 )
+from unilabos.workflow.execution_restart_recovery import (
+    EXECUTION_PROCESS_RESTARTED,
+    TASK_ABORTED_BY_RUNTIME_RESTART,
+)
 from unilabos.workflow.execution_lock_lease import (
     list_execution_locks,
     wait_resource_from_execution_lock,
@@ -422,6 +426,17 @@ class TaskSchedulerBridge:
         except ValueError as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
+    def step_state(self, task_uuid: str) -> dict[str, Any]:
+        """返回标准 Step UI 使用的后端权威候选集合。"""
+
+        if self._closed:
+            raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        normalized_uuid = self._required_text(task_uuid, field="task_uuid")
+        try:
+            return self._scheduler.step_state(normalized_uuid)
+        except ValueError as error:
+            raise TaskSchedulerBridgeError(str(error)) from error
+
     def cancel(
         self,
         task_uuid: str,
@@ -480,31 +495,42 @@ class TaskSchedulerBridge:
         return aggregate
 
     def pause(self, task_uuid: str) -> dict[str, Any]:
-        """Pause future dispatch while preserving already in-flight device work."""
+        """请求 normal→step，并等待当前 Task 的在途 Job 自然排空。"""
 
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         normalized_uuid = self._required_text(task_uuid, field="task_uuid")
         try:
-            result = self._scheduler.pause_workflow(normalized_uuid)
-            task = self._store.set_task_control_status(
-                normalized_uuid, control_status="paused"
+            result = self._scheduler.switch_to_step(normalized_uuid)
+            task = self._store.set_task_execution_mode(
+                normalized_uuid,
+                execution_mode=str(result["execution_mode"]),
+                control_status="paused",
             )
             return {"task": task, "scheduler": result}
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
     def resume(self, task_uuid: str) -> dict[str, Any]:
-        """Resume a command-paused workflow under the same Task identity."""
+        """把稳定暂停的 step Task 切换为自动调度。"""
 
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         normalized_uuid = self._required_text(task_uuid, field="task_uuid")
         try:
-            result = self._scheduler.resume_workflow(normalized_uuid)
-            task = self._store.set_task_control_status(
-                normalized_uuid, control_status="active"
-            )
+            result = self._scheduler.continue_automatic(normalized_uuid)
+            task = self._store.get_task(normalized_uuid)
+            if task.get("status") not in {
+                "succeeded",
+                "failed",
+                "canceled",
+                "timeout",
+            }:
+                task = self._store.set_task_execution_mode(
+                    normalized_uuid,
+                    execution_mode="normal",
+                    control_status="active",
+                )
             return {"task": task, "scheduler": result}
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
@@ -741,15 +767,11 @@ class TaskSchedulerBridge:
             raise TaskSchedulerBridgeError(str(error)) from error
 
     def recover_active_tasks(self) -> list[dict[str, Any]]:
-        """恢复未派发任务，并失败执行进程重启时仍在途的任务。
+        """在 runtime 重启后失败所有未终态工作流任务。
 
-        参数：无。返回：已恢复任务的标准聚合列表；包括运行中任务和尚未执行
-        首步的 ``pending + paused`` 单步任务。已成功作业仅
-        恢复 DAG 返回值，待处理作业才可派发；发现 ``dispatched`` 或
-        ``running`` 作业时将作业和父任务转为 ``failed``、跳过尚未开始的节点并
-        保留不确定执行占用，返回的聚合可直接用于告警和物理结算。
-        异常：冻结计划或持久事实不一致时记录后跳过，不阻止其他
-        可证明安全的任务恢复。
+        已完成 Job 保持现状；在途 Job 失败；未开始 Job 取消且不恢复
+        派发。任务的数量预留、实例物料预留和旧 Claim/Fence 一并释放。
+        返回已收敛的标准任务聚合；单任务故障不阻止其他任务处理。
         """
 
         if self._closed:
@@ -776,21 +798,19 @@ class TaskSchedulerBridge:
             finished_listener=self._replay_persisted_job_finished,
         )
         recovered: list[dict[str, Any]] = []
-        # Backend 启动扫描包含普通 pending Task，并按 create_time/uuid 稳定排序。
-        # Local 使用同一顺序恢复，保证创建已提交、调度调用尚未发生的崩溃窗口
-        # 能以原 Task/Job 身份幂等重入。
+        # 按 create_time/uuid 稳定扫描，不重建内存 DAG，保证重启后没有
+        # pending 或 step-paused 任务以原身份继续派发。
         for task in self._store.list_recoverable_tasks():
             try:
-                if task.get("status") == "pending" and not (
-                    task.get("run_mode") == "step"
-                    and task.get("control_status") == "paused"
-                ):
-                    aggregate = self.submit(task)
-                else:
-                    aggregate = self._recover_running_task(task)
+                task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
+                aggregate = self._projection.project_execution_process_restarted(
+                    task_uuid
+                )
+                if aggregate is not None:
+                    self._release_runtime_restart_resources(aggregate)
             except Exception:  # 单任务损坏不影响其他恢复
                 logger.exception(
-                    "活动工作流任务无法安全恢复：%s",
+                    "活动工作流任务无法按重启策略收敛：%s",
                     task.get("uuid"),
                 )
                 continue
@@ -823,6 +843,19 @@ class TaskSchedulerBridge:
                 for task in task_page["items"]:
                     task_uuid = str(task["uuid"])
                     jobs = self._store.list_jobs(task_uuid)
+                    task_errors = task.get("error_info")
+                    if (
+                        isinstance(task_errors, list)
+                        and any(
+                            isinstance(item, Mapping)
+                            and item.get("code") == EXECUTION_PROCESS_RESTARTED
+                            for item in task_errors
+                        )
+                    ):
+                        self._release_runtime_restart_resources(
+                            {"task": task, "jobs": jobs}
+                        )
+                        continue
                     uncertain_jobs = [
                         job
                         for job in jobs
@@ -967,7 +1000,7 @@ class TaskSchedulerBridge:
         参数：``job_uuids`` 是动作账本保留下来的结果不确定作业。返回无。异常：
         单项投影故障在其余任务全部处理后聚合为 ``TaskSchedulerBridgeError``；陈旧
         终态任务幂等跳过。每个任务只投影一次；运行中作业进入失败，尚未物理
-        执行的节点进入跳过，Claim/Fence 保留待人工对账。
+        执行的节点进入取消，Claim/Fence 与任务预留全部释放。
         """
 
         task_uuids: list[str] = []
@@ -1003,11 +1036,11 @@ class TaskSchedulerBridge:
                 )
                 continue
             try:
-                self._mark_inventory_claims_uncertain(aggregate)
+                self._release_runtime_restart_resources(aggregate)
             except Exception as error:
                 failures.append((task_uuid, error))
                 logger.exception(
-                    "动作进程重启冻结库存 Claim 失败：%s",
+                    "动作进程重启释放任务资源失败：%s",
                     task_uuid,
                 )
                 continue
@@ -1020,6 +1053,48 @@ class TaskSchedulerBridge:
             raise TaskSchedulerBridgeError(
                 "动作进程重启有任务未能提交失败事实：" + failed_task_uuids
             ) from failures[0][1]
+
+    def _release_runtime_restart_resources(
+        self,
+        aggregate: Mapping[str, Any],
+    ) -> None:
+        """runtime 重启终止任务后，释放其全部任务级资源。"""
+
+        task = aggregate.get("task")
+        jobs = aggregate.get("jobs")
+        if not isinstance(task, Mapping) or not isinstance(jobs, list):
+            raise StoreConflict("重启失败聚合结构非法")
+        task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
+        inventory = self._scheduler.station_resource_inventory
+        for job in jobs:
+            if not isinstance(job, Mapping):
+                continue
+            job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
+            claim = self._projection.get_execution_claim(job_uuid)
+            if claim is not None and inventory is not None:
+                inventory.transition_dispatch_permit(
+                    str(claim["claim_uuid"]),
+                    target_state="released",
+                )
+            self._task_by_job.pop(job_uuid, None)
+            self._cancel_cancel_timer(job_uuid)
+            self._cancel_manual_confirmation_timer(job_uuid)
+        self._submitted_tasks.discard(task_uuid)
+        self._admission_pending_tasks.discard(task_uuid)
+        if self._quantity_inventory is not None:
+            self._quantity_inventory.release_task(
+                task_uuid,
+                reason="runtime_restarted",
+            )
+        if any(
+            isinstance(job, Mapping)
+            and job.get("executor_kind") == "material_source"
+            for job in jobs
+        ):
+            self._material_sources.release_terminal_reservations(
+                task_uuid,
+                reason="runtime_restarted",
+            )
 
     def _recover_running_task(
         self,
@@ -2315,6 +2390,10 @@ class TaskSchedulerBridge:
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
             return
+        persisted_job = self._store.get_job(job_uuid)
+        if self._was_aborted_by_runtime_restart(persisted_job):
+            logger.info("忽略 runtime 重启后迟到的旧式作业完成通知：%s", job_uuid)
+            return
         # ``return_info`` 保持标准对象字段；标量结果使用明确包装键。
         return_info = (
             dict(ret_value)
@@ -2371,6 +2450,13 @@ class TaskSchedulerBridge:
             ).strip()
             if not task_uuid:
                 return
+        persisted_job = self._store.get_job(job_uuid)
+        if self._was_aborted_by_runtime_restart(persisted_job):
+            # runtime 重启已经为这次执行冻结了失败/取消事实，并释放了旧
+            # Claim/Fence。旧执行进程随后到达的结果不再具备提交权，必须丢弃，
+            # 否则会与重启事实形成不可变结果冲突，甚至错误结算物料。
+            logger.info("忽略 runtime 重启后迟到的作业结果：%s", job_uuid)
+            return
         if outcome.unknown_command_ids:
             self._transition_inventory_claim(job_uuid, target_state="uncertain")
             self._projection.project_execution_attention(
@@ -2381,7 +2467,6 @@ class TaskSchedulerBridge:
                 ),
             )
             return
-        persisted_job = self._store.get_job(job_uuid)
         if (
             persisted_job.get("status") == "failed"
             and str(persisted_job.get("uncertainty_reason") or "").strip()
@@ -2448,6 +2533,23 @@ class TaskSchedulerBridge:
             return_info=outcome.return_info,
             error_info=outcome.error_info,
             manual_confirmation_status=None,
+        )
+
+    @staticmethod
+    def _was_aborted_by_runtime_restart(job: Mapping[str, Any]) -> bool:
+        """判断 Job 终态是否由 runtime 重启策略冻结。"""
+
+        error_info = job.get("error_info")
+        if not isinstance(error_info, list):
+            return False
+        return any(
+            isinstance(item, Mapping)
+            and item.get("code")
+            in {
+                EXECUTION_PROCESS_RESTARTED,
+                TASK_ABORTED_BY_RUNTIME_RESTART,
+            }
+            for item in error_info
         )
 
     def _project_job_result(
@@ -2530,6 +2632,26 @@ class TaskSchedulerBridge:
         # Job→Task 路由而没有对应内存运行。记录这一区别，用于在释放持久派发
         # 容量后主动唤醒其他已经恢复、仍在调度器中等待的作业。
         replayed_without_runtime = self._scheduler.workflow_snapshot(task_uuid) is None
+        scheduler_runtime = self._scheduler.workflow_snapshot(task_uuid)
+        if scheduler_runtime is not None:
+            persisted_task = self._store.get_task(task_uuid)
+            runtime_mode = str(
+                scheduler_runtime.get("execution_mode")
+                or persisted_task.get("execution_mode")
+                or persisted_task.get("run_mode")
+                or "normal"
+            )
+            if (
+                runtime_mode == "step"
+                and persisted_task.get("execution_mode") == "switching_to_step"
+                and persisted_task.get("status")
+                not in {"succeeded", "failed", "canceled", "timeout"}
+            ):
+                self._store.set_task_execution_mode(
+                    task_uuid,
+                    execution_mode="step",
+                    control_status="paused",
+                )
         # ``continue`` 只在下一个节点没有断点时复用既有单步派发原语；断点或
         # 显式 ``step`` 会先创建新 Hold，绝不越过物理派发边界。
         debug_action = self._store.advance_debug_after_job_finished(task_uuid)

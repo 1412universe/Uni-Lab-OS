@@ -13,6 +13,7 @@ vi.mock('../lib/edgeClient', async (importOriginal) => ({
 }))
 
 const authoritativeSnapshot: EdgeSnapshot = {
+  startupMode: 'develop',
   workflows: [],
   tasks: [],
   materials: [{
@@ -81,7 +82,7 @@ describe('useEdgeData', () => {
       .mockResolvedValueOnce([{
         uuid: 'task-new', workflowUuid: 'wf-1', workflowName: '流程', status: 'running',
         sample: 'sample-1', description: 'task', current: '运行中', progress: 0,
-        updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', matrixGroupKey: 'wf-1',
+        updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal', controlStatus: 'active', matrixGroupKey: 'wf-1',
       }])
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const wrapper = ({ children }: { children: ReactNode }) => (

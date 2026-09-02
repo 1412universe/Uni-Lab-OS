@@ -54,6 +54,9 @@ class WorkflowRun:
 
     def __init__(self, spec: WorkflowSpec):
         self.spec = spec
+        # ``run_mode`` 是冻结的创建事实；运行期间的自动/单步切换只修改这里的
+        # 调度闸门，不能反向篡改 ExecutionPlan。
+        self.execution_mode = "step" if spec.run_mode == "step" else "normal"
         # 单步任务创建后必须停在首个节点之前；只有显式 step 命令可以临时放行。
         self.state = (
             WorkflowState.PAUSED if spec.run_mode == "step" else WorkflowState.RUNNING
@@ -1229,6 +1232,7 @@ class WorkflowRun:
             "workflow_id": self.spec.workflow_id,
             "task_id": self.spec.task_id,
             "state": self.state.value,
+            "execution_mode": self.execution_mode,
             "nodes": {
                 node_id: {
                     "state": state.value,

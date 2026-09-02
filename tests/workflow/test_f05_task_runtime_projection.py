@@ -1355,13 +1355,13 @@ def test_projection_never_writes_legacy_history_or_execution_unknown(
     )
 
 
-def test_execution_process_restart_fails_inflight_and_skips_pending_nodes(
+def test_execution_process_restart_fails_inflight_and_cancels_pending_nodes(
     store: WorkflowStore,
 ) -> None:
     """执行进程重启必须在一个事务中终止整张活动 DAG。
 
     参数：``store`` 是隔离工作流写模型。返回无；断言在途 Job 明确失败、未派发
-    Job 跳过、父 Task 失败且清理状态独立需要人工处理。异常：事务状态不一致会使
+    Job 取消、父 Task 失败且旧执行占用释放。异常：事务状态不一致会使
     测试失败。
     """
 
@@ -1384,21 +1384,21 @@ def test_execution_process_restart_fails_inflight_and_skips_pending_nodes(
     assert jobs[first_job_uuid]["error_info"][0]["code"] == (
         "execution_process_restarted"
     )
-    assert jobs[second_job_uuid]["status"] == "skipped"
+    assert jobs[second_job_uuid]["status"] == "canceled"
     assert jobs[second_job_uuid]["error_info"][0]["code"] == (
-        "upstream_execution_process_restarted"
+        "task_aborted_by_runtime_restart"
     )
     assert aggregate["task"]["status"] == "failed"
-    assert aggregate["task"]["cleanup_status"] == "requires_attention"
-    assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "uncertain"
+    assert aggregate["task"]["cleanup_status"] == "settled"
+    assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "released"
     events = StationEventOutboxStore(store).list_pending()
     assert [event["event_type"] for event in events] == [
         "task.running",
         "job.dispatched",
         "job.running",
         "job.outcome_committed",
-        "job.skipped",
+        "job.canceled",
         "task.failed",
     ]
     assert events[3]["payload"]["outcome"] == "failed"
-    assert events[5]["payload"]["cleanup_status"] == "requires_attention"
+    assert events[5]["payload"]["cleanup_status"] == "settled"

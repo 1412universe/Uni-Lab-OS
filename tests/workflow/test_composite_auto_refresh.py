@@ -51,6 +51,7 @@ def _apply_source(
 
 def test_compatible_operation_apply_automatically_refreshes_clean_parent(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """实验操作兼容更新后，干净引用方工作流自动采用新展开图。
 
@@ -60,6 +61,13 @@ def test_compatible_operation_apply_automatically_refreshes_clean_parent(
     """
 
     reset_workflow_service_for_test()
+    # 本测试验证生产调度允许同一工作流存在多个任务；develop 模式的单任务
+    # 调试槽由独立合同测试覆盖。
+    monkeypatch.setattr(
+        WorkflowService,
+        "_develop_execution_mode",
+        staticmethod(lambda: False),
+    )
     package_root = tmp_path / "editable"
     package_root.mkdir()
     _write_package(package_root)

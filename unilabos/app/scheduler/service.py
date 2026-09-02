@@ -66,6 +66,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
 from unilabos.app.scheduler.models import (
     DispatchedJob,
     ReadyTask,
+    WorkflowNode,
     WorkflowSpec,
     WorkflowState,
     priority_weight,
@@ -706,26 +707,52 @@ class EdgeScheduler:
         self,
         job_uuids: tuple[str, ...],
     ) -> None:
-        """冻结受动作进程重启影响的本地 DAG，并保留现场占用。
+        """终止受动作进程重启影响的本地 DAG。
 
         参数：``job_uuids`` 是动作账本判定已越过派发边界、但无法确认终态的
-        作业。返回无。异常：持久投影监听器异常原样传播。处理不会移除在途作业
-        或资源锁；每个受影响工作流先进入失败态，确保任何后继节点不再派发。
+        作业。返回无。异常：持久投影监听器异常原样传播。持久失败事实提交后
+        移除在途作业与本地资源锁，使旧 Fence 失效，后继节点不再派发。
         """
 
         affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
         if not affected:
             return
         with self._lock:
+            affected_workflow_ids: set[str] = set()
             for job_uuid in affected:
                 job = self._inflight.get(job_uuid)
                 if job is None:
                     continue
+                affected_workflow_ids.add(job.workflow_id)
                 run = self._workflows.get(job.workflow_id)
                 if run is not None:
                     run.mark_failed(job.node_id)
             for listener in tuple(self._execution_process_restarted_listeners):
                 listener(affected)
+            aborted_job_ids = [
+                job_uuid
+                for job_uuid, job in self._inflight.items()
+                if job.workflow_id in affected_workflow_ids
+            ]
+            for job_uuid in aborted_job_ids:
+                job = self._inflight.pop(job_uuid, None)
+                self._job_resource_locks.pop(job_uuid, None)
+                action_trace = self._job_spans.pop(job_uuid, None)
+                if action_trace is not None:
+                    action_trace.event(
+                        "action.runtime_restarted",
+                        {"workflow.job.uuid": job_uuid},
+                    )
+                    action_trace.end()
+                if job is not None:
+                    self._record_timeline(
+                        job,
+                        success=False,
+                        suc_type="execution_process_restarted",
+                        state="failed",
+                    )
+            notifications = self._collect_terminal_notifications()
+        self._fire_notifications(notifications)
 
     def replay_persisted_edge_projections(
         self,
@@ -1051,15 +1078,17 @@ class EdgeScheduler:
             run = self._workflows.get(workflow_id)
             if run is None:
                 raise ValueError(f"workflow {workflow_id} not found")
-            if run.spec.run_mode != "step":
+            if run.execution_mode != "step":
                 raise ValueError(f"workflow {workflow_id} is not in step mode")
             if run.state is not WorkflowState.PAUSED:
                 raise ValueError(f"workflow {workflow_id} is not paused")
+            if self._workflow_in_flight_count_locked(workflow_id):
+                raise ValueError(f"workflow {workflow_id} step is still in progress")
 
-            # ready_nodes 只允许 RUNNING 状态读取；该活动态仅存在于本次锁内重排。
-            run.state = WorkflowState.RUNNING
-            ready_nodes = run.ready_nodes()
+            ready_nodes = self._step_ready_nodes_locked(run)
             if target_node_id is None:
+                if len(ready_nodes) > 1:
+                    raise ValueError("multiple step targets require explicit selection")
                 selected = ready_nodes[0] if ready_nodes else None
             else:
                 selected = next(
@@ -1072,11 +1101,15 @@ class EdgeScheduler:
 
             self._step_targets[workflow_id] = selected.id
             try:
+                # READY 候选确认后才临时打开同一调度循环；finally 会在本步的
+                # 本地控制结算或动作派发完成后重新关闭闸门。
+                run.state = WorkflowState.RUNNING
                 dispatched = self._reschedule_locked()
             finally:
                 self._step_targets.pop(workflow_id, None)
                 if run.state is WorkflowState.RUNNING:
                     run.state = WorkflowState.PAUSED
+            self._advance_step_repeat_transitions_locked(run)
             notifications = self._collect_terminal_notifications()
             result = {
                 "workflow_id": workflow_id,
@@ -1086,48 +1119,181 @@ class EdgeScheduler:
         self._fire_notifications(notifications)
         return result
 
-    def pause_workflow(self, workflow_id: str) -> dict[str, Any]:
-        """Pause future dispatch for a normal workflow without stopping in-flight work."""
+    def step_state(self, workflow_id: str) -> dict[str, Any]:
+        """返回单步控制所需的后端权威候选与在途状态。"""
 
         with self._lock:
             run = self._workflows.get(workflow_id)
             if run is None:
                 raise ValueError(f"workflow {workflow_id} not found")
-            if run.spec.run_mode == "step":
-                raise ValueError(f"workflow {workflow_id} is in step mode")
+            in_flight = self._workflow_in_flight_count_locked(workflow_id)
+            candidates = (
+                self._step_ready_nodes_locked(run)
+                if run.execution_mode == "step"
+                and run.state is WorkflowState.PAUSED
+                and in_flight == 0
+                else []
+            )
+            return {
+                "workflow_id": workflow_id,
+                "state": run.state.value,
+                "execution_mode": run.execution_mode,
+                "in_flight_job_count": in_flight,
+                "requires_selection": len(candidates) > 1,
+                "can_step": bool(candidates),
+                "candidates": [
+                    {
+                        "node_id": node.id,
+                        "executor_kind": node.executor_kind,
+                        "node_type": node.node_type,
+                        "device_id": node.device_id,
+                        "action_name": node.action_name,
+                    }
+                    for node in candidates
+                ],
+            }
+
+    def switch_to_step(self, workflow_id: str) -> dict[str, Any]:
+        """停止新的自动派发，并在当前 Task 的在途 Job 排空后进入单步。"""
+
+        with self._lock:
+            run = self._workflows.get(workflow_id)
+            if run is None:
+                raise ValueError(f"workflow {workflow_id} not found")
+            if run.execution_mode != "normal":
+                raise ValueError(f"workflow {workflow_id} is not in normal mode")
             if run.state in self._TERMINAL_STATES:
                 raise ValueError(f"workflow {workflow_id} is terminal")
-            if run.state is not WorkflowState.PAUSED:
-                run.state = WorkflowState.PAUSED
-                self._emit_monitor(
-                    "scheduler",
-                    "workflow_paused",
-                    {"workflow_id": workflow_id, "reason": "command"},
-                )
-                self._safe_history("record_state", workflow_id, "paused")
-            return {"workflow_id": workflow_id, "state": run.state.value}
+            run.execution_mode = "switching_to_step"
+            run.state = WorkflowState.PAUSED
+            self._complete_step_transition_locked(run)
+            return self.step_state(workflow_id)
 
-    def resume_workflow(self, workflow_id: str) -> dict[str, Any]:
-        """Resume a command-paused normal workflow and run one scheduling round."""
+    def continue_automatic(self, workflow_id: str) -> dict[str, Any]:
+        """从稳定单步暂停态恢复同一 WorkflowRun 的自动调度。"""
 
         with self._lock:
             run = self._workflows.get(workflow_id)
             if run is None:
                 raise ValueError(f"workflow {workflow_id} not found")
-            if run.spec.run_mode == "step":
-                raise ValueError(f"workflow {workflow_id} is in step mode")
+            if run.execution_mode != "step":
+                raise ValueError(f"workflow {workflow_id} is not in step mode")
             if run.state is not WorkflowState.PAUSED:
                 raise ValueError(f"workflow {workflow_id} is not paused")
+            if self._workflow_in_flight_count_locked(workflow_id):
+                raise ValueError(f"workflow {workflow_id} step is still in progress")
+            run.execution_mode = "normal"
             run.state = WorkflowState.RUNNING
             dispatched = self._reschedule_locked()
             notifications = self._collect_terminal_notifications()
             result = {
                 "workflow_id": workflow_id,
                 "state": run.state.value,
+                "execution_mode": run.execution_mode,
                 "dispatched": dispatched,
             }
         self._fire_notifications(notifications)
         return result
+
+    def _workflow_in_flight_count_locked(self, workflow_id: str) -> int:
+        """统计指定 WorkflowRun 尚未结算的 Job；调用方必须持有调度锁。"""
+
+        return sum(
+            job.workflow_id == workflow_id for job in self._inflight.values()
+        )
+
+    def _step_ready_nodes_locked(self, run: WorkflowRun) -> list[WorkflowNode]:
+        """在不打开派发闸门的前提下读取一个暂停运行的 DAG 候选。"""
+
+        previous_state = run.state
+        run.state = WorkflowState.RUNNING
+        try:
+            return list(run.ready_nodes())
+        finally:
+            run.state = previous_state
+
+    def _commit_prepared_local_control_locked(
+        self,
+        run: WorkflowRun,
+        evaluation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """先持久化一个本地控制决定，再提交同一份内存 DAG 事实。"""
+
+        control_node = run.node(str(evaluation["node_id"]))
+        event = {
+            **evaluation,
+            "workflow_id": run.spec.workflow_id,
+            "job_id": control_node.job_id,
+            "skipped_jobs": [
+                {
+                    "node_id": node_id,
+                    "job_id": run.node(node_id).job_id,
+                }
+                for node_id in evaluation.get("skipped_node_ids", ())
+            ],
+        }
+        event = self._notify_local_control(event)
+        run.commit_local_control(event)
+        return event
+
+    def _advance_step_repeat_transitions_locked(self, run: WorkflowRun) -> None:
+        """自动结算 Step 循环轮末 until，并在 false 时惰性物化下一轮。
+
+        RepeatUntil 容器首次进入仍是一个用户 Step，循环体中的可见节点也逐个
+        放行；这里只跨过不发送设备命令的轮末判断，以及该判断为 false 时紧邻
+        的下一轮物化。新的独立循环容器或条件节点不会被顺带消费。
+        """
+
+        if (
+            run.execution_mode != "step"
+            or run.state is not WorkflowState.PAUSED
+            or self._workflow_in_flight_count_locked(run.spec.workflow_id)
+        ):
+            return
+        previous_state = run.state
+        run.state = WorkflowState.RUNNING
+        allow_continuation_materialization = False
+        try:
+            while run.state is WorkflowState.RUNNING:
+                evaluation = run.prepare_local_control()
+                if evaluation is None or evaluation.get("control_type") != "repeat_until":
+                    break
+                phase = str(evaluation.get("phase") or "")
+                if phase == "materialize" and not allow_continuation_materialization:
+                    break
+                if phase not in {"evaluate", "materialize"}:
+                    break
+                event = self._commit_prepared_local_control_locked(run, evaluation)
+                if phase == "materialize":
+                    break
+                allow_continuation_materialization = (
+                    not event.get("error")
+                    and event.get("condition_result") is False
+                )
+        finally:
+            if run.state is WorkflowState.RUNNING:
+                run.state = previous_state
+
+    def _complete_step_transition_locked(self, run: WorkflowRun) -> None:
+        """在最后一个在途 Job 结算后原子完成 normal→step 排空。"""
+
+        if (
+            run.execution_mode == "switching_to_step"
+            and self._workflow_in_flight_count_locked(run.spec.workflow_id) == 0
+        ):
+            run.execution_mode = "step"
+            if run.state not in self._TERMINAL_STATES:
+                run.state = WorkflowState.PAUSED
+
+    def pause_workflow(self, workflow_id: str) -> dict[str, Any]:
+        """兼容标准 pause 命令：请求当前自动任务安全切换到单步。"""
+
+        return self.switch_to_step(workflow_id)
+
+    def resume_workflow(self, workflow_id: str) -> dict[str, Any]:
+        """兼容标准 resume 命令：从单步暂停态继续自动调度。"""
+
+        return self.continue_automatic(workflow_id)
 
     def restore_workflow(
         self,
@@ -1434,6 +1600,16 @@ class EdgeScheduler:
                     job.workflow_id,
                 )
 
+            # normal→step 的切换请求在最后一个在途 Job 结算前始终保持排空态；
+            # 必须先从 ``_inflight`` 删除当前 Job、再完成切换，保证下一轮重排
+            # 看见的是关闭的新派发闸门。
+            self._complete_step_transition_locked(run)
+
+            # Step 的用户边界止于可见 body 节点。最后一个 body Job 结算后，
+            # until 判断和 false→下一轮物化没有设备动作，必须在同一调度事务内
+            # 自动完成，避免暂停态因没有 READY 候选而永久卡住。
+            self._advance_step_repeat_transitions_locked(run)
+
             # 调试器的继续/断点推进必须等当前节点已经写入 WorkflowRun；否则下一
             # 节点仍被依赖判定为未就绪。完成事实监听与 DAG 结算监听明确分阶段。
             self._notify_job_settled(job_id, success, ret_value, suc_type)
@@ -1714,36 +1890,35 @@ class EdgeScheduler:
         for run in self._workflows.values():
             if run.state is not WorkflowState.RUNNING:
                 continue
+            step_target = self._step_targets.get(run.spec.workflow_id)
+            stepped_local_control = False
             while True:
                 evaluation = run.prepare_local_control()
                 if evaluation is None:
                     break
-                control_node = run.node(str(evaluation["node_id"]))
-                event = {
-                    **evaluation,
-                    "workflow_id": run.spec.workflow_id,
-                    "job_id": control_node.job_id,
-                    "skipped_jobs": [
-                        {
-                            "node_id": node_id,
-                            "job_id": run.node(node_id).job_id,
-                        }
-                        for node_id in evaluation.get("skipped_node_ids", ())
-                    ],
-                }
-                event = self._notify_local_control(event)
+                # 自动模式可连续推进调度器本地控制节点；单步模式只允许本次
+                # 明确选择的一个可见控制节点，不能顺带跨过同层其他条件或循环。
+                if (
+                    step_target is not None
+                    and str(evaluation.get("node_id") or "") != step_target
+                ):
+                    break
                 # 监听器可以把“物化失败”原子改写为同一控制节点的失败决定；
                 # 提交已投影的事件副本，保证持久状态与内存 DAG 不会分叉。
-                run.commit_local_control(event)
+                self._commit_prepared_local_control_locked(run, evaluation)
+                if step_target is not None:
+                    stepped_local_control = True
+                    break
                 if run.state is not WorkflowState.RUNNING:
                     break
+            if stepped_local_control:
+                continue
             if run.state is not WorkflowState.RUNNING:
                 continue
             weight = priority_weight(run.spec.priority)
             for node in run.ready_nodes():
                 if node.executor_kind == "condition":
                     continue
-                step_target = self._step_targets.get(run.spec.workflow_id)
                 if step_target is not None and node.id != step_target:
                     continue
                 ready.append(

@@ -149,10 +149,10 @@ def test_scheduler_fair_order_uses_persisted_task_creation_time(
         store.close()
 
 
-def test_restart_recovers_ordinary_pending_task_without_new_identity(
+def test_restart_aborts_ordinary_pending_task_without_dispatch(
     tmp_path: Path,
 ) -> None:
-    """创建已提交、调度前崩溃的普通 pending Task 必须在重启后恢复。"""
+    """创建已提交、调度前崩溃的 pending Task 在重启后取消节点并失败。"""
 
     store = _open_store(tmp_path)
     task_uuid = _uuid(101)
@@ -168,8 +168,9 @@ def test_restart_recovers_ordinary_pending_task_without_new_identity(
         recovered = bridge.recover_active_tasks()
 
         assert [item["task"]["uuid"] for item in recovered] == [task_uuid]
-        assert [item["job_id"] for item in dispatcher.dispatched] == [job_uuid]
-        assert store.get_task(task_uuid)["status"] == "running"
+        assert dispatcher.dispatched == []
+        assert store.get_job(job_uuid)["status"] == "canceled"
+        assert store.get_task(task_uuid)["status"] == "failed"
         assert store.count_rows("workflow_task") == 1
         assert store.count_rows("workflow_node_job") == 1
     finally:
@@ -205,7 +206,8 @@ def test_global_task_capacity_releases_and_activates_oldest_pending_task(
     )
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:
-        bridge.recover_active_tasks()
+        bridge.submit(store.get_task(first_task))
+        bridge.submit(store.get_task(second_task))
 
         assert [item["job_id"] for item in dispatcher.dispatched] == [first_job]
         assert store.get_task(first_task)["status"] == "running"
@@ -259,7 +261,9 @@ def test_per_workflow_capacity_does_not_block_another_workflow(
     )
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:
-        bridge.recover_active_tasks()
+        bridge.submit(store.get_task(first_task))
+        bridge.submit(store.get_task(blocked_task))
+        bridge.submit(store.get_task(independent_task))
 
         assert [item["job_id"] for item in dispatcher.dispatched] == [
             first_job,
@@ -300,7 +304,7 @@ def test_job_dispatch_capacity_is_durable_and_released_by_terminal_result(
     )
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:
-        bridge.recover_active_tasks()
+        bridge.submit(store.get_task(task_uuid))
 
         assert [item["job_id"] for item in dispatcher.dispatched] == [first_job]
         assert store.get_job(second_job)["status"] == "pending"
@@ -316,13 +320,13 @@ def test_job_dispatch_capacity_is_durable_and_released_by_terminal_result(
         store.close()
 
 
-def test_restart_failed_job_releases_scheduler_capacity_for_waiting_task(
+def test_restart_aborts_inflight_and_waiting_tasks_without_replay(
     tmp_path: Path,
 ) -> None:
-    """重启失败 Job 不再占用活动调度容量，等待任务可以立即补位。
+    """重启失败 Job 并取消等待 Job，二者均不在新 runtime 重放。
 
     参数：``tmp_path`` 提供跨实例工作流库。返回无；断言旧任务明确失败后，等待任务
-    可被派发；物理资源是否可复用仍由独立 Claim 决定。异常：恢复或容量推进错误
+    不会被派发；旧物理资源由重启策略统一释放。异常：恢复或容量推进错误
     会使测试失败。
     """
 
@@ -349,7 +353,8 @@ def test_restart_failed_job_releases_scheduler_capacity_for_waiting_task(
             max_in_flight_jobs=1,
         ),
     )
-    first_bridge.recover_active_tasks()
+    first_bridge.submit(first_store.get_task(first_task))
+    first_bridge.submit(first_store.get_task(waiting_task))
     assert [item["job_id"] for item in first_dispatcher.dispatched] == [first_job]
     assert first_store.get_job(waiting_job)["status"] == "pending"
     first_bridge.close()
@@ -369,7 +374,9 @@ def test_restart_failed_job_releases_scheduler_capacity_for_waiting_task(
 
         assert recovered_store.get_job(first_job)["status"] == "failed"
         assert recovered_store.get_task(first_task)["status"] == "failed"
-        assert [item["job_id"] for item in recovered_dispatcher.dispatched] == [waiting_job]
+        assert recovered_store.get_job(waiting_job)["status"] == "canceled"
+        assert recovered_store.get_task(waiting_task)["status"] == "failed"
+        assert recovered_dispatcher.dispatched == []
     finally:
         recovered_bridge.close()
         recovered_store.close()

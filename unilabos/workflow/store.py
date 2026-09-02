@@ -58,6 +58,7 @@ from unilabos.workflow.store_migrations import (
     ensure_local_cancellation_schema,
     ensure_station_task_submission_schema,
     ensure_task_material_admission_schema,
+    ensure_workflow_task_control_schema,
     ensure_workflow_inventory_schema,
 )
 
@@ -277,6 +278,8 @@ CREATE TABLE IF NOT EXISTS workflow_task (
     workflow_snapshot TEXT NOT NULL,
     execution_plan TEXT NOT NULL,
     run_mode TEXT NOT NULL,
+    execution_mode TEXT NOT NULL DEFAULT 'normal'
+        CHECK (execution_mode IN ('normal', 'switching_to_step', 'step')),
     target_node_uuid TEXT,
     control_status TEXT NOT NULL,
     cleanup_status TEXT NOT NULL,
@@ -576,6 +579,7 @@ class WorkflowStore:
                         )
                     ensure_device_action_run_schema(self._conn)
                     ensure_station_task_submission_schema(self._conn)
+                    ensure_workflow_task_control_schema(self._conn)
                     from unilabos.workflow.workflow_boundary import (
                         ensure_workflow_boundary_schema,
                     )
@@ -1857,6 +1861,7 @@ class WorkflowStore:
         request_fingerprint: str = "",
         revision_fingerprint: str | None = None,
         deadline: str | None = None,
+        reject_if_nonterminal_task_exists: bool = False,
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
@@ -1899,6 +1904,21 @@ class WorkflowStore:
                     result = self._task_row(existing)
                     result["_station_submission_created"] = False
                     return result
+            if reject_if_nonterminal_task_exists:
+                occupied = conn.execute(
+                    """
+                    SELECT uuid, status FROM workflow_task
+                    WHERE deleted_at IS NULL
+                      AND status IN ('pending', 'running', 'canceling')
+                    ORDER BY create_time, uuid
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if occupied is not None:
+                    raise StoreConflict(
+                        "develop_task_conflict:"
+                        f"{occupied['uuid']}:{occupied['status']}"
+                    )
             if applied_graph is None:
                 if not self._persist_workflow_definitions:
                     raise StoreConflict("运行事实库创建任务时缺少工作流图快照")
@@ -1921,11 +1941,12 @@ class WorkflowStore:
                 INSERT INTO workflow_task(
                     uuid, create_time, update_time, deleted_at, description,
                     meta_data, workflow_uuid, status, workflow_snapshot,
-                    execution_plan, run_mode, target_node_uuid, control_status,
+                    execution_plan, run_mode, execution_mode, target_node_uuid,
+                    control_status,
                     cleanup_status, trace_context, input, output, error_info,
                     backend_task_uuid, invocation_key, priority,
                     request_fingerprint, revision_fingerprint, timeout_at
-                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?,
                           'none', '{}', ?, '{}', '[]', ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -1938,6 +1959,7 @@ class WorkflowStore:
                     _json(prepared.workflow_snapshot),
                     _json(plan),
                     effective_run_mode,
+                    "step" if effective_run_mode == "step" else "normal",
                     effective_target,
                     control_status,
                     _json(prepared.resolved_input),
@@ -2366,6 +2388,7 @@ class WorkflowStore:
                         ), '[]'))
                     ) AS execution_plan,
                     task.run_mode,
+                    task.execution_mode,
                     task.target_node_uuid,
                     task.control_status,
                     task.cleanup_status,
@@ -2536,6 +2559,12 @@ class WorkflowStore:
                 (task_uuid, idempotency_key),
             ).fetchone()
             if existing is not None:
+                if (
+                    str(existing["type"]) != command_type
+                    or (existing["target_node_uuid"] or None)
+                    != (target_node_uuid or None)
+                ):
+                    raise StoreConflict("同一任务控制幂等键对应的命令内容已变化")
                 return self._task_command_row(existing), False
             conn.execute(
                 """
@@ -2592,6 +2621,52 @@ class WorkflowStore:
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
                     (control_status, now, task_uuid),
+                )
+                self._append_event(
+                    conn,
+                    event="workflow.runtime.changed",
+                    data={"workflow_task_uuid": task_uuid},
+                    now=now,
+                )
+            updated = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?", (task_uuid,)
+            ).fetchone()
+            return self._task_row(updated)
+
+    def set_task_execution_mode(
+        self,
+        task_uuid: str,
+        *,
+        execution_mode: str,
+        control_status: str,
+    ) -> Dict[str, Any]:
+        """原子保存当前执行控制模式及其派发闸门状态。"""
+
+        if execution_mode not in {"normal", "switching_to_step", "step"}:
+            raise StoreConflict("任务执行模式非法")
+        if control_status not in {"active", "paused"}:
+            raise StoreConflict("任务控制状态非法")
+        now = utc_now()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
+                (task_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            if row["status"] in {"succeeded", "failed", "canceled", "timeout"}:
+                raise StoreConflict("终态任务不能修改执行模式")
+            if (
+                str(row["execution_mode"]) != execution_mode
+                or str(row["control_status"]) != control_status
+            ):
+                conn.execute(
+                    """
+                    UPDATE workflow_task
+                    SET execution_mode = ?, control_status = ?, update_time = ?
+                    WHERE uuid = ? AND deleted_at IS NULL
+                    """,
+                    (execution_mode, control_status, now, task_uuid),
                 )
                 self._append_event(
                     conn,
@@ -4147,6 +4222,7 @@ class WorkflowStore:
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),
             "run_mode": row["run_mode"],
+            "execution_mode": row["execution_mode"],
             "control_status": row["control_status"],
             "cleanup_status": row["cleanup_status"],
             "wait_reason": _load(row["wait_reason"], {}),
@@ -4191,6 +4267,7 @@ class WorkflowStore:
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),
             "run_mode": row["run_mode"],
+            "execution_mode": row["execution_mode"],
             "control_status": row["control_status"],
             "cleanup_status": row["cleanup_status"],
             "wait_reason": _load(row["wait_reason"], {}),

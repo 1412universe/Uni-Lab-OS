@@ -406,6 +406,81 @@ class TestStepControl:
         second = scheduler.step_workflow("wf-step")
         assert [item["node_id"] for item in second["dispatched"]] == ["B"]
 
+    def test_rejects_another_step_while_previous_job_is_in_flight(self):
+        """单步闸门必须等当前 Job 终态，不能并发放行普通 DAG 分叉。"""
+
+        scheduler, dispatcher = _make()
+        scheduler.submit_workflow(
+            WorkflowSpec(
+                workflow_id="wf-step-fork",
+                nodes=[_node("A", "d1"), _node("B", "d2")],
+                run_mode="step",
+            )
+        )
+
+        with pytest.raises(ValueError, match="multiple step targets"):
+            scheduler.step_workflow("wf-step-fork")
+
+        scheduler.step_workflow("wf-step-fork", target_node_id="A")
+        with pytest.raises(ValueError, match="step is still in progress"):
+            scheduler.step_workflow("wf-step-fork", target_node_id="B")
+
+        first_job = dispatcher.dispatched[0]["job_id"]
+        scheduler.on_job_finished(first_job, success=True, ret_value={})
+        second = scheduler.step_workflow("wf-step-fork", target_node_id="B")
+        assert [item["node_id"] for item in second["dispatched"]] == ["B"]
+
+    def test_backend_reports_authoritative_step_candidates(self):
+        """候选集合由调度器 DAG 事实计算，普通分叉保持全部可选。"""
+
+        scheduler, _dispatcher = _make()
+        scheduler.submit_workflow(
+            WorkflowSpec(
+                workflow_id="wf-step-candidates",
+                nodes=[_node("A", "d1"), _node("B", "d2")],
+                run_mode="step",
+            )
+        )
+
+        state = scheduler.step_state("wf-step-candidates")
+
+        assert state["execution_mode"] == "step"
+        assert state["requires_selection"] is True
+        assert [item["node_id"] for item in state["candidates"]] == ["A", "B"]
+
+    def test_normal_to_step_drains_in_flight_job_before_pausing(self):
+        """自动转单步先关闭新派发，待在途 Job 结束后才进入稳定暂停态。"""
+
+        scheduler, dispatcher = _make()
+        submitted = scheduler.submit_workflow(_chain_spec("wf-switch-to-step"))
+
+        switching = scheduler.switch_to_step("wf-switch-to-step")
+        assert switching["execution_mode"] == "switching_to_step"
+        assert switching["in_flight_job_count"] == 1
+
+        scheduler.on_job_finished(
+            submitted["dispatched"][0]["job_id"], success=True, ret_value={}
+        )
+        state = scheduler.step_state("wf-switch-to-step")
+        assert state["execution_mode"] == "step"
+        assert [item["node_id"] for item in state["candidates"]] == ["B"]
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
+
+    def test_step_to_normal_continues_same_workflow(self):
+        """稳定暂停的单步任务可以沿用已完成事实恢复自动调度。"""
+
+        scheduler, dispatcher = _make()
+        scheduler.submit_workflow(_step_chain_spec("wf-continue-auto"))
+        first = scheduler.step_workflow("wf-continue-auto")
+        scheduler.on_job_finished(
+            first["dispatched"][0]["job_id"], success=True, ret_value={}
+        )
+
+        resumed = scheduler.continue_automatic("wf-continue-auto")
+
+        assert resumed["execution_mode"] == "normal"
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A", "B"]
+
 
 class TestPauseResumeControl:
     def test_pause_stops_future_dispatch_and_resume_continues_same_run(self):

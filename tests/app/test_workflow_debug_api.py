@@ -80,7 +80,7 @@ def _runtime(tmp_path):
     return client, store, bridge, workflow["uuid"]
 
 
-def test_debug_launch_freezes_configuration_and_excludes_disabled_node(tmp_path) -> None:
+def test_retired_debug_task_create_returns_gone(tmp_path) -> None:
     client, store, _bridge, workflow_uuid = _runtime(tmp_path)
 
     response = client.post(
@@ -94,69 +94,24 @@ def test_debug_launch_freezes_configuration_and_excludes_disabled_node(tmp_path)
         },
     )
 
-    assert response.status_code == 201, response.text
-    task = response.json()["data"]
-    jobs = client.get(f"/api/v1/workflow-tasks/{task['uuid']}/jobs").json()["data"]
-    projection = client.get(
-        f"/api/v1/debug/workflow-tasks/{task['uuid']}"
-    ).json()["data"]
-
-    assert {node["uuid"] for node in task["workflow_snapshot"]["nodes"]} == {
-        START_NODE_UUID,
-        DISABLED_NODE_UUID,
-    }
-    assert [node["uuid"] for node in task["execution_plan"]["nodes"]] == [
-        START_NODE_UUID
-    ]
-    assert [job["workflow_node_uuid"] for job in jobs] == [START_NODE_UUID]
-    assert projection["configuration"] == {
-        "start_node_uuids": [START_NODE_UUID],
-        "breakpoint_node_uuids": [START_NODE_UUID],
-    }
-    assert projection["active_node_uuids"] == [START_NODE_UUID]
-    assert projection["out_of_scope_node_uuids"] == []
-    assert projection["disabled_node_uuids"] == [DISABLED_NODE_UUID]
-    assert projection["holds"][0]["workflow_node_uuid"] == START_NODE_UUID
-    assert projection["holds"][0]["status"] == "open"
+    assert response.status_code == 410, response.text
+    assert response.json()["error"]["code"] == "debug_api_retired"
     store.close()
 
 
-def test_debug_step_requires_exact_open_hold_and_is_idempotent(tmp_path) -> None:
-    client, store, bridge, workflow_uuid = _runtime(tmp_path)
-    task = client.post(
-        "/api/v1/debug/workflow-tasks",
-        json={
-            "workflow_uuid": workflow_uuid,
-            "start_node_uuids": [START_NODE_UUID],
-            "breakpoint_node_uuids": [],
-        },
-    ).json()["data"]
-    projection = client.get(
-        f"/api/v1/debug/workflow-tasks/{task['uuid']}"
-    ).json()["data"]
-    hold_uuid = projection["holds"][0]["uuid"]
-    body = {
-        "type": "step",
-        "scope": {"type": "hold", "hold_uuid": hold_uuid},
-        "idempotency_key": "debug-step-1",
-    }
+def test_retired_debug_detail_and_command_return_gone(tmp_path) -> None:
+    client, store, _bridge, _workflow_uuid = _runtime(tmp_path)
 
-    first = client.post(
-        f"/api/v1/debug/workflow-tasks/{task['uuid']}/commands", json=body
-    )
-    replay = client.post(
-        f"/api/v1/debug/workflow-tasks/{task['uuid']}/commands", json=body
+    detail = client.get("/api/v1/debug/workflow-tasks/retired-task")
+    command = client.post(
+        "/api/v1/debug/workflow-tasks/retired-task/commands",
+        json={"type": "step"},
     )
 
-    assert first.status_code == 201, first.text
-    assert replay.status_code == 201, replay.text
-    assert first.json()["data"] == replay.json()["data"]
-    assert first.json()["data"]["status"] == "succeeded"
-    assert bridge.steps == [(task["uuid"], START_NODE_UUID)]
-    released = client.get(
-        f"/api/v1/debug/workflow-tasks/{task['uuid']}"
-    ).json()["data"]["holds"][0]
-    assert released["status"] == "released"
+    assert detail.status_code == 410, detail.text
+    assert command.status_code == 410, command.text
+    assert detail.json()["error"]["code"] == "debug_api_retired"
+    assert command.json()["error"]["code"] == "debug_api_retired"
     store.close()
 
 

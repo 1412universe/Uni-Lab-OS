@@ -5,6 +5,7 @@ import { EDGE_API_BASE, loadEdgeSnapshot, loadEdgeTasks, materialsWithTaskRefere
 import type { ConnectionMode, EdgeSnapshot } from '../types'
 
 const demoSnapshot: EdgeSnapshot = {
+  startupMode: 'develop',
   workflows: demoWorkflows,
   tasks: demoTasks,
   materials: demoMaterials,
@@ -14,6 +15,7 @@ const demoSnapshot: EdgeSnapshot = {
 }
 
 const emptySnapshot: EdgeSnapshot = {
+  startupMode: 'product',
   workflows: [],
   tasks: [],
   materials: [],

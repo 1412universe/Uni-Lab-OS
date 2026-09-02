@@ -2198,10 +2198,9 @@ class TaskRuntimeProjection:
     ) -> dict[str, Any] | None:
         """在一个事务内失败因设备执行进程重启而中断的任务。
 
-        参数：``task_uuid`` 是稳定工作流任务（WorkflowTask）UUID。返回：任务包含
-        已派发、运行或取消中的设备作业时返回失败后的任务/作业聚合；尚未越过物理
-        派发边界时返回 ``None``，允许调用方以原身份继续恢复。异常：身份、状态或
-        SQLite 事务冲突原样传播，且不会释放任何缺少物理结算证据的执行占用。
+        参数：``task_uuid`` 是稳定工作流任务（WorkflowTask）UUID。返回：非终态
+        Task 失败后的任务/作业聚合；既有终态 Task 返回 ``None``。已完成
+        Job 保持不变，在途 Job 失败，未开始 Job 取消，旧执行占用释放。
         """
 
         with self._store.transaction() as connection:

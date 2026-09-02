@@ -253,6 +253,7 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
 
 def test_workflow_task_priority_enum_is_accepted_and_persisted(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """工作流任务接口接受 normal/high，并把默认值和显式值分别写入 SQLite。
 
@@ -260,6 +261,11 @@ def test_workflow_task_priority_enum_is_accepted_and_persisted(
     持久化合同不满足时由断言报告；本测试不触碰调度器排序实现。
     """
 
+    monkeypatch.setattr(
+        WorkflowService,
+        "_develop_execution_mode",
+        staticmethod(lambda: False),
+    )
     client, store = _client(tmp_path / "task-priority.db")
     try:
         workflow_uuid = _create_workflow(client, store)
@@ -320,6 +326,11 @@ def test_station_invocation_is_idempotent_and_allows_same_workflow_twice(
 
     client, store = _client(tmp_path / "station-invocation.db")
     try:
+        monkeypatch.setattr(
+            WorkflowService,
+            "_develop_execution_mode",
+            staticmethod(lambda: False),
+        )
         _create_workflow(client, store)
         monkeypatch.setattr(EdgeControlConfig, "api_key", "station-secret")
         backend_task_uuid = "71000000-0000-4000-8000-000000000001"

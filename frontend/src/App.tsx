@@ -77,6 +77,7 @@ export default function App() {
           onNotify={setToast}
           onSelectWorkflow={openWorkflow}
           targetWorkflow={workflowTarget}
+          startupMode={snapshot.startupMode}
         />
       ) : (
         <TasksPage
@@ -87,6 +88,7 @@ export default function App() {
           onRefresh={refresh}
           onNotify={setToast}
           onOpenWorkflow={openWorkflow}
+          startupMode={snapshot.startupMode}
         />
       )}
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>

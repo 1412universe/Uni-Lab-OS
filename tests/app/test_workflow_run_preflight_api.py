@@ -207,3 +207,68 @@ def test_preflight_reports_temporary_inventory_unavailability(tmp_path) -> None:
     )
     assert gap["status"] == "blocked"
     store.close()
+
+
+def test_step_task_preflight_failure_creates_no_task(tmp_path) -> None:
+    """Step 创建必须先通过 Preflight；失败时任务槽与 Task/Job 均零写入。"""
+
+    client, store = _client(tmp_path)
+    workflow = client.post(
+        "/api/v1/workflows",
+        json={"name": "Step 等待库存", "tags": [], "meta_data": {}},
+    ).json()["data"]
+
+    response = client.post(
+        "/api/v1/workflow-tasks",
+        json={
+            "workflow_uuid": workflow["uuid"],
+            "run_mode": "step",
+            "input": {},
+            "inventory_bindings": [
+                {
+                    "requirement_key": "sample",
+                    "inventory_type": "reagent",
+                    "inventory_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                    "reserved_quantity": 1,
+                    "quantity_unit": "mL",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 3003
+    assert response.json()["error"]["code"] == "preflight_failed"
+    tasks = client.get(
+        "/api/v1/workflow-tasks", params={"workflow_uuid": workflow["uuid"]}
+    ).json()["data"]
+    assert tasks["items"] == []
+    store.close()
+
+
+def test_step_task_rejects_middle_start_target_without_writes(tmp_path) -> None:
+    """Step 必须从入口开始；调用方不能借 target 绕过前向数据依赖。"""
+
+    client, store = _client(tmp_path)
+    workflow = client.post(
+        "/api/v1/workflows",
+        json={"name": "Step 禁止中间开始", "tags": [], "meta_data": {}},
+    ).json()["data"]
+
+    response = client.post(
+        "/api/v1/workflow-tasks",
+        json={
+            "workflow_uuid": workflow["uuid"],
+            "run_mode": "step",
+            "target_node_uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "input": {},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 1000
+    tasks = client.get(
+        "/api/v1/workflow-tasks", params={"workflow_uuid": workflow["uuid"]}
+    ).json()["data"]
+    assert tasks["items"] == []
+    store.close()

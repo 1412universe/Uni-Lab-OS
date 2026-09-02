@@ -38,6 +38,7 @@ class DeviceActionRunStore:
         job: dict[str, Any],
         idempotency_key: str,
         request_fingerprint: str,
+        reject_if_nonterminal_task_exists: bool = False,
     ) -> dict[str, Any]:
         """在单事务内创建或幂等复用一个直接设备动作聚合。
 
@@ -83,6 +84,21 @@ class DeviceActionRunStore:
                         raise StoreConflict("设备单动作任务没有唯一设备作业")
                     job_uuid = str(job_rows[0]["uuid"])
                 else:
+                    if reject_if_nonterminal_task_exists:
+                        occupied = connection.execute(
+                            """
+                            SELECT uuid, status FROM workflow_task
+                            WHERE deleted_at IS NULL
+                              AND status IN ('pending', 'running', 'canceling')
+                            ORDER BY create_time, uuid
+                            LIMIT 1
+                            """
+                        ).fetchone()
+                        if occupied is not None:
+                            raise StoreConflict(
+                                "develop_task_conflict:"
+                                f"{occupied['uuid']}:{occupied['status']}"
+                            )
                     self._insert(connection, task=task, job=job)
                     created = True
         except sqlite3.IntegrityError as error:
@@ -115,10 +131,11 @@ class DeviceActionRunStore:
                 meta_data, workflow_uuid, execution_kind, idempotency_key,
                 request_fingerprint, status, workflow_snapshot, execution_plan,
                 run_mode, target_node_uuid, control_status, cleanup_status,
+                execution_mode,
                 trace_context, input, output, error_info
             ) VALUES (?, ?, ?, NULL, ?, ?, NULL, 'ad_hoc_device_action', ?, ?,
-                      'pending', ?, ?, 'single_node', ?, 'active', 'none', '{}',
-                      '{}', '{}', '[]')
+                      'pending', ?, ?, 'single_node', ?, 'active', 'none',
+                      'normal', '{}', '{}', '{}', '[]')
             """,
             (
                 task["uuid"],

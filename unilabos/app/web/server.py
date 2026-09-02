@@ -16,6 +16,7 @@ from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
 from unilabos.utils.log import info, error
 from unilabos.utils.tracing import install_http_tracing, trace_ui_base_url
 from unilabos.config.config import BasicConfig
+from unilabos.app.startup_mode import get_startup_mode
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -187,6 +188,7 @@ def api_readiness() -> Response:
     ready = not required or phase == "ready"
     payload: dict[str, Any] = {
         "status": "ready" if ready else "starting",
+        "startupMode": get_startup_mode().value,
         "phase": "ready" if not required else phase,
         "workflowRuntime": "disabled" if not required else phase,
         "workflowProgress": {"loaded": loaded, "total": total},

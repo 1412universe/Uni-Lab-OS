@@ -13,6 +13,7 @@ import type {
   WorkflowGraphEdge,
   WorkflowGraphNode,
   WorkflowTask,
+  WorkflowStepState,
   ResourceTemplateRecord,
   ActionTemplateRecord,
   ActionParameterRecord,
@@ -707,9 +708,12 @@ export function adaptTask(
   const controlStatus = String(raw.control_status || 'active')
   const cleanupStatus = String(raw.cleanup_status || 'none')
   const normalisedStatus = normaliseTaskStatus(raw.status)
+  const hasInFlightJob = jobs.some((job) => (
+    ['dispatched', 'running', 'cancel_requested'].includes(String(job.status || ''))
+  ))
   let status: TaskPresentationStatus = normalisedStatus
   if (normalisedStatus === 'pending' && waitMessage) status = 'admission_blocked'
-  if (controlStatus === 'paused') status = 'paused'
+  if (controlStatus === 'paused' && !hasInFlightJob) status = 'paused'
   if (controlStatus === 'waiting_intervention') status = 'intervention_required'
   if (controlStatus === 'waiting_reconciliation') status = 'execution_unknown'
   if (cleanupStatus === 'requires_attention' || attentionMessage) status = 'intervention_required'
@@ -849,6 +853,8 @@ export function adaptTask(
     materialUuids: collectTaskMaterialUuids(raw, jobs, inputContract, knownMaterialUuids),
     workflowRevision: Number(raw.workflow_snapshot?.workflow?.revision || raw.workflow?.revision || 0) || undefined,
     runMode: String(raw.run_mode || raw.execution_plan?.run_mode || 'normal'),
+    executionMode: String(raw.execution_mode || raw.run_mode || 'normal') as WorkflowTask['executionMode'],
+    controlStatus,
     matrixGroupKey: matrixGroupKey(raw),
     trace: taskTraceReference(raw, traceUiUrl),
   }
@@ -1731,6 +1737,7 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
   const materialsWithReferences = materialsWithTaskReferences(materials, tasks)
 
   return {
+    startupMode: readiness.startupMode === 'develop' ? 'develop' : 'product',
     workflows,
     tasks,
     materials: materialsWithReferences,
@@ -1807,10 +1814,11 @@ export async function loadWorkflowPreflight(
   workflowUuid: string,
   input: Record<string, unknown>,
   signal?: AbortSignal,
+  runMode: 'normal' | 'step' = 'normal',
 ): Promise<RunPreflightReport> {
   const report = await postData<RawRecord>(
     `/workflows/${encodeURIComponent(workflowUuid)}/run-preflight`,
-    { run_mode: 'normal', input },
+    { run_mode: runMode, input },
     signal,
   )
   const summary = report.summary || {}
@@ -1846,18 +1854,67 @@ export async function createWorkflowTask({
   workflowUuid,
   input,
   description,
+  runMode = 'normal',
 }: {
   workflowUuid: string
   input: Record<string, unknown>
   description: string
+  runMode?: 'normal' | 'step'
 }) {
   return postData<RawRecord>('/workflow-tasks', {
     workflow_uuid: workflowUuid,
-    run_mode: 'normal',
+    run_mode: runMode,
     input,
     description,
     meta_data: { source: 'unilabos-frontend' },
   })
+}
+
+export async function loadWorkflowTaskStepState(
+  taskUuid: string,
+  signal?: AbortSignal,
+): Promise<WorkflowStepState> {
+  const state = await requestData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/step-state`,
+    signal,
+  )
+  return {
+    workflowTaskUuid: String(state.workflow_task_uuid),
+    executionMode: String(state.execution_mode || 'normal') as WorkflowStepState['executionMode'],
+    controlStatus: String(state.control_status || 'active'),
+    inFlightJobCount: Number(state.in_flight_job_count || 0),
+    requiresSelection: Boolean(state.requires_selection),
+    canStep: Boolean(state.can_step),
+    candidates: Array.isArray(state.candidates) ? state.candidates.map((candidate: RawRecord) => ({
+      nodeUuid: String(candidate.node_uuid),
+      name: String(candidate.name || candidate.node_uuid),
+      kind: String(candidate.kind || 'device_action'),
+      deviceId: candidate.device_id ? String(candidate.device_id) : undefined,
+      actionName: candidate.action_name ? String(candidate.action_name) : undefined,
+    })) : [],
+  }
+}
+
+export async function commandWorkflowTask(
+  taskUuid: string,
+  type: 'step' | 'pause' | 'resume' | 'cancel',
+  targetNodeUuid?: string,
+): Promise<RawRecord> {
+  const generatedKey = globalThis.crypto?.randomUUID?.()
+    || `${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const command = await postData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`,
+    {
+      type,
+      target_node_uuid: targetNodeUuid || null,
+      idempotency_key: generatedKey,
+      meta_data: { source: 'unilabos-frontend' },
+    },
+  )
+  if (command.status === 'rejected') {
+    throw new Error(String(command.result?.reason || '调度器拒绝了任务控制命令'))
+  }
+  return command
 }
 
 export async function decideManualConfirmation(

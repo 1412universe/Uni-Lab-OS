@@ -73,6 +73,7 @@ export function WorkflowsPage({
   onNotify,
   onSelectWorkflow,
   targetWorkflow,
+  startupMode = 'product',
 }: {
   workflows: WorkflowDefinition[]
   materials: MaterialRecord[]
@@ -81,6 +82,7 @@ export function WorkflowsPage({
   onNotify: (message: string) => void
   onSelectWorkflow?: (target: WorkflowTarget) => void
   targetWorkflow?: WorkflowTarget
+  startupMode?: 'develop' | 'product'
 }) {
   const [query, setQuery] = useState('')
   const availableWorkflows = useMemo(
@@ -96,6 +98,7 @@ export function WorkflowsPage({
   const [childPickerOpen, setChildPickerOpen] = useState(false)
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
+  const [runMode, setRunMode] = useState<'normal' | 'step'>('normal')
   const pythonImportRef = useRef<HTMLInputElement>(null)
   const jsonImportRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
@@ -140,11 +143,12 @@ export function WorkflowsPage({
     retryDelay: (attempt) => Math.min(300 * 2 ** attempt, 1_200),
   })
   const preflightQuery = useQuery({
-    queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision, runInput],
+    queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision, runInput, runMode],
     queryFn: ({ signal }) => loadWorkflowPreflight(
       selected!.uuid,
       serialisePreflightInput(selected!.inputContract, runInput),
       signal,
+      runMode,
     ),
     enabled: false,
     retry: false,
@@ -180,6 +184,9 @@ export function WorkflowsPage({
   })
   const preflight = preflightQuery.data
   useEffect(() => setRunInput(initialRunInput(detail)), [detail?.uuid, detail?.revision])
+  useEffect(() => {
+    if (startupMode !== 'develop') setRunMode('normal')
+  }, [startupMode])
   const requiredInputReady = Boolean(detail) && detail.inputContract.every((field) => (
     !field.required || field.defaultValue !== undefined || Boolean(runInput[field.name]?.trim())
   ))
@@ -194,6 +201,7 @@ export function WorkflowsPage({
         workflowUuid: detail.uuid,
         description: runDescription,
         input: serialiseTaskInput(detail.inputContract, runInput),
+        runMode,
       })
     },
     onMutate: () => onNavigate('tasks'),
@@ -397,6 +405,9 @@ export function WorkflowsPage({
                   <div className="run-preparation-grid">
                     <section className="run-input-panel">
                       <div className="run-section-title"><span>01</span><div><strong>运行输入与物料绑定</strong><small>{detail.inputContract.length} 个公开输入 · {detail.inputContract.filter(resourceSlotSchema).length} 个手动物料槽位 · {materialDependencies.length} 个自动物料源</small></div></div>
+                      {startupMode === 'develop' ? (
+                        <label className="run-description"><span>运行方式</span><select aria-label="运行方式" value={runMode} onChange={(event) => setRunMode(event.target.value as 'normal' | 'step')}><option value="normal">自动运行</option><option value="step">单步调试</option></select></label>
+                      ) : null}
                       <label className="run-description"><span>任务描述</span><input value={runDescription} onChange={(event) => setRunDescription(event.target.value)} /></label>
                       <div className="run-fields">
                         {detail.inputContract.map((field) => {
