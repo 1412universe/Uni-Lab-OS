@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import wraps
 from inspect import signature
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
 from unilabos.app.scheduler.inventory.domain import (
     ACTIVE_INSTANCE_STATES,
@@ -1681,12 +1681,23 @@ class InventoryService:
             expected_change.get("kind") != "material_transfer"
             or str(expected_change.get("material_uuid") or "")
             != command.material_uuid
-            or str(expected_change.get("target_site_uuid") or "")
-            != command.target_site_uuid
         ):
             raise StationResourceError(
                 "settlement_change_set_mismatch",
-                "PhysicalSettlement 目标与派发时冻结的 ChangeSet 不一致",
+                "PhysicalSettlement 物料与派发时冻结的 ChangeSet 不一致",
+            )
+        # 失败转运的现场事实不一定是原计划目标：动作可能尚未开始，物料仍在
+        # 来源库位；也可能已经取起而停在夹爪库位。允许操作员在派发时已经由
+        # 同一 Claim/Fence 保护的任一库位上结算，但禁止借对账接口写入未声明
+        # 的库位。这样既能表达真实物理位置，也不扩大原派发凭据的写权限。
+        actual_site_lock = (
+            f"material/{command.target_owner_material_uuid}/site/"
+            f"{command.target_site_uuid}/exclusive"
+        )
+        if actual_site_lock not in fences:
+            raise StationResourceError(
+                "settlement_actual_site_not_claimed",
+                "PhysicalSettlement 实际库位不在派发时冻结的 Claim/Fence 中",
             )
         settlement_event_uuid = str(
             uuid.uuid5(

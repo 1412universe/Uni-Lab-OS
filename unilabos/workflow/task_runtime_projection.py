@@ -124,7 +124,13 @@ def _decode_json_field(value: str | None, *, fallback: Any) -> Any:
 def _normalize_wait_reason_resources(
     values: Sequence[Mapping[str, Any]] | None,
 ) -> list[dict[str, str]]:
-    """规范仅用于解释门禁等待的设备、物料或库位身份。"""
+    """规范仅用于解释门禁等待的设备、物料或库位身份。
+
+    设备选择器除了库存中的设备 Material UUID，还会携带本地设备 ID、展示名
+    以及候选设备各自的不可用原因。这些字段属于公开等待诊断合同；保留它们既
+    能让前端直接展示具体设备，也避免设备忙碌这一正常调度状态被误判为提交
+    失败。未知字段仍然关闭式拒绝，防止任意注册快照数据泄漏进任务投影。
+    """
 
     normalized: list[dict[str, str]] = []
     seen: set[tuple[tuple[str, str], ...]] = set()
@@ -133,7 +139,16 @@ def _normalize_wait_reason_resources(
         "material": "material_uuid",
         "material_site": "site_uuid",
     }
-    allowed = {"scope", "device_id", "material_uuid", "site_uuid"}
+    allowed = {
+        "scope",
+        "device_id",
+        "material_uuid",
+        "site_uuid",
+        "local_device_id",
+        "device_name",
+        "wait_code",
+        "wait_message",
+    }
     for value in values or ():
         if not isinstance(value, Mapping):
             raise StoreConflict("等待资源必须是对象")
@@ -147,7 +162,15 @@ def _normalize_wait_reason_resources(
         if not isinstance(identity, str) or not identity.strip():
             raise StoreConflict(f"等待资源缺少 {identity_field}")
         resource = {"scope": scope, identity_field: identity.strip()}
-        for field in ("device_id", "material_uuid", "site_uuid"):
+        for field in (
+            "device_id",
+            "material_uuid",
+            "site_uuid",
+            "local_device_id",
+            "device_name",
+            "wait_code",
+            "wait_message",
+        ):
             extra = value.get(field)
             if field == identity_field or extra in (None, ""):
                 continue
@@ -1204,6 +1227,7 @@ class TaskRuntimeProjection:
                 "none",
                 "pending",
                 "required",
+                "requires_attention",
                 "canceling",
             }:
                 raise StoreConflict(f"任务清理状态不能结算：{task_uuid}")

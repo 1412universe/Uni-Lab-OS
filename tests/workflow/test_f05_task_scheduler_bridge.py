@@ -1046,6 +1046,36 @@ def test_restart_finishes_terminal_inventory_cleanup_without_reexecution(
     assert dispatcher.dispatched == []
 
 
+def test_restart_finishes_reconciled_attention_cleanup_without_reexecution(
+    store: WorkflowStore,
+) -> None:
+    """重启补扫已完成物理对账、但仍标记 requires_attention 的失败任务。"""
+
+    _seed_task(store, with_material=False)
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status = 'failed', "
+            "cleanup_status = 'requires_attention' WHERE uuid = ?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET status = 'failed', "
+            "uncertainty_reason = NULL WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        )
+
+    dispatcher = RecordingDispatcher()
+    restarted = _bridge(store, EdgeScheduler(dispatcher=dispatcher))
+    try:
+        recovered = restarted.recover_active_tasks()
+    finally:
+        restarted.close()
+
+    assert recovered == []
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert dispatcher.dispatched == []
+
+
 @pytest.mark.parametrize(
     ("outcome", "task_status"),
     [("failed", "failed"), ("canceled", "canceled"), ("timeout", "timeout")],
@@ -1685,6 +1715,70 @@ def test_terminal_recovery_freezes_inventory_claim_before_cleanup(
     assert inventory.transitions == [(claim["claim_uuid"], "uncertain")]
     assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
     assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "uncertain"
+
+
+def test_late_stop_proof_after_restart_uses_persisted_job_route(
+    store: WorkflowStore,
+) -> None:
+    """重启后迟到的停止证明仍须按持久 Job 归属完成投影和 Claim 释放。"""
+
+    class _ClaimRecorder:
+        def __init__(self) -> None:
+            self.transitions: list[tuple[str, str]] = []
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            self.transitions.append((claim_uuid, target_state))
+
+        def release_unprojected_dispatch_permits(
+            self,
+            *,
+            known_claim_uuids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            return ()
+
+    _seed_task(store, with_material=False)
+    projection = TaskRuntimeProjection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_execution_process_restarted(TASK_UUID)
+    claim = projection.get_execution_claim(JOB_UUID)
+    assert claim is not None
+    inventory = _ClaimRecorder()
+    bridge = _bridge(
+        store,
+        EdgeScheduler(
+            dispatcher=RecordingDispatcher(),
+            station_resources=inventory,
+        ),
+    )
+    try:
+        assert bridge._task_by_job == {}
+        bridge._on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome="canceled",
+                return_info={},
+                error_info=[],
+                unknown_command_ids=[],
+            ),
+        )
+    finally:
+        bridge.close()
+
+    assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
+    assert inventory.transitions == [(claim["claim_uuid"], "released")]
+    assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
 
 
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(

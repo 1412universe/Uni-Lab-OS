@@ -807,6 +807,7 @@ class TaskSchedulerBridge:
                         "none",
                         "pending",
                         "required",
+                        "requires_attention",
                         "canceling",
                     }:
                         self._projection.project_cleanup_settled(task_uuid)
@@ -2380,7 +2381,18 @@ class TaskSchedulerBridge:
 
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
-            return
+            # 重启恢复会先把已经越过物理边界的 Task 标为失败，因此它不再进入
+            # 活动 DAG 路由表；设备停止证明仍可能在稍后到达。此时必须从持久
+            # WorkflowNodeJob 恢复归属，不能静默丢弃证明并永久持有 Claim。
+            try:
+                persisted_route = self._store.get_job(job_uuid)
+            except StoreNotFound:
+                return
+            task_uuid = str(
+                persisted_route.get("workflow_task_uuid") or ""
+            ).strip()
+            if not task_uuid:
+                return
         if outcome.unknown_command_ids:
             self._transition_inventory_claim(job_uuid, target_state="uncertain")
             self._projection.project_execution_attention(
