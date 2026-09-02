@@ -14,7 +14,7 @@ from unilabos.workflow.source_discovery import discover_editable_sources
 from unilabos.workflow.store import WorkflowStore
 
 
-def _client(tmp_path, *, with_import: bool = False):
+def _client(tmp_path, *, with_import: bool = False, material_resolver=None):
     """创建隔离的 Local 工作流定义服务。"""
 
     store = WorkflowStore(tmp_path / "workflow_definition_edit.db")
@@ -47,9 +47,47 @@ def _client(tmp_path, *, with_import: bool = False):
         store,
         compiler=engine,
         source_target=DomainWorkflowSourceTarget.from_discovery_plan(plan),
+        material_resolver=material_resolver,
     )
     service.replace_discovered_source_authorizations(plan)
     return TestClient(create_workflow_app(service)), store
+
+
+def test_source_backed_node_projects_fixed_material_binding(tmp_path) -> None:
+    """增量创作必须把已选设备物料可信投影到源码和应用图。"""
+
+    material_uuid = "51000000-0000-4000-8000-000000000001"
+    client, store = _client(
+        tmp_path,
+        with_import=True,
+        material_resolver=lambda identity: {
+            "uuid": identity,
+            "resource_template_uuid": "31000000-0000-4000-8000-000000000001",
+        } if identity == material_uuid else None,
+    )
+    workflow = _workflow(client, "固定设备操作")
+    response = client.post(
+        f"/api/v1/workflows/{workflow['uuid']}/nodes",
+        json={
+            "workflow_node_template_uuid": "30000000-0000-4000-8000-000000000090",
+            "material_uuid": material_uuid,
+            "name": "noop",
+            "description": "固定设备动作",
+            "param": {},
+            "meta_data": {"unilab": {"executor_binding": {"mode": "fixed", "device_id": "untrusted"}}},
+        },
+    )
+
+    assert response.status_code == 201, response.json()
+    node = response.json()["data"]
+    assert node["material_uuid"] == material_uuid
+    assert node["meta_data"]["unilab"]["executor_binding"] == {
+        "mode": "fixed",
+        "device_id": material_uuid,
+    }
+    source_path = next((tmp_path / "domain" / "demo_domain").rglob("workflow_*.py"))
+    assert f"device('{material_uuid}')" in source_path.read_text(encoding="utf-8")
+    store.close()
 
 
 def _workflow(client: TestClient, name: str = "增量编辑") -> dict:

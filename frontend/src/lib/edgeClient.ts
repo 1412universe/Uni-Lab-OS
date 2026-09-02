@@ -185,13 +185,17 @@ function adaptContractFields(items: unknown, key: 'parameters' | 'outputs'): Con
   if (!Array.isArray(items)) return []
   return items.map((item) => {
     const record = item as RawRecord
-    return {
+    const field: ContractField = {
       name: String(record.name || 'unnamed'),
       type: schemaType(record.schema),
       required: Boolean(record.required),
       defaultValue: record.default,
       schema: record.schema && typeof record.schema === 'object' ? { ...record.schema } : {},
     }
+    if (typeof record.title === 'string') field.title = record.title
+    if (typeof record.description === 'string') field.description = record.description
+    if (typeof record.implicit === 'boolean') field.implicit = record.implicit
+    return field
   })
 }
 
@@ -1078,6 +1082,54 @@ export async function loadExperimentOperations(signal?: AbortSignal): Promise<Wo
   })
 }
 
+export async function loadPublishedExperimentOperations(signal?: AbortSignal): Promise<WorkflowDefinition[]> {
+  const operations = await loadExperimentOperations(signal)
+  return operations.filter((operation) => operation.workflowType === 'experiment_operation' && operation.status === 'published')
+}
+
+export async function loadPublishedWorkflowContracts(signal?: AbortSignal): Promise<RawRecord[]> {
+  const [contracts, operations] = await Promise.all([
+    requestAllPages<RawRecord>('/published-workflow-contracts', signal),
+    requestAllPages<RawRecord>('/workflows?workflow_type=experiment_operation&status=published', signal),
+  ])
+  // 发布合同是引用所需的参数/执行器快照，但公共合同投影不保证携带
+  // workflow_type 或 tags（历史合同经常是空 tags）。以 OS 工作流列表返回的
+  // 类型和 published 状态作为唯一门禁，避免把普通工作流混入，也不漏掉合法合同。
+  const publishedOperations = new Map(
+    operations.items.map((operation) => [String(operation.uuid || ''), operation]),
+  )
+  return contracts.items
+    .filter((contract) => publishedOperations.has(String(contract.workflow_uuid || '')))
+    .map((contract) => {
+      const operation = publishedOperations.get(String(contract.workflow_uuid || ''))
+      return {
+        ...contract,
+        workflow_type: operation?.workflow_type || 'experiment_operation',
+        status: operation?.status || 'published',
+        name: contract.name || operation?.name,
+      }
+    })
+}
+
+export async function insertCompositeWorkflow(payload: {
+  parentWorkflowUuid: string
+  revision: number
+  contractUuid: string
+  invocationUuid?: string
+  deviceBindings?: Record<string, string>
+  pose?: Record<string, unknown>
+  param?: Record<string, unknown>
+}) {
+  return writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.parentWorkflowUuid)}/composite-invocations`, {
+    revision: payload.revision,
+    contract_uuid: payload.contractUuid,
+    invocation_uuid: payload.invocationUuid,
+    device_bindings: payload.deviceBindings || {},
+    pose: payload.pose || { x: 120, y: 180 },
+    param: payload.param || {},
+  })
+}
+
 export async function publishExperimentOperation(workflowUuid: string, revision: number) {
   return writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/publications`, { revision })
 }
@@ -1092,6 +1144,8 @@ export async function updateExperimentOperation(payload: {
   description: string
   categoryUuid?: string
   actions: Array<{ nodeUuid?: string; templateUuid?: string; name: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  inputContract?: Record<string, unknown>
+  outputContract?: Record<string, unknown>
 }) {
   await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}`, {
     name: payload.name,
@@ -1099,7 +1153,7 @@ export async function updateExperimentOperation(payload: {
     tags: ['experiment-operation'],
     workflow_type: 'experiment_operation',
     operation_category_uuid: payload.categoryUuid || null,
-    meta_data: {},
+    meta_data: { unilab: { input_contract: payload.inputContract || {}, output_contract: payload.outputContract || {} } },
   })
   const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`)
   const edits = new Map(payload.actions.filter((action) => action.nodeUuid).map((action) => [action.nodeUuid!, action]))
@@ -1119,8 +1173,16 @@ export async function updateExperimentOperation(payload: {
     nodes,
     edges: Array.isArray(graph.edges) ? graph.edges : [],
   })
-  const existing = nodes[nodes.length - 1]
+  // 图接口返回顺序不是作者顺序；固定执行器边必须按 sequence_index 取最后一个
+  // 节点，否则编辑时新增多个节点会把第二条边的源句柄误取成当前新节点模板的
+  // ready 句柄，OS 会以“Handle 不属于节点模板”拒绝整条边。
+  const orderedNodes = [...nodes].sort((left, right) => (
+    Number(left.meta_data?.unilab?.sequence_index ?? Number.MAX_SAFE_INTEGER)
+    - Number(right.meta_data?.unilab?.sequence_index ?? Number.MAX_SAFE_INTEGER)
+  ))
+  const existing = orderedNodes[orderedNodes.length - 1]
   let previousUuid = existing?.uuid ? String(existing.uuid) : ''
+  const detailsByNodeUuid = new Map<string, RawRecord>()
   for (const [index, action] of payload.actions.filter((item) => !item.nodeUuid).entries()) {
     if (!action.templateUuid) throw new Error(`新增动作“${action.name}”缺少模板身份`)
     const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(action.templateUuid)}`)
@@ -1131,57 +1193,76 @@ export async function updateExperimentOperation(payload: {
       meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
     })
     if (!created?.uuid) throw new Error(`新增动作“${action.name}”后端未返回节点身份`)
+    // 保留新节点自己的模板句柄；下一次循环的边源端必须从上一个新节点取，
+    // 不能从尚未更新的 nodes 快照中猜测。
+    detailsByNodeUuid.set(String(created.uuid), detail)
     if (previousUuid) {
-      const source = nodes.find((node: RawRecord) => String(node.uuid) === previousUuid) || created
-      const sourceDetail = source === created ? detail : await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(String(source.workflow_node_template_uuid))}`)
+      const source = nodes.find((node: RawRecord) => String(node.uuid) === previousUuid)
+      const sourceDetail = detailsByNodeUuid.get(previousUuid)
+        || (source
+          ? await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(String(source.workflow_node_template_uuid))}`)
+          : undefined)
+      if (!sourceDetail) throw new Error(`新增动作“${action.name}”无法解析前置节点模板`)
       const sourceHandle = (Array.isArray(sourceDetail.handles) ? sourceDetail.handles : []).find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source')
       const targetHandle = handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target')
-      if (sourceHandle?.uuid && targetHandle?.uuid) await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.workflowUuid)}/edges`, { source_node_uuid: previousUuid, target_node_uuid: String(created.uuid), source_handle_uuid: sourceHandle.uuid, target_handle_uuid: targetHandle.uuid, description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } } })
+      if (!sourceHandle?.uuid || !targetHandle?.uuid) throw new Error(`动作“${action.name}”的模板缺少 ready 控制句柄，无法建立顺序依赖`)
+      await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.workflowUuid)}/edges`, { source_node_uuid: previousUuid, target_node_uuid: String(created.uuid), source_handle_uuid: sourceHandle.uuid, target_handle_uuid: targetHandle.uuid, description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } } })
     }
     previousUuid = String(created.uuid)
   }
   return { workflowUuid: payload.workflowUuid, status: 'source' as const }
 }
 
-export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
-  const workflow = await writeData<RawRecord>('POST', '/workflows', {
-    name: payload.name, description: payload.description, tags: ['experiment-operation'], workflow_type: 'experiment_operation',
-    operation_category_uuid: payload.categoryUuid || undefined, meta_data: {},
-  })
-  const workflowUuid = String(workflow.uuid)
-  const createdNodes: Array<{ uuid: string; readySource?: string; readyTarget?: string }> = []
-  for (let index = 0; index < payload.actions.length; index += 1) {
-    const action = payload.actions[index]
-    const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(action.templateUuid)}`)
-    const handles = Array.isArray(detail.handles) ? detail.handles : []
-    const createdNode = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/nodes`, {
-      workflow_node_template_uuid: action.templateUuid,
-      material_uuid: action.materialUuid || undefined,
-      name: action.name,
-      pose: { x: 120 + index * 220, y: 180 },
-      param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
+  let workflowUuid = ''
+  try {
+    const workflow = await writeData<RawRecord>('POST', '/workflows', {
+      name: payload.name, description: payload.description, tags: ['experiment-operation'], workflow_type: 'experiment_operation',
+      operation_category_uuid: payload.categoryUuid || undefined, meta_data: { unilab: { input_contract: payload.inputContract || {}, output_contract: payload.outputContract || {} } },
     })
-    if (!createdNode?.uuid) throw new Error(`动作“${action.name}”已提交，但后端未返回新节点身份`)
-    createdNodes.push({
-      uuid: String(createdNode.uuid),
-      readySource: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source')?.uuid,
-      readyTarget: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target')?.uuid,
-    })
+    workflowUuid = String(workflow.uuid || '')
+    if (!workflowUuid) throw new Error('OS 创建实验操作后未返回工作流 UUID')
+    const createdNodes: Array<{ uuid: string; readySource?: string; readyTarget?: string }> = []
+    for (let index = 0; index < payload.actions.length; index += 1) {
+      const action = payload.actions[index]
+      const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(action.templateUuid)}`)
+      const handles = Array.isArray(detail.handles) ? detail.handles : []
+      const createdNode = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/nodes`, {
+        workflow_node_template_uuid: action.templateUuid,
+        material_uuid: action.materialUuid || undefined,
+        name: action.name,
+        pose: { x: 120 + index * 220, y: 180 },
+        param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+      })
+      if (!createdNode?.uuid) throw new Error(`动作“${action.name}”已提交，但后端未返回新节点身份`)
+      createdNodes.push({
+        uuid: String(createdNode.uuid),
+        readySource: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source')?.uuid,
+        readyTarget: handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target')?.uuid,
+      })
+    }
+    for (let index = 1; index < createdNodes.length; index += 1) {
+      const source = createdNodes[index - 1]
+      const target = createdNodes[index]
+      if (!source.readySource || !target.readyTarget) throw new Error('动作模板缺少 ready 控制句柄，无法建立顺序依赖')
+      await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, {
+        source_node_uuid: source.uuid, target_node_uuid: target.uuid,
+        source_handle_uuid: source.readySource, target_handle_uuid: target.readyTarget,
+        description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } },
+      })
+    }
+    const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+    const revision = Number(graph.workflow?.revision)
+    if (!Number.isFinite(revision)) throw new Error('子工作流已写入，但无法读取当前修订，未执行发布')
+    return { workflowUuid, revision, status: 'source' as const }
+  } catch (error) {
+    // 创建是多步 API；任何节点/连线/编译失败都撤销已创建的领域定义，避免
+    // 返回列表出现没有节点的空实验操作。删除失败不覆盖原始错误，便于重试诊断。
+    if (workflowUuid) {
+      try { await deleteExperimentOperation(workflowUuid) } catch { /* 保留原始失败原因 */ }
+    }
+    throw error
   }
-  for (let index = 1; index < createdNodes.length; index += 1) {
-    const source = createdNodes[index - 1]
-    const target = createdNodes[index]
-    if (!source.readySource || !target.readyTarget) throw new Error('动作模板缺少 ready 控制句柄，无法建立顺序依赖')
-    await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, {
-      source_node_uuid: source.uuid, target_node_uuid: target.uuid,
-      source_handle_uuid: source.readySource, target_handle_uuid: target.readyTarget,
-      description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } },
-    })
-  }
-  const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
-  const revision = Number(graph.workflow?.revision)
-  if (!Number.isFinite(revision)) throw new Error('子工作流已写入，但无法读取当前修订，未执行发布')
-  return { workflowUuid, revision, status: 'source' as const }
 }
 
 function materialSitesFromGraph(graph: RawRecord): Map<string, MaterialRecord['sites']> {

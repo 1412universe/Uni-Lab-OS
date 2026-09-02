@@ -20,7 +20,7 @@ import {
   Send,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
-import { createWorkflowTask, importWorkflowJson, importWorkflowPython, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
+import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
@@ -83,37 +83,48 @@ export function WorkflowsPage({
   targetWorkflow?: WorkflowTarget
 }) {
   const [query, setQuery] = useState('')
+  const availableWorkflows = useMemo(
+    () => workflows.filter((workflow) => workflow.workflowType !== 'experiment_operation'),
+    [workflows],
+  )
   const [selectedId, setSelectedId] = useState(
-    workflows.some((workflow) => workflow.uuid === targetWorkflow?.workflowUuid)
+    availableWorkflows.some((workflow) => workflow.uuid === targetWorkflow?.workflowUuid)
       ? targetWorkflow?.workflowUuid || ''
-      : workflows[0]?.uuid || '',
+      : availableWorkflows[0]?.uuid || '',
   )
   const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
+  const [childPickerOpen, setChildPickerOpen] = useState(false)
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
   const pythonImportRef = useRef<HTMLInputElement>(null)
   const jsonImportRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const [knownNodeCounts, setKnownNodeCounts] = useState<Record<string, number>>({})
+  const publishedChildrenQuery = useQuery({
+    queryKey: ['published-child-workflows'],
+    queryFn: ({ signal }) => loadPublishedWorkflowContracts(signal),
+    enabled: childPickerOpen && connected,
+    staleTime: 15_000,
+  })
 
   useEffect(() => {
-    if (targetWorkflow?.workflowUuid && workflows.some((workflow) => workflow.uuid === targetWorkflow.workflowUuid)) {
+    if (targetWorkflow?.workflowUuid && availableWorkflows.some((workflow) => workflow.uuid === targetWorkflow.workflowUuid)) {
       setSelectedId(targetWorkflow.workflowUuid)
       return
     }
-    if (!workflows.some((workflow) => workflow.uuid === selectedId)) {
-      setSelectedId(workflows[0]?.uuid || '')
+    if (!availableWorkflows.some((workflow) => workflow.uuid === selectedId)) {
+      setSelectedId(availableWorkflows[0]?.uuid || '')
     }
-  }, [workflows, selectedId, targetWorkflow?.workflowUuid])
+  }, [availableWorkflows, selectedId, targetWorkflow?.workflowUuid])
 
   const visibleWorkflows = useMemo(() => {
     const needle = query.trim().toLowerCase()
-    if (!needle) return workflows
-    return workflows.filter((workflow) => [workflow.name, workflow.uuid, workflow.description]
+    if (!needle) return availableWorkflows
+    return availableWorkflows.filter((workflow) => [workflow.name, workflow.uuid, workflow.description]
       .join(' ')
       .toLowerCase()
       .includes(needle))
-  }, [query, workflows])
+  }, [query, availableWorkflows])
 
   const selected = visibleWorkflows.find((workflow) => workflow.uuid === selectedId) || visibleWorkflows[0]
   const selectedTaskSnapshotUuid = selected?.uuid === targetWorkflow?.workflowUuid
@@ -197,6 +208,23 @@ export function WorkflowsPage({
       onNotify(`导入失败：${error instanceof Error ? error.message : '未知错误'}`)
     }
   }
+  async function referenceChildWorkflow(contract: Record<string, any>) {
+    if (!detail) return
+    const contractUuid = String(contract.uuid || '')
+    if (!contractUuid) { onNotify('引用失败：发布合同缺少 UUID'); return }
+    try {
+      await insertCompositeWorkflow({
+        parentWorkflowUuid: detail.uuid,
+        revision: detail.revision,
+        contractUuid,
+        pose: { x: 120 + graphNodes.length * 220, y: 180 },
+      })
+      setChildPickerOpen(false)
+      onNotify(`已引用实验操作“${String(contract.name || contract.workflow_uuid)}”，当前工作流已回到 source`)
+      await queryClient.invalidateQueries({ queryKey: ['workflow-graph', detail.uuid] })
+      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
+    } catch (error) { onNotify(`引用失败：${error instanceof Error ? error.message : '未知错误'}`) }
+  }
   const preflightTone: ReadinessTone = preflightQuery.isFetching
     ? 'loading'
     : preflightQuery.isError
@@ -264,7 +292,7 @@ export function WorkflowsPage({
 
       <div className={`workflow-layout workflow-layout-${workspaceView}`}>
         <Panel className="workflow-library">
-          <PanelHeader title="工作流目录" description={`${workflows.length} 个 Edge 定义`} action={<WorkflowIcon size={18} />} />
+          <PanelHeader title="工作流目录" description={`${availableWorkflows.length} 个普通工作流`} action={<WorkflowIcon size={18} />} />
           <label className="search-field">
             <Search size={16} />
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名称或 UUID" />
@@ -292,7 +320,7 @@ export function WorkflowsPage({
             {!visibleWorkflows.length ? <EmptyState title="没有匹配的工作流" description="调整搜索词后重试。" /> : null}
           </div>
           <div className="library-summary">
-            <div><span>已发布</span><strong>{workflows.filter((item) => item.status !== 'draft').length}</strong></div>
+            <div><span>已发布</span><strong>{availableWorkflows.filter((item) => item.status === 'published').length}</strong></div>
             <div><span>输入合同</span><strong>{workflows.reduce((sum, item) => sum + item.inputContract.length, 0)}</strong></div>
           </div>
         </Panel>
@@ -325,7 +353,8 @@ export function WorkflowsPage({
                 <button className={workspaceView === 'run' ? 'active' : ''} onClick={() => setWorkspaceView('run')}><Play size={14} />运行准备</button>
               </div>
               {workspaceView === 'topology' ? <div className="workflow-canvas">
-                <div className="canvas-toolbar"><span><GitBranch size={15} />发布修订拓扑</span><small>{graphQuery.isFetching ? '正在读取图…' : graphQuery.isError ? '图接口不可用，显示定义摘要' : 'Edge 权威图'}</small></div>
+                <div className="canvas-toolbar"><span><GitBranch size={15} />发布修订拓扑</span><div className="canvas-toolbar-actions"><small>{graphQuery.isFetching ? '正在读取图…' : graphQuery.isError ? '图接口不可用，显示定义摘要' : 'Edge 权威图'}</small><Button icon={<WorkflowIcon size={13} />} disabled={!connected || !detail} onClick={() => setChildPickerOpen((open) => !open)}>引用已发布子工作流</Button></div></div>
+                {childPickerOpen ? <div className="child-workflow-picker"><header><div><strong>选择可引用的实验操作</strong><small>仅展示已发布的 experiment_operation；普通工作流不会出现在这里。</small></div><button type="button" onClick={() => setChildPickerOpen(false)}>×</button></header>{publishedChildrenQuery.isFetching ? <p>正在读取已发布实验操作…</p> : publishedChildrenQuery.data?.length ? <div>{publishedChildrenQuery.data.map((contract) => <button type="button" key={String(contract.uuid)} onClick={() => void referenceChildWorkflow(contract)}><WorkflowIcon size={15} /><span><strong>{String(contract.name || contract.workflow_uuid)}</strong><small>{String(contract.workflow_uuid || '')} · r{String(contract.workflow_revision || contract.version || '')} · {Array.isArray(contract.input_contract?.parameters) ? contract.input_contract.parameters.length : 0} 个输入 · {Array.isArray(contract.output_contract?.outputs) ? contract.output_contract.outputs.length : 0} 个输出</small></span><Plus size={14} /></button>)}</div> : <p>暂无可引用的已发布实验操作。</p>}</div> : null}
                 <WorkflowDag
                   key={`${detail.uuid}:${detail.revision}`}
                   nodes={graphNodes}

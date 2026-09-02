@@ -750,8 +750,10 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         "candidate_invalid",
         "workflow_identity_mismatch",
         "source_function_conflict",
+        "invalid_composite_child_type",
+        "invalid_composite_child_status",
     }
-    if error.code == "invalid_input":
+    if error.code in {"invalid_input", "invalid_composite_child_type"}:
         business_code = 1000
     elif error.code in {"not_found", "workflow_not_found"}:
         business_code = 3002

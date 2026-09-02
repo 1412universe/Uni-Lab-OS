@@ -773,25 +773,34 @@ class WorkflowStore:
         now = utc_now()
         try:
             with self.transaction() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO workflow(
-                        uuid, create_time, update_time, deleted_at,
-                        description, meta_data, name, tags, workflow_type,
-                        revision
-                    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1)
-                    """,
-                    (
-                        workflow_uuid,
-                        now,
-                        now,
-                        description,
-                        _json(meta_data),
-                        name,
-                        _json(tags),
-                        workflow_type,
-                    ),
-                )
+                existing = conn.execute(
+                    "SELECT deleted_at FROM workflow WHERE uuid = ?",
+                    (workflow_uuid,),
+                ).fetchone()
+                if existing is not None:
+                    # 被软删除的定义仍然是身份墓碑；只有定义目录被显式清空后，
+                    # 导入才允许再次占用相同 UUID。
+                    raise StoreConflict(f"workflow {workflow_uuid} already exists")
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO workflow(
+                            uuid, create_time, update_time, deleted_at,
+                            description, meta_data, name, tags, workflow_type,
+                            revision
+                        ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, 1)
+                        """,
+                        (
+                            workflow_uuid,
+                            now,
+                            now,
+                            description,
+                            _json(meta_data),
+                            name,
+                            _json(tags),
+                            workflow_type,
+                        ),
+                    )
                 if node_templates is not None or handle_templates is not None:
                     if not template_catalog_fingerprint:
                         raise StoreConflict("Candidate Catalog 缺少目录指纹")
@@ -930,10 +939,39 @@ class WorkflowStore:
             )
         return self.get_workflow(workflow_uuid)
 
-    def delete_workflow(self, workflow_uuid: str) -> None:
+    def delete_workflow(self, workflow_uuid: str, *, purge: bool = False) -> None:
+        """删除工作流定义。
+
+        默认保留软删除墓碑，供持久运行事实库及旧版调用方追溯；进程内定义
+        目录可传 ``purge=True``，将定义、图和创作元数据一并硬删除。运行任务
+        不在定义目录中，因此不会随 purge 被删除。
+        """
+
         now = utc_now()
         with self.transaction() as conn:
             self.get_workflow(workflow_uuid, conn=conn)
+            if purge:
+                if conn.execute(
+                    "SELECT 1 FROM workflow_task WHERE workflow_uuid = ? LIMIT 1",
+                    (workflow_uuid,),
+                ).fetchone() is not None:
+                    raise StoreConflict(
+                        f"workflow {workflow_uuid} has historical tasks"
+                    )
+                for table in (
+                    "workflow_inventory_requirement",
+                    "workflow_source_registration",
+                    "workflow_authoring",
+                    "published_workflow_contract",
+                    "workflow_edge",
+                    "workflow_node",
+                ):
+                    conn.execute(
+                        f"DELETE FROM {table} WHERE workflow_uuid = ?",
+                        (workflow_uuid,),
+                    )
+                conn.execute("DELETE FROM workflow WHERE uuid = ?", (workflow_uuid,))
+                return
             conn.execute(
                 "UPDATE workflow SET deleted_at = ?, update_time = ? WHERE uuid = ?",
                 (now, now, workflow_uuid),

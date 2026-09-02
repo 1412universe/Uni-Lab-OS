@@ -96,6 +96,9 @@ export interface ContractField {
   type: string
   required?: boolean
   defaultValue?: unknown
+  title?: string
+  description?: string
+  implicit?: boolean
   schema: Record<string, unknown>
 }
 

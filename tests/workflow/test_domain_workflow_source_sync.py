@@ -536,6 +536,78 @@ def test_imported_workflow_delete_removes_source_and_manifest(
         reopened.close()
 
 
+def test_deleted_python_workflow_can_be_imported_again_with_same_identity(
+    tmp_path: Path,
+) -> None:
+    """删除后再次导入同一 Python 文件不得被旧 UUID/图记录阻塞。"""
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+    )
+    try:
+        first = service.import_python_workflow(
+            file_name="same_workflow.py",
+            python_source=_source(),
+        )
+        service.delete_workflow(first["workflow"]["uuid"])
+        assert definitions.count_rows("workflow", include_deleted=True) == 0
+        second = service.import_python_workflow(
+            file_name="same_workflow.py",
+            python_source=_source(),
+        )
+        assert second["workflow"]["uuid"] == first["workflow"]["uuid"]
+        assert second["workflow"]["revision"] == 1
+        assert definitions.count_rows("workflow") == 1
+        assert package_root.joinpath(
+            "workflows", "same_workflow.py"
+        ).is_file()
+    finally:
+        service.close()
+
+
+def test_domain_workflow_status_returns_source_after_editing_published_revision(
+    tmp_path: Path,
+) -> None:
+    """领域包发布旧修订后，图被修改时当前定义必须回到 source。"""
+
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    service, _runtime_store, _definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+    )
+    try:
+        imported = service.import_python_workflow(
+            file_name="published_then_edited.py",
+            python_source=_source(),
+        )
+        service.publish_workflow_contract(
+            WORKFLOW_UUID,
+            revision=int(imported["workflow"]["revision"]),
+        )
+        graph = service.get_graph(WORKFLOW_UUID)
+        edited_nodes = [
+            {**node, "name": "编辑后的节点"} for node in graph["nodes"]
+        ]
+        edited = service.save_graph(
+            WORKFLOW_UUID,
+            revision=int(imported["workflow"]["revision"]),
+            nodes=edited_nodes,
+            edges=graph["edges"],
+        )
+        assert edited["workflow"]["revision"] == int(imported["workflow"]["revision"]) + 1
+        assert service.get_workflow(WORKFLOW_UUID)["status"] == "source"
+        assert service.list_workflows(
+            workflow_type="experiment_operation",
+            status="published",
+        )["items"] == []
+    finally:
+        service.close()
+
+
 def test_delete_hides_published_contract_when_history_cleanup_is_unavailable(
     tmp_path: Path,
 ) -> None:

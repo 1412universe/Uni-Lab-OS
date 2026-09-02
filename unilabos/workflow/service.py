@@ -212,6 +212,14 @@ _ERRORS = {
         409,
         "工作流函数名已被领域包中的其他工作流占用，请修改工作流名称",
     ),
+    "invalid_composite_child_type": (
+        422,
+        "组合节点只能引用实验操作类型的工作流",
+    ),
+    "invalid_composite_child_status": (
+        409,
+        "只能引用当前修订已发布的实验操作",
+    ),
     "internal_error": (500, "本地工作流服务出现错误，请重试或查看日志"),
 }
 _HASH_TOKEN = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -615,6 +623,7 @@ class WorkflowService:
             source = self._read_source(self._registration(identity))
             is_currently_published = (
                 latest_contract is not None
+                and int(latest_contract["workflow_revision"]) == int(projected["revision"])
                 and publication is not None
                 and source is not None
                 and publication["contract"]["uuid"] == latest_contract["uuid"]
@@ -1279,7 +1288,13 @@ class WorkflowService:
                     raise
             else:
                 self._unregister_domain_source(registration)
-            self._definition_store.delete_workflow(identity)
+            # 领域工作流定义只存在进程内目录（SQLite :memory: 仅作事务实现），
+            # 删除时必须清掉 UUID/节点/连线墓碑，否则同一源码再次导入会冲突。
+            # 运行事实库仍走默认软删除，保留历史任务与事件。
+            self._definition_store.delete_workflow(
+                identity,
+                purge=self._definition_store.path == ":memory:",
+            )
             self._remove_active_source_authorization(identity)
             contract_store = self._published_contract_store()
             contract_store.discard_workflow(identity)
@@ -1579,6 +1594,14 @@ class WorkflowService:
                 contract = self._published_contract_store().get(contract_identity)
             except KeyError:
                 raise WorkflowError("not_found") from None
+            # 复合节点只能引用已发布的实验操作合同；普通工作流即使存在发布
+            # 合同，也不能作为实验操作子工作流插入。
+            child_uuid = validate_uuid(str(contract.get("workflow_uuid", "")))
+            child = self.get_workflow(child_uuid)
+            if child.get("workflow_type") != WORKFLOW_TYPE_EXPERIMENT_OPERATION:
+                raise WorkflowError("invalid_composite_child_type")
+            if child.get("status") != "published":
+                raise WorkflowError("invalid_composite_child_status")
             requirements = contract["executor_requirements"]
             required_keys = {str(item["key"]) for item in requirements}
             if set(normalized_bindings) != required_keys:
