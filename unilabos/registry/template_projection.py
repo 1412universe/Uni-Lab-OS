@@ -49,6 +49,89 @@ class RegistryTemplateProjectionError(ValueError):
     """设备注册表不能安全投影为规范模板。"""
 
 
+def _condition_parameter_schema() -> dict[str, Any]:
+    """返回条件节点参数的展示合同。
+
+    返回值：一个新的 JSON Schema 风格字典，说明调度器读取的变量、绑定和有序
+    分支字段。该合同只用于目录和前端编辑提示，真正的结构校验仍由工作流编译器
+    与执行计划构建器负责，避免两套校验规则产生分歧。
+    """
+
+    return {
+        "type": "object",
+        "description": "条件节点按顺序检查分支；第一个为真的分支会被执行。",
+        "properties": {
+            "variables": {
+                "type": "object",
+                "description": "条件表达式使用的初始变量；也可由 bindings 提供。",
+            },
+            "bindings": {
+                "type": "object",
+                "description": "变量来源，可引用 workflow_input 或 node_result。",
+                "additionalProperties": {"type": "object"},
+            },
+            "branches": {
+                "type": "array",
+                "description": "按执行顺序排列的分支；最后一个分支可用 condition=null 表示兜底。",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "condition": {"type": ["object", "null"]},
+                        "node_uuids": {"type": "array", "items": {"type": "string"}},
+                        "entry_node_uuids": {"type": "array", "items": {"type": "string"}},
+                        "exit_node_uuids": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["label", "node_uuids", "entry_node_uuids", "exit_node_uuids"],
+                },
+            },
+            "predecessor_node_uuids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "进入条件节点前必须完成的节点。",
+            },
+        },
+        "required": ["branches"],
+    }
+
+
+def _repeat_until_parameter_schema() -> dict[str, Any]:
+    """返回循环节点参数的展示合同。
+
+    返回值：一个新的 JSON Schema 风格字典，说明循环上限、carry、退出条件和
+    区域边界字段。该合同用于前端生成参数编辑提示，不替代执行计划的严格校验。
+    """
+
+    return {
+        "type": "object",
+        "description": "循环节点逐轮执行区域内节点，直到 until 严格为真或达到上限。",
+        "properties": {
+            "loop_variable": {"type": "string", "description": "循环状态名称。"},
+            "max_iterations": {"type": "integer", "minimum": 1, "description": "最大执行轮数。"},
+            "initial_carry": {"type": "object", "description": "第一轮 carry 的初始值或来源。"},
+            "next_carry": {"type": "object", "description": "下一轮 carry 的值或来源。"},
+            "until": {"type": "object", "description": "每轮完成后计算的退出条件表达式。"},
+            "bindings": {"type": "object", "description": "退出条件变量来源，可引用 workflow_input 或 node_result。"},
+            "variables": {"type": "object", "description": "退出条件使用的初始工作流输入值。"},
+            "node_uuids": {"type": "array", "items": {"type": "string"}, "description": "循环体内的节点。"},
+            "entry_node_uuids": {"type": "array", "items": {"type": "string"}},
+            "exit_node_uuids": {"type": "array", "items": {"type": "string"}},
+            "predecessor_node_uuids": {"type": "array", "items": {"type": "string"}},
+            "successor_node_uuids": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "max_iterations",
+            "initial_carry",
+            "next_carry",
+            "until",
+            "bindings",
+            "node_uuids",
+            "entry_node_uuids",
+            "exit_node_uuids",
+        ],
+    }
+
+
 def _definition_business_id(definition: Mapping[str, Any]) -> str:
     """读取注册表定义的稳定业务身份排序键。
 
@@ -568,6 +651,7 @@ class RegistryTemplateProjection:
                 "unilab": {
                     "framework_owner_only": True,
                     "executor_kind": "repeat_until",
+                    "parameter_schema": _repeat_until_parameter_schema(),
                     "resource_template": {
                         "uuid": resource_template_uuid,
                         "name": resource_name,
@@ -604,6 +688,7 @@ class RegistryTemplateProjection:
                 "unilab": {
                     "framework_owner_only": True,
                     "executor_kind": "condition",
+                    "parameter_schema": _condition_parameter_schema(),
                     "resource_template": {
                         "uuid": resource_template_uuid,
                         "name": resource_name,

@@ -43,11 +43,22 @@ function material(uuid: string, name: string, order: number): WorkflowGraphNode 
   }
 }
 
+function control(uuid: string, name: string, type: 'condition' | 'repeat_until', order: number): WorkflowGraphNode {
+  return { uuid, name, type, kind: 'action', authoringOrder: order, disabled: false }
+}
+
 function edge(uuid: string, sourceNodeUuid: string, targetNodeUuid: string): WorkflowGraphEdge {
   return { uuid, sourceNodeUuid, targetNodeUuid }
 }
 
 describe('WorkflowDag', () => {
+  it('用条件节点和循环节点的业务名称展示结构控制节点', () => {
+    render(<WorkflowDag nodes={[control('condition-1', '按结果分支', 'condition', 0), control('repeat-1', '重试循环', 'repeat_until', 1)]} edges={[]} loading={false} error={false} />)
+
+    expect(screen.getByRole('article', { name: /按结果分支.*条件节点/ })).toBeInTheDocument()
+    expect(screen.getByRole('article', { name: /重试循环.*循环节点/ })).toBeInTheDocument()
+  })
+
   it('labels a parallel control edge and highlights both endpoints when selected', () => {
     const nodes = [
       action('setup-beaker', '烧杯准备完成', 0),

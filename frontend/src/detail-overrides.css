@@ -60,6 +60,21 @@
 .operation-builder > .node-parameter-editor { margin: 14px; border: 1px solid #cfd6e2; border-radius: 10px; }
 .node-parameter-editor > header > div { display: grid; gap: 3px; }
 .node-parameter-editor > header > button { color: #667085; background: transparent; border: 0; font-size: 17px; }
+.control-template-card { display: grid; gap: 4px; padding: 8px 9px; margin-top: 6px; border: 1px solid #d9e1f2; border-radius: 8px; background: #f8faff; }
+.control-template-card strong, .control-template-card code, .control-template-card small { display: block; }
+.control-template-card strong { font-size: 9px; }
+.control-template-card code { color: #6941c6; font-size: 7px; }
+.control-template-card small, .control-template-card > span { color: #667085; font-size: 7px; line-height: 1.4; }
+.control-template-empty { display: block; padding: 4px; color: #98a2b3; font-size: 7px; }
+.control-parameter-editor { display: grid; gap: 8px; border-top: 1px solid #cfd6e2; border-radius: 10px; }
+.control-parameter-editor article { border: 1px solid #d9e1f2; border-radius: 8px; background: #fff; }
+.control-parameter-heading { display: flex; align-items: center; gap: 7px; width: 100%; padding: 9px; color: #344054; text-align: left; background: transparent; border: 0; }
+.control-parameter-heading strong { font-size: 9px; }
+.control-parameter-heading code { color: #6941c6; font-size: 7px; }
+.control-parameter-heading span { margin-left: auto; color: #667085; font-size: 7px; }
+.control-parameter-body { display: grid; gap: 7px; padding: 0 9px 9px; }
+.control-parameter-body p, .control-parameter-body small { margin: 0; color: #667085; font-size: 7px; line-height: 1.5; }
+.control-parameter-body textarea { min-height: 180px; padding: 8px; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #344054; border: 1px solid #d0d5dd; border-radius: 7px; resize: vertical; }
 .operation-builder .node-parameter-row label span { display: flex; align-items: center; gap: 6px; }
 .operation-builder .node-parameter-row label em { padding: 2px 5px; color: #475467; background: #f2f4f7; border-radius: 999px; font-size: 7px; font-style: normal; }
 .operation-builder .node-parameter-row label em[data-required="true"] { color: #b42318; background: #fff1f0; }

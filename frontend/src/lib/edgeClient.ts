@@ -15,6 +15,7 @@ import type {
   WorkflowTask,
   ResourceTemplateRecord,
   ActionTemplateRecord,
+  ControlTemplateRecord,
   ActionParameterRecord,
   OperationCategoryRecord,
   ReagentInfoRecord,
@@ -935,13 +936,34 @@ export async function verifyMaterialBarcode(barcode: string, signal?: AbortSigna
   return (result.items || []).map((raw) => adaptMaterial(raw))
 }
 
+/** 读取可由实验操作线性编排的设备动作模板，不包含结构控制节点。 */
 export async function loadActionTemplates(signal?: AbortSignal): Promise<ActionTemplateRecord[]> {
   const page = await requestAllPages<RawRecord>('/workflow-node-templates', signal)
-  return page.items.map((raw) => ({
+  return page.items.filter((raw) => !['condition', 'repeat_until'].includes(String(raw.node_type || ''))).map((raw) => ({
     uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid), description: raw.description ? String(raw.description) : undefined,
     type: String(raw.type || ''), nodeType: String(raw.node_type || ''),
     resourceTemplate: { uuid: String(raw.resource_template?.uuid || ''), name: String(raw.resource_template?.name || ''), displayName: String(raw.resource_template?.display_name || raw.resource_template?.name || '') },
   }))
+}
+
+/** 读取条件与循环模板，并从详情接口取得调度器实际使用的参数说明。 */
+export async function loadControlTemplates(signal?: AbortSignal): Promise<ControlTemplateRecord[]> {
+  const page = await requestAllPages<RawRecord>('/workflow-node-templates', signal)
+  const summaries = page.items.filter((raw) => ['condition', 'repeat_until'].includes(String(raw.node_type || ''))).map((raw) => ({
+    uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid), description: raw.description ? String(raw.description) : undefined,
+    type: String(raw.type || ''), nodeType: String(raw.node_type || ''),
+    resourceTemplate: { uuid: String(raw.resource_template?.uuid || ''), name: String(raw.resource_template?.name || ''), displayName: String(raw.resource_template?.display_name || raw.resource_template?.name || '') },
+  }))
+  return mapWithConcurrency(summaries, 4, async (summary) => {
+    const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(summary.uuid)}`, signal)
+    const detailTemplate = detail.template && typeof detail.template === 'object' ? detail.template as RawRecord : {}
+    const schema = detailTemplate.meta_data?.unilab?.parameter_schema
+    return {
+      ...summary,
+      description: summary.description || (detailTemplate.description ? String(detailTemplate.description) : undefined),
+      parameterSchema: schema && typeof schema === 'object' ? { ...schema } : { type: 'object' },
+    }
+  })
 }
 
 export async function loadActionParameters(templateUuid: string, signal?: AbortSignal): Promise<ActionParameterRecord[]> {
@@ -1230,12 +1252,14 @@ export async function deleteExperimentOperation(workflowUuid: string) {
   return writeData<unknown>('DELETE', `/workflows/${encodeURIComponent(workflowUuid)}`)
 }
 
+/** 保存实验操作元数据和图节点；控制节点仅更新 param，不改其结构与模板身份。 */
 export async function updateExperimentOperation(payload: {
   workflowUuid: string
   name: string
   description: string
   categoryUuid?: string
   actions: Array<{ nodeUuid?: string; templateUuid?: string; name: string; description?: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  controls?: Array<{ nodeUuid: string; templateUuid: string; name: string; description?: string; param: Record<string, unknown> }>
   inputContract?: Record<string, unknown>
   outputContract?: Record<string, unknown>
 }) {
@@ -1249,8 +1273,14 @@ export async function updateExperimentOperation(payload: {
   })
   const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`)
   const edits = new Map(payload.actions.filter((action) => action.nodeUuid).map((action) => [action.nodeUuid!, action]))
+  const controlEdits = new Map((payload.controls || []).map((control) => [control.nodeUuid, control]))
   const nodes = (Array.isArray(graph.nodes) ? graph.nodes : []).map((node: RawRecord) => {
     const edit = edits.get(String(node.uuid))
+    const controlEdit = controlEdits.get(String(node.uuid))
+    if (!edit && !controlEdit) return node
+    if (controlEdit) {
+      return { ...node, name: controlEdit.name, description: controlEdit.description || controlEdit.name, param: controlEdit.param }
+    }
     if (!edit) return node
     return {
       ...node,
