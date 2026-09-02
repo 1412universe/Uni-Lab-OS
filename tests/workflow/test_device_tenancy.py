@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.store import StoreConflict, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
 WORKFLOW_UUID = "81000000-0000-4000-8000-000000000001"
@@ -445,4 +445,10 @@ def test_failed_load_retains_tenancy_for_manual_physical_settlement(
     assert store.get_job(TASK_A_JOBS[0])["status"] == "failed"
     assert task["status"] == "failed"
     assert task["cleanup_status"] == "requires_attention"
+    assert projection.list_device_tenancies(task_uuid=TASK_A_UUID)
+
+    with pytest.raises(StoreConflict, match="仍有活动设备托管"):
+        projection.project_cleanup_settled(TASK_A_UUID)
+
+    assert store.get_task(TASK_A_UUID)["cleanup_status"] == "requires_attention"
     assert projection.list_device_tenancies(task_uuid=TASK_A_UUID)

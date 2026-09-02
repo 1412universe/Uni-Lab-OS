@@ -159,6 +159,12 @@ class StationResourceInventory(Protocol):
         异常：库存读取失败原样传播，不得把读取失败降级成不匹配。
         """
 
+    def describe_wait_resources(
+        self,
+        resources: Sequence[Mapping[str, str]],
+    ) -> tuple[dict[str, str], ...]:
+        """用库存当前名称补齐等待资源，不改变其稳定身份。"""
+
     def resolve_target_site(self, request: TargetSiteRequest) -> StationSiteTarget:
         """按稳定选择器解析当前可接收物料的目标库位（Site）。
 
@@ -264,6 +270,53 @@ class SqliteStationResourceInventory:
         self._store = store
         self._settle_material_transfer = settle_material_transfer
         self._settle_material_aliquot = settle_material_aliquot
+
+    def describe_wait_resources(
+        self,
+        resources: Sequence[Mapping[str, str]],
+    ) -> tuple[dict[str, str], ...]:
+        """补齐等待资源的人类可读名称。
+
+        参数：``resources`` 是调度器已经确认的设备、物料或库位稳定身份。返回：
+        保持输入顺序和原字段的资源描述；库存中仍存在的物料与库位分别补充
+        ``material_name``、``site_name``。异常：SQLite 读取错误原样传播，名称
+        缺失时保留稳定 UUID，绝不伪造展示值。
+        """
+
+        described: list[dict[str, str]] = []
+        for raw_resource in resources:
+            resource = dict(raw_resource)
+            scope = str(resource.get("scope") or "").strip()
+            device_id = str(resource.get("device_id") or "").strip()
+            if scope == "device" and device_id and not str(
+                resource.get("device_name") or ""
+            ).strip():
+                device = self._store.query_one(
+                    "SELECT name FROM material "
+                    "WHERE uuid=? AND deleted_at IS NULL",
+                    (device_id,),
+                )
+                if device is not None and str(device.get("name") or "").strip():
+                    resource["device_name"] = str(device["name"]).strip()
+            material_uuid = str(resource.get("material_uuid") or "").strip()
+            if material_uuid and not str(resource.get("material_name") or "").strip():
+                material = self._store.query_one(
+                    "SELECT name FROM material "
+                    "WHERE uuid=? AND deleted_at IS NULL",
+                    (material_uuid,),
+                )
+                if material is not None and str(material.get("name") or "").strip():
+                    resource["material_name"] = str(material["name"]).strip()
+            site_uuid = str(resource.get("site_uuid") or "").strip()
+            if site_uuid and not str(resource.get("site_name") or "").strip():
+                site = self._store.query_one(
+                    "SELECT name FROM site WHERE uuid=? AND deleted_at IS NULL",
+                    (site_uuid,),
+                )
+                if site is not None and str(site.get("name") or "").strip():
+                    resource["site_name"] = str(site["name"]).strip()
+            described.append(resource)
+        return tuple(described)
 
     def is_device_material(
         self,

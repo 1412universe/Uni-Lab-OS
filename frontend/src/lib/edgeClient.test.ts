@@ -538,6 +538,48 @@ describe('Edge view model adapters', () => {
     })
   })
 
+  it('uses wait-resource names carried by the scheduler without a separate inventory lookup', () => {
+    const task = adaptTask({
+      uuid: 'task-inline-wait-names',
+      workflow_uuid: 'wf-1',
+      status: 'running',
+      execution_plan: {
+        nodes: [{ uuid: 'node-wait', name: '等待节点', topological_index: 0 }],
+      },
+    }, [{
+      workflow_node_uuid: 'node-wait',
+      status: 'pending',
+      wait_reason: {
+        code: 'operation_lease',
+        resources: [
+          {
+            scope: 'device',
+            device_id: 'device-1',
+            device_name: 'S09 机械臂',
+          },
+          {
+            scope: 'material_site',
+            material_uuid: 'device-2',
+            material_name: 'S08 开盖机',
+            site_uuid: 'site-1',
+            site_name: 'INPUT-1',
+          },
+          {
+            scope: 'material',
+            material_uuid: 'material-1',
+            material_name: '样品瓶 A',
+          },
+        ],
+      },
+    }])
+
+    expect(task.nodes[0].waitReason?.details).toEqual([
+      '设备：S09 机械臂（device-1）',
+      '库位：S08 开盖机 / INPUT-1（site-1）',
+      '物料：样品瓶 A（material-1）',
+    ])
+  })
+
   it('projects a task-level material admission wait onto its material-source nodes', () => {
     const task = adaptTask({
       uuid: 'task-material-admission',

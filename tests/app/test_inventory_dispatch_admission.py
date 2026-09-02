@@ -507,6 +507,50 @@ def test_changed_target_fact_rolls_back_whole_claim(
     assert len(store.query_all("SELECT * FROM station_execution_claim")) == 1
 
 
+def test_wait_resource_descriptions_include_material_and_site_names(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """调度等待资源必须由库存权威补齐物料名和库位名。"""
+
+    _store, service, identities = station_inventory
+
+    assert service.station_resources.describe_wait_resources(
+        (
+            {
+                "scope": "device",
+                "device_id": identities["robot"],
+            },
+            {
+                "scope": "material",
+                "material_uuid": identities["vessel"],
+            },
+            {
+                "scope": "material_site",
+                "material_uuid": identities["target_device"],
+                "site_uuid": TARGET_SITE,
+            },
+        )
+    ) == (
+        {
+            "scope": "device",
+            "device_id": identities["robot"],
+            "device_name": "ROBOT",
+        },
+        {
+            "scope": "material",
+            "material_uuid": identities["vessel"],
+            "material_name": "待搬容器",
+        },
+        {
+            "scope": "material_site",
+            "material_uuid": identities["target_device"],
+            "material_name": "TARGET-DEVICE",
+            "site_uuid": TARGET_SITE,
+            "site_name": "IN",
+        },
+    )
+
+
 def test_missing_transfer_source_reports_the_blocked_material(
     station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:

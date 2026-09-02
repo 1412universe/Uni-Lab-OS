@@ -92,6 +92,28 @@ _FINISHED_STATE_MAP = {
     "canceled": "canceled",
     "timeout": "timeout",
 }
+_WAIT_REASON_IDENTITY_FIELD_BY_SCOPE = {
+    "device": "device_id",
+    "material": "material_uuid",
+    "material_site": "site_uuid",
+}
+_WAIT_REASON_RESOURCE_FIELDS = (
+    "device_id",
+    "material_uuid",
+    "site_uuid",
+    "local_device_id",
+    "device_name",
+    "material_name",
+    "site_name",
+    "wait_code",
+    "wait_message",
+)
+_WAIT_REASON_ALLOWED_FIELDS = frozenset(
+    ("scope", *_WAIT_REASON_RESOURCE_FIELDS)
+)
+CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL = frozenset(
+    {"none", "pending", "required", "requires_attention", "canceling"}
+)
 
 
 def _encode_json_field(value: Any, *, field_name: str) -> str:
@@ -134,43 +156,20 @@ def _normalize_wait_reason_resources(
 
     normalized: list[dict[str, str]] = []
     seen: set[tuple[tuple[str, str], ...]] = set()
-    required_identity = {
-        "device": "device_id",
-        "material": "material_uuid",
-        "material_site": "site_uuid",
-    }
-    allowed = {
-        "scope",
-        "device_id",
-        "material_uuid",
-        "site_uuid",
-        "local_device_id",
-        "device_name",
-        "wait_code",
-        "wait_message",
-    }
     for value in values or ():
         if not isinstance(value, Mapping):
             raise StoreConflict("等待资源必须是对象")
-        if set(value) - allowed:
+        if set(value) - _WAIT_REASON_ALLOWED_FIELDS:
             raise StoreConflict("等待资源包含未知字段")
         scope = str(value.get("scope") or "").strip()
-        identity_field = required_identity.get(scope)
+        identity_field = _WAIT_REASON_IDENTITY_FIELD_BY_SCOPE.get(scope)
         if identity_field is None:
             raise StoreConflict("等待资源 scope 不合法")
         identity = value.get(identity_field)
         if not isinstance(identity, str) or not identity.strip():
             raise StoreConflict(f"等待资源缺少 {identity_field}")
         resource = {"scope": scope, identity_field: identity.strip()}
-        for field in (
-            "device_id",
-            "material_uuid",
-            "site_uuid",
-            "local_device_id",
-            "device_name",
-            "wait_code",
-            "wait_message",
-        ):
+        for field in _WAIT_REASON_RESOURCE_FIELDS:
             extra = value.get(field)
             if field == identity_field or extra in (None, ""):
                 continue
@@ -440,17 +439,7 @@ class TaskRuntimeProjection:
         异常任务恢复为 ``required``，由桥接层完成任务级资源清理后再转 ``settled``。
         """
 
-        unsettled = connection.execute(
-            """
-            SELECT 1 FROM workflow_node_job
-            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
-              AND uncertainty_reason IS NOT NULL
-              AND TRIM(uncertainty_reason) != ''
-            LIMIT 1
-            """,
-            (task_uuid,),
-        ).fetchone()
-        if unsettled is not None:
+        if cls._has_unsettled_job_reconciliation(connection, task_uuid=task_uuid):
             return False
         task = cls._task_row(connection, task_uuid)
         if task["control_status"] != "waiting_reconciliation":
@@ -474,6 +463,28 @@ class TaskRuntimeProjection:
             (cleanup_status, now, task_uuid),
         )
         return True
+
+    @staticmethod
+    def _has_unsettled_job_reconciliation(
+        connection: sqlite3.Connection,
+        *,
+        task_uuid: str,
+    ) -> bool:
+        """判断父任务是否仍有需要物理对账的作业。"""
+
+        return (
+            connection.execute(
+                """
+                SELECT 1 FROM workflow_node_job
+                WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+                  AND uncertainty_reason IS NOT NULL
+                  AND TRIM(uncertainty_reason) != ''
+                LIMIT 1
+                """,
+                (task_uuid,),
+            ).fetchone()
+            is not None
+        )
 
     @classmethod
     def _aggregate(
@@ -1223,14 +1234,18 @@ class TaskRuntimeProjection:
                 raise StoreConflict(f"非异常终态任务不能结算清理：{task_uuid}")
             if task_row["cleanup_status"] == "settled":
                 return self._aggregate(connection, task_uuid)
-            if task_row["cleanup_status"] not in {
-                "none",
-                "pending",
-                "required",
-                "requires_attention",
-                "canceling",
-            }:
+            if (
+                task_row["cleanup_status"]
+                not in CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL
+            ):
                 raise StoreConflict(f"任务清理状态不能结算：{task_uuid}")
+            if self._has_unsettled_job_reconciliation(
+                connection,
+                task_uuid=task_uuid,
+            ):
+                raise StoreConflict(f"任务仍有作业等待物理对账：{task_uuid}")
+            if active_task_device_tenancies(connection, task_uuid=task_uuid):
+                raise StoreConflict(f"任务仍有活动设备托管：{task_uuid}")
             settled_at = utc_now()
             release_task_execution_locks(
                 connection,
@@ -1695,6 +1710,7 @@ class TaskRuntimeProjection:
                     to_status="running",
                     now=utc_now(),
                 )
+            resources = _normalize_wait_reason_resources(wait_resources)
             if execution_locks:
                 record_execution_lock_wait(
                     connection,
@@ -1703,6 +1719,7 @@ class TaskRuntimeProjection:
                     requests=execution_locks,
                     blocking_task_uuid=blocking_task_uuid,
                     blocking_job_uuid=blocking_job_uuid,
+                    wait_resources=resources,
                 )
             else:
                 normalized_wait_code = str(wait_code or "").strip()
@@ -1723,7 +1740,6 @@ class TaskRuntimeProjection:
                     "message": normalized_wait_message,
                     "waiting_since": waiting_since,
                 }
-                resources = _normalize_wait_reason_resources(wait_resources)
                 if resources:
                     reason["resources"] = resources
                 encoded_reason = _encode_json_field(

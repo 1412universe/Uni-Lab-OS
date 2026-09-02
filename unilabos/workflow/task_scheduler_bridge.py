@@ -37,7 +37,11 @@ from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.dispatch_permit_saga import (
     freeze_projected_dispatch_permit,
 )
-from unilabos.workflow.execution_lock_lease import list_execution_locks
+from unilabos.workflow.execution_lock_lease import (
+    list_execution_locks,
+    wait_resource_from_execution_lock,
+    wait_resource_identity,
+)
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
 from unilabos.workflow.material_transfer_settlement import (
     MaterialTransferSettlement,
@@ -49,7 +53,10 @@ from unilabos.workflow.physical_settlement_policy import (
 )
 from unilabos.workflow.quantity_inventory import WorkflowQuantityInventory
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore
-from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
+from unilabos.workflow.task_runtime_projection import (
+    CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL,
+    TaskRuntimeProjection,
+)
 from unilabos.workflow.workflow_spec_compiler import WorkflowSpecCompiler
 
 logger = logging.getLogger(__name__)
@@ -803,13 +810,11 @@ class TaskSchedulerBridge:
                             task_uuid,
                             reason=reason,
                         )
-                    if status != "succeeded" and task.get("cleanup_status") in {
-                        "none",
-                        "pending",
-                        "required",
-                        "requires_attention",
-                        "canceling",
-                    }:
+                    if (
+                        status != "succeeded"
+                        and task.get("cleanup_status")
+                        in CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL
+                    ):
                         self._projection.project_cleanup_settled(task_uuid)
                 if page * 200 >= int(task_page["total"]):
                     break
@@ -1857,6 +1862,30 @@ class TaskSchedulerBridge:
             }
             for site_uuid in candidate_site_uuids or []
         )
+        known_resource_identities = {
+            identity
+            for resource in wait_resources
+            if (identity := wait_resource_identity(resource)) is not None
+        }
+        for execution_lock in execution_locks:
+            if not isinstance(execution_lock, Mapping):
+                raise StoreConflict(f"等待作业执行锁必须是对象：{job_uuid}")
+            resource = wait_resource_from_execution_lock(execution_lock)
+            identity = (
+                wait_resource_identity(resource)
+                if resource is not None
+                else None
+            )
+            if resource is not None and identity not in known_resource_identities:
+                wait_resources.append(resource)
+                if identity is not None:
+                    known_resource_identities.add(identity)
+        inventory = self._scheduler.station_resource_inventory
+        if inventory is not None:
+            wait_resources = [
+                dict(resource)
+                for resource in inventory.describe_wait_resources(wait_resources)
+            ]
         self._projection.project_execution_lock_wait(
             task_uuid=task_uuid,
             job_uuid=job_uuid,
@@ -2429,6 +2458,8 @@ class TaskSchedulerBridge:
                     raise StoreConflict(f"失败作业物理结算缺少库存 Claim：{job_uuid}")
             self._cancel_cancel_timer(job_uuid)
             self._cancel_manual_confirmation_timer(job_uuid)
+            if not settled_job.get("uncertainty_reason"):
+                self._finish_settled_terminal_task(job_uuid)
             return
         scheduler_state = {
             "succeeded": "success",

@@ -74,6 +74,20 @@ class _ToggleInventory:
             "allocation_sites": {},
         }
 
+    def describe_wait_resources(
+        self,
+        resources: list[dict[str, str]],
+    ) -> tuple[dict[str, str], ...]:
+        """模拟库存权威把稳定物料身份解析为前端可读名称。"""
+
+        return tuple(
+            {
+                **resource,
+                "material_name": "测试固定物料",
+            }
+            for resource in resources
+        )
+
     def consume_reservation(self, workflow_uuid: str, node_uuid: str) -> None:
         """保留既有调度器调用面；参数是任务和节点身份，返回无。"""
 
@@ -338,7 +352,11 @@ def test_blocked_admission_retry_reuses_task_and_job_identities(
     ]
     assert [job["status"] for job in blocked["jobs"]] == ["pending", "pending"]
     assert blocked["task"]["wait_reason"]["resources"] == [
-        {"scope": "material", "material_uuid": MATERIAL_UUID},
+        {
+            "scope": "material",
+            "material_uuid": MATERIAL_UUID,
+            "material_name": "测试固定物料",
+        },
     ]
     assert [call[0] for call in inventory.admission_calls] == [TASK_UUID, TASK_UUID]
     assert admitted["jobs"][0]["uuid"] == SOURCE_JOB_UUID

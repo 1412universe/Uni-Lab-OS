@@ -546,6 +546,39 @@ def test_reconciled_attention_task_can_finish_cleanup_settlement(
     assert claim_status == "released"
 
 
+def test_cleanup_settlement_rejects_jobs_that_still_need_reconciliation(
+    store: WorkflowStore,
+) -> None:
+    """只要任一 Job 仍有不确定事实，任务级清理就不得释放执行锁。"""
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status='failed', "
+            "cleanup_status='requires_attention' WHERE uuid=?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET status='failed', "
+            "uncertainty_reason='edge_result_unknown' WHERE uuid=?",
+            (job_uuid,),
+        )
+
+    with pytest.raises(StoreConflict, match="仍有作业等待物理对账"):
+        projection.project_cleanup_settled(TASK_UUID)
+
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+    assert projection.list_execution_locks(job_uuid)[0]["state"] == "reserved"
+
+
 def test_paused_submission_accepts_succeeded_material_sources(
     store: WorkflowStore,
 ) -> None:
@@ -1020,6 +1053,57 @@ def test_device_capacity_wait_preserves_candidate_diagnostics(
     assert wait_reason["message"] == "固定设备当前忙碌，等待下一轮调度"
     assert wait_reason["resources"] == [device]
     assert wait_reason["waiting_since"]
+
+
+def test_material_and_site_wait_preserve_human_readable_names(
+    store: WorkflowStore,
+) -> None:
+    """物料与库位等待事实必须同时保存稳定身份和用户可读名称。"""
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    resources = [
+        {
+            "scope": "material",
+            "material_uuid": "50000000-0000-4000-8000-000000000011",
+            "material_name": "样品瓶 A",
+        },
+        {
+            "scope": "material_site",
+            "material_uuid": "50000000-0000-4000-8000-000000000012",
+            "material_name": "S08 开盖机",
+            "site_uuid": "60000000-0000-4000-8000-000000000011",
+            "site_name": "INPUT-1",
+        },
+    ]
+
+    projection.project_execution_lock_wait(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        execution_locks=[
+            {
+                "lock_key": (
+                    "material/50000000-0000-4000-8000-000000000011/exclusive"
+                ),
+                "scope": "material",
+                "material_uuid": "50000000-0000-4000-8000-000000000011",
+            },
+            {
+                "lock_key": (
+                    "material/50000000-0000-4000-8000-000000000012/site/"
+                    "60000000-0000-4000-8000-000000000011/exclusive"
+                ),
+                "scope": "material_site",
+                "material_uuid": "50000000-0000-4000-8000-000000000012",
+                "site_uuid": "60000000-0000-4000-8000-000000000011",
+            },
+        ],
+        wait_code="site_occupied",
+        wait_message="目标库位当前不可用",
+        wait_resources=resources,
+    )
+
+    assert store.get_job(job_uuid)["wait_reason"]["resources"] == resources
 
 
 def test_runtime_journal_and_sse_invalidation_capture_dispatch_and_result(

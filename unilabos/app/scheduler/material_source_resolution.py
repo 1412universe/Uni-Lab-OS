@@ -164,18 +164,18 @@ class MaterialSourceResolutionCoordinator:
                 quantity_allocations,
             )
         except (InsufficientStock, WorkflowQuantityReservationError) as error:
-            wait_resources_by_node = {
-                node_uuid: (
+            wait_resources_by_node: dict[str, list[dict[str, str]]] = {}
+            for node_uuid, selector in selectors.items():
+                fixed_uuid = str(selector.get("material_uuid") or "").strip()
+                resources = (
                     [{"scope": "material", "material_uuid": fixed_uuid}]
-                    if (
-                        fixed_uuid := str(
-                            selector.get("material_uuid") or ""
-                        ).strip()
-                    )
+                    if fixed_uuid
                     else []
                 )
-                for node_uuid, selector in selectors.items()
-            }
+                wait_resources_by_node[node_uuid] = [
+                    dict(resource)
+                    for resource in self._inventory.describe_wait_resources(resources)
+                ]
             reason = str(error) or "任务所需物料暂不可用"
             if source_nodes:
                 self._projection.project_material_source_blocked(
@@ -194,8 +194,16 @@ class MaterialSourceResolutionCoordinator:
                         allocation.get("material_uuid"),
                         field="quantity_allocation.material_uuid",
                     )
-                    resources_by_job.setdefault(job_uuid, []).append(
-                        {"scope": "material", "material_uuid": material_uuid}
+                    resources_by_job.setdefault(job_uuid, []).extend(
+                        dict(resource)
+                        for resource in self._inventory.describe_wait_resources(
+                            [
+                                {
+                                    "scope": "material",
+                                    "material_uuid": material_uuid,
+                                }
+                            ]
+                        )
                     )
                 self._projection.project_quantity_inventory_blocked(
                     task_uuid,

@@ -470,6 +470,59 @@ def test_scheduler_wait_projects_authoritative_structured_resources(
     assert store.get_job(JOB_UUID)["wait_reason"]["resources"] == wait_resources
 
 
+def test_scheduler_lock_wait_derives_and_names_resources_from_lock_requests(
+    store: WorkflowStore,
+) -> None:
+    """真实锁竞争没有显式 resources 时也要持久化具体物料名称。"""
+
+    class _WaitInventory:
+        store = None
+
+        def describe_wait_resources(
+            self,
+            resources: list[dict[str, str]],
+        ) -> tuple[dict[str, str], ...]:
+            return tuple(
+                {**resource, "material_name": "样品瓶 A"}
+                for resource in resources
+            )
+
+    _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        station_resources=_WaitInventory(),
+    )
+    bridge = _bridge(store, scheduler)
+    material_uuid = "72000000-0000-4000-8000-000000000001"
+    try:
+        bridge._task_by_job[JOB_UUID] = TASK_UUID
+        bridge._on_job_execution_wait(
+            {
+                "job_id": JOB_UUID,
+                "workflow_id": TASK_UUID,
+                "execution_locks": [
+                    {
+                        "lock_key": f"material/{material_uuid}/exclusive",
+                        "scope": "material",
+                        "material_uuid": material_uuid,
+                    },
+                ],
+                "blocking_job_id": SECOND_JOB_UUID,
+                "blocking_workflow_id": "other-task",
+            }
+        )
+    finally:
+        bridge.close()
+
+    assert store.get_job(JOB_UUID)["wait_reason"]["resources"] == [
+        {
+            "scope": "material",
+            "material_uuid": material_uuid,
+            "material_name": "样品瓶 A",
+        }
+    ]
+
+
 def test_step_task_stays_paused_until_bridge_step_dispatches_one_job(
     store: WorkflowStore,
 ) -> None:
@@ -1779,6 +1832,7 @@ def test_late_stop_proof_after_restart_uses_persisted_job_route(
     assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
     assert inventory.transitions == [(claim["claim_uuid"], "released")]
     assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
 
 
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(

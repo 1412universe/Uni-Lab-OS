@@ -392,17 +392,30 @@ function waitResourceDetails(
     scopes.add(scope)
     if (scope === 'device' && resource.device_id) {
       const identity = String(resource.device_id)
-      append(resourceDetail('设备', identity, resourceLabel(labels.devices, identity)))
+      const label = String(resource.device_name || '').trim()
+        || resourceLabel(labels.devices, identity)
+      append(resourceDetail('设备', identity, label))
       return
     }
     if (scope === 'material_site' && resource.site_uuid) {
       const siteIdentity = String(resource.site_uuid)
-      append(resourceDetail('库位', siteIdentity, resourceLabel(labels.sites, siteIdentity)))
+      const ownerName = String(resource.material_name || '').trim()
+      const siteName = String(resource.site_name || '').trim()
+      const inlineLabel = ownerName && siteName
+        ? `${ownerName} / ${siteName}`
+        : siteName
+      append(resourceDetail(
+        '库位',
+        siteIdentity,
+        inlineLabel || resourceLabel(labels.sites, siteIdentity),
+      ))
       return
     }
     if (scope === 'material' && resource.material_uuid) {
       const identity = String(resource.material_uuid)
-      append(resourceDetail('物料', identity, resourceLabel(labels.materials, identity)))
+      const label = String(resource.material_name || '').trim()
+        || resourceLabel(labels.materials, identity)
+      append(resourceDetail('物料', identity, label))
     }
   })
   return { details, scopes }

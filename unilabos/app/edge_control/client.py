@@ -92,6 +92,19 @@ def _device_command_belongs_to_job(device_command_id: str, job_uuid: str) -> boo
     )
 
 
+def _unknown_command_ids_for_job(
+    command_ids: list[str],
+    job_uuid: str,
+) -> list[str]:
+    """从设备 UNKNOWN 账本中筛选属于一个工作流作业的命令。"""
+
+    return [
+        command_id
+        for command_id in command_ids
+        if _device_command_belongs_to_job(command_id, job_uuid)
+    ]
+
+
 def _registration_action_mappings(
     host_node: Any,
     device_id: str,
@@ -916,11 +929,10 @@ class EdgeControlClient(BaseCommunicationClient):
                 host_node,
                 local_device_id,
             )
-            job_unknown_command_ids = [
-                command_id
-                for command_id in device_unknown_command_ids
-                if _device_command_belongs_to_job(command_id, job_uuid)
-            ]
+            job_unknown_command_ids = _unknown_command_ids_for_job(
+                device_unknown_command_ids,
+                job_uuid,
+            )
             if (
                 root_device_command_id not in job_unknown_command_ids
                 and len(job_unknown_command_ids) == 1
@@ -949,11 +961,10 @@ class EdgeControlClient(BaseCommunicationClient):
         _, remaining_unknown_command_ids = _device_dispatch_state(
             host_node, local_device_id
         )
-        remaining_job_unknown_command_ids = [
-            command_id
-            for command_id in remaining_unknown_command_ids
-            if _device_command_belongs_to_job(command_id, job_uuid)
-        ]
+        remaining_job_unknown_command_ids = _unknown_command_ids_for_job(
+            remaining_unknown_command_ids,
+            job_uuid,
+        )
         self.store.complete_unknown_resolution(
             command_uuid,
             {

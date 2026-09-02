@@ -143,6 +143,14 @@ class InventoryService:
 
         return self._station_resources
 
+    def describe_wait_resources(
+        self,
+        resources: Sequence[Mapping[str, str]],
+    ) -> tuple[dict[str, str], ...]:
+        """通过工站资源窄接口补齐等待物料与库位的展示名称。"""
+
+        return self._station_resources.describe_wait_resources(resources)
+
     def _now_ms(self) -> int:
         return int(self._time_fn() * 1000)
 
