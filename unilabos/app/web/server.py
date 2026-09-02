@@ -12,10 +12,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse, Response
 
-from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
-from unilabos.utils.log import info, error
-from unilabos.utils.tracing import install_http_tracing, trace_ui_base_url
+from unilabos.app.web.openapi_docs import install_openapi_documentation
 from unilabos.config.config import BasicConfig
+from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
+from unilabos.utils.log import error, info
+from unilabos.utils.tracing import install_http_tracing, trace_ui_base_url
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -25,6 +26,7 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
 )
+install_openapi_documentation(app)
 install_http_tracing(app)
 
 # 创建页面路由
@@ -597,6 +599,8 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
         except Exception as e:
             error(f"[Web] 加载Web页面模块时出错: {str(e)}")
 
+    # 路由会按启动配置动态挂载；清掉旧缓存，确保 Swagger 展示本次实际路由。
+    app.openapi_schema = None
     return app
 
 
