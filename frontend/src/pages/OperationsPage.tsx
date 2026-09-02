@@ -315,7 +315,18 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
         const bindings = composite.device_bindings && typeof composite.device_bindings === 'object' ? Object.fromEntries(Object.entries(composite.device_bindings).map(([key, value]) => [key, String(value)])) : {}
         return { contractUuid: String(composite.contract_uuid || ''), workflowUuid: String(composite.child_workflow_uuid || ''), name: String(node.name || composite.child_workflow_uuid || '子工作流'), revision: Number(composite.child_workflow_revision || 1), invocationUuid: String(node.uuid), x: Number(rawPose.x || 120 + index * 220), y: Number(rawPose.y || 180), requirements, deviceBindings: bindings }
       }).filter((child) => child.contractUuid && child.invocationUuid)
-      setEditingUuid(operation.uuid); setCreating(true); setSelectedOperation(null); setName(operation.name); setDescription(operation.description); setCategoryUuid(operation.operationCategoryUuid || ''); setInputContractFields((operation.inputContract || []).map((field) => editableField(field, 'input'))); setOutputContractFields((operation.outputContract || []).map((field) => editableField(field, 'output'))); setChildWorkflowRefs(children); setChildPickerOpen(false); setDraft(actions); setDraftControls(controls); setInvalidControlParamIds(new Set()); setExpandedControlId('')
+      const inputFields = (operation.inputContract || []).map((field) => editableField(field, 'input'))
+      const declaredNames = new Set(inputFields.map((field) => field.name.trim()))
+      for (const action of actions) {
+        for (const field of action.fields) {
+          const parameter = action.inputBindings[field.handleUuid]?.parameter?.trim()
+          if (parameter && !declaredNames.has(parameter)) {
+            inputFields.push(contractFieldForActionParameter(field, parameter))
+            declaredNames.add(parameter)
+          }
+        }
+      }
+      setEditingUuid(operation.uuid); setCreating(true); setSelectedOperation(null); setName(operation.name); setDescription(operation.description); setCategoryUuid(operation.operationCategoryUuid || ''); setInputContractFields(inputFields); setOutputContractFields((operation.outputContract || []).map((field) => editableField(field, 'output'))); setChildWorkflowRefs(children); setChildPickerOpen(false); setDraft(actions); setDraftControls(controls); setInvalidControlParamIds(new Set()); setExpandedControlId('')
     } catch (error) { onNotify(`读取实验操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
   async function addAction(templateUuid: string) {

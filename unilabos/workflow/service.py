@@ -965,6 +965,31 @@ class WorkflowService:
             identity = validate_uuid(workflow_uuid or str(uuid4()))
             tags = normalize_json_array(tags)
             meta_data = normalize_json_object(meta_data)
+            # The managed-local source is authoritative, but the initial public
+            # contract still has to reach the source generator.  Keep only the
+            # two editable contract sections from the request; all other
+            # ``unilab`` metadata is server-owned and must not cross this seam.
+            requested_unilab = meta_data.get("unilab")
+            requested_input_contract = (
+                deepcopy(requested_unilab.get("input_contract"))
+                if isinstance(requested_unilab, Mapping)
+                and isinstance(requested_unilab.get("input_contract"), Mapping)
+                else {"version": 1, "parameters": []}
+            )
+            requested_output_contract = (
+                deepcopy(requested_unilab.get("output_contract"))
+                if isinstance(requested_unilab, Mapping)
+                and isinstance(requested_unilab.get("output_contract"), Mapping)
+                else {"version": 1, "outputs": []}
+            )
+            if "parameters" not in requested_input_contract:
+                requested_input_contract["parameters"] = []
+            if "version" not in requested_input_contract:
+                requested_input_contract["version"] = 1
+            if "outputs" not in requested_output_contract:
+                requested_output_contract["outputs"] = []
+            if "version" not in requested_output_contract:
+                requested_output_contract["version"] = 1
             workflow_type = normalize_workflow_type(workflow_type)
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
@@ -1001,6 +1026,8 @@ class WorkflowService:
                         nodes=[],
                         edges=[],
                         workflow_type=workflow_type,
+                        input_contract=requested_input_contract,
+                        output_contract=requested_output_contract,
                     )
                     return self._public_workflow_with_status(created_graph["workflow"])
                 workflow = self._definition_store.create_workflow(
@@ -1181,6 +1208,7 @@ class WorkflowService:
                     raise ValueError("workflow name must not be blank")
                 tags = normalize_json_array(tags)
                 public_meta_data = dict(normalize_json_object(meta_data))
+                requested_unilab = public_meta_data.get("unilab")
                 normalized_workflow_type = normalize_workflow_type(
                     workflow_type,
                     default=current["workflow_type"],
@@ -1227,7 +1255,18 @@ class WorkflowService:
                         normalized_category_uuid
                     )
                 if "unilab" in current["meta_data"]:
-                    public_meta_data["unilab"] = current["meta_data"]["unilab"]
+                    # Preserve server-owned authoring metadata while accepting
+                    # the explicitly editable workflow I/O contracts from the
+                    # update request.  Previously the whole incoming section
+                    # was discarded, so node input bindings were validated
+                    # against an empty contract after every save.
+                    current_unilab = dict(current["meta_data"]["unilab"] or {})
+                    if isinstance(requested_unilab, Mapping):
+                        for contract_key in ("input_contract", "output_contract"):
+                            contract = requested_unilab.get(contract_key)
+                            if isinstance(contract, Mapping):
+                                current_unilab[contract_key] = deepcopy(contract)
+                    public_meta_data["unilab"] = current_unilab
                 if self._has_active_source(identity):
                     unilab_meta = dict(public_meta_data.get("unilab") or {})
                     root_fields = set(unilab_meta.get("authoring_root_fields") or [])
@@ -1367,6 +1406,11 @@ class WorkflowService:
                     if previous is None or previous["uuid"] != contract["uuid"]:
                         contract_store.discard(contract["uuid"])
                     raise WorkflowError("source_publication_failed") from error
+            # 发布本身新增了一个组合节点模板；立即刷新共享编译目录，让同一进程
+            # 内随后创建父图时即可引用它。跨重启场景由
+            # ``restore_published_workflow_contracts`` 执行同一刷新。
+            if self._compiler_rebuilder is not None:
+                self._rebuild_workspace_activation_catalog()
         public_contract = contract_store.public(contract)
         dependent_refresh = self._refresh_published_contract_dependents(contract)
         if dependent_refresh["updated_workflow_uuids"] or dependent_refresh["pending"]:
@@ -1386,6 +1430,7 @@ class WorkflowService:
         # ``contract_store`` 是本次进程内发布合同投影；领域包 JSON 才负责跨
         # 重启持久化，恢复过程不会触碰运行事实 SQLite。
         contract_store = self._published_contract_store()
+        restored_any = False
         for entry in self._publication_catalog.list_entries():
             # ``workflow_uuid`` 是合同来源定义稳定身份；只有同代 manifest 已授权
             # 且 Python 定义已激活时才允许恢复，防止孤儿合同重新暴露已撤权定义。
@@ -1395,10 +1440,17 @@ class WorkflowService:
             try:
                 self._definition_store.get_workflow(workflow_uuid)
                 contract_store.restore(entry["contract"])
+                restored_any = True
             except StoreNotFound:
                 continue
             except (PublishedContractConflict, PublishedContractInvalid) as error:
                 raise WorkflowError("source_publication_failed") from error
+        # 模板投影在工作流源码激活之前构造，而发布合同在此方法中才从领域包
+        # 恢复。恢复后立即重建一次编译目录，确保已发布组合模板（包括其合同
+        # UUID/Handle UUID）进入后续 graph save 的同一目录代际；否则父图插入
+        # 会被编译器误判为“当前目录之外的模板”。
+        if restored_any and self._compiler_rebuilder is not None:
+            self._rebuild_workspace_activation_catalog()
 
     def list_published_workflow_contracts(
         self,
@@ -2063,6 +2115,35 @@ class WorkflowService:
                     "mode": "fixed",
                     "device_id": str(material_uuid),
                 }
+            # New nodes must append to the author's existing sequence.  If the
+            # field is omitted, the deterministic compiler falls back to UUID
+            # order; that can put a newly added node before the existing one
+            # and emit a reverse ready edge before the UI adds its intended
+            # dependency.
+            existing_orders = [
+                int(
+                    ((candidate.get("meta_data") or {}).get("unilab") or {})[
+                        "authoring_source_order"
+                    ]
+                )
+                for candidate in graph["nodes"]
+                if isinstance((candidate.get("meta_data") or {}).get("unilab"), Mapping)
+                and isinstance(
+                    ((candidate.get("meta_data") or {}).get("unilab") or {}).get(
+                        "authoring_source_order"
+                    ),
+                    int,
+                )
+                and not isinstance(
+                    ((candidate.get("meta_data") or {}).get("unilab") or {}).get(
+                        "authoring_source_order"
+                    ),
+                    bool,
+                )
+            ]
+            editable_unilab["authoring_source_order"] = (
+                max(existing_orders) + 1 if existing_orders else len(graph["nodes"])
+            )
             node_meta_data = {
                 key: value
                 for key, value in node.get("meta_data", {}).items()
@@ -2462,6 +2543,8 @@ class WorkflowService:
         nodes: list[dict[str, Any]],
         edges: list[dict[str, Any]],
         workflow_type: str,
+        input_contract: Mapping[str, Any] | None = None,
+        output_contract: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """在工作流锁内把新定义规范化为首版领域 Python 源码。
 
@@ -2516,6 +2599,14 @@ class WorkflowService:
                         "workflow_type",
                     ],
                 }
+                if isinstance(input_contract, Mapping):
+                    source_meta_data["unilab"]["input_contract"] = deepcopy(
+                        dict(input_contract)
+                    )
+                if isinstance(output_contract, Mapping):
+                    source_meta_data["unilab"]["output_contract"] = deepcopy(
+                        dict(output_contract)
+                    )
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
                 try:

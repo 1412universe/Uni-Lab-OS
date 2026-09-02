@@ -1348,6 +1348,16 @@ export async function createExperimentOperation(payload: { name: string; descrip
     })
     workflowUuid = String(workflow.uuid || '')
     if (!workflowUuid) throw new Error('OS 创建实验操作后未返回工作流 UUID')
+    // OS 的创建接口会先生成空的输入/输出合同；必须在首个节点写入前
+    // 用工作流更新接口落盘合同，否则节点 input_bindings 会按“0 个参数”被拒绝。
+    await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}`, {
+      name: payload.name,
+      description: payload.description,
+      tags: ['experiment-operation'],
+      workflow_type: 'experiment_operation',
+      operation_category_uuid: payload.categoryUuid || null,
+      meta_data: { unilab: { input_contract: payload.inputContract || {}, output_contract: payload.outputContract || {} } },
+    })
     const createdNodes: Array<{ uuid: string; readySource?: string; readyTarget?: string }> = []
     for (let index = 0; index < payload.actions.length; index += 1) {
       const action = payload.actions[index]
@@ -1358,7 +1368,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
         material_uuid: action.materialUuid || undefined,
         name: action.name, description: action.description || action.name,
         pose: { x: 120 + index * 220, y: 180 },
-        param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+        param: action.param || {}, execution_policy: {}, meta_data: { unilab: { sequence_index: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
       })
       if (!createdNode?.uuid) throw new Error(`动作“${action.name}”已提交，但后端未返回新节点身份`)
       createdNodes.push({

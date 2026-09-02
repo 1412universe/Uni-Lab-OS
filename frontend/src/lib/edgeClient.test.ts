@@ -148,6 +148,7 @@ describe('Edge view model adapters', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-1', revision: 1 } })
+      if (url.endsWith('/workflows/operation-1') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'operation-1', revision: 1 } })
       if (url.endsWith('/workflow-node-templates/template-1')) return response({ code: 0, data: { template: { uuid: 'template-1' }, handles: [{ uuid: 'ready-source', handle_key: 'ready', io_type: 'source' }, { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' }] } })
       if (url.endsWith('/workflows/operation-1/nodes') && init?.method === 'POST') {
         const nodeCalls = fetchMock.mock.calls.filter(([calledUrl, calledInit]) => String(calledUrl).endsWith('/workflows/operation-1/nodes') && calledInit?.method === 'POST').length
@@ -171,7 +172,7 @@ describe('Edge view model adapters', () => {
     expect(JSON.parse(String(nodeCall?.[1]?.body))).toMatchObject({
       material_uuid: 'device-1',
       description: '吸液',
-      meta_data: { unilab: { executor_binding: { mode: 'fixed', device_id: 's09_station' } } },
+      meta_data: { unilab: { executor_binding: { mode: 'fixed', device_id: 'device-1' } } },
     })
   })
 
@@ -243,6 +244,7 @@ describe('Edge view model adapters', () => {
       const url = String(input)
       if (init?.method) methods.push(`${init.method} ${url}`)
       if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'wf-failed', revision: 1 } })
+      if (url.endsWith('/workflows/wf-failed') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'wf-failed', revision: 1 } })
       if (url.endsWith('/workflow-node-templates/template-1')) return response({ code: 0, data: { handles: [] } })
       if (url.endsWith('/workflows/wf-failed/nodes') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'node-1' } })
       if (url.endsWith('/workflows/wf-failed') && init?.method === 'DELETE') return response({ code: 0 })
