@@ -1221,6 +1221,9 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             "version": 1,
             "transfer": {
                 "material_param": "resource",
+                "source_owner_param": "",
+                "source_site_uuid_param": "",
+                "source_site_name_param": "",
                 "target_owner_param": "mount_resource",
                 "target_site_uuid_param": "site_uuid",
                 "target_site_name_param": "",

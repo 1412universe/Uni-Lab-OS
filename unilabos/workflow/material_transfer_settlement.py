@@ -11,6 +11,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
     StationResourceInventory,
 )
 from unilabos.app.scheduler.inventory.dispatch_admission import DispatchFence
+from unilabos.registry.action_resource_contract import TRANSFER_CONTRACT_FIELDS
 from unilabos.workflow.store import StoreConflict
 
 
@@ -150,7 +151,7 @@ def _transfer_contract(
     """从冻结计划读取作业唯一合法的转运参数映射。
 
     参数：``job`` 提供节点和执行种类；``execution_plan`` 是父任务的不可变计划。
-    返回：五个转运参数/角色字段组成的稳定映射；非转运动作返回 ``None``。异常：
+    返回：八个转运参数/角色字段组成的稳定映射；非转运动作返回 ``None``。异常：
     计划节点或合同形状损坏时抛 ``StoreConflict``。
     """
 
@@ -183,13 +184,7 @@ def _transfer_contract(
         if str(job.get("executor_kind") or "") == "material_transfer":
             raise StoreConflict(f"物料转移作业缺少冻结资源合同：{node_uuid}")
         return None
-    required = {
-        "material_param",
-        "target_owner_param",
-        "target_site_uuid_param",
-        "target_site_name_param",
-        "gripper_site_role",
-    }
+    required = set(TRANSFER_CONTRACT_FIELDS)
     if (
         not isinstance(transfer, Mapping)
         or set(transfer) != required
