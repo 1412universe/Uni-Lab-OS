@@ -154,6 +154,7 @@ class TaskSchedulerBridge:
         scheduler.add_job_outcome_listener(self._on_job_outcome)
         scheduler.add_job_finished_listener(self._on_job_finished)
         scheduler.add_job_settled_listener(self._on_job_settled)
+        scheduler.add_local_control_listener(self._on_local_control_evaluated)
         scheduler.add_execution_process_restarted_listener(
             self._on_execution_process_restarted
         )
@@ -579,27 +580,18 @@ class TaskSchedulerBridge:
             ):
                 receipts = actual_change_set.get("receipts")
                 if (
-                    persisted_job.get("status")
-                    not in {"failed", "canceled", "timeout"}
+                    persisted_job.get("status") not in {"failed", "canceled", "timeout"}
                     or persisted_job.get("uncertainty_reason")
                     != MATERIAL_CONTENT_RECONCILIATION_REQUIRED
                     or not isinstance(receipts, list)
                     or not isinstance(control, Mapping)
-                    or not isinstance(
-                        control.get("physical_settlement"), Mapping
-                    )
-                    or not control["physical_settlement"].get(
-                        "execution_stopped"
-                    )
+                    or not isinstance(control.get("physical_settlement"), Mapping)
+                    or not control["physical_settlement"].get("execution_stopped")
                 ):
-                    raise StoreConflict(
-                        "失败分装缺少完整目标回执或设备停止证明"
-                    )
+                    raise StoreConflict("失败分装缺少完整目标回执或设备停止证明")
                 claim = self._projection.get_execution_claim(normalized_job)
                 if claim is None:
-                    raise StoreConflict(
-                        f"失败分装作业缺少库存 Claim：{normalized_job}"
-                    )
+                    raise StoreConflict(f"失败分装作业缺少库存 Claim：{normalized_job}")
                 settled = self._material_aliquot_settlement.settle_success(
                     job=persisted_job,
                     execution_claim=claim,
@@ -607,9 +599,7 @@ class TaskSchedulerBridge:
                 )
                 change_set = {
                     "kind": "material_content_aliquot",
-                    "source_material_uuid": expected_change.get(
-                        "source_material_uuid"
-                    ),
+                    "source_material_uuid": expected_change.get("source_material_uuid"),
                     "target_material_uuids": list(
                         expected_change.get("target_material_uuids") or []
                     ),
@@ -626,44 +616,33 @@ class TaskSchedulerBridge:
                 )
                 self._finish_settled_terminal_task(normalized_job)
                 return next(
-                    item
-                    for item in aggregate["jobs"]
-                    if item["uuid"] == normalized_job
+                    item for item in aggregate["jobs"] if item["uuid"] == normalized_job
                 )
-            change_set = self._normalize_actual_material_change_set(
-                actual_change_set
-            )
+            change_set = self._normalize_actual_material_change_set(actual_change_set)
             if (
                 persisted_job.get("status") not in {"failed", "canceled", "timeout"}
                 or persisted_job.get("uncertainty_reason")
                 != MATERIAL_TRANSFER_RECONCILIATION_REQUIRED
                 or not isinstance(expected_change, Mapping)
                 or expected_change.get("kind") != "material_transfer"
-                or change_set["material_uuid"]
-                != expected_change.get("material_uuid")
+                or change_set["material_uuid"] != expected_change.get("material_uuid")
                 or not isinstance(control, Mapping)
                 or not isinstance(control.get("physical_settlement"), Mapping)
                 or not control["physical_settlement"].get("execution_stopped")
             ):
-                raise StoreConflict(
-                    "失败转运缺少匹配的预期变化或设备停止证明"
-                )
+                raise StoreConflict("失败转运缺少匹配的预期变化或设备停止证明")
             claim = self._projection.get_execution_claim(normalized_job)
             if claim is None:
                 raise StoreConflict(f"失败转运作业缺少库存 Claim：{normalized_job}")
             settled_material = inventory.settle_material_transfer(
                 MaterialTransferCommand(
                     material_uuid=change_set["material_uuid"],
-                    target_owner_material_uuid=change_set[
-                        "target_owner_material_uuid"
-                    ],
+                    target_owner_material_uuid=change_set["target_owner_material_uuid"],
                     target_site_uuid=change_set.get("target_site_uuid", ""),
                     target_site_name=change_set.get("target_site_name", ""),
                     actor="physical_settlement",
                     causation_id=normalized_job,
-                    effect_uuid=str(
-                        persisted_job.get("dispatch_effect_uuid") or ""
-                    ),
+                    effect_uuid=str(persisted_job.get("dispatch_effect_uuid") or ""),
                     claim_uuid=str(claim["claim_uuid"]),
                     job_uuid=normalized_job,
                     attempt=int(persisted_job.get("attempt") or 0),
@@ -692,11 +671,14 @@ class TaskSchedulerBridge:
             )
             self._finish_settled_terminal_task(normalized_job)
             return next(
-                job
-                for job in aggregate["jobs"]
-                if job["uuid"] == normalized_job
+                job for job in aggregate["jobs"] if job["uuid"] == normalized_job
             )
-        except (StoreConflict, StoreNotFound, StationResourceError, ValueError) as error:
+        except (
+            StoreConflict,
+            StoreNotFound,
+            StationResourceError,
+            ValueError,
+        ) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
     def recover_active_tasks(self) -> list[dict[str, Any]]:
@@ -716,9 +698,7 @@ class TaskSchedulerBridge:
         inventory = self._scheduler.station_resource_inventory
         if inventory is not None:
             inventory.release_unprojected_dispatch_permits(
-                known_claim_uuids=(
-                    self._projection.list_active_execution_claim_uuids()
-                )
+                known_claim_uuids=(self._projection.list_active_execution_claim_uuids())
             )
         elif self._scheduler.physical_dispatch_enabled:
             raise TaskSchedulerBridgeError("物理部署缺少库存 DispatchPermit 权威")
@@ -838,17 +818,16 @@ class TaskSchedulerBridge:
         if not isinstance(jobs, list):
             raise StoreConflict("任务聚合缺少作业数组")
         for job in jobs:
-            if not isinstance(job, Mapping) or not str(
-                job.get("uncertainty_reason") or ""
-            ).strip():
+            if (
+                not isinstance(job, Mapping)
+                or not str(job.get("uncertainty_reason") or "").strip()
+            ):
                 continue
             job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
             claim = self._projection.get_execution_claim(job_uuid)
             if claim is None:
                 if self._scheduler.physical_dispatch_enabled:
-                    raise StoreConflict(
-                        f"等待物理结算的作业缺少库存 Claim：{job_uuid}"
-                    )
+                    raise StoreConflict(f"等待物理结算的作业缺少库存 Claim：{job_uuid}")
                 continue
             if inventory is None:
                 if self._scheduler.physical_dispatch_enabled:
@@ -995,10 +974,10 @@ class TaskSchedulerBridge:
         # 和截止时间恢复等待，禁止释放后重新仲裁或生成新的派发凭据。
         pending_manual_jobs: list[dict[str, Any]] = []
         for job in jobs:
-            if (
-                job.get("executor_kind") == "manual_confirm"
-                and job.get("status") in {"dispatched", "running"}
-            ):
+            if job.get("executor_kind") == "manual_confirm" and job.get("status") in {
+                "dispatched",
+                "running",
+            }:
                 try:
                     confirmation = self._manual_confirmations.get_by_job(
                         self._required_text(job.get("uuid"), field="job.uuid")
@@ -1025,8 +1004,7 @@ class TaskSchedulerBridge:
             job
             for job in jobs
             if (
-                job.get("status")
-                in {"dispatched", "running", "cancel_requested"}
+                job.get("status") in {"dispatched", "running", "cancel_requested"}
                 and str(job.get("uuid") or "") not in safe_manual_ids
             )
         ]
@@ -1074,7 +1052,7 @@ class TaskSchedulerBridge:
                 job for job in jobs if job.get("executor_kind") != "material_source"
             ]
         if any(
-            job.get("status") not in {"pending", "succeeded"}
+            job.get("status") not in {"pending", "succeeded", "skipped"}
             and str(job.get("uuid") or "") not in safe_manual_ids
             for job in ordinary_jobs
         ):
@@ -1097,27 +1075,43 @@ class TaskSchedulerBridge:
             str(job.get("workflow_node_uuid") or ""): job for job in ordinary_jobs
         }
         completed_results: dict[str, Any] = {}
+        skipped_nodes: dict[str, str] = {}
         recovery_run = WorkflowRun(spec)
         for node in spec.nodes:
             job = jobs_by_node.get(node.id)
-            if job is None or job.get("status") != "succeeded":
+            if job is None:
+                continue
+            if job.get("status") == "skipped":
+                error_info = job.get("error_info")
+                reason = (
+                    str(error_info[0].get("code") or "branch_not_selected")
+                    if isinstance(error_info, list)
+                    and error_info
+                    and isinstance(error_info[0], Mapping)
+                    else "branch_not_selected"
+                )
+                skipped_nodes[node.id] = reason
+                recovery_run.mark_skipped(node.id, reason=reason)
+                continue
+            if job.get("status") != "succeeded":
                 continue
             # 按冻结拓扑顺序重建当时最终参数；这只读取已成功
             # 父节点事实，不派发任何动作。
-            resolved_param = recovery_run.resolve_params(node.id)
-            recovered_result = self._recover_simulated_action_return(
-                job,
-                nodes_by_uuid.get(node.id, {}),
-                resolved_param=resolved_param,
-            )
+            if node.executor_kind == "condition":
+                recovered_result = deepcopy(job.get("return_info") or {})
+            else:
+                resolved_param = recovery_run.resolve_params(node.id)
+                recovered_result = self._recover_simulated_action_return(
+                    job,
+                    nodes_by_uuid.get(node.id, {}),
+                    resolved_param=resolved_param,
+                )
             completed_results[node.id] = recovered_result
             recovery_run.mark_finished(node.id, recovered_result)
         spec_nodes = {node.id: node for node in spec.nodes}
         restored_manual_jobs: list[DispatchedJob] = []
         for persisted_job in pending_manual_jobs:
-            job_uuid = self._required_text(
-                persisted_job.get("uuid"), field="job.uuid"
-            )
+            job_uuid = self._required_text(persisted_job.get("uuid"), field="job.uuid")
             node_uuid = self._required_text(
                 persisted_job.get("workflow_node_uuid"),
                 field="job.workflow_node_uuid",
@@ -1162,19 +1156,14 @@ class TaskSchedulerBridge:
                     if isinstance(persisted_execution_locks, list)
                     else ()
                 )
-                if isinstance(item, Mapping)
-                and str(item.get("lock_key") or "").strip()
+                if isinstance(item, Mapping) and str(item.get("lock_key") or "").strip()
             }
             credentials = {
                 "attempt": int(persisted_job.get("attempt") or 0),
-                "command_uuid": str(
-                    persisted_job.get("edge_command_uuid") or ""
-                ),
+                "command_uuid": str(persisted_job.get("edge_command_uuid") or ""),
                 "claim_uuid": str(claim.get("claim_uuid") or ""),
                 "fences": [dict(item) for item in claim.get("fences", ())],
-                "effect_uuid": str(
-                    persisted_job.get("dispatch_effect_uuid") or ""
-                ),
+                "effect_uuid": str(persisted_job.get("dispatch_effect_uuid") or ""),
                 "parameter_hash": str(
                     persisted_job.get("dispatch_parameter_hash") or ""
                 ),
@@ -1222,6 +1211,7 @@ class TaskSchedulerBridge:
                 spec,
                 completed_results,
                 restored_manual_jobs,
+                skipped_nodes,
             )
             self._project_scheduler_trace_context(
                 task_uuid,
@@ -1304,6 +1294,7 @@ class TaskSchedulerBridge:
         self._scheduler.remove_job_outcome_listener(self._on_job_outcome)
         self._scheduler.remove_job_finished_listener(self._on_job_finished)
         self._scheduler.remove_job_settled_listener(self._on_job_settled)
+        self._scheduler.remove_local_control_listener(self._on_local_control_evaluated)
         self._scheduler.remove_execution_process_restarted_listener(
             self._on_execution_process_restarted
         )
@@ -1668,17 +1659,13 @@ class TaskSchedulerBridge:
                 "device_material_uuid",
             }
             if set(raw_operate) != required_operate or any(
-                not str(raw_operate[field] or "").strip()
-                for field in required_operate
+                not str(raw_operate[field] or "").strip() for field in required_operate
             ):
                 raise StoreConflict("派发原位操作条件字段不完整")
             if transfer is not None:
                 raise StoreConflict("同一作业不能同时声明转运和原位操作")
             operate_in_place = OperateInPlaceCondition(
-                **{
-                    field: str(raw_operate[field]).strip()
-                    for field in required_operate
-                }
+                **{field: str(raw_operate[field]).strip() for field in required_operate}
             )
         if raw_aliquot is not None:
             if not isinstance(raw_aliquot, Mapping) or set(raw_aliquot) != {
@@ -1741,9 +1728,7 @@ class TaskSchedulerBridge:
         ):
             raise StoreConflict(f"等待作业候选库位集合不是数组：{job_uuid}")
         raw_wait_resources = waiting.get("wait_resources")
-        if raw_wait_resources is not None and not isinstance(
-            raw_wait_resources, list
-        ):
+        if raw_wait_resources is not None and not isinstance(raw_wait_resources, list):
             raise StoreConflict(f"等待作业资源集合不是数组：{job_uuid}")
         wait_resources = list(raw_wait_resources or [])
         wait_resources.extend(
@@ -2046,6 +2031,79 @@ class TaskSchedulerBridge:
             idempotency_key=sample.get("idempotency_key"),
         )
 
+    def _on_local_control_evaluated(self, event: Mapping[str, Any]) -> None:
+        """把条件选择与未选分支作为无物理副作用的标准作业事实落盘。"""
+
+        job_uuid = self._required_text(event.get("job_id"), field="control.job_id")
+        task_uuid = self._task_by_job.get(job_uuid)
+        if task_uuid is None:
+            return
+        skipped_jobs = event.get("skipped_jobs")
+        if not isinstance(skipped_jobs, list):
+            raise TaskSchedulerBridgeError("条件结算缺少 skipped_jobs")
+        skipped_job_uuids = [
+            self._required_text(
+                item.get("job_id"),
+                field="control.skipped_jobs[].job_id",
+            )
+            for item in skipped_jobs
+            if isinstance(item, Mapping)
+        ]
+        if len(skipped_job_uuids) != len(skipped_jobs):
+            raise TaskSchedulerBridgeError("条件结算 skipped_jobs 结构非法")
+        aggregate = self._projection.project_local_control_evaluation(
+            job_uuid=job_uuid,
+            selected_branch=(
+                str(event["selected_branch"])
+                if event.get("selected_branch") is not None
+                else None
+            ),
+            skipped_job_uuids=skipped_job_uuids,
+            error_code=(str(event["error"]) if event.get("error") else None),
+            error_message=(str(event["message"]) if event.get("message") else None),
+        )
+        self._task_by_job.pop(job_uuid, None)
+        for skipped_uuid in skipped_job_uuids:
+            self._task_by_job.pop(skipped_uuid, None)
+        terminal_status = aggregate["task"]["status"]
+        if terminal_status == "succeeded":
+            if self._quantity_inventory is not None:
+                self._quantity_inventory.release_task(
+                    task_uuid,
+                    reason="workflow_succeeded",
+                )
+            if any(
+                job.get("executor_kind") == "material_source"
+                for job in aggregate["jobs"]
+            ):
+                self._material_sources.release_terminal_reservations(
+                    task_uuid,
+                    reason="workflow_succeeded",
+                )
+        elif terminal_status == "failed":
+            scheduler_snapshot = self._scheduler.snapshot()
+            active_for_task = any(
+                inflight.get("workflow_id") == task_uuid
+                for inflight in scheduler_snapshot.get("inflight_jobs", {}).values()
+            )
+            if not active_for_task:
+                if self._quantity_inventory is not None:
+                    self._quantity_inventory.release_task(
+                        task_uuid,
+                        reason="workflow_failed",
+                    )
+                if any(
+                    job.get("executor_kind") == "material_source"
+                    for job in aggregate["jobs"]
+                ):
+                    self._material_sources.release_terminal_reservations(
+                        task_uuid,
+                        reason="workflow_failed",
+                    )
+                self._projection.project_cleanup_settled(task_uuid)
+        if task_uuid not in self._task_by_job.values():
+            self._submitted_tasks.discard(task_uuid)
+
     def _on_job_finished(
         self,
         job_uuid: str,
@@ -2140,9 +2198,7 @@ class TaskSchedulerBridge:
                         target_state="released",
                     )
                 elif self._scheduler.physical_dispatch_enabled:
-                    raise StoreConflict(
-                        f"失败作业物理结算缺少库存 Claim：{job_uuid}"
-                    )
+                    raise StoreConflict(f"失败作业物理结算缺少库存 Claim：{job_uuid}")
             self._cancel_cancel_timer(job_uuid)
             self._cancel_manual_confirmation_timer(job_uuid)
             return
@@ -2347,19 +2403,15 @@ class TaskSchedulerBridge:
         }
         if set(value) - allowed:
             raise ValueError("实际物料位置包含未定义字段")
-        normalized = {
-            field: str(value.get(field) or "").strip()
-            for field in allowed
-        }
+        normalized = {field: str(value.get(field) or "").strip() for field in allowed}
         if normalized["kind"] != "material_transfer":
             raise ValueError("实际变化类型必须是 material_transfer")
-        if not normalized["material_uuid"] or not normalized[
-            "target_owner_material_uuid"
-        ]:
-            raise ValueError("实际物料位置缺少物料或父资源 UUID")
-        if bool(normalized["target_site_uuid"]) == bool(
-            normalized["target_site_name"]
+        if (
+            not normalized["material_uuid"]
+            or not normalized["target_owner_material_uuid"]
         ):
+            raise ValueError("实际物料位置缺少物料或父资源 UUID")
+        if bool(normalized["target_site_uuid"]) == bool(normalized["target_site_name"]):
             raise ValueError("实际物料位置必须且只能指定库位 UUID 或名称")
         return {key: item for key, item in normalized.items() if item}
 
@@ -2412,6 +2464,7 @@ class TaskSchedulerBridge:
 
         try:
             self._scheduler.cancel_workflow(task_uuid)
+            self._scheduler.discard_workflow(task_uuid)
         except Exception:  # 清理失败不能覆盖原始安全错误
             logger.exception("失败的工作流任务提交无法清理遗留调度运行")
         self._submitted_tasks.discard(task_uuid)

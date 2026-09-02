@@ -39,6 +39,7 @@ _NODE_ANCHOR = re.compile(
     r"(?:[ \t]+disabled=(true))?[ \t]*$"
 )
 _NODE_METADATA_PREFIX = re.compile(r"^[ \t]*#[ \t]*\[")
+_MAX_CONTROL_NESTING_DEPTH = 8
 _NODE_METADATA = re.compile(
     r"^(?P<indent>[ \t]*)#[ \t]*\[(?P<title>[^]\r\n]+)\]"
     r"(?:(?:[ \t]*:[ \t]*)|(?:[ \t]+))"
@@ -131,6 +132,29 @@ class GroupDeclaration:
 
 
 @dataclass(frozen=True, slots=True)
+class ConditionBranchDeclaration:
+    """条件区域中的一个有序分支。"""
+
+    label: str
+    condition: dict[str, Any] | None
+    node_uuids: tuple[str, ...]
+    entry_node_uuids: tuple[str, ...]
+    exit_node_uuids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ConditionDeclaration:
+    """由调度器本地求值的结构化条件区域声明。"""
+
+    node_uuid: str
+    title: str | None
+    description: str | None
+    branches: tuple[ConditionBranchDeclaration, ...]
+    bindings: tuple[tuple[str, dict[str, str]], ...]
+    source_node: ast.If
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowProgram:
     """作者源码静态子集解析后的不可变中间表示。"""
 
@@ -154,6 +178,7 @@ class WorkflowProgram:
         ...,
     ]
     groups: tuple[GroupDeclaration, ...]
+    conditions: tuple[ConditionDeclaration, ...]
     parent_by_node: tuple[tuple[str, str], ...]
     order_dependencies: tuple[tuple[str, str], ...]
     source_order: tuple[str, ...]
@@ -181,10 +206,12 @@ class _BodyState:
     node_metadata: dict[int, tuple[str, str]]
     actions: list[ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration]
     groups: list[GroupDeclaration]
+    conditions: list[ConditionDeclaration]
     parent_by_node: dict[str, str]
     order_dependencies: list[tuple[str, str]]
     source_order: list[str]
     material_results: set[str]
+    control_depth: int
 
 
 def parse_authoring_source(
@@ -211,7 +238,11 @@ def parse_authoring_source(
     result_records: list[ast.ClassDef] = []
     for statement in declarations:
         # 允许模块级文档字符串；它只用于说明，不参与工作流定义。
-        if isinstance(statement, ast.Expr) and isinstance(getattr(statement, "value", None), ast.Constant) and isinstance(statement.value.value, str):
+        if (
+            isinstance(statement, ast.Expr)
+            and isinstance(getattr(statement, "value", None), ast.Constant)
+            and isinstance(statement.value.value, str)
+        ):
             continue
         if isinstance(statement, ast.AnnAssign):
             devices.append(_device_declaration(statement, imports))
@@ -270,6 +301,7 @@ def parse_authoring_source(
     (
         actions,
         groups,
+        conditions,
         parent_by_node,
         order_dependencies,
         authoring_source_order,
@@ -283,7 +315,8 @@ def parse_authoring_source(
         node_metadata=node_metadata,
     )
     used_anchor_lines = {
-        declaration.source_node.lineno - 1 for declaration in (*actions, *groups)
+        declaration.source_node.lineno - 1
+        for declaration in (*actions, *groups, *conditions)
     }
     if set(anchors) != used_anchor_lines:
         _fail("invalid_node_anchor", "节点 UUID 锚点必须紧邻一个动作声明")
@@ -305,6 +338,7 @@ def parse_authoring_source(
         output_resource_template_symbols=output_resource_template_symbols,
         actions=tuple(actions),
         groups=tuple(groups),
+        conditions=tuple(conditions),
         parent_by_node=tuple(sorted(parent_by_node.items())),
         order_dependencies=tuple(order_dependencies),
         source_order=tuple(authoring_source_order),
@@ -859,6 +893,7 @@ def _workflow_body(
 ) -> tuple[
     list[ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration],
     list[GroupDeclaration],
+    list[ConditionDeclaration],
     dict[str, str],
     list[tuple[str, str]],
     list[str],
@@ -895,10 +930,12 @@ def _workflow_body(
         node_metadata=node_metadata,
         actions=[],
         groups=[],
+        conditions=[],
         parent_by_node={},
         order_dependencies=[],
         source_order=[],
         material_results=set(),
+        control_depth=0,
     )
     # ``known_results`` 只在递归边界复制，保证同级并行分支互不可见。
     known_results: set[str] = set()
@@ -918,6 +955,7 @@ def _workflow_body(
     return (
         state.actions,
         state.groups,
+        state.conditions,
         state.parent_by_node,
         state.order_dependencies,
         state.source_order,
@@ -982,6 +1020,14 @@ def _parse_statement(
     返回：无合成节点的入口/出口流。异常：未知 ``with`` 或动态语句失败关闭。
     """
 
+    if isinstance(statement, ast.If):
+        return _parse_condition(
+            statement,
+            state=state,
+            available_results=available_results,
+            parent_uuid=parent_uuid,
+        )
+
     if isinstance(statement, ast.With):
         marker = _with_marker(statement, state.imports)
         if marker == "group":
@@ -1033,6 +1079,282 @@ def _parse_statement(
         (action.node_uuid,),
         frozenset({action.result_name}),
     )
+
+
+def _parse_condition(
+    statement: ast.If,
+    *,
+    state: _BodyState,
+    available_results: set[str],
+    parent_uuid: str | None,
+) -> _Flow:
+    """解析原生 ``if / elif / else`` 为一个有序结构化控制区域。"""
+
+    if state.control_depth >= _MAX_CONTROL_NESTING_DEPTH:
+        _fail("control_nesting_too_deep", "条件区域嵌套深度不能超过 8", statement)
+    state.control_depth += 1
+
+    node_uuid = state.anchors.get(statement.lineno - 1)
+    if node_uuid is None:
+        _fail(
+            "invalid_node_anchor", "每个条件区域前必须有相邻节点 UUID 锚点", statement
+        )
+    metadata = state.node_metadata.get(statement.lineno - 1)
+    if parent_uuid is not None:
+        state.parent_by_node[node_uuid] = parent_uuid
+    state.source_order.append(node_uuid)
+
+    clauses: list[tuple[str, ast.expr | None, list[ast.stmt]]] = []
+    current = statement
+    branch_index = 0
+    while True:
+        label = "if" if branch_index == 0 else f"elif{branch_index - 1}"
+        clauses.append((label, current.test, list(current.body)))
+        if len(current.orelse) == 1 and isinstance(current.orelse[0], ast.If):
+            current = current.orelse[0]
+            branch_index += 1
+            continue
+        if current.orelse:
+            clauses.append(("else", None, list(current.orelse)))
+        break
+
+    branches: list[ConditionBranchDeclaration] = []
+    all_exits: list[str] = []
+    for label, test, body in clauses:
+        before = len(state.source_order)
+        branch_results = set(available_results)
+        flow = _parse_sequence(
+            body,
+            state=state,
+            available_results=branch_results,
+            parent_uuid=node_uuid,
+        )
+        node_uuids = tuple(state.source_order[before:])
+        if not node_uuids:
+            _fail("invalid_condition", "条件分支至少包含一个工作流节点", statement)
+        condition = (
+            None
+            if test is None
+            else _condition_expression(
+                test,
+                input_names=state.input_names,
+                known_results=available_results,
+            )
+        )
+        branches.append(
+            ConditionBranchDeclaration(
+                label=label,
+                condition=condition,
+                node_uuids=node_uuids,
+                entry_node_uuids=flow.entries,
+                exit_node_uuids=flow.exits,
+            )
+        )
+        all_exits.extend(flow.exits)
+
+    variable_names = {
+        name
+        for branch in branches
+        if branch.condition is not None
+        for name in _condition_variable_names(branch.condition)
+    }
+    result_nodes = {
+        declaration.result_name: declaration.node_uuid
+        for declaration in state.actions
+        if declaration.result_name in available_results
+    }
+    bindings: list[tuple[str, dict[str, str]]] = []
+    for name in sorted(variable_names):
+        if name in state.input_names:
+            bindings.append((name, {"kind": "workflow_input", "parameter": name}))
+        elif name in result_nodes:
+            bindings.append(
+                (name, {"kind": "node_result", "node_uuid": result_nodes[name]})
+            )
+        else:
+            _fail("invalid_condition_expression", "条件变量缺少稳定来源", statement)
+
+    state.conditions.append(
+        ConditionDeclaration(
+            node_uuid=node_uuid,
+            title=metadata[0] if metadata is not None else None,
+            description=metadata[1] if metadata is not None else None,
+            branches=tuple(branches),
+            bindings=tuple(bindings),
+            source_node=statement,
+        )
+    )
+    state.control_depth -= 1
+    return _Flow(
+        entries=(node_uuid,),
+        exits=tuple(all_exits),
+        result_names=frozenset(),
+    )
+
+
+def _condition_expression(
+    expression: ast.expr,
+    *,
+    input_names: set[str],
+    known_results: set[str],
+) -> dict[str, Any]:
+    """把条件 AST 编译为 pTLC 兼容的封闭结构化表达式。"""
+
+    if isinstance(expression, ast.Constant):
+        if expression.value is None or isinstance(
+            expression.value, (bool, int, float, str)
+        ):
+            return {"lit": expression.value}
+        _fail("invalid_condition_expression", "条件字面量不是 JSON 标量", expression)
+    if isinstance(expression, ast.Name):
+        if expression.id not in input_names | known_results:
+            _fail("invalid_condition_expression", "条件引用了不可见变量", expression)
+        return {"var": expression.id}
+    if isinstance(expression, ast.Attribute):
+        return {
+            "field": _condition_expression(
+                expression.value,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+            "name": expression.attr,
+        }
+    if isinstance(expression, ast.Subscript):
+        return {
+            "index": _condition_expression(
+                expression.value,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+            "key": _condition_expression(
+                expression.slice,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+        }
+    if isinstance(expression, ast.BoolOp):
+        operator_name = "and" if isinstance(expression.op, ast.And) else "or"
+        values = [
+            _condition_expression(
+                value,
+                input_names=input_names,
+                known_results=known_results,
+            )
+            for value in expression.values
+        ]
+        result = values[0]
+        for value in values[1:]:
+            result = {"binop": operator_name, "left": result, "right": value}
+        return result
+    if (
+        isinstance(expression, ast.Compare)
+        and len(expression.ops) == len(expression.comparators) == 1
+    ):
+        operators = {
+            ast.Eq: "==",
+            ast.NotEq: "!=",
+            ast.Gt: ">",
+            ast.GtE: ">=",
+            ast.Lt: "<",
+            ast.LtE: "<=",
+        }
+        operator_name = operators.get(type(expression.ops[0]))
+        if operator_name is None:
+            _fail("invalid_condition_expression", "条件比较运算符不受支持", expression)
+        return {
+            "binop": operator_name,
+            "left": _condition_expression(
+                expression.left,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+            "right": _condition_expression(
+                expression.comparators[0],
+                input_names=input_names,
+                known_results=known_results,
+            ),
+        }
+    if isinstance(expression, ast.BinOp):
+        operators = {
+            ast.Add: "+",
+            ast.Sub: "-",
+            ast.Mult: "*",
+            ast.Div: "/",
+            ast.FloorDiv: "//",
+            ast.Mod: "%",
+        }
+        operator_name = operators.get(type(expression.op))
+        if operator_name is None:
+            _fail("invalid_condition_expression", "条件算术运算符不受支持", expression)
+        return {
+            "binop": operator_name,
+            "left": _condition_expression(
+                expression.left,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+            "right": _condition_expression(
+                expression.right,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+        }
+    if isinstance(expression, ast.UnaryOp):
+        operator_name = (
+            "not"
+            if isinstance(expression.op, ast.Not)
+            else "neg"
+            if isinstance(expression.op, ast.USub)
+            else None
+        )
+        if operator_name is None:
+            _fail("invalid_condition_expression", "条件一元运算符不受支持", expression)
+        return {
+            "unop": operator_name,
+            "operand": _condition_expression(
+                expression.operand,
+                input_names=input_names,
+                known_results=known_results,
+            ),
+        }
+    if isinstance(expression, ast.Call) and isinstance(expression.func, ast.Name):
+        allowed_calls = {"len", "min", "max", "abs", "round", "contains", "get"}
+        if expression.func.id not in allowed_calls or expression.keywords:
+            _fail(
+                "invalid_condition_expression", "条件函数不在纯函数白名单中", expression
+            )
+        return {
+            "call": expression.func.id,
+            "args": [
+                _condition_expression(
+                    argument,
+                    input_names=input_names,
+                    known_results=known_results,
+                )
+                for argument in expression.args
+            ],
+        }
+    _fail("invalid_condition_expression", "条件表达式超出可信静态子集", expression)
+
+
+def _condition_variable_names(expression: Mapping[str, Any]) -> set[str]:
+    """返回结构化表达式中所有变量引用。"""
+
+    result: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            if set(value) == {"var"} and isinstance(value.get("var"), str):
+                result.add(str(value["var"]))
+                return
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(expression)
+    return result
 
 
 def _with_marker(statement: ast.With, imports: dict[str, str]) -> str | None:

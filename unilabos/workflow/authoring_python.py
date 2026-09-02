@@ -74,11 +74,11 @@ def render_authoring_python(
         all_catalog,
     )
     node_by_uuid = {
-        key: value for key, value in all_nodes.items() if key not in hidden_composite_nodes
+        key: value
+        for key, value in all_nodes.items()
+        if key not in hidden_composite_nodes
     }
-    catalog_by_node = {
-        key: all_catalog[key] for key in node_by_uuid
-    }
+    catalog_by_node = {key: all_catalog[key] for key in node_by_uuid}
     visible_edges = [
         edge
         for edge in edges
@@ -143,9 +143,7 @@ def render_authoring_python(
         )
         for name in explicit_output_bindings
     }
-    typing_names: set[str] = (
-        {"TypedDict"} if explicit_output_bindings else set()
-    )
+    typing_names: set[str] = {"TypedDict"} if explicit_output_bindings else set()
     needs_field = False
     needs_resource_slot = False
     annotation_resource_imports: set[tuple[str, str]] = set()
@@ -180,9 +178,12 @@ def render_authoring_python(
     if needs_resource_slot:
         lines.append("from unilabos.registry.placeholder_type import ResourceSlot")
     group_nodes = [
+        node for node in ordered_nodes if _is_group(catalog_by_node[str(node["uuid"])])
+    ]
+    condition_nodes = [
         node
         for node in ordered_nodes
-        if _is_group(catalog_by_node[str(node["uuid"])])
+        if _is_condition(catalog_by_node[str(node["uuid"])])
     ]
     marker_imports = "device, workflow"
     if group_nodes:
@@ -234,9 +235,7 @@ def render_authoring_python(
     )
     root_fields = _authoring_root_fields(workflow)
     if "tags" in root_fields:
-        lines.append(
-            f"    tags={_stable_python_json(workflow.get('tags') or [])!r},"
-        )
+        lines.append(f"    tags={_stable_python_json(workflow.get('tags') or [])!r},")
     if "meta_data" in root_fields:
         lines.append(
             "    meta_data="
@@ -300,6 +299,29 @@ def render_authoring_python(
         if node_uuid in rendered_node_uuids or isinstance(node.get("parent_uuid"), str):
             continue
         action = catalog_by_node[node_uuid]
+        if _is_condition(action):
+            _append_condition_source(
+                node=node,
+                indent_level=1,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=node_by_uuid,
+                catalog_by_node=catalog_by_node,
+                device_symbols=device_symbols,
+            )
+            rendered_node_uuids.add(node_uuid)
+            rendered_node_uuids.update(
+                str(child["uuid"])
+                for child in condition_nodes
+                if child.get("parent_uuid") == node_uuid
+            )
+            rendered_node_uuids.update(
+                str(child["uuid"]) for child in children_by_parent[node_uuid]
+            )
+            continue
         if not _is_group(action):
             _append_action_source(
                 node=node,
@@ -419,16 +441,12 @@ def _authoring_root_fields(workflow: Mapping[str, Any]) -> set[str]:
     meta_data = workflow.get("meta_data")
     unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
     values = (
-        unilab.get("authoring_root_fields")
-        if isinstance(unilab, Mapping)
-        else None
+        unilab.get("authoring_root_fields") if isinstance(unilab, Mapping) else None
     )
     if not isinstance(values, list):
         return set()
     return {
-        value
-        for value in values
-        if value in {"tags", "meta_data", "workflow_type"}
+        value for value in values if value in {"tags", "meta_data", "workflow_type"}
     }
 
 
@@ -437,8 +455,7 @@ def _stable_python_json(value: Any) -> Any:
 
     if isinstance(value, Mapping):
         return {
-            str(key): _stable_python_json(value[key])
-            for key in sorted(value, key=str)
+            str(key): _stable_python_json(value[key]) for key in sorted(value, key=str)
         }
     if isinstance(value, list):
         return [_stable_python_json(item) for item in value]
@@ -537,8 +554,8 @@ def _append_action_source(
 
     node_uuid = str(node["uuid"])
     action = catalog_by_node[node_uuid]
-    if _is_group(action):
-        raise AuthoringGraphError("candidate_invalid", "展示分组不能作为动作生成")
+    if _is_group(action) or _is_condition(action):
+        raise AuthoringGraphError("candidate_invalid", "控制或展示节点不能作为动作生成")
     indent = "    " * indent_level
     start_line = len(lines) + 1
     result_name = _node_result_name(node)
@@ -590,6 +607,165 @@ def _append_action_source(
             end_column=utf16_length(lines[-1]) + 1,
         ).model_dump()
     )
+
+
+def _append_condition_source(
+    *,
+    node: Mapping[str, Any],
+    indent_level: int,
+    lines: list[str],
+    source_map: list[dict[str, Any]],
+    result_names: set[str],
+    material_sources: Mapping[str, RenderedMaterialSource],
+    incoming: Mapping[tuple[str, str], tuple[str, str]],
+    node_by_uuid: Mapping[str, dict[str, Any]],
+    catalog_by_node: Mapping[str, AuthoringCatalogAction],
+    device_symbols: Mapping[tuple[str, str | None], str],
+) -> None:
+    """把条件区域及其直接动作分支确定性写回原生 Python。"""
+
+    node_uuid = str(node["uuid"])
+    action = catalog_by_node[node_uuid]
+    indent = "    " * indent_level
+    start_line = len(lines) + 1
+    metadata_comment = _node_metadata_comment(node=node, action=action)
+    if metadata_comment is not None:
+        lines.append(f"{indent}{metadata_comment}")
+    lines.append(f"{indent}{_node_anchor(node_uuid, node)}")
+    params = node.get("param")
+    branches = params.get("branches") if isinstance(params, Mapping) else None
+    if not isinstance(branches, list) or not branches:
+        raise AuthoringGraphError("candidate_invalid", "条件区域缺少有序分支")
+    source_map.append(
+        CandidateSourceMapEntry(
+            workflow_node_uuid=node_uuid,
+            start_line=start_line,
+            start_column=len(indent) + 1,
+            end_line=len(lines) + 1,
+            end_column=len(indent) + 1,
+        ).model_dump()
+    )
+    for index, branch in enumerate(branches):
+        if not isinstance(branch, Mapping):
+            raise AuthoringGraphError("candidate_invalid", "条件分支必须是对象")
+        label = branch.get("label")
+        condition = branch.get("condition")
+        if index == 0 and label == "if" and isinstance(condition, Mapping):
+            header = f"if {_render_condition_expression(condition)}:"
+        elif label == f"elif{index - 1}" and isinstance(condition, Mapping):
+            header = f"elif {_render_condition_expression(condition)}:"
+        elif index == len(branches) - 1 and label == "else" and condition is None:
+            header = "else:"
+        else:
+            raise AuthoringGraphError("candidate_invalid", "条件分支顺序或表达式无效")
+        lines.append(f"{indent}{header}")
+        node_uuids = branch.get("node_uuids")
+        if not isinstance(node_uuids, list) or not node_uuids:
+            raise AuthoringGraphError("candidate_invalid", "条件分支不能为空")
+        for child_uuid_value in node_uuids:
+            child_uuid = str(child_uuid_value)
+            child = node_by_uuid.get(child_uuid)
+            child_action = catalog_by_node.get(child_uuid)
+            if child is not None and child.get("parent_uuid") != node_uuid:
+                # ``node_uuids`` 包含整个分支子树；这里只渲染直接子节点，嵌套
+                # 条件由递归调用负责写出其后代，避免重复生成。
+                continue
+            if child is None or child_action is None or _is_group(child_action):
+                raise AuthoringGraphError(
+                    "candidate_invalid", "条件分支只能包含动作或嵌套条件节点"
+                )
+            if _is_condition(child_action):
+                _append_condition_source(
+                    node=child,
+                    indent_level=indent_level + 1,
+                    lines=lines,
+                    source_map=source_map,
+                    result_names=result_names,
+                    material_sources=material_sources,
+                    incoming=incoming,
+                    node_by_uuid=node_by_uuid,
+                    catalog_by_node=catalog_by_node,
+                    device_symbols=device_symbols,
+                )
+            else:
+                _append_action_source(
+                    node=child,
+                    indent_level=indent_level + 1,
+                    lines=lines,
+                    source_map=source_map,
+                    result_names=result_names,
+                    material_sources=material_sources,
+                    incoming=incoming,
+                    node_by_uuid=node_by_uuid,
+                    catalog_by_node=catalog_by_node,
+                    device_symbols=device_symbols,
+                )
+
+
+def _render_condition_expression(value: Mapping[str, Any]) -> str:
+    """把封闭结构化表达式无损渲染为 Python 条件表达式。"""
+
+    if set(value) == {"lit"}:
+        return repr(value["lit"])
+    if set(value) == {"var"}:
+        return _safe_identifier(str(value["var"]), fallback="invalid")
+    if set(value) == {"field", "name"} and isinstance(value["field"], Mapping):
+        name = _safe_identifier(str(value["name"]), fallback="invalid")
+        return f"{_render_condition_expression(value['field'])}.{name}"
+    if (
+        set(value) == {"index", "key"}
+        and isinstance(value["index"], Mapping)
+        and isinstance(value["key"], Mapping)
+    ):
+        return (
+            f"{_render_condition_expression(value['index'])}"
+            f"[{_render_condition_expression(value['key'])}]"
+        )
+    if (
+        set(value) == {"binop", "left", "right"}
+        and isinstance(value["left"], Mapping)
+        and isinstance(value["right"], Mapping)
+    ):
+        operator_name = str(value["binop"])
+        if operator_name not in {
+            "+",
+            "-",
+            "*",
+            "/",
+            "//",
+            "%",
+            "==",
+            "!=",
+            ">",
+            ">=",
+            "<",
+            "<=",
+            "and",
+            "or",
+        }:
+            raise AuthoringGraphError("candidate_invalid", "条件二元运算符无效")
+        return (
+            f"({_render_condition_expression(value['left'])} {operator_name} "
+            f"{_render_condition_expression(value['right'])})"
+        )
+    if set(value) == {"unop", "operand"} and isinstance(value["operand"], Mapping):
+        operator_name = str(value["unop"])
+        if operator_name == "not":
+            return f"not {_render_condition_expression(value['operand'])}"
+        if operator_name == "neg":
+            return f"-{_render_condition_expression(value['operand'])}"
+        raise AuthoringGraphError("candidate_invalid", "条件一元运算符无效")
+    if set(value) == {"call", "args"} and isinstance(value["args"], list):
+        name = str(value["call"])
+        if name not in {"len", "min", "max", "abs", "round", "contains", "get"}:
+            raise AuthoringGraphError("candidate_invalid", "条件函数不在白名单中")
+        if any(not isinstance(argument, Mapping) for argument in value["args"]):
+            raise AuthoringGraphError("candidate_invalid", "条件函数参数无效")
+        arguments = ", ".join(
+            _render_condition_expression(argument) for argument in value["args"]
+        )
+        return f"{name}({arguments})"
+    raise AuthoringGraphError("candidate_invalid", "条件表达式结构无效")
 
 
 class _NoDefault:
@@ -704,22 +880,31 @@ def _authoring_ordered_nodes(
     missing_source_order = False
     for node_uuid, node in nodes.items():
         unilab = (node.get("meta_data") or {}).get("unilab", {})
-        value = unilab.get("authoring_source_order") if isinstance(unilab, Mapping) else None
+        value = (
+            unilab.get("authoring_source_order")
+            if isinstance(unilab, Mapping)
+            else None
+        )
         if value is None:
             missing_source_order = True
             continue
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise AuthoringGraphError("candidate_invalid", "作者源码节点顺序必须是非负整数")
+            raise AuthoringGraphError(
+                "candidate_invalid", "作者源码节点顺序必须是非负整数"
+            )
         if value in source_positions.values():
             raise AuthoringGraphError("candidate_invalid", "作者源码节点顺序不能重复")
         source_positions[node_uuid] = value
-    has_group = any(
-        str(node.get("type")) == "group" or str(node.get("node_type")) == "group"
+    has_structured_node = any(
+        str(node.get("type")) in {"group", "condition"}
+        or str(node.get("node_type")) in {"group", "condition"}
         for node in nodes.values()
     )
     if missing_source_order:
-        if has_group:
-            raise AuthoringGraphError("candidate_invalid", "展示分组候选图缺少作者源码顺序")
+        if has_structured_node:
+            raise AuthoringGraphError(
+                "candidate_invalid", "结构化候选图缺少作者源码顺序"
+            )
         return topological
 
     def source_position_sort_key(node: Mapping[str, Any]) -> int:
@@ -740,7 +925,9 @@ def _authoring_ordered_nodes(
         source_uuid = str(edge.get("source_node_uuid"))
         target_uuid = str(edge.get("target_node_uuid"))
         if ordered_index[source_uuid] >= ordered_index[target_uuid]:
-            raise AuthoringGraphError("candidate_invalid", "作者源码节点顺序逆转了执行依赖")
+            raise AuthoringGraphError(
+                "candidate_invalid", "作者源码节点顺序逆转了执行依赖"
+            )
     return ordered
 
 
@@ -761,7 +948,9 @@ def _parallel_scope(node: Mapping[str, Any]) -> str | None:
     try:
         return validate_uuid(value)
     except (TypeError, ValueError) as error:
-        raise AuthoringGraphError("candidate_invalid", "并行结构作用域身份无效") from error
+        raise AuthoringGraphError(
+            "candidate_invalid", "并行结构作用域身份无效"
+        ) from error
 
 
 def _parallel_order(node: Mapping[str, Any]) -> int:
@@ -792,6 +981,18 @@ def _is_group(action: AuthoringCatalogAction) -> bool:
         and template.get("node_type") == "group"
         and template.get("class") == "unilabos.workflow.authoring:group"
         and template.get("name") == "group"
+    )
+
+
+def _is_condition(action: AuthoringCatalogAction) -> bool:
+    """判断目录动作是否为框架拥有的条件控制区域模板。"""
+
+    template = action.template
+    return (
+        template.get("type") == "condition"
+        and template.get("node_type") == "condition"
+        and template.get("class") == "unilabos.workflow.authoring:condition"
+        and template.get("name") == "condition"
     )
 
 
@@ -861,6 +1062,7 @@ def _device_symbols(
         if (
             _is_material_source(action)
             or _is_group(action)
+            or _is_condition(action)
             or _is_published_workflow(action)
         ):
             continue
@@ -976,9 +1178,7 @@ def _render_schema(
     """
 
     template_uuids = (
-        _resource_template_allowlist(schema)
-        if include_resource_templates
-        else None
+        _resource_template_allowlist(schema) if include_resource_templates else None
     )
     annotation, imports = _render_schema_base(schema)
     resource_imports: set[tuple[str, str]] = set()
@@ -996,8 +1196,7 @@ def _render_schema(
             resource_imports.add((module, symbol))
             symbols.append(symbol)
         annotation = (
-            f"Annotated[{annotation}, "
-            f"AllowedResourceTemplates({', '.join(symbols)})]"
+            f"Annotated[{annotation}, AllowedResourceTemplates({', '.join(symbols)})]"
         )
         imports.add("Annotated")
     return annotation, imports, resource_imports
@@ -1077,9 +1276,7 @@ def _resource_template_allowlist(schema: Mapping[str, Any]) -> list[str] | None:
             found.append(list(raw_allowlist))
         members = item.get("anyOf")
         if isinstance(members, list):
-            pending.extend(
-                member for member in members if isinstance(member, Mapping)
-            )
+            pending.extend(member for member in members if isinstance(member, Mapping))
         child = item.get("items")
         if isinstance(child, Mapping):
             pending.append(child)
@@ -1109,8 +1306,7 @@ def _incoming_bindings(
         for handle in action.handles
         if handle.get("io_type") == "target"
         and handle.get("handle_key") != "ready"
-        and str(handle.get("data_source") or "executor").lower()
-        in {"executor", "goal"}
+        and str(handle.get("data_source") or "executor").lower() in {"executor", "goal"}
     }
     result: dict[tuple[str, str], tuple[str, str]] = {}
     for value in edges:
@@ -1213,9 +1409,7 @@ def _render_action_arguments(
                 raise AuthoringGraphError(
                     "candidate_invalid", "动作资源引用元数据或实际物料身份无效"
                 )
-            expression = (
-                f"resource_ref({json.dumps(resource_id, ensure_ascii=False)})"
-            )
+            expression = f"resource_ref({json.dumps(resource_id, ensure_ascii=False)})"
         elif handle_uuid in input_bindings:
             # ``binding`` 是当前目标连接点（Handle）对应的工作流输入绑定事实；
             # 必须按连接点 UUID 查询，避免根据动作参数名称猜测绑定。
@@ -1356,12 +1550,8 @@ def _node_metadata_comment(
     # 动作模板显示名是人类可读默认值，动作业务名只用于兼容旧目录。
     template_title = action.template.get("display_name") or action.template.get("name")
     template_description = action.template.get("description")
-    descriptions_match = (
-        description == template_description
-        or (
-            title == template_title
-            and description in (None, "")
-        )
+    descriptions_match = description == template_description or (
+        title == template_title and description in (None, "")
     )
     if title == template_title and descriptions_match:
         return None

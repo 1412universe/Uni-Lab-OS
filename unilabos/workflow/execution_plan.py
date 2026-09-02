@@ -6,7 +6,7 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from unilabos.workflow._execution_plan_graph import (
     ExecutionPlanBuildError,
@@ -22,6 +22,11 @@ from unilabos.workflow.execution_resource_policy import (
 )
 
 PLAN_VERSION = 1
+CONTROL_PLAN_VERSION = 2
+CONTROL_PLAN_CAPABILITIES = (
+    "condition_expression_v1",
+    "control_regions_v1",
+)
 
 
 class ExecutionPlanBuilder:
@@ -71,6 +76,29 @@ class ExecutionPlanBuilder:
             if node.get("disabled") is not True
             and kinds[node_uuid] not in {"group", "material_source", "workflow"}
         }
+        disabled_conditions = {
+            node_uuid
+            for node_uuid, node in nodes.items()
+            if kinds[node_uuid] == "condition" and node.get("disabled") is True
+        }
+        for active_uuid in active:
+            current = active_uuid
+            seen: set[str] = set()
+            while current not in seen:
+                seen.add(current)
+                parent = nodes.get(current, {}).get("parent_uuid")
+                if parent in disabled_conditions:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region",
+                        "禁用条件区域仍包含启用的分支节点",
+                    )
+                if not isinstance(parent, str):
+                    break
+                current = parent
+            else:
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "条件区域父子关系包含环"
+                )
         # ``planned_graph_nodes`` 同时保留协调责任与普通执行责任，使来源运行连接点
         # 和来源到首消费动作的直连边成为冻结执行计划（ExecutionPlan）事实。
         planned_graph_nodes = {**material_sources, **active}
@@ -91,6 +119,12 @@ class ExecutionPlanBuilder:
             handles=handles,
             runtime_handle_ids=runtime_handle_ids,
         )
+        control_edges = self._condition_control_edges(
+            nodes=nodes,
+            kinds=kinds,
+            active_node_uuids=set(active),
+        )
+        planned_edges.extend(control_edges)
         graph_order = graph_normalizer.topological_order(
             planned_graph_nodes,
             planned_edges,
@@ -207,6 +241,21 @@ class ExecutionPlanBuilder:
                     if handle["io_type"] == "source"
                 ],
             }
+            node_metadata = node.get("meta_data")
+            node_unilab = (
+                node_metadata.get("unilab")
+                if isinstance(node_metadata, Mapping)
+                else None
+            )
+            result_name = (
+                node_unilab.get("authoring_result_name")
+                if isinstance(node_unilab, Mapping)
+                else None
+            )
+            if isinstance(result_name, str) and result_name:
+                planned_node["result_name"] = result_name
+            if kind == "condition":
+                planned_node["control_region"] = deepcopy(planned_param)
             if kind in {"device_action", "material_transfer"}:
                 planned_node.update(
                     self._device_action_contract(node, template=template)
@@ -268,16 +317,235 @@ class ExecutionPlanBuilder:
                 "static_resource_deadlock",
                 str(error),
             ) from error
+        has_control_regions = bool(control_edges)
         plan: dict[str, Any] = {
-            "version": PLAN_VERSION,
+            "version": CONTROL_PLAN_VERSION if has_control_regions else PLAN_VERSION,
             "run_mode": run_mode,
             "nodes": planned_nodes,
             "edges": planned_edges,
             "handles": runtime_handles,
         }
+        if has_control_regions:
+            plan["capabilities"] = list(CONTROL_PLAN_CAPABILITIES)
         if target_node_uuid is not None:
             plan["target_node_uuid"] = target_node_uuid
         return plan, jobs
+
+    @staticmethod
+    def _condition_control_edges(
+        *,
+        nodes: Mapping[str, Mapping[str, Any]],
+        kinds: Mapping[str, str],
+        active_node_uuids: set[str],
+    ) -> list[dict[str, Any]]:
+        """把条件区域到各分支入口投影为无数据依赖边。"""
+
+        result: list[dict[str, Any]] = []
+        seen_targets: set[tuple[str, str]] = set()
+        condition_uuids = {
+            node_uuid
+            for node_uuid in active_node_uuids
+            if kinds.get(node_uuid) == "condition"
+        }
+
+        def is_descendant(node_uuid: str, region_uuid: str) -> bool:
+            """只沿冻结 parent_uuid 证明区域成员关系。"""
+
+            current = node_uuid
+            seen: set[str] = set()
+            while current not in seen:
+                seen.add(current)
+                parent = nodes.get(current, {}).get("parent_uuid")
+                if parent == region_uuid:
+                    return True
+                if not isinstance(parent, str):
+                    return False
+                current = parent
+            raise ExecutionPlanBuildError(
+                "invalid_control_region", "条件区域父子关系包含环"
+            )
+
+        for node_uuid in condition_uuids:
+            depth = 1
+            current = node_uuid
+            seen: set[str] = set()
+            while current not in seen:
+                seen.add(current)
+                parent = nodes.get(current, {}).get("parent_uuid")
+                if not isinstance(parent, str):
+                    break
+                if parent in condition_uuids:
+                    depth += 1
+                current = parent
+            else:
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "条件区域父子关系包含环"
+                )
+            if depth > 8:
+                raise ExecutionPlanBuildError(
+                    "control_nesting_too_deep", "条件区域嵌套深度不能超过 8"
+                )
+
+        for region_uuid, node in nodes.items():
+            if (
+                kinds.get(region_uuid) != "condition"
+                or region_uuid not in active_node_uuids
+            ):
+                continue
+            params = node.get("param")
+            branches = params.get("branches") if isinstance(params, Mapping) else None
+            if (
+                not isinstance(branches, Sequence)
+                or isinstance(branches, (str, bytes))
+                or not branches
+            ):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "条件区域缺少有序分支"
+                )
+            bindings = params.get("bindings", {}) if isinstance(params, Mapping) else {}
+            if not isinstance(bindings, Mapping):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "条件变量绑定必须是对象"
+                )
+            region_descendants = {
+                candidate_uuid
+                for candidate_uuid in active_node_uuids
+                if candidate_uuid != region_uuid
+                and is_descendant(candidate_uuid, region_uuid)
+            }
+            declared_members: set[str] = set()
+            for binding in bindings.values():
+                if not isinstance(binding, Mapping):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件变量绑定必须是对象"
+                    )
+                if binding.get("kind") != "node_result":
+                    continue
+                source_uuid = str(binding.get("node_uuid") or "")
+                if source_uuid not in active_node_uuids or source_uuid == region_uuid:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件结果绑定引用计划外节点"
+                    )
+                pair = (source_uuid, region_uuid)
+                if pair not in seen_targets:
+                    seen_targets.add(pair)
+                    result.append(
+                        {
+                            "uuid": str(
+                                uuid5(
+                                    UUID(region_uuid),
+                                    f"condition-source:{source_uuid}",
+                                )
+                            ),
+                            "source_node_uuid": source_uuid,
+                            "target_node_uuid": region_uuid,
+                            "source_handle_uuid": "",
+                            "target_handle_uuid": "",
+                            "dependency_only": True,
+                        }
+                    )
+            predecessors = params.get("predecessor_node_uuids", [])
+            if not isinstance(predecessors, Sequence) or isinstance(
+                predecessors, (str, bytes)
+            ):
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "条件顺序前驱必须是数组"
+                )
+            for source_value in predecessors:
+                source_uuid = str(source_value)
+                if source_uuid not in active_node_uuids or source_uuid == region_uuid:
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件顺序前驱引用计划外节点"
+                    )
+                pair = (source_uuid, region_uuid)
+                if pair in seen_targets:
+                    continue
+                seen_targets.add(pair)
+                result.append(
+                    {
+                        "uuid": str(
+                            uuid5(
+                                UUID(region_uuid),
+                                f"condition-predecessor:{source_uuid}",
+                            )
+                        ),
+                        "source_node_uuid": source_uuid,
+                        "target_node_uuid": region_uuid,
+                        "source_handle_uuid": "",
+                        "target_handle_uuid": "",
+                        "dependency_only": True,
+                    }
+                )
+            for branch in branches:
+                if not isinstance(branch, Mapping):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件分支必须是对象"
+                    )
+                entries = branch.get("entry_node_uuids")
+                exits = branch.get("exit_node_uuids")
+                members = branch.get("node_uuids")
+                if (
+                    not isinstance(entries, Sequence)
+                    or isinstance(entries, (str, bytes))
+                    or not entries
+                    or not isinstance(exits, Sequence)
+                    or isinstance(exits, (str, bytes))
+                    or not exits
+                    or not isinstance(members, Sequence)
+                    or isinstance(members, (str, bytes))
+                    or not members
+                ):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件分支成员或边界无效"
+                    )
+                member_uuids = {str(value) for value in members}
+                if len(member_uuids) != len(members):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件分支成员不能重复"
+                    )
+                if (
+                    not member_uuids <= region_descendants
+                    or declared_members & member_uuids
+                    or not {str(value) for value in entries} <= member_uuids
+                    or not {str(value) for value in exits} <= member_uuids
+                ):
+                    raise ExecutionPlanBuildError(
+                        "invalid_control_region", "条件分支成员不属于对应控制区域"
+                    )
+                declared_members.update(member_uuids)
+                for target_value in entries:
+                    target_uuid = str(target_value)
+                    if (
+                        target_uuid not in active_node_uuids
+                        or target_uuid == region_uuid
+                    ):
+                        raise ExecutionPlanBuildError(
+                            "invalid_control_region", "条件分支入口引用计划外节点"
+                        )
+                    pair = (region_uuid, target_uuid)
+                    if pair in seen_targets:
+                        continue
+                    seen_targets.add(pair)
+                    result.append(
+                        {
+                            "uuid": str(
+                                uuid5(
+                                    UUID(region_uuid),
+                                    f"condition-entry:{target_uuid}",
+                                )
+                            ),
+                            "source_node_uuid": region_uuid,
+                            "target_node_uuid": target_uuid,
+                            "source_handle_uuid": "",
+                            "target_handle_uuid": "",
+                            "dependency_only": True,
+                        }
+                    )
+            if declared_members != region_descendants:
+                raise ExecutionPlanBuildError(
+                    "invalid_control_region", "条件分支没有完整覆盖区域后代"
+                )
+        return result
 
     @staticmethod
     def _planned_executor_kind(
@@ -645,7 +913,9 @@ class ExecutionPlanBuilder:
         )
         if (
             not isinstance(transfer, Mapping)
-            or any(not str(transfer.get(field) or "").strip() for field in required_text)
+            or any(
+                not str(transfer.get(field) or "").strip() for field in required_text
+            )
             or not (
                 str(transfer.get("target_site_uuid_param") or "").strip()
                 or str(transfer.get("target_site_name_param") or "").strip()
@@ -759,6 +1029,8 @@ class ExecutionPlanBuilder:
 
 
 __all__ = [
+    "CONTROL_PLAN_CAPABILITIES",
+    "CONTROL_PLAN_VERSION",
     "PLAN_VERSION",
     "ExecutionPlanBuildError",
     "ExecutionPlanBuilder",

@@ -159,6 +159,51 @@ def _seed_material_source_task(
     return job_uuids
 
 
+def test_local_condition_evaluation_persists_selected_and_skipped_jobs(
+    store: WorkflowStore,
+) -> None:
+    """本地条件结算不得借用设备完成路径，并且必须幂等记录未选分支。"""
+
+    condition_job_uuid, selected_job_uuid, skipped_job_uuid = _seed_task(
+        store,
+        job_count=3,
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_node_job SET executor_kind = 'condition' WHERE uuid = ?",
+            (condition_job_uuid,),
+        )
+    projection = _projection(store)
+
+    for _ in range(2):
+        projection.project_local_control_evaluation(
+            job_uuid=condition_job_uuid,
+            selected_branch="if",
+            skipped_job_uuids=[skipped_job_uuid],
+        )
+
+    aggregate = _aggregate(store)
+    jobs = {job["uuid"]: job for job in aggregate["jobs"]}
+    assert aggregate["task"]["status"] == "pending"
+    assert jobs[condition_job_uuid]["status"] == "succeeded"
+    assert jobs[condition_job_uuid]["return_info"] == {"selected_branch": "if"}
+    assert jobs[selected_job_uuid]["status"] == "pending"
+    assert jobs[skipped_job_uuid]["status"] == "skipped"
+    assert jobs[skipped_job_uuid]["error_info"] == [{"code": "branch_not_selected"}]
+
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=selected_job_uuid,
+    )
+    projection.project_job_finished(
+        job_uuid=selected_job_uuid,
+        scheduler_state="success",
+        return_info={"ok": True},
+    )
+
+    assert store.get_task(TASK_UUID)["status"] == "succeeded"
+
+
 def test_material_source_admission_projects_typed_result_atomically(
     store: WorkflowStore,
 ) -> None:
@@ -212,9 +257,7 @@ def test_material_source_admission_requires_explicit_custody_policy(
             {
                 NODE_UUIDS[0]: {
                     "uuid": "50000000-0000-4000-8000-000000000001",
-                    "resource_template_uuid": (
-                        "60000000-0000-4000-8000-000000000001"
-                    ),
+                    "resource_template_uuid": ("60000000-0000-4000-8000-000000000001"),
                 }
             },
         )
@@ -241,9 +284,7 @@ def test_material_source_admission_persists_backend_shaped_facts(
         {
             NODE_UUIDS[0]: {
                 "uuid": material_uuid,
-                "resource_template_uuid": (
-                    "60000000-0000-4000-8000-000000000001"
-                ),
+                "resource_template_uuid": ("60000000-0000-4000-8000-000000000001"),
                 "site_uuid": site_uuid,
                 "flow_role": "reagent",
                 "custody_policy": "task_exclusive",
@@ -258,13 +299,11 @@ def test_material_source_admission_persists_backend_shaped_facts(
             (TASK_UUID,),
         ).fetchone()
         binding = connection.execute(
-            "SELECT * FROM workflow_task_material_binding "
-            "WHERE workflow_task_uuid = ?",
+            "SELECT * FROM workflow_task_material_binding WHERE workflow_task_uuid = ?",
             (TASK_UUID,),
         ).fetchone()
         claim = connection.execute(
-            "SELECT * FROM workflow_task_material_claim "
-            "WHERE workflow_task_uuid = ?",
+            "SELECT * FROM workflow_task_material_claim WHERE workflow_task_uuid = ?",
             (TASK_UUID,),
         ).fetchone()
     assert dict(admission)["status"] == "admitted"
@@ -299,9 +338,7 @@ def test_shared_source_binding_does_not_create_exclusive_claim(
         {
             NODE_UUIDS[0]: {
                 "uuid": "50000000-0000-4000-8000-000000000001",
-                "resource_template_uuid": (
-                    "60000000-0000-4000-8000-000000000001"
-                ),
+                "resource_template_uuid": ("60000000-0000-4000-8000-000000000001"),
                 "site_uuid": None,
                 "flow_role": "primary_sample",
                 "custody_policy": "shared_source",
@@ -442,9 +479,7 @@ def test_failed_task_releases_claim_only_after_cleanup_settlement(
         {
             NODE_UUIDS[0]: {
                 "uuid": "50000000-0000-4000-8000-000000000001",
-                "resource_template_uuid": (
-                    "60000000-0000-4000-8000-000000000001"
-                ),
+                "resource_template_uuid": ("60000000-0000-4000-8000-000000000001"),
                 "custody_policy": "task_exclusive",
             }
         },
@@ -725,11 +760,14 @@ def test_blocked_material_source_admission_preserves_jobs_and_records_wait(
     assert aggregate["jobs"][0]["status"] == "pending"
     assert aggregate["jobs"][0]["return_info"] == {}
     with store.transaction() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM workflow_task_material_binding "
-            "WHERE workflow_task_uuid = ?",
-            (TASK_UUID,),
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM workflow_task_material_binding "
+                "WHERE workflow_task_uuid = ?",
+                (TASK_UUID,),
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_quantity_only_material_admission_records_wait_and_can_retry(
@@ -753,9 +791,7 @@ def test_quantity_only_material_admission_records_wait_and_can_retry(
     )
 
     blocked = _aggregate(store)
-    assert blocked["task"]["wait_reason"]["code"] == (
-        "quantity_inventory_unavailable"
-    )
+    assert blocked["task"]["wait_reason"]["code"] == ("quantity_inventory_unavailable")
     assert blocked["jobs"][0]["wait_reason"]["resources"] == [
         {
             "scope": "material",
@@ -941,9 +977,7 @@ def test_runtime_journal_and_sse_invalidation_capture_dispatch_and_result(
         ("job_transition", "dispatched", "succeeded"),
         ("task_transition", "running", "succeeded"),
     ]
-    assert page["items"][1]["param"] == {
-        "resource": {"uuid": "material-1"}
-    }
+    assert page["items"][1]["param"] == {"resource": {"uuid": "material-1"}}
     assert page["items"][2]["return_info"] == {"message": "done"}
     assert page["next_cursor"] == page["items"][-1]["sequence"]
     assert page["has_more"] is False

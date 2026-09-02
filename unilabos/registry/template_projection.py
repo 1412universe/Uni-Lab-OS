@@ -518,16 +518,59 @@ class RegistryTemplateProjection:
             nodes.append(framework_node)
             handles.append(framework_handle)
             try:
-                nodes.append(
-                    self._compile_group(
-                        resource_template_uuid=resource_template_uuid,
-                        resource_name=resource_name,
-                        resource_display_name=resource_display_name,
-                    )
+                nodes.extend(
+                    [
+                        self._compile_group(
+                            resource_template_uuid=resource_template_uuid,
+                            resource_name=resource_name,
+                            resource_display_name=resource_display_name,
+                        ),
+                        self._compile_condition(
+                            resource_template_uuid=resource_template_uuid,
+                            resource_name=resource_name,
+                            resource_display_name=resource_display_name,
+                        ),
+                    ]
                 )
             except TemplateIdentityError as error:
                 raise RegistryTemplateProjectionError(str(error)) from error
         return nodes, handles
+
+    @staticmethod
+    def _compile_condition(
+        *,
+        resource_template_uuid: str,
+        resource_name: str,
+        resource_display_name: str,
+    ) -> dict[str, Any]:
+        """编译宿主节点唯一拥有的结构化条件控制区域模板。"""
+
+        return {
+            "uuid": action_template_uuid(resource_name, "condition"),
+            "resource_template_uuid": resource_template_uuid,
+            "name": "condition",
+            "display_name": "条件",
+            "description": "由调度器本地求值并选择唯一分支的结构化控制区域。",
+            "class": "unilabos.workflow.authoring:condition",
+            "goal": {},
+            "goal_default": {},
+            "feedback": {},
+            "result": {},
+            "schema": None,
+            "type": "condition",
+            "node_type": "condition",
+            "meta_data": {
+                "unilab": {
+                    "framework_owner_only": True,
+                    "executor_kind": "condition",
+                    "resource_template": {
+                        "uuid": resource_template_uuid,
+                        "name": resource_name,
+                        "display_name": resource_display_name,
+                    },
+                }
+            },
+        }
 
     @staticmethod
     def _compile_group(

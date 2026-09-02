@@ -481,13 +481,19 @@ class TaskRuntimeProjection:
         """投影本地调度器（EdgeScheduler）的首次接收状态。
 
         参数：``task_uuid`` 是既有工作流任务（WorkflowTask）身份；
-        ``scheduler_state`` 接受 ``waiting_for_material``、``running`` 或单步任务
-        的 ``paused``。返回：不
+        ``scheduler_state`` 接受 ``waiting_for_material``、``running``、单步任务
+        的 ``paused``，以及仅本地控制即可到达的 ``success``/``failed``。返回：不
         改写标准状态的任务/作业聚合。异常：未知本地状态或不合法的既有聚合抛出
         ``StoreConflict``；身份缺失抛出 ``StoreNotFound``。
         """
 
-        if scheduler_state not in {"waiting_for_material", "running", "paused"}:
+        if scheduler_state not in {
+            "waiting_for_material",
+            "running",
+            "paused",
+            "success",
+            "failed",
+        }:
             raise StoreConflict(f"不支持的本地提交状态：{scheduler_state}")
         with self._store.transaction() as connection:
             # ``aggregate`` 是首次提交后可公开给 Backend-shaped 接口的标准事实。
@@ -497,8 +503,14 @@ class TaskRuntimeProjection:
             # 协调器会在普通动作提交前完成 MaterialSource 作业，因此暂停的调试
             # 任务可以合法呈现 ``pending task + succeeded sources + pending actions``。
             # 物料来源成功不是物理派发，也不应迫使父任务提前进入 running。
-            if task_status in {"pending", "running"} and job_statuses <= (
-                _ACTIVE_JOB_STATES | {"succeeded"}
+            if task_status in {"pending", "running", "succeeded"} and job_statuses <= (
+                _ACTIVE_JOB_STATES | {"succeeded", "skipped"}
+            ):
+                return aggregate
+            if (
+                scheduler_state == "failed"
+                and task_status == "failed"
+                and job_statuses <= (_TERMINAL_JOB_STATES | {"pending"})
             ):
                 return aggregate
             raise StoreConflict(
@@ -549,7 +561,8 @@ class TaskRuntimeProjection:
             if task_row["status"] in {"succeeded", "failed", "timeout"}:
                 raise StoreConflict(f"终态任务不能取消：{task_uuid}")
             if any(
-                row["status"] in {
+                row["status"]
+                in {
                     "dispatched",
                     "running",
                     "cancel_requested",
@@ -606,9 +619,7 @@ class TaskRuntimeProjection:
                 to_status="canceled",
                 now=now,
             )
-            self._append_invalidation(
-                connection, task_uuid=task_uuid, now=now
-            )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
             return self._aggregate(connection, task_uuid)
 
     def project_cancel_requested(
@@ -680,11 +691,9 @@ class TaskRuntimeProjection:
                     )
                     continue
                 if status in {"dispatched", "running"}:
-                    existing_uncertainty = str(
-                        row["uncertainty_reason"] or ""
-                    ).strip()
-                    has_execution_attention = (
-                        has_execution_attention or bool(existing_uncertainty)
+                    existing_uncertainty = str(row["uncertainty_reason"] or "").strip()
+                    has_execution_attention = has_execution_attention or bool(
+                        existing_uncertainty
                     )
                     changed = connection.execute(
                         """
@@ -725,9 +734,8 @@ class TaskRuntimeProjection:
                     continue
                 if status == "cancel_requested":
                     in_flight = True
-                    has_execution_attention = (
-                        has_execution_attention
-                        or bool(str(row["uncertainty_reason"] or "").strip())
+                    has_execution_attention = has_execution_attention or bool(
+                        str(row["uncertainty_reason"] or "").strip()
                     )
                     continue
                 raise StoreConflict(f"作业状态不能取消：{job_uuid}/{status}")
@@ -826,9 +834,7 @@ class TaskRuntimeProjection:
         task_uuid: str,
         *,
         reason: str = "任务所需物料暂不可用",
-        wait_resources_by_node: Mapping[
-            str, Sequence[Mapping[str, Any]]
-        ] | None = None,
+        wait_resources_by_node: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     ) -> dict[str, Any]:
         """持久化一次受阻的任务物料准入投影。
 
@@ -851,11 +857,11 @@ class TaskRuntimeProjection:
                 for job in aggregate["jobs"]
                 if job.get("executor_kind") == "material_source"
             ]
-            if not source_jobs or any(job["status"] != "pending" for job in source_jobs):
+            if not source_jobs or any(
+                job["status"] != "pending" for job in source_jobs
+            ):
                 raise StoreConflict(f"物料来源作业不能保持待处理：{task_uuid}")
-            source_node_uuids = {
-                str(job["workflow_node_uuid"]) for job in source_jobs
-            }
+            source_node_uuids = {str(job["workflow_node_uuid"]) for job in source_jobs}
             raw_resources_by_node = dict(wait_resources_by_node or {})
             unknown_node_uuids = set(raw_resources_by_node) - source_node_uuids
             if unknown_node_uuids:
@@ -873,9 +879,7 @@ class TaskRuntimeProjection:
                 [
                     resource
                     for job in source_jobs
-                    for resource in resources_by_node[
-                        str(job["workflow_node_uuid"])
-                    ]
+                    for resource in resources_by_node[str(job["workflow_node_uuid"])]
                 ]
             )
             wait_reason: dict[str, Any] = {
@@ -936,7 +940,9 @@ class TaskRuntimeProjection:
                 for job in aggregate["jobs"]
                 if job["status"] == "pending"
             }
-            if not wait_resources_by_job or set(wait_resources_by_job) - set(pending_jobs):
+            if not wait_resources_by_job or set(wait_resources_by_job) - set(
+                pending_jobs
+            ):
                 raise StoreConflict(f"数量库存等待作业集合无效：{task_uuid}")
             normalized_by_job = {
                 job_uuid: _normalize_wait_reason_resources(resources)
@@ -1027,9 +1033,7 @@ class TaskRuntimeProjection:
             if not isinstance(raw_binding, Mapping):
                 raise StoreConflict("物料来源绑定成员必须是对象")
             material_uuid = str(raw_binding.get("uuid") or "").strip()
-            template_uuid = str(
-                raw_binding.get("resource_template_uuid") or ""
-            ).strip()
+            template_uuid = str(raw_binding.get("resource_template_uuid") or "").strip()
             custody_policy = str(raw_binding.get("custody_policy") or "").strip()
             if not node_uuid or not material_uuid or not template_uuid:
                 raise StoreConflict("物料来源绑定身份不能为空")
@@ -1045,8 +1049,7 @@ class TaskRuntimeProjection:
             material_facts[str(node_uuid)] = {
                 "material_uuid": material_uuid,
                 "resource_template_uuid": template_uuid,
-                "site_uuid": str(raw_binding.get("site_uuid") or "").strip()
-                or None,
+                "site_uuid": str(raw_binding.get("site_uuid") or "").strip() or None,
                 "flow_role": str(
                     raw_binding.get("flow_role") or "primary_sample"
                 ).strip(),
@@ -1088,7 +1091,10 @@ class TaskRuntimeProjection:
                     field_name="return_info",
                 )
                 if row["status"] == "succeeded":
-                    if _decode_json_field(row["return_info"], fallback={}) != return_info:
+                    if (
+                        _decode_json_field(row["return_info"], fallback={})
+                        != return_info
+                    ):
                         raise StoreConflict(f"物料来源终态载荷冲突：{row['uuid']}")
                     continue
                 if row["status"] != "pending":
@@ -1270,7 +1276,10 @@ class TaskRuntimeProjection:
                 )
         claimed_targets: set[tuple[str, str]] = set()
         for raw_node in raw_nodes:
-            if not isinstance(raw_node, Mapping) or raw_node.get("kind") != "material_source":
+            if (
+                not isinstance(raw_node, Mapping)
+                or raw_node.get("kind") != "material_source"
+            ):
                 continue
             source_uuid = str(raw_node.get("uuid") or "")
             binding = bindings.get(source_uuid)
@@ -1294,7 +1303,10 @@ class TaskRuntimeProjection:
                     continue
                 claimed_targets.add(target)
                 target_row = jobs_by_node.get(target_uuid)
-                if target_row is None or target_row["executor_kind"] == "material_source":
+                if (
+                    target_row is None
+                    or target_row["executor_kind"] == "material_source"
+                ):
                     raise StoreConflict(f"物料来源绑定目标不是普通动作：{target_uuid}")
                 # 多个物料来源（MaterialSource）可以把不同参数绑定到同一个动作。
                 # ``jobs_by_node`` 来自事务开始时的快照；每次写入前重新读取目标，
@@ -1488,9 +1500,7 @@ class TaskRuntimeProjection:
 
             # ``projected_at`` 是同一事务内任务与作业共享的投影时间。
             projected_at = utc_now()
-            dispatch_command_uuid = str(
-                job_row["edge_command_uuid"] or uuid4()
-            )
+            dispatch_command_uuid = str(job_row["edge_command_uuid"] or uuid4())
             updated_jobs = connection.execute(
                 """
                 UPDATE workflow_node_job
@@ -1907,9 +1917,10 @@ class TaskRuntimeProjection:
         with self._store.transaction() as connection:
             job = self._job_row(connection, job_uuid)
             task_uuid = str(job["workflow_task_uuid"])
-            if job["status"] not in {"running", "failed"} or not job[
-                "uncertainty_reason"
-            ]:
+            if (
+                job["status"] not in {"running", "failed"}
+                or not job["uncertainty_reason"]
+            ):
                 raise StoreConflict("只有等待物理对账的运行中或失败作业可以人工处置")
             leases = list_execution_locks(connection, job_uuid=job_uuid)
             if not leases or any(lease["state"] != "uncertain" for lease in leases):
@@ -2090,21 +2101,18 @@ class TaskRuntimeProjection:
                     connection,
                     str(job["workflow_task_uuid"]),
                 )
-            if (
-                job["status"] not in {"failed", "canceled", "timeout"}
-                or job["uncertainty_reason"] not in {
-                    MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
-                    MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
-                }
-            ):
+            if job["status"] not in {"failed", "canceled", "timeout"} or job[
+                "uncertainty_reason"
+            ] not in {
+                MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
+                MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
+            }:
                 raise StoreConflict("作业不是等待库存物理对账的失败作业")
             expected = _decode_json_field(job["expected_change_set"], fallback={})
             if not isinstance(expected, Mapping) or not isinstance(control, Mapping):
                 raise StoreConflict("作业物理结算审计字段已损坏")
             stopped = control.get("physical_settlement")
-            if not isinstance(stopped, Mapping) or not stopped.get(
-                "execution_stopped"
-            ):
+            if not isinstance(stopped, Mapping) or not stopped.get("execution_stopped"):
                 raise StoreConflict("物料位置对账前缺少设备停止证明")
             change_matches = (
                 expected.get("kind") == "material_transfer"
@@ -2224,6 +2232,201 @@ class TaskRuntimeProjection:
             idempotency_key=idempotency_key,
         )
 
+    def project_local_control_evaluation(
+        self,
+        *,
+        job_uuid: str,
+        selected_branch: str | None,
+        skipped_job_uuids: Sequence[str],
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> dict[str, Any]:
+        """原子结算调度器本地条件作业及其未选分支。
+
+        本入口只接受尚未派发的 ``condition`` 作业和同任务 ``pending`` 作业，
+        不创建执行 Claim、Fence 或设备结算事实。
+        """
+
+        normalized_error = str(error_code or "").strip() or None
+        condition_status = "failed" if normalized_error else "succeeded"
+        condition_return = (
+            {} if normalized_error else {"selected_branch": selected_branch}
+        )
+        condition_errors = (
+            [
+                {
+                    "code": normalized_error,
+                    "message": str(error_message or "条件求值失败"),
+                }
+            ]
+            if normalized_error
+            else []
+        )
+        normalized_skipped = tuple(
+            dict.fromkeys(str(item) for item in skipped_job_uuids)
+        )
+        finished_at = utc_now()
+        with self._store.transaction() as connection:
+            condition_job = self._job_row(connection, job_uuid)
+            task_uuid = str(condition_job["workflow_task_uuid"])
+            task_row = self._task_row(connection, task_uuid)
+            if str(condition_job["executor_kind"]) != "condition":
+                raise StoreConflict(f"本地控制作业类型非法：{job_uuid}")
+            if task_row["status"] not in {"pending", "running", "failed", "succeeded"}:
+                raise StoreConflict(f"父任务状态不接受本地控制结果：{task_uuid}")
+
+            self._project_local_job_terminal(
+                connection,
+                task_uuid=task_uuid,
+                job_row=condition_job,
+                target_status=condition_status,
+                return_info=condition_return,
+                error_info=condition_errors,
+                now=finished_at,
+                require_condition=True,
+            )
+            skip_code = normalized_error or "branch_not_selected"
+            for skipped_uuid in normalized_skipped:
+                skipped_job = self._job_row(connection, skipped_uuid)
+                if str(skipped_job["workflow_task_uuid"]) != task_uuid:
+                    raise StoreConflict("条件节点不能跳过其他任务的作业")
+                self._project_local_job_terminal(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_row=skipped_job,
+                    target_status="skipped",
+                    return_info={},
+                    error_info=[{"code": skip_code}],
+                    now=finished_at,
+                    require_condition=False,
+                )
+
+            self._project_ready_output(
+                connection,
+                task_uuid=task_uuid,
+                now=finished_at,
+            )
+            job_rows = self._job_rows(connection, task_uuid)
+            statuses = [str(row["status"]) for row in job_rows]
+            target_task_status: str | None = None
+            if normalized_error:
+                target_task_status = "failed"
+            elif all(status in {"succeeded", "skipped"} for status in statuses):
+                target_task_status = "succeeded"
+            current_task_status = str(self._task_row(connection, task_uuid)["status"])
+            if (
+                target_task_status is not None
+                and current_task_status != target_task_status
+            ):
+                changed = connection.execute(
+                    """
+                    UPDATE workflow_task
+                    SET status = ?, finished_at = ?, update_time = ?
+                    WHERE uuid = ? AND status IN ('pending', 'running')
+                      AND deleted_at IS NULL
+                    """,
+                    (
+                        target_task_status,
+                        finished_at,
+                        finished_at,
+                        task_uuid,
+                    ),
+                ).rowcount
+                if changed != 1:
+                    raise StoreConflict(f"任务本地控制终态发生并发变化：{task_uuid}")
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    kind="task_transition",
+                    from_status=current_task_status,
+                    to_status=target_task_status,
+                    now=finished_at,
+                )
+                append_task_state_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    status=target_task_status,
+                    details={"finished_at": finished_at},
+                )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=finished_at)
+            return self._aggregate(connection, task_uuid)
+
+    @staticmethod
+    def _project_local_job_terminal(
+        connection: sqlite3.Connection,
+        *,
+        task_uuid: str,
+        job_row: sqlite3.Row,
+        target_status: str,
+        return_info: Mapping[str, Any],
+        error_info: Sequence[Any],
+        now: str,
+        require_condition: bool,
+    ) -> None:
+        """在同一事务幂等推进一个从未派发的本地作业。"""
+
+        job_uuid = str(job_row["uuid"])
+        current_status = str(job_row["status"])
+        if require_condition and str(job_row["executor_kind"]) != "condition":
+            raise StoreConflict(f"本地控制作业类型非法：{job_uuid}")
+        if current_status == target_status:
+            if _decode_json_field(job_row["return_info"], fallback={}) == dict(
+                return_info
+            ) and _decode_json_field(job_row["error_info"], fallback=[]) == list(
+                error_info
+            ):
+                return
+            raise StoreConflict(f"本地作业终态载荷冲突：{job_uuid}")
+        if current_status != "pending":
+            raise StoreConflict(f"已派发作业不能由本地控制结算：{job_uuid}")
+        # ``workflow_node_job_result`` 只冻结执行结果；分支跳过没有执行尝试，
+        # 因此只写标准 Job 状态与状态事件，不能伪造 Edge 结果证据。
+        if target_status != "skipped":
+            record_job_result(
+                connection,
+                job_row=job_row,
+                outcome=target_status,
+                return_info=dict(return_info),
+                error_info=list(error_info),
+            )
+        changed = connection.execute(
+            """
+            UPDATE workflow_node_job
+            SET status = ?, return_info = ?, error_info = ?,
+                wait_reason = '{}', finished_at = ?, update_time = ?
+            WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
+            """,
+            (
+                target_status,
+                _encode_json_field(return_info, field_name="return_info"),
+                _encode_json_field(error_info, field_name="error_info"),
+                now,
+                now,
+                job_uuid,
+            ),
+        ).rowcount
+        if changed != 1:
+            raise StoreConflict(f"本地作业状态发生并发变化：{job_uuid}")
+        append_runtime_event(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            kind="job_transition",
+            from_status="pending",
+            to_status=target_status,
+            now=now,
+        )
+        updated = connection.execute(
+            "SELECT * FROM workflow_node_job WHERE uuid = ?",
+            (job_uuid,),
+        ).fetchone()
+        append_job_state_event(
+            connection,
+            job_row=updated,
+            status=target_status,
+            details={"return_info": dict(return_info), "error_info": list(error_info)},
+        )
+
     def project_job_finished(
         self,
         *,
@@ -2282,8 +2485,7 @@ class TaskRuntimeProjection:
                 error_info=normalized_error_info,
             )
             no_send_proof = (
-                normalized_return_info.get("cancel_reason")
-                == "local_no_send_proof"
+                normalized_return_info.get("cancel_reason") == "local_no_send_proof"
             )
             expected_change = _decode_json_field(
                 job_row["expected_change_set"],
@@ -2384,9 +2586,7 @@ class TaskRuntimeProjection:
                         updated_control_data,
                         field_name="control_data",
                     ),
-                    (
-                        uncertainty_reason
-                    ),
+                    (uncertainty_reason),
                     finished_at,
                     finished_at,
                     job_uuid,
@@ -2438,8 +2638,7 @@ class TaskRuntimeProjection:
                 task_row["control_status"] == "waiting_reconciliation"
             )
             if was_waiting_reconciliation and not any(
-                bool(str(row["uncertainty_reason"] or "").strip())
-                for row in job_rows
+                bool(str(row["uncertainty_reason"] or "").strip()) for row in job_rows
             ):
                 connection.execute(
                     """
@@ -2478,7 +2677,7 @@ class TaskRuntimeProjection:
                     # 物理对账中的人工取消证明终结的是整次 Task；后续节点
                     # 不得继续派发，物理清理由 settled 阶段统一完成。
                     target_task_status = "canceled"
-                elif all(status == "succeeded" for status in job_statuses):
+                elif all(status in {"succeeded", "skipped"} for status in job_statuses):
                     target_task_status = "succeeded"
             if target_task_status is not None:
                 active_tenancies = active_task_device_tenancies(
@@ -2560,9 +2759,7 @@ class TaskRuntimeProjection:
                     from_status=str(current_job_status),
                     to_status=target_job_status,
                     data={
-                        "reason": (
-                            uncertainty_reason
-                        ),
+                        "reason": (uncertainty_reason),
                         "execution_stopped": True,
                     },
                     now=finished_at,

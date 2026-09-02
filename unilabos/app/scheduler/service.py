@@ -139,6 +139,7 @@ def _log_background_reconcile_failure(future: Future[Any]) -> None:
     except BaseException:
         logger.exception("[EdgeScheduler] 后台重排失败")
 
+
 _DEFAULT_MAX_IN_FLIGHT_JOBS = 100
 _DEFAULT_MAX_ACTIVE_TASKS = 500
 _DEFAULT_MAX_TASKS_PER_WORKFLOW = 100
@@ -210,7 +211,10 @@ class EdgeScheduler:
         workflow_state_listener: Callable[[str, str], None] | None = None,
         inventory: Any = None,
         station_resources: StationResourceInventory | None = None,
-        device_target_resolver: Callable[[Mapping[str, Any], str, set[str]], ResolvedDeviceTarget] | None = None,
+        device_target_resolver: Callable[
+            [Mapping[str, Any], str, set[str]], ResolvedDeviceTarget
+        ]
+        | None = None,
         estimator: DurationEstimator | None = None,
         timeline_capacity: int = 400,
         monitor: Any = None,
@@ -248,9 +252,7 @@ class EdgeScheduler:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{field} 必须是正整数")
         if max_tasks_per_workflow > max_active_tasks:
-            raise ValueError(
-                "max_tasks_per_workflow 不能大于 max_active_tasks"
-            )
+            raise ValueError("max_tasks_per_workflow 不能大于 max_active_tasks")
 
         self._orderer = orderer or StableLocalOrderer()
         self._dispatcher = dispatcher or RecordingDispatcher()
@@ -313,27 +315,22 @@ class EdgeScheduler:
         self._job_spans: dict[str, DetachedSpan] = {}
         # 物理派发只有一个持久准入权威。单一绑定防止普通观察器伪造 Permit，
         # 也避免多个数据库权威以未定义顺序分别取得部分资源。
-        self._dispatch_admission_authority: (
-            Callable[[dict[str, Any]], bool] | None
-        ) = None
+        self._dispatch_admission_authority: Callable[[dict[str, Any]], bool] | None = (
+            None
+        )
         self._job_execution_wait_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._job_dispatch_accepted_listeners: list[Callable[[str], None]] = []
-        self._job_dispatch_uncertain_listeners: list[
-            Callable[[str, str], None]
-        ] = []
+        self._job_dispatch_uncertain_listeners: list[Callable[[str, str], None]] = []
         self._job_cancel_accepted_listeners: list[Callable[[str], None]] = []
-        self._job_cancel_uncertain_listeners: list[
-            Callable[[str, str], None]
-        ] = []
+        self._job_cancel_uncertain_listeners: list[Callable[[str, str], None]] = []
         self._job_cancel_no_send_listeners: list[Callable[[str], None]] = []
-        self._job_feedback_listeners: list[
-            Callable[[str, dict[str, Any]], None]
-        ] = []
+        self._job_feedback_listeners: list[Callable[[str, dict[str, Any]], None]] = []
         self._job_finished_listeners: list[Callable[[str, bool, Any, str], None]] = []
         self._job_outcome_listeners: list[
             Callable[[str, CommittedJobOutcome], None]
         ] = []
         self._job_settled_listeners: list[Callable[[str, bool, Any, str], None]] = []
+        self._local_control_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._execution_process_restarted_listeners: list[
             Callable[[tuple[str, ...]], None]
         ] = []
@@ -414,9 +411,7 @@ class EdgeScheduler:
         except Exception:
             logger.exception("[EdgeScheduler] history.%s failed", method)
 
-    def set_workflow_state_listener(
-        self, listener: Callable[[str, str], None]
-    ) -> None:
+    def set_workflow_state_listener(self, listener: Callable[[str, str], None]) -> None:
         """替换工作流终态监听器；参数 ``listener`` 接收工作流身份和旧状态值。"""
 
         self._workflow_state_listener = listener
@@ -701,9 +696,7 @@ class EdgeScheduler:
                 run = self._workflows.get(job.workflow_id)
                 if run is not None:
                     run.mark_failed(job.node_id)
-            for listener in tuple(
-                self._execution_process_restarted_listeners
-            ):
+            for listener in tuple(self._execution_process_restarted_listeners):
                 listener(affected)
 
     def replay_persisted_edge_projections(
@@ -751,6 +744,24 @@ class EdgeScheduler:
 
         self._job_settled_listeners = [
             current for current in self._job_settled_listeners if current != listener
+        ]
+
+    def add_local_control_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """注册调度器本地条件结算监听器。"""
+
+        self._local_control_listeners.append(listener)
+
+    def remove_local_control_listener(
+        self,
+        listener: Callable[[dict[str, Any]], None],
+    ) -> None:
+        """幂等移除调度器本地条件结算监听器。"""
+
+        self._local_control_listeners = [
+            current for current in self._local_control_listeners if current != listener
         ]
 
     def _notify_job_pre_dispatch(self, dispatching: dict[str, Any]) -> bool:
@@ -882,6 +893,12 @@ class EdgeScheduler:
         for listener in tuple(self._job_settled_listeners):
             listener(job_id, success, ret_value, suc_type)
 
+    def _notify_local_control(self, evaluation: dict[str, Any]) -> None:
+        """在任何后继设备派发前同步提交本地控制结算事实。"""
+
+        for listener in tuple(self._local_control_listeners):
+            listener(deepcopy(evaluation))
+
     # ── 触发点 1：任务进来 ────────────────────────────────────
 
     def submit_workflow(self, spec: WorkflowSpec) -> dict[str, Any]:
@@ -907,12 +924,15 @@ class EdgeScheduler:
             # 先登记 span 也充当 submit 占位，避免并发同 ID 覆盖对方的追踪句柄。
             self._workflow_spans[spec.workflow_id] = workflow_trace
         try:
-            with workflow_trace.activate(), span(
-                "workflow.task.submit",
-                attributes={
-                    "workflow.uuid": spec.workflow_id,
-                    "workflow.task.uuid": spec.task_id,
-                },
+            with (
+                workflow_trace.activate(),
+                span(
+                    "workflow.task.submit",
+                    attributes={
+                        "workflow.uuid": spec.workflow_id,
+                        "workflow.task.uuid": spec.task_id,
+                    },
+                ),
             ):
                 result = self._submit_workflow(spec)
                 trace_context = getattr(workflow_trace, "trace_context", None)
@@ -1076,6 +1096,7 @@ class EdgeScheduler:
         spec: WorkflowSpec,
         completed_results: dict[str, Any],
         restored_jobs: Sequence[DispatchedJob] = (),
+        skipped_nodes: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         """从持久成功事实恢复一个未终态工作流（Workflow）。
 
@@ -1085,9 +1106,10 @@ class EdgeScheduler:
         已完成节点只恢复 DAG 状态，绝不重放设备动作。
         """
 
+        skipped_nodes = dict(skipped_nodes or {})
         completed_node_ids = set(completed_results)
         known_node_ids = {node.id for node in spec.nodes if not node.disabled}
-        unknown_node_ids = completed_node_ids - known_node_ids
+        unknown_node_ids = (completed_node_ids | set(skipped_nodes)) - known_node_ids
         if unknown_node_ids:
             raise ValueError(
                 f"workflow {spec.workflow_id} has unknown completed nodes: "
@@ -1122,13 +1144,13 @@ class EdgeScheduler:
                 for node in spec.nodes:
                     if node.id in completed_results:
                         run.mark_finished(node.id, completed_results[node.id])
+                    elif node.id in skipped_nodes:
+                        run.mark_skipped(node.id, reason=skipped_nodes[node.id])
                 nodes_by_id = {node.id: node for node in spec.nodes}
                 for restored_job in restored_jobs:
                     node = nodes_by_id.get(restored_job.node_id)
                     if node is None or not node.is_manual_confirm():
-                        raise ValueError(
-                            "只允许恢复尚未越过设备边界的人工确认作业"
-                        )
+                        raise ValueError("只允许恢复尚未越过设备边界的人工确认作业")
                     if restored_job.node_id in completed_results:
                         raise ValueError("已完成节点不能同时恢复为人工确认等待")
                     if restored_job.job_id in self._inflight:
@@ -1319,7 +1341,11 @@ class EdgeScheduler:
             # 完成投递，禁止出现“作业成功但库存仍未扣减”的公开事实。
             if success and job.workflow_id in self._material_workflows:
                 node = next(
-                    (candidate for candidate in run.spec.nodes if candidate.id == job.node_id),
+                    (
+                        candidate
+                        for candidate in run.spec.nodes
+                        if candidate.id == job.node_id
+                    ),
                     None,
                 )
                 if node is not None and node.material_requirements:
@@ -1514,14 +1540,18 @@ class EdgeScheduler:
             dispatched_result = {
                 "workflow_id": job.workflow_id,
                 "workflow_state": run.state.value,
-                "dispatched": ([] if complete_without_dispatch else [
-                    {
-                        "job_id": job_id,
-                        "workflow_id": job.workflow_id,
-                        "node_id": job.node_id,
-                        "device_action_key": job.device_action_key,
-                    }
-                ]),
+                "dispatched": (
+                    []
+                    if complete_without_dispatch
+                    else [
+                        {
+                            "job_id": job_id,
+                            "workflow_id": job.workflow_id,
+                            "node_id": job.node_id,
+                            "device_action_key": job.device_action_key,
+                        }
+                    ]
+                ),
             }
         if complete_without_dispatch:
             return self.on_job_finished(
@@ -1671,8 +1701,33 @@ class EdgeScheduler:
         for run in self._workflows.values():
             if run.state is not WorkflowState.RUNNING:
                 continue
+            while True:
+                evaluation = run.prepare_local_control()
+                if evaluation is None:
+                    break
+                control_node = run.node(str(evaluation["node_id"]))
+                event = {
+                    **evaluation,
+                    "workflow_id": run.spec.workflow_id,
+                    "job_id": control_node.job_id,
+                    "skipped_jobs": [
+                        {
+                            "node_id": node_id,
+                            "job_id": run.node(node_id).job_id,
+                        }
+                        for node_id in evaluation.get("skipped_node_ids", ())
+                    ],
+                }
+                self._notify_local_control(event)
+                run.commit_local_control(evaluation)
+                if run.state is not WorkflowState.RUNNING:
+                    break
+            if run.state is not WorkflowState.RUNNING:
+                continue
             weight = priority_weight(run.spec.priority)
             for node in run.ready_nodes():
+                if node.executor_kind == "condition":
+                    continue
                 step_target = self._step_targets.get(run.spec.workflow_id)
                 if step_target is not None and node.id != step_target:
                     continue
@@ -1761,9 +1816,7 @@ class EdgeScheduler:
                     resolved_args,
                     transfer_contract=transfer_contract,
                     site_uuids=resource_policy.target_site_uuids,
-                    unavailable_site_uuids=_claimed_site_uuids(
-                        held_resource_locks
-                    ),
+                    unavailable_site_uuids=_claimed_site_uuids(held_resource_locks),
                 )
                 lock_keys = self._resource_lock_keys(
                     task.node,
@@ -1783,9 +1836,7 @@ class EdgeScheduler:
                         resource_material_uuid=moved_material_uuid,
                         target=resolved_site,
                         executor_material_uuid=selected_device_material_uuid,
-                        gripper_site_role=transfer_contract[
-                            "gripper_site_role"
-                        ],
+                        gripper_site_role=transfer_contract["gripper_site_role"],
                         # S3/S10/S11 等被动库位归属于工站 Deck，不存在设备祖先；
                         # 仍由物料、来源/目标 Site、机械臂与夹爪锁完整保护。端点
                         # 能追溯到设备时解析器会额外返回并锁住设备，但夹爪角色
@@ -1842,7 +1893,10 @@ class EdgeScheduler:
                         )
                         for parameter in aliquot_contract["target_material_params"]
                     )
-                    if len(set(target_uuids)) != len(target_uuids) or source_uuid in target_uuids:
+                    if (
+                        len(set(target_uuids)) != len(target_uuids)
+                        or source_uuid in target_uuids
+                    ):
                         raise ExecutionPolicyError("分装来源与目标容器必须互异")
                     lock_keys.update(
                         material_lock_key(value)
@@ -1900,8 +1954,7 @@ class EdgeScheduler:
                     )
                     continue
                 logger.error(
-                    "[EdgeScheduler] 转运完整资源集解析失败 "
-                    "wf=%s node=%s code=%s: %s",
+                    "[EdgeScheduler] 转运完整资源集解析失败 wf=%s node=%s code=%s: %s",
                     task.workflow_id,
                     task.node.id,
                     error.code,
@@ -2072,15 +2125,18 @@ class EdgeScheduler:
             self._job_spans[job_id] = action_trace
             dispatch_intent_committed = False
             try:
-                with action_trace.activate(), span(
-                    "workflow.job.dispatch",
-                    attributes={
-                        "workflow.job.uuid": job_id,
-                        "workflow.uuid": task.workflow_id,
-                        "workflow.node.uuid": task.node.id,
-                        "device.name": selected_device_id,
-                        "action.name": task.node.action_name,
-                    },
+                with (
+                    action_trace.activate(),
+                    span(
+                        "workflow.job.dispatch",
+                        attributes={
+                            "workflow.job.uuid": job_id,
+                            "workflow.uuid": task.workflow_id,
+                            "workflow.node.uuid": task.node.id,
+                            "device.name": selected_device_id,
+                            "action.name": task.node.action_name,
+                        },
+                    ),
                 ):
                     # 标准任务/作业必须先提交派发意图，才能越过物理执行边界。
                     dispatching = {
@@ -2323,9 +2379,7 @@ class EdgeScheduler:
 
         device_id = str(getattr(node, "device_id", "") or "").strip()
         if device_id:
-            material_uuid = str(
-                getattr(node, "device_material_uuid", "") or ""
-            ).strip()
+            material_uuid = str(getattr(node, "device_material_uuid", "") or "").strip()
             if self._device_target_resolver is not None:
                 return self._device_target_resolver(
                     {
@@ -2377,9 +2431,7 @@ class EdgeScheduler:
             selector: Mapping[str, Any] = {
                 "mode": "fixed",
                 "local_device_id": device_id,
-                "material_uuid": str(
-                    planned_node.get("material_uuid") or ""
-                ).strip(),
+                "material_uuid": str(planned_node.get("material_uuid") or "").strip(),
             }
         else:
             raw_selector = planned_node.get("device_selector")
@@ -2430,20 +2482,10 @@ class EdgeScheduler:
         material_param = transfer_contract["material_param"]
         owner_param = transfer_contract["target_owner_param"]
         site_uuid = str(
-            (
-                resolved_args.get(site_uuid_param)
-                if site_uuid_param
-                else ""
-            )
-            or ""
+            (resolved_args.get(site_uuid_param) if site_uuid_param else "") or ""
         ).strip()
         site_name = str(
-            (
-                resolved_args.get(site_name_param)
-                if site_name_param
-                else ""
-            )
-            or ""
+            (resolved_args.get(site_name_param) if site_name_param else "") or ""
         ).strip()
         if not site_uuid and not site_name and not site_uuids:
             if transfer_contract["gripper_site_role"]:
@@ -3032,6 +3074,30 @@ class EdgeScheduler:
                 )
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
+        return True
+
+    def discard_workflow(self, workflow_id: str) -> bool:
+        """丢弃可证明从未越过设备派发边界的失败提交占位。"""
+
+        with self._lock:
+            if any(job.workflow_id == workflow_id for job in self._inflight.values()):
+                raise ValueError("已存在在途作业的工作流不能丢弃")
+            run = self._workflows.pop(workflow_id, None)
+            if run is None:
+                return False
+            self._step_targets.pop(workflow_id, None)
+            had_material_reservation = workflow_id in self._material_workflows
+            self._material_workflows.discard(workflow_id)
+            self._notified_workflows.discard(workflow_id)
+            workflow_trace = self._workflow_spans.pop(workflow_id, None)
+        if workflow_trace is not None:
+            workflow_trace.end()
+        if had_material_reservation:
+            self._safe_inventory_call(
+                "release_workflow",
+                workflow_id,
+                reason="workflow_discarded",
+            )
         return True
 
 

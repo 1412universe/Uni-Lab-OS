@@ -50,6 +50,7 @@ class NodeState(str, Enum):
     READY = "ready"  # 依赖已清零，等待排序/下发
     DISPATCHED = "dispatched"  # 已下发给设备执行（对应云端 job running）
     SUCCESS = "success"
+    SKIPPED = "skipped"
     FAILED = "failed"
     CANCELED = "canceled"
     TIMEOUT = "timeout"  # 词汇对齐云端 job 状态；Edge 调度器当前不主动产生
@@ -90,6 +91,8 @@ class WorkflowNode:
     """WorkflowNode 子集：Edge 执行一个设备动作所需的全部信息。"""
 
     id: str  # 节点 id（uuid 或云端 node_id 字符串化）
+    # Python 作者源码中的结果变量名；条件表达式只通过该稳定计划字段读前序结果。
+    result_name: str = ""
     # 已存在的工作流节点作业（WorkflowNodeJob）UUID；空值保持旧路径随机生成。
     job_id: str = ""
     device_id: str = ""  # 目标设备
@@ -286,6 +289,7 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
         raise TypeError("action_resource_contract 必须是对象")
     return WorkflowNode(
         id=str(data["id"]),
+        result_name=str(data.get("result_name") or ""),
         job_id=str(data.get("job_id", "") or ""),
         device_id=data.get("device_id", "") or "",
         device_material_uuid=str(data.get("device_material_uuid") or ""),

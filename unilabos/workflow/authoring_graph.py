@@ -13,6 +13,7 @@ from unilabos.workflow.applied_authoring_projection import (
 from unilabos.workflow.authoring_ast import (
     ActionDeclaration,
     CompositeDeclaration,
+    ConditionDeclaration,
     DeviceDeclaration,
     GroupDeclaration,
     WorkflowProgram,
@@ -102,6 +103,31 @@ def build_candidate_graph(
     )
     compatible_catalog_replacements: set[str] = set()
     disabled_node_uuids = set(program.disabled_node_uuids)
+    for declaration in program.conditions:
+        try:
+            condition_catalog = catalog.require_action(
+                "unilabos.workflow.authoring:condition",
+                "condition",
+            )
+        except AuthoringCatalogError as error:
+            raise AuthoringGraphError(
+                "template_catalog_mismatch",
+                "工作流创作目录缺少唯一条件区域模板",
+            ) from error
+        action_catalog[declaration.node_uuid] = condition_catalog
+        nodes.append(
+            _condition_node(
+                declaration=declaration,
+                catalog_action=condition_catalog,
+                parent_uuid=parent_by_node.get(declaration.node_uuid),
+                source_order=source_order[declaration.node_uuid],
+                predecessor_node_uuids=[
+                    source_uuid
+                    for source_uuid, target_uuid in program.order_dependencies
+                    if target_uuid == declaration.node_uuid
+                ],
+            )
+        )
     for declaration in program.groups:
         try:
             group_catalog = catalog.require_action(
@@ -290,6 +316,10 @@ def build_candidate_graph(
     }
     for source_node_uuid, target_node_uuid in dict.fromkeys(program.order_dependencies):
         if (source_node_uuid, target_node_uuid) in data_pairs:
+            continue
+        if target_node_uuid in {item.node_uuid for item in program.conditions}:
+            # 条件没有数据 Handle；顺序前驱冻结在区域参数中，由执行计划投影为
+            # dependency_only 边，避免伪造动作连接点。
             continue
         source_handle = _require_handle(
             action_catalog[source_node_uuid],
@@ -949,6 +979,63 @@ def _group_node(
                 "presentation_group": True,
                 "parallel_scope": parallel_scope,
                 "parallel_order": declaration.parallel_order,
+            }
+        },
+    }
+
+
+def _condition_node(
+    *,
+    declaration: ConditionDeclaration,
+    catalog_action: AuthoringCatalogAction,
+    parent_uuid: str | None,
+    source_order: int,
+    predecessor_node_uuids: list[str],
+) -> dict[str, Any]:
+    """构造一个只由调度器执行的结构化条件区域节点。"""
+
+    template = catalog_action.template
+    return {
+        "uuid": declaration.node_uuid,
+        "workflow_node_template_uuid": str(template["uuid"]),
+        "parent_uuid": parent_uuid,
+        "material_uuid": None,
+        "name": declaration.title or template.get("display_name") or "条件",
+        "type": "condition",
+        "icon": template.get("icon"),
+        "pose": {},
+        "param": {
+            "predecessor_node_uuids": list(dict.fromkeys(predecessor_node_uuids)),
+            "bindings": {
+                name: deepcopy(binding) for name, binding in declaration.bindings
+            },
+            "branches": [
+                {
+                    "label": branch.label,
+                    "condition": deepcopy(branch.condition),
+                    "node_uuids": list(branch.node_uuids),
+                    "entry_node_uuids": list(branch.entry_node_uuids),
+                    "exit_node_uuids": list(branch.exit_node_uuids),
+                }
+                for branch in declaration.branches
+            ],
+        },
+        "footer": template.get("footer"),
+        "action_name": None,
+        "action_type": None,
+        "execution_policy": {},
+        "disabled": False,
+        "minimized": False,
+        "script": None,
+        "description": (
+            declaration.description
+            if declaration.description is not None
+            else template.get("description")
+        ),
+        "meta_data": {
+            "unilab": {
+                "authoring_source_order": source_order,
+                "control_region_kind": "condition",
             }
         },
     }

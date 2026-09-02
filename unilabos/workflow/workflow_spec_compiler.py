@@ -24,7 +24,11 @@ from unilabos.workflow._workflow_spec_snapshot import (
     mapping,
     mapping_sequence,
 )
-from unilabos.workflow.execution_plan import PLAN_VERSION
+from unilabos.workflow.execution_plan import (
+    CONTROL_PLAN_CAPABILITIES,
+    CONTROL_PLAN_VERSION,
+    PLAN_VERSION,
+)
 
 
 class WorkflowSpecCompiler:
@@ -62,11 +66,21 @@ class WorkflowSpecCompiler:
             "task_snapshot.execution_plan",
         )
         version = plan.get("version")
-        if isinstance(version, bool) or version != PLAN_VERSION:
+        if isinstance(version, bool) or version not in {
+            PLAN_VERSION,
+            CONTROL_PLAN_VERSION,
+        }:
             raise WorkflowSpecCompilationError(
                 "invalid_execution_plan",
-                f"执行计划版本必须是 {PLAN_VERSION}",
+                f"执行计划版本必须是 {PLAN_VERSION} 或 {CONTROL_PLAN_VERSION}",
             )
+        if version == CONTROL_PLAN_VERSION:
+            capabilities = plan.get("capabilities")
+            if capabilities != list(CONTROL_PLAN_CAPABILITIES):
+                raise WorkflowSpecCompilationError(
+                    "unsupported_execution_plan_capability",
+                    "控制执行计划能力声明不完整",
+                )
         raw_nodes = mapping_sequence(
             plan.get("nodes"),
             "invalid_execution_plan",
@@ -99,6 +113,14 @@ class WorkflowSpecCompiler:
             ordered_node_uuids=ordered_node_uuids,
             nodes=nodes,
             jobs_by_node=jobs_by_node,
+            task_input=(
+                task.get("input")
+                if isinstance(task.get("input"), Mapping)
+                else task.get("normalized_input")
+                if isinstance(task.get("normalized_input"), Mapping)
+                else {}
+            ),
+            control_enabled=version == CONTROL_PLAN_VERSION,
         )
         active_node_uuids = {node.id for node in compiled_nodes}
         # ``coordinator_node_uuids`` 在执行计划中保留图身份，但不会进入旧调度器。
@@ -163,6 +185,8 @@ class WorkflowSpecCompiler:
         ordered_node_uuids: Sequence[str],
         nodes: Mapping[str, Mapping[str, Any]],
         jobs_by_node: Mapping[str, Mapping[str, Any]],
+        task_input: Mapping[str, Any],
+        control_enabled: bool,
     ) -> list[WorkflowNode]:
         """编译执行计划中的设备动作节点。
 
@@ -190,13 +214,96 @@ class WorkflowSpecCompiler:
                         f"协调器作业执行种类非法：{node_uuid}",
                     )
                 continue
+            if kind == "condition":
+                if not control_enabled:
+                    raise WorkflowSpecCompilationError(
+                        "unsupported_executor_kind",
+                        f"版本 1 执行计划不支持条件作业：{node_uuid}",
+                    )
+                if str(job.get("executor_kind") or "") != "condition":
+                    raise WorkflowSpecCompilationError(
+                        "unsupported_executor_kind",
+                        f"条件作业执行种类非法：{node_uuid}",
+                    )
+                job_uuid = canonical_uuid(
+                    job.get("uuid"),
+                    "invalid_job_identity",
+                    f"jobs[{node_uuid}].uuid",
+                )
+                planned_param = node.get("control_region")
+                public_param = node.get("param")
+                job_param = job.get("param", {})
+                if (
+                    not isinstance(planned_param, Mapping)
+                    or not isinstance(public_param, Mapping)
+                    or dict(public_param) != dict(planned_param)
+                    or not isinstance(job_param, Mapping)
+                ):
+                    raise WorkflowSpecCompilationError(
+                        "invalid_execution_plan",
+                        f"条件区域冻结参数不一致：{node_uuid}",
+                    )
+                # 分支拓扑和表达式只读冻结的 control_region；Job.param 不能覆盖
+                # 控制结构，否则会与已经冻结的 dependency_only 边分叉。
+                condition_param = deepcopy(dict(planned_param))
+                variables = condition_param.get("variables", {})
+                bindings = condition_param.get("bindings")
+                if not isinstance(variables, Mapping):
+                    raise WorkflowSpecCompilationError(
+                        "invalid_execution_plan",
+                        f"条件变量必须是对象：{node_uuid}",
+                    )
+                expression_names = self._condition_variable_names(condition_param)
+                if (
+                    not isinstance(bindings, Mapping)
+                    or set(bindings) != expression_names
+                ):
+                    raise WorkflowSpecCompilationError(
+                        "invalid_execution_plan",
+                        f"条件变量与绑定不一致：{node_uuid}",
+                    )
+                condition_variables: dict[str, Any] = {}
+                for name, binding in bindings.items():
+                    if not isinstance(binding, Mapping):
+                        raise WorkflowSpecCompilationError(
+                            "invalid_execution_plan",
+                            f"条件变量绑定必须是对象：{node_uuid}",
+                        )
+                    binding_kind = binding.get("kind")
+                    if binding_kind == "workflow_input":
+                        parameter = str(binding.get("parameter") or "")
+                        if parameter in task_input:
+                            condition_variables[str(name)] = deepcopy(
+                                task_input[parameter]
+                            )
+                    elif binding_kind != "node_result":
+                        raise WorkflowSpecCompilationError(
+                            "invalid_execution_plan",
+                            f"条件变量绑定类型无效：{node_uuid}",
+                        )
+                condition_param["variables"] = condition_variables
+                compiled.append(
+                    WorkflowNode(
+                        id=node_uuid,
+                        result_name=str(node.get("result_name") or ""),
+                        job_id=job_uuid,
+                        device_id="scheduler-control",
+                        action_name="evaluate_condition",
+                        action_type="condition",
+                        param=condition_param,
+                        executor_kind="condition",
+                        node_type="condition",
+                    )
+                )
+                continue
             if kind not in {"device_action", "material_transfer", "manual_confirm"}:
                 raise WorkflowSpecCompilationError(
                     "unsupported_executor_kind", f"旧调度器不支持执行种类：{kind}"
                 )
-            if kind == "material_transfer" and str(
-                job.get("executor_kind") or ""
-            ) != "material_transfer":
+            if (
+                kind == "material_transfer"
+                and str(job.get("executor_kind") or "") != "material_transfer"
+            ):
                 raise WorkflowSpecCompilationError(
                     "unsupported_executor_kind",
                     f"物料转移作业执行种类非法：{node_uuid}",
@@ -213,14 +320,19 @@ class WorkflowSpecCompiler:
                     f"动态设备选择器必须是对象：{node_uuid}",
                 )
             device_selector = deepcopy(dict(raw_device_selector))
-            dispatches_device_action = kind in {
-                "device_action",
-                "material_transfer",
-            } or continues_device_action
+            dispatches_device_action = (
+                kind
+                in {
+                    "device_action",
+                    "material_transfer",
+                }
+                or continues_device_action
+            )
             if dispatches_device_action:
                 if not device_id and not device_selector:
                     raise WorkflowSpecCompilationError(
-                        "invalid_executor_binding", f"设备动作缺少执行器选择：{node_uuid}"
+                        "invalid_executor_binding",
+                        f"设备动作缺少执行器选择：{node_uuid}",
                     )
             else:
                 device_id = "manual-confirmation"
@@ -253,6 +365,7 @@ class WorkflowSpecCompiler:
             compiled.append(
                 WorkflowNode(
                     id=node_uuid,
+                    result_name=str(node.get("result_name") or ""),
                     job_id=job_uuid,
                     device_id=device_id,
                     device_material_uuid=str(node.get("material_uuid") or "").strip(),
@@ -266,7 +379,9 @@ class WorkflowSpecCompiler:
                     action_resource_contract=deepcopy(
                         dict(node.get("action_resource_contract") or {})
                     ),
-                    node_type=("manual_confirm" if kind == "manual_confirm" else "ILab"),
+                    node_type=(
+                        "manual_confirm" if kind == "manual_confirm" else "ILab"
+                    ),
                     manual_continues_device_action=continues_device_action,
                     disabled=False,
                     always_free=bool(node.get("always_free", False)),
@@ -274,6 +389,26 @@ class WorkflowSpecCompiler:
                 )
             )
         return compiled
+
+    @staticmethod
+    def _condition_variable_names(param: Mapping[str, Any]) -> set[str]:
+        """收集条件分支表达式中所有结构化变量名。"""
+
+        result: set[str] = set()
+
+        def visit(value: Any) -> None:
+            if isinstance(value, Mapping):
+                if set(value) == {"var"} and isinstance(value.get("var"), str):
+                    result.add(str(value["var"]))
+                    return
+                for child in value.values():
+                    visit(child)
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                for child in value:
+                    visit(child)
+
+        visit(param.get("branches"))
+        return result
 
     @staticmethod
     def _material_requirements(
