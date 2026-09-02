@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertCircle,
@@ -22,7 +22,7 @@ import {
   Send,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
-import { createWorkflowTask, loadWorkflowGraph, loadWorkflowPreflight } from '../lib/edgeClient'
+import { createWorkflowTask, importWorkflowJson, importWorkflowPython, loadWorkflowGraph, loadWorkflowPreflight } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
@@ -99,6 +99,8 @@ export function WorkflowsPage({
   const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
+  const pythonImportRef = useRef<HTMLInputElement>(null)
+  const jsonImportRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
 
   useEffect(() => {
@@ -175,6 +177,16 @@ export function WorkflowsPage({
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
+
+  async function importFile(file: File, kind: 'python' | 'json') {
+    try {
+      const imported = kind === 'python' ? await importWorkflowPython(file) : await importWorkflowJson(file, 'normal')
+      onNotify(`已导入工作流“${imported.name}”（${imported.uuid}）`)
+      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
+    } catch (error) {
+      onNotify(`导入失败：${error instanceof Error ? error.message : '未知错误'}`)
+    }
+  }
   const preflightTone: ReadinessTone = preflightQuery.isFetching
     ? 'loading'
     : preflightQuery.isError
@@ -231,7 +243,10 @@ export function WorkflowsPage({
         description="管理 Edge 已加载定义、发布修订、运行合同和工作流节点拓扑。"
         actions={
           <>
-            <Button icon={<FileInput size={16} />} onClick={() => onNotify('Python 导入将调用工作流作者接口，当前保持只读')}>导入 Python</Button>
+            <input ref={pythonImportRef} hidden type="file" accept=".py,text/x-python" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file, 'python') }} />
+            <input ref={jsonImportRef} hidden type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file, 'json') }} />
+            <Button icon={<FileInput size={16} />} disabled={!connected} onClick={() => pythonImportRef.current?.click()}>导入 Python</Button>
+            <Button icon={<FileJson size={16} />} disabled={!connected} onClick={() => jsonImportRef.current?.click()}>导入 JSON</Button>
             <Button tone="primary" icon={<Plus size={17} />} onClick={() => onNotify('新建工作流将在作者工作台中开放')}>新建工作流</Button>
           </>
         }

@@ -749,7 +749,7 @@ export async function updateExperimentOperation(payload: {
   name: string
   description: string
   categoryUuid?: string
-  actions: Array<{ nodeUuid: string; name: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  actions: Array<{ nodeUuid?: string; templateUuid?: string; name: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
 }) {
   await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}`, {
     name: payload.name,
@@ -760,7 +760,7 @@ export async function updateExperimentOperation(payload: {
     meta_data: {},
   })
   const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`)
-  const edits = new Map(payload.actions.map((action) => [action.nodeUuid, action]))
+  const edits = new Map(payload.actions.filter((action) => action.nodeUuid).map((action) => [action.nodeUuid!, action]))
   const nodes = (Array.isArray(graph.nodes) ? graph.nodes : []).map((node: RawRecord) => {
     const edit = edits.get(String(node.uuid))
     if (!edit) return node
@@ -772,11 +772,33 @@ export async function updateExperimentOperation(payload: {
       meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: edit.inputBindings, executor_binding: { mode: 'fixed', device_id: edit.deviceId } } },
     }
   })
-  return writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`, {
+  await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`, {
     revision: Number(graph.workflow?.revision),
     nodes,
     edges: Array.isArray(graph.edges) ? graph.edges : [],
   })
+  const existing = nodes[nodes.length - 1]
+  let previousUuid = existing?.uuid ? String(existing.uuid) : ''
+  for (const [index, action] of payload.actions.filter((item) => !item.nodeUuid).entries()) {
+    if (!action.templateUuid) throw new Error(`新增动作“${action.name}”缺少模板身份`)
+    const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(action.templateUuid)}`)
+    const handles = Array.isArray(detail.handles) ? detail.handles : []
+    const created = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.workflowUuid)}/nodes`, {
+      workflow_node_template_uuid: action.templateUuid, material_uuid: action.materialUuid || undefined, name: action.name,
+      pose: { x: 120 + (nodes.length + index) * 220, y: 180 }, param: action.param || {}, execution_policy: {},
+      meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+    })
+    if (!created?.uuid) throw new Error(`新增动作“${action.name}”后端未返回节点身份`)
+    if (previousUuid) {
+      const source = nodes.find((node: RawRecord) => String(node.uuid) === previousUuid) || created
+      const sourceDetail = source === created ? detail : await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(String(source.workflow_node_template_uuid))}`)
+      const sourceHandle = (Array.isArray(sourceDetail.handles) ? sourceDetail.handles : []).find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'source')
+      const targetHandle = handles.find((handle: RawRecord) => handle.handle_key === 'ready' && handle.io_type === 'target')
+      if (sourceHandle?.uuid && targetHandle?.uuid) await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.workflowUuid)}/edges`, { source_node_uuid: previousUuid, target_node_uuid: String(created.uuid), source_handle_uuid: sourceHandle.uuid, target_handle_uuid: targetHandle.uuid, description: '实验操作顺序依赖', meta_data: { unilab: { generated_by: 'operation-builder' } } })
+    }
+    previousUuid = String(created.uuid)
+  }
+  return { workflowUuid: payload.workflowUuid, status: 'source' as const }
 }
 
 export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; actions: Array<{ templateUuid: string; materialUuid?: string; deviceId: string; name: string; param?: Record<string, unknown>; inputBindings?: Record<string, { parameter: string }> }> }) {
@@ -1047,6 +1069,39 @@ export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSign
     nodes: Array.isArray(graph.nodes) ? graph.nodes : [],
     edges: Array.isArray(graph.edges) ? graph.edges : [],
   }
+}
+
+export async function importWorkflowJson(file: File, workflowType?: 'normal' | 'experiment_operation'): Promise<WorkflowDefinition> {
+  let payload: unknown
+  try {
+    payload = JSON.parse(await file.text())
+  } catch {
+    throw new Error('JSON 文件格式无效')
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('JSON 工作流必须是对象')
+  }
+  if (workflowType) (payload as RawRecord).workflow_type = workflowType
+  const imported = await postData<RawRecord>('/workflows/import', payload)
+  return adaptWorkflow({ ...(imported.workflow || {}), nodes: imported.nodes || [] })
+}
+
+export async function importWorkflowPython(file: File): Promise<WorkflowDefinition> {
+  const response = await fetch(`${EDGE_API_BASE}/local/workflows/import-python`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'text/x-python',
+      'X-Workflow-Filename': file.name,
+    },
+    body: await file.arrayBuffer(),
+  })
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    throw new Error(body?.error?.msg || body?.detail || `Python 导入失败（${response.status}）`)
+  }
+  const imported = unwrapEnvelope(body as EdgeEnvelope<RawRecord>)
+  return adaptWorkflow({ ...(imported.workflow || {}), nodes: imported.nodes || [] })
 }
 
 export async function loadWorkflowPreflight(
