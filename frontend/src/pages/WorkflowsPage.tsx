@@ -120,7 +120,7 @@ export function WorkflowsPage({
   }, [query, availableWorkflows])
 
   const selected = visibleWorkflows.find((workflow) => workflow.uuid === selectedId) || visibleWorkflows[0]
-  const selectedTaskSnapshotUuid = selected?.uuid === targetWorkflow?.workflowUuid
+  const selectedTaskSnapshotUuid = targetWorkflow && selected?.uuid === targetWorkflow.workflowUuid
     ? targetWorkflow.taskUuid
     : undefined
   const graphQuery = useQuery({
@@ -129,7 +129,8 @@ export function WorkflowsPage({
       ? loadWorkflowTaskGraph(selectedTaskSnapshotUuid, signal)
       : loadWorkflowGraph(selected!.uuid, signal),
     enabled: Boolean(selected),
-    retry: false,
+    retry: 2,
+    retryDelay: (attempt) => Math.min(300 * 2 ** attempt, 1_200),
   })
   const preflightQuery = useQuery({
     queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision],
@@ -353,6 +354,7 @@ export function WorkflowsPage({
                   edges={graphEdges}
                   loading={graphQuery.isFetching}
                   error={graphQuery.isError}
+                  onRetry={() => void graphQuery.refetch()}
                 />
               </div> : null}
               {workspaceView === 'contract' ? (

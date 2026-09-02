@@ -63,7 +63,7 @@ export interface WorkflowGraphNode {
   uuid: string
   name: string
   type: string
-  kind: 'group' | 'material_source' | 'action'
+  kind: 'group' | 'material_source' | 'condition' | 'repeat_until' | 'action'
   action_name?: string
   workflow_node_template_uuid?: string
   material_uuid?: string

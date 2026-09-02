@@ -11,6 +11,7 @@ import {
   lookupCompoundByCas,
   loadEdgeSnapshot,
   loadReagentHistory,
+  loadWorkflowGraph,
   loadWorkflowTaskGraph,
   unwrapEnvelope,
   updateExperimentOperation,
@@ -55,6 +56,26 @@ describe('loadWorkflowTaskGraph', () => {
       '/api/v1/workflow-tasks/task-1',
       expect.objectContaining({ headers: { Accept: 'application/json' } }),
     )
+  })
+})
+
+describe('loadWorkflowGraph', () => {
+  it('preserves scheduler control node kinds for the topology projection', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({
+      code: 0,
+      data: {
+        workflow: { uuid: 'wf-control', name: '控制流', revision: 1 },
+        nodes: [
+          { uuid: 'condition', name: '条件', type: 'condition', param: { branches: [] } },
+          { uuid: 'repeat', name: '重复直到', type: 'repeat_until', param: { node_uuids: [] } },
+        ],
+        edges: [],
+      },
+    })))
+
+    const graph = await loadWorkflowGraph('wf-control')
+
+    expect(graph.nodes.map((node) => node.kind)).toEqual(['condition', 'repeat_until'])
   })
 })
 

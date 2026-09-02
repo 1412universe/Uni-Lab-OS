@@ -246,7 +246,11 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
       ? 'group'
       : normalisedType === 'material_source'
         ? 'material_source'
-        : 'action',
+        : normalisedType === 'condition'
+          ? 'condition'
+          : normalisedType === 'repeat_until'
+            ? 'repeat_until'
+            : 'action',
     action_name: raw.action_name ? String(raw.action_name) : undefined,
     workflow_node_template_uuid: raw.workflow_node_template_uuid
       ? String(raw.workflow_node_template_uuid)

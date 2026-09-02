@@ -149,6 +149,12 @@ describe('MaterialsPage', () => {
 })
 
 describe('WorkflowsPage', () => {
+  it('renders the empty catalog without a task navigation target', () => {
+    expect(() => renderWithQuery(
+      <WorkflowsPage workflows={[]} materials={[]} connected={false} onNavigate={vi.fn()} onNotify={vi.fn()} />,
+    )).not.toThrow()
+  })
+
   it('selects the workflow targeted by a task navigation', async () => {
     const target = demoWorkflows[1]
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

@@ -1,4 +1,5 @@
 import type { WorkflowGraphEdge, WorkflowGraphNode } from '../types'
+import { isWorkflowRegionNode, workflowControlKind } from './workflowControlFlow'
 
 const NODE_WIDTH = 164
 const NODE_HEIGHT = 82
@@ -24,6 +25,7 @@ export interface PositionedWorkflowNode {
   rank: number
   band: number
   groupUuid?: string
+  groupUuids: string[]
 }
 
 export interface PositionedWorkflowGroup {
@@ -63,7 +65,40 @@ interface LayoutEntity {
 }
 
 function isGroup(node: WorkflowGraphNode) {
-  return node.kind === 'group'
+  return isWorkflowRegionNode(node)
+}
+
+function groupFrames(
+  groupNode: WorkflowGraphNode,
+  children: PositionedWorkflowNode[],
+): Array<{ x: number; y: number; width: number; height: number }> {
+  if (!workflowControlKind(groupNode)) {
+    return children.map((node) => ({
+      x: node.x - GROUP_FRAME_SIDE,
+      y: node.y - GROUP_FRAME_TOP,
+      width: node.width + GROUP_FRAME_SIDE * 2,
+      height: node.height + GROUP_FRAME_TOP + GROUP_FRAME_BOTTOM,
+    }))
+  }
+  const childrenByBand = new Map<number, PositionedWorkflowNode[]>()
+  children.forEach((child) => {
+    const values = childrenByBand.get(child.band) || []
+    values.push(child)
+    childrenByBand.set(child.band, values)
+  })
+  return [...childrenByBand.entries()].sort(([left], [right]) => left - right).map(([, values]) => {
+    const minX = Math.min(...values.map((node) => node.x))
+    const minY = Math.min(...values.map((node) => node.y))
+    const maxX = Math.max(...values.map((node) => node.x + node.width))
+    const maxY = Math.max(...values.map((node) => node.y + node.height))
+    const repeatBottom = workflowControlKind(groupNode) === 'repeat_until' ? 38 : 0
+    return {
+      x: minX - GROUP_FRAME_SIDE,
+      y: minY - GROUP_FRAME_TOP,
+      width: maxX - minX + GROUP_FRAME_SIDE * 2,
+      height: maxY - minY + GROUP_FRAME_TOP + GROUP_FRAME_BOTTOM + repeatBottom,
+    }
+  })
 }
 
 function nodeOrder(node: WorkflowGraphNode) {
@@ -227,22 +262,31 @@ export function layoutWorkflowGraph(
     })
   })
 
-  const positionedNodes: PositionedWorkflowNode[] = entities.map((entity) => ({
-    node: entity.node,
-    x: entity.x,
-    y: entity.y,
-    width: NODE_WIDTH,
-    height: NODE_HEIGHT,
-    rank: entity.rank,
-    band: entity.band,
-    groupUuid: entity.node.parentUuid && groupIds.has(entity.node.parentUuid)
-      ? entity.node.parentUuid
-      : undefined,
-  }))
+  const positionedNodes: PositionedWorkflowNode[] = entities.map((entity) => {
+    const groupUuids: string[] = []
+    const seen = new Set<string>()
+    let parentUuid = entity.node.parentUuid
+    while (parentUuid && groupIds.has(parentUuid) && !seen.has(parentUuid)) {
+      seen.add(parentUuid)
+      groupUuids.push(parentUuid)
+      parentUuid = nodesByUuid.get(parentUuid)?.parentUuid
+    }
+    return {
+      node: entity.node,
+      x: entity.x,
+      y: entity.y,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      rank: entity.rank,
+      band: entity.band,
+      groupUuid: groupUuids[0],
+      groupUuids,
+    }
+  })
 
   let emptyGroupIndex = 0
   const positionedGroups: PositionedWorkflowGroup[] = groupNodes.map((groupNode) => {
-    const children = positionedNodes.filter((node) => node.groupUuid === groupNode.uuid)
+    const children = positionedNodes.filter((node) => node.groupUuids.includes(groupNode.uuid))
     if (!children.length) {
       const visualSlot = emptyGroupIndex % ranksPerBand
       const emptyRow = Math.floor(emptyGroupIndex / ranksPerBand)
@@ -265,12 +309,7 @@ export function layoutWorkflowGraph(
       rank: Math.min(...children.map((node) => node.rank)),
       band: Math.min(...children.map((node) => node.band)),
       children,
-      frames: children.map((node) => ({
-        x: node.x - GROUP_FRAME_SIDE,
-        y: node.y - GROUP_FRAME_TOP,
-        width: node.width + GROUP_FRAME_SIDE * 2,
-        height: node.height + GROUP_FRAME_TOP + GROUP_FRAME_BOTTOM,
-      })),
+      frames: groupFrames(groupNode, children),
     }
   })
 
@@ -325,23 +364,15 @@ export function applyWorkflowNodeOffsets(
   const nodesByUuid = new Map(nodes.map((node) => [node.node.uuid, node]))
   const groups = layout.groups.map((group) => {
     const children = group.children.map((child) => nodesByUuid.get(child.node.uuid) || child)
+    const emptyGroupOffset = !children.length ? offsets[group.node.uuid] : undefined
     return {
       ...group,
       children,
-      frames: group.frames.map((frame, index) => {
-        const originalChild = group.children[index]
-        const movedChild = originalChild ? nodesByUuid.get(originalChild.node.uuid) : undefined
-        const emptyGroupOffset = !originalChild ? offsets[group.node.uuid] : undefined
-        return movedChild
-          ? {
-              ...frame,
-              x: frame.x + movedChild.x - originalChild.x,
-              y: frame.y + movedChild.y - originalChild.y,
-            }
-          : emptyGroupOffset
+      frames: children.length
+        ? groupFrames(group.node, children)
+        : group.frames.map((frame) => emptyGroupOffset
             ? { ...frame, x: frame.x + emptyGroupOffset.x, y: frame.y + emptyGroupOffset.y }
-            : frame
-      }),
+            : frame),
     }
   })
   const edges = layout.edges.map((positioned) => {
