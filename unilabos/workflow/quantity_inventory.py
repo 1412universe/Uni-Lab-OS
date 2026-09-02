@@ -200,12 +200,22 @@ class WorkflowQuantityInventory:
             str(job.get("workflow_node_uuid")): str(job.get("uuid"))
             for job in prepared.jobs
         }
+        planned_nodes = {
+            str(node.get("uuid"))
+            for node in prepared.execution_plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        }
         requirements = [
             dict(requirement)
             for requirement in graph.get("inventory_requirements", [])
             if isinstance(requirement, Mapping)
-            and str(requirement.get("consume_node_uuid")) in job_by_node
+            and str(requirement.get("consume_node_uuid")) in planned_nodes
         ]
+        if any(
+            str(requirement.get("consume_node_uuid")) not in job_by_node
+            for requirement in requirements
+        ):
+            raise StoreConflict("动态执行节点的数量型库存需求尚未支持逐轮分配")
         requirement_by_key = {
             str(requirement.get("requirement_key") or "").strip(): requirement
             for requirement in requirements

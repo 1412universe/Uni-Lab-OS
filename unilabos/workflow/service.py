@@ -1708,7 +1708,9 @@ class WorkflowService:
                     None,
                 )
                 active_nodes = {
-                    str(job.get("workflow_node_uuid")) for job in prepared.jobs
+                    str(node.get("uuid"))
+                    for node in prepared.execution_plan.get("nodes", [])
+                    if isinstance(node, Mapping)
                 }
                 active_requirements = [
                     requirement
@@ -3127,7 +3129,11 @@ class WorkflowService:
                     task_uuid=task_uuid,
                     bindings=normalized_inventory_bindings,
                 )
-            active_nodes = {str(job.get("workflow_node_uuid")) for job in prepared.jobs}
+            active_nodes = {
+                str(node.get("uuid"))
+                for node in prepared.execution_plan.get("nodes", [])
+                if isinstance(node, Mapping)
+            }
             has_active_requirements = any(
                 isinstance(requirement, Mapping)
                 and str(requirement.get("consume_node_uuid")) in active_nodes

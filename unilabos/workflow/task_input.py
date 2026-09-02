@@ -71,7 +71,7 @@ def prepare_task_input(
             supplied,
             resource_resolver=resource_resolver,
         )
-        _bind_active_plan(
+        _bind_plan_inputs(
             plan=plan,
             jobs=prepared_jobs,
             input_bindings=validated.input_bindings,
@@ -318,7 +318,7 @@ def _resolve_resource_slot_values(
     return value
 
 
-def _bind_active_plan(
+def _bind_plan_inputs(
     *,
     plan: dict[str, Any],
     jobs: list[dict[str, Any]],

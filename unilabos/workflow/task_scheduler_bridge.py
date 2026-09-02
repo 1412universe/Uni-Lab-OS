@@ -190,7 +190,11 @@ class TaskSchedulerBridge:
         有逻辑库存需求但未装配库存权威时关闭式失败；具体校验错误原样传播。
         """
 
-        active_nodes = {str(job.get("workflow_node_uuid")) for job in prepared.jobs}
+        active_nodes = {
+            str(node.get("uuid"))
+            for node in prepared.execution_plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        }
         active_requirements = [
             requirement
             for requirement in graph.get("inventory_requirements", [])
@@ -224,7 +228,11 @@ class TaskSchedulerBridge:
         本方法不创建任务、预留、台账或 Outbox。
         """
 
-        active_nodes = {str(job.get("workflow_node_uuid")) for job in prepared.jobs}
+        active_nodes = {
+            str(node.get("uuid"))
+            for node in prepared.execution_plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        }
         active_requirements = [
             requirement
             for requirement in graph.get("inventory_requirements", [])

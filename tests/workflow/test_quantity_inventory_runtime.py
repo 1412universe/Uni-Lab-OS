@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -213,6 +214,42 @@ def test_quantity_preflight_is_all_or_nothing_and_read_only(tmp_path: Path) -> N
                 bindings=bindings,
             )
         assert facts() == insufficient_before
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_quantity_preflight_rejects_lazy_job_requirements(tmp_path: Path) -> None:
+    """惰性节点不得绕过数量库存准入，未支持逐轮分配前须失败关闭。"""
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    lazy_prepared = replace(prepared, jobs=[])
+    bindings = [
+        {
+            "requirement_key": "ethanol",
+            "inventory_type": "reagent",
+            "inventory_uuid": reagent_uuid,
+            "reserved_quantity": 2,
+            "quantity_unit": "mL",
+        }
+    ]
+
+    try:
+        with pytest.raises(StoreConflict, match="尚未支持逐轮分配"):
+            coordinator.preflight_task_allocations(
+                graph=graph,
+                prepared=lazy_prepared,
+                bindings=bindings,
+            )
     finally:
         workflow_store.close()
         inventory_store.close()
