@@ -744,7 +744,7 @@ class TaskRuntimeProjection:
             cleanup_status = (
                 "requires_attention"
                 if has_execution_attention
-                else ("canceling" if in_flight else "settled")
+                else ("canceling" if in_flight else "required")
             )
             control_status = (
                 "waiting_reconciliation" if has_execution_attention else "active"

@@ -225,7 +225,7 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
     """派发前投影失败后本地运行不得在后续重排中偷偷执行。
 
     参数：``tmp_path`` 隔离工作流数据库。返回无；断言公共任务运行投影失败会
-    阻止设备命令、取消尚未越过派发边界的内存运行，并保留作业 ``pending``。
+    阻止设备命令、移除尚未越过派发边界的内存运行，并终止持久 Task/Job。
     """
 
     store = WorkflowStore(tmp_path / "workflow_history.db")
@@ -292,8 +292,10 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
         assert str(captured_error.value.__cause__) == "workflow database unavailable"
         assert dispatcher.dispatched == []
         assert scheduler.reschedule() == []
-        assert scheduler.workflow_snapshot(TASK_A_UUID)["state"] == "canceled"
-        assert store.get_job(JOB_A_UUID)["status"] == "pending"
+        assert scheduler.workflow_snapshot(TASK_A_UUID) is None
+        assert store.get_task(TASK_A_UUID)["status"] == "canceled"
+        assert store.get_task(TASK_A_UUID)["cleanup_status"] == "settled"
+        assert store.get_job(JOB_A_UUID)["status"] == "canceled"
     finally:
         bridge.close()
         store.close()

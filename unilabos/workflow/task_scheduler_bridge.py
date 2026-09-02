@@ -279,7 +279,7 @@ class TaskSchedulerBridge:
         if task_uuid in self._admission_pending_tasks:
             return self._aggregate(task_uuid)
         jobs: list[dict[str, Any]] = []
-        registered = False
+        admission_attempted = False
         try:
             persisted_task = self._store.get_task(task_uuid)
             # ``jobs`` 是创建事务已经确定的工作流节点作业（WorkflowNodeJob）集合。
@@ -302,6 +302,9 @@ class TaskSchedulerBridge:
             quantity_allocations = (
                 allocation_reader(task_uuid) if callable(allocation_reader) else ()
             )
+            # 从进入 reconcile 起就必须按“可能已经提交预留”处理异常：库存事务
+            # 返回后仍有结果校验和绑定投影，任一步失败都要幂等补偿。
+            admission_attempted = True
             material_resolution = self._material_sources.reconcile(
                 persisted_task,
                 jobs,
@@ -332,7 +335,6 @@ class TaskSchedulerBridge:
                     continue
                 self._task_by_job[job_uuid] = task_uuid
             self._submitted_tasks.add(task_uuid)
-            registered = True
             submission = self._scheduler.submit_workflow(spec)
             self._project_scheduler_trace_context(
                 task_uuid,
@@ -348,7 +350,7 @@ class TaskSchedulerBridge:
                 raise TaskSchedulerBridgeError(
                     "工作流任务派发结果不确定，已保留在途执行等待明确结果"
                 ) from error
-            if registered:
+            if admission_attempted:
                 self._cancel_failed_submission(task_uuid, jobs)
             if isinstance(error, TaskSchedulerBridgeError):
                 raise
@@ -449,6 +451,10 @@ class TaskSchedulerBridge:
             if job.get("status") == "cancel_requested":
                 self._schedule_cancel_timeout(job)
         if aggregate["task"]["status"] == "canceled":
+            aggregate = self._release_canceled_inventory(
+                aggregate,
+                reason="workflow_canceled",
+            )
             self._submitted_tasks.discard(normalized_uuid)
         return aggregate
 
@@ -2659,20 +2665,53 @@ class TaskSchedulerBridge:
         for job in jobs:
             self._task_by_job.pop(str(job.get("uuid") or ""), None)
         aggregate = self._projection.project_canceled(task_uuid)
+        try:
+            self._release_canceled_inventory(
+                aggregate,
+                reason="workflow_submission_failed",
+            )
+        except Exception:  # 清理重试由 required 状态恢复；不得覆盖提交原始异常
+            logger.exception("失败提交的任务库存预留暂未释放，等待启动恢复重试")
+
+    def _release_canceled_inventory(
+        self,
+        aggregate: dict[str, Any],
+        *,
+        reason: str,
+    ) -> dict[str, Any]:
+        """幂等释放能够证明安全终止的取消任务库存。
+
+        参数：``aggregate`` 是取消后的 Task/Job 聚合；``reason`` 是库存审计原因。
+        返回：释放后聚合。``required`` 先释放再提交 ``settled``；历史 ``settled``
+        仍重放幂等释放以修复旧版本提前结算留下的活动预留。``requires_attention``
+        等不能证明安全的状态保持全部占用，等待人工物理对账。
+        """
+
+        task = aggregate.get("task")
+        jobs = aggregate.get("jobs")
+        if not isinstance(task, dict) or not isinstance(jobs, list):
+            raise StoreConflict("取消任务聚合缺少 Task 或 Jobs")
+        if task.get("status") != "canceled":
+            raise StoreConflict("只能释放已取消任务的库存预留")
+        cleanup_status = str(task.get("cleanup_status") or "")
+        if cleanup_status not in {"required", "settled"}:
+            return aggregate
         if self._quantity_inventory is not None:
             self._quantity_inventory.release_task(
-                task_uuid,
-                reason="workflow_submission_failed",
+                str(task["uuid"]),
+                reason=reason,
             )
         if any(
             job.get("executor_kind") == "material_source"
-            for job in aggregate["jobs"]
+            for job in jobs
         ):
             self._material_sources.release_terminal_reservations(
-                task_uuid,
-                reason="workflow_submission_failed",
+                str(task["uuid"]),
+                reason=reason,
             )
-        self._projection.project_cleanup_settled(task_uuid)
+        if cleanup_status == "required":
+            return self._projection.project_cleanup_settled(str(task["uuid"]))
+        return aggregate
 
     def _crossed_dispatch_boundary(self, jobs: list[dict[str, Any]]) -> bool:
         """判断标准作业是否已经越过持久派发边界。
