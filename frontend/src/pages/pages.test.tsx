@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
+import styles from '../styles.css?inline'
 import { MaterialsPage } from './MaterialsPage'
 import { serialiseTaskInput, TasksPage } from './TasksPage'
 import { WorkflowsPage } from './WorkflowsPage'
@@ -418,6 +419,9 @@ describe('WorkflowsPage', () => {
 
 describe('TasksPage', () => {
   it('distinguishes successful, running, waiting, failed, and not-run nodes in the matrix', () => {
+    const style = document.createElement('style')
+    style.textContent = styles
+    document.head.appendChild(style)
     const statuses = ['succeeded', 'running', 'waiting', 'failed', 'pending'] as const
     const task = {
       ...demoTasks[0],
@@ -440,12 +444,20 @@ describe('TasksPage', () => {
       />,
     )
 
-    expect(screen.getByText('未运行')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /状态节点 succeeded，已完成/ })).toHaveClass('matrix-node-succeeded')
-    expect(screen.getByRole('button', { name: /状态节点 running，正在运行/ })).toHaveClass('matrix-node-running')
-    expect(screen.getByRole('button', { name: /状态节点 waiting，等待资源/ })).toHaveClass('matrix-node-waiting')
-    expect(screen.getByRole('button', { name: /状态节点 failed，失败/ })).toHaveClass('matrix-node-failed')
-    expect(screen.getByRole('button', { name: /状态节点 pending，待运行/ })).toHaveClass('matrix-node-pending')
+    const legend = screen.getByLabelText('节点状态颜色')
+    ;['运行成功', '正在运行', '等待运行', '运行失败', '未运行'].forEach((label) => {
+      expect(within(legend).getByText(label)).toBeInTheDocument()
+    })
+
+    const nodes = statuses.map((status) => {
+      const node = screen.getByRole('button', { name: new RegExp(`状态节点 ${status}，`) })
+      expect(node).toHaveClass(`matrix-node-${status}`)
+      return node
+    })
+    const backgroundColors = nodes.map((node) => getComputedStyle(node).backgroundColor)
+    expect(backgroundColors).not.toContain('rgba(0, 0, 0, 0)')
+    expect(new Set(backgroundColors).size).toBe(statuses.length)
+    style.remove()
   })
 
   it('renders one matrix row per task and lights every running task node', () => {
