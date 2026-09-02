@@ -7,6 +7,42 @@ on:
     branches: [main, dev]
 
 jobs:
+  scheduler-core-test:
+    name: 独立调度核心测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tests/scheduler_core/requirements.txt
+
+      - name: Install scheduler-core test dependencies
+        run: python -m pip install -r tests/scheduler_core/requirements.txt
+
+      - name: Run isolated scheduler behavior matrix
+        run: python -m pytest -q tests/scheduler_core
+
+      - name: Measure deterministic scheduler policy coverage
+        run: |
+          python -m pytest -q tests/scheduler_core \
+            -k "not fifty_tasks_with_eight_jobs" \
+            --cov=unilabos.app.scheduler.ordering \
+            --cov=unilabos.app.scheduler.resource_wait_policy \
+            --cov=unilabos.workflow.execution_wait_graph \
+            --cov-branch \
+            --cov-report=term \
+            --cov-report=json:scheduler-core-coverage.json
+          python scripts/check_scheduler_core_coverage.py \
+            scheduler-core-coverage.json \
+            --statements 85 \
+            --branches 75
+
   frontend-check:
     name: 前端测试与构建一致性
     runs-on: ubuntu-latest

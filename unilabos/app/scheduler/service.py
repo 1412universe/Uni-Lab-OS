@@ -222,6 +222,7 @@ class EdgeScheduler:
         max_in_flight_jobs: int = _DEFAULT_MAX_IN_FLIGHT_JOBS,
         max_active_tasks: int = _DEFAULT_MAX_ACTIVE_TASKS,
         max_tasks_per_workflow: int = _DEFAULT_MAX_TASKS_PER_WORKFLOW,
+        clock: Callable[[], float] = time.time,
     ):
         """装配本地执行态调度器（Scheduler）。
 
@@ -242,6 +243,7 @@ class EdgeScheduler:
             max_in_flight_jobs: 全局尚未收敛的在途作业上限。
             max_active_tasks: 全局运行中工作流任务上限。
             max_tasks_per_workflow: 同一工作流定义的运行任务上限。
+            clock: 调度时间来源；测试可注入手动时钟，生产默认使用系统时间。
         """
 
         for field, value in (
@@ -254,7 +256,8 @@ class EdgeScheduler:
         if max_tasks_per_workflow > max_active_tasks:
             raise ValueError("max_tasks_per_workflow 不能大于 max_active_tasks")
 
-        self._orderer = orderer or StableLocalOrderer()
+        self._clock = clock
+        self._orderer = orderer or StableLocalOrderer(clock=clock)
         self._dispatcher = dispatcher or RecordingDispatcher()
         self._lock = threading.RLock()
 
@@ -2398,6 +2401,7 @@ class EdgeScheduler:
                         workflow_id=task.workflow_id,
                         node_id=task.node.id,
                         device_action_key=action_key,
+                        dispatched_at=self._clock(),
                         device_id=selected_device_id,
                         device_material_uuid=selected_device_material_uuid,
                         action_name=task.node.action_name,
@@ -3048,7 +3052,7 @@ class EdgeScheduler:
         ret_value: Any = None,
     ) -> None:
         """job 完结（成功/失败/取消）时记录时间线并喂历史统计（须在锁内调用）。"""
-        ended_at = time.time()
+        ended_at = self._clock()
         actual_s = max(0.0, ended_at - job.dispatched_at)
         if not state:
             state = "success" if success else "failed"
@@ -3106,7 +3110,7 @@ class EdgeScheduler:
         泳道由前端按 device_id（或 device_action_key）分组；running 条目
         用 started_at + estimated_s 画预估终点，completed 条目画实际区间。
         """
-        now = time.time()
+        now = self._clock()
         cutoff = now - max(window_s, 0.0)
         with self._lock:
             running = [
@@ -3139,7 +3143,7 @@ class EdgeScheduler:
 
     def device_status(self) -> list[dict[str, Any]]:
         """设备占用视图（监控面板）：busy 来自 inflight，idle 来自时间线痕迹。"""
-        now = time.time()
+        now = self._clock()
         with self._lock:
             devices: dict[str, dict[str, Any]] = {}
             # 时间线里出现过的设备默认 idle（带最近一次动作）

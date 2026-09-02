@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -76,6 +76,8 @@ class TaskSchedulerBridge:
         cancel_complete_timeout_seconds: float = (
             _DEFAULT_CANCEL_COMPLETE_TIMEOUT_SECONDS
         ),
+        clock: Callable[[], datetime] | None = None,
+        timer_factory: Callable[..., Any] = threading.Timer,
     ) -> None:
         """装配唯一工作流任务调度桥（TaskSchedulerBridge）。
 
@@ -85,6 +87,8 @@ class TaskSchedulerBridge:
         受理与设备终态等待。返回无；初始化会只读恢复此前受阻的准入任务。异常：
         读取恢复事实或超时参数转换失败时原样传播；库存服务只能从
         ``scheduler.inventory_service`` 读取，不能另行注入。
+        ``clock`` 与 ``timer_factory`` 是时间边界；生产默认使用 UTC 系统时间和
+        ``threading.Timer``，隔离测试可注入手动推进实现而不真实等待。
         """
 
         # ``_store`` 是本桥唯一的工作流任务（WorkflowTask）持久事实来源。
@@ -106,10 +110,12 @@ class TaskSchedulerBridge:
             self._cancel_ack_timeout_seconds,
             float(cancel_complete_timeout_seconds),
         )
-        self._cancel_timers: dict[str, threading.Timer] = {}
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
+        self._timer_factory = timer_factory
+        self._cancel_timers: dict[str, Any] = {}
         self._cancel_timer_lock = threading.RLock()
         self._manual_confirmations = ManualConfirmationStore(store)
-        self._manual_timers: dict[str, threading.Timer] = {}
+        self._manual_timers: dict[str, Any] = {}
         self._manual_timer_lock = threading.RLock()
         # 关闭时要等待已进入的超时收敛回调完成，避免回调在
         # 外部关闭 SQLite 后继续投影终态。
@@ -431,7 +437,7 @@ class TaskSchedulerBridge:
             command_uuid or str(uuid4()),
             field="command_uuid",
         )
-        now = datetime.now(timezone.utc)
+        now = self._clock()
         ack_deadline = now + timedelta(seconds=self._cancel_ack_timeout_seconds)
         complete_deadline = now + timedelta(
             seconds=self._cancel_complete_timeout_seconds
@@ -1419,6 +1425,20 @@ class TaskSchedulerBridge:
         execution_locks = dispatching.get("execution_locks")
         if not isinstance(execution_locks, list):
             raise StoreConflict(f"派发作业缺少执行锁集合：{job_uuid}")
+        # 等待图是 WorkflowStore 的只读权威，不要求测试或扩展注入的生命周期
+        # Projection 同时实现诊断查询接口。
+        wait_graph = TaskRuntimeProjection(self._store).get_execution_wait_graph()
+        if wait_graph.get("deadlock_detected"):
+            self._projection.project_execution_lock_wait(
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                execution_locks=[],
+                wait_code="execution_deadlock_detected",
+                wait_message="检测到工站作业等待环，已冻结新的物理派发",
+                max_active_tasks=self._max_active_tasks,
+                max_tasks_per_workflow=self._max_tasks_per_workflow,
+            )
+            return False
         raw_candidates = dispatching.get("dispatch_candidates")
         dispatch_candidates: list[Mapping[str, Any]] = []
         if raw_candidates is not None:
@@ -1911,6 +1931,7 @@ class TaskSchedulerBridge:
         job = self._store.get_job(job_uuid)
         if job.get("status") in {"succeeded", "failed", "canceled", "timeout"}:
             return
+        self._transition_inventory_claim(job_uuid, target_state="uncertain")
         self._projection.project_execution_attention(job_uuid, reason=reason)
 
     def _on_job_cancel_no_send(self, job_uuid: str) -> None:
@@ -1983,9 +2004,9 @@ class TaskSchedulerBridge:
             return
         delay = max(
             0.0,
-            (deadline - datetime.now(timezone.utc)).total_seconds(),
+            (deadline - self._clock()).total_seconds(),
         )
-        timer = threading.Timer(
+        timer = self._timer_factory(
             delay,
             self._on_cancel_timeout,
             kwargs={
@@ -2030,6 +2051,7 @@ class TaskSchedulerBridge:
                 if accepted
                 else "local_cancel_acceptance_timeout"
             )
+            self._transition_inventory_claim(job_uuid, target_state="uncertain")
             self._projection.project_execution_attention(job_uuid, reason=reason)
         except Exception:
             logger.exception("本地取消超时检查失败：%s", job_uuid)
@@ -2052,9 +2074,9 @@ class TaskSchedulerBridge:
         deadline = self._parse_time(raw_deadline)
         delay = max(
             0.0,
-            (deadline - datetime.now(timezone.utc)).total_seconds(),
+            (deadline - self._clock()).total_seconds(),
         )
-        timer = threading.Timer(
+        timer = self._timer_factory(
             delay,
             self._on_manual_confirmation_timeout,
             kwargs={"job_uuid": job_uuid},
@@ -2080,7 +2102,7 @@ class TaskSchedulerBridge:
                 if confirmation.get("status") != "pending":
                     return
                 deadline = self._parse_time(confirmation.get("deadline_at"))
-                if deadline > datetime.now(timezone.utc):
+                if deadline > self._clock():
                     self._schedule_manual_confirmation_timeout(job_uuid)
                     return
                 self._scheduler.expire_manual_confirmation(job_uuid)
@@ -2360,6 +2382,7 @@ class TaskSchedulerBridge:
         if task_uuid is None:
             return
         if outcome.unknown_command_ids:
+            self._transition_inventory_claim(job_uuid, target_state="uncertain")
             self._projection.project_execution_attention(
                 job_uuid,
                 reason=(
@@ -2627,7 +2650,9 @@ class TaskSchedulerBridge:
     ) -> None:
         """把 Scheduler 根 span carrier 写入 Task，关闭观测时保持业务 no-op。"""
 
-        if not isinstance(trace_context, Mapping) or not trace_context:
+        if not isinstance(trace_context, Mapping) or not trace_context.get(
+            "traceparent"
+        ):
             return
         projector = getattr(self._projection, "project_trace_context", None)
         if not callable(projector):
@@ -2701,10 +2726,7 @@ class TaskSchedulerBridge:
                 str(task["uuid"]),
                 reason=reason,
             )
-        if any(
-            job.get("executor_kind") == "material_source"
-            for job in jobs
-        ):
+        if any(job.get("executor_kind") == "material_source" for job in jobs):
             self._material_sources.release_terminal_reservations(
                 str(task["uuid"]),
                 reason=reason,
