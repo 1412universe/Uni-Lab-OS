@@ -190,16 +190,12 @@ class TaskSchedulerBridge:
         有逻辑库存需求但未装配库存权威时关闭式失败；具体校验错误原样传播。
         """
 
-        active_nodes = {
-            str(node.get("uuid"))
-            for node in prepared.execution_plan.get("nodes", [])
-            if isinstance(node, Mapping)
-        }
         active_requirements = [
             requirement
             for requirement in graph.get("inventory_requirements", [])
             if isinstance(requirement, Mapping)
-            and str(requirement.get("consume_node_uuid")) in active_nodes
+            and str(requirement.get("consume_node_uuid"))
+            in prepared.planned_node_uuids
         ]
         if self._quantity_inventory is None:
             if active_requirements or bindings:
@@ -228,16 +224,12 @@ class TaskSchedulerBridge:
         本方法不创建任务、预留、台账或 Outbox。
         """
 
-        active_nodes = {
-            str(node.get("uuid"))
-            for node in prepared.execution_plan.get("nodes", [])
-            if isinstance(node, Mapping)
-        }
         active_requirements = [
             requirement
             for requirement in graph.get("inventory_requirements", [])
             if isinstance(requirement, Mapping)
-            and str(requirement.get("consume_node_uuid")) in active_nodes
+            and str(requirement.get("consume_node_uuid"))
+            in prepared.planned_node_uuids
         ]
         if self._quantity_inventory is None:
             if active_requirements or bindings:

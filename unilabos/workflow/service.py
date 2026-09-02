@@ -1707,16 +1707,12 @@ class WorkflowService:
                     "preflight_inventory_allocations",
                     None,
                 )
-                active_nodes = {
-                    str(node.get("uuid"))
-                    for node in prepared.execution_plan.get("nodes", [])
-                    if isinstance(node, Mapping)
-                }
                 active_requirements = [
                     requirement
                     for requirement in graph.get("inventory_requirements", [])
                     if isinstance(requirement, Mapping)
-                    and str(requirement.get("consume_node_uuid")) in active_nodes
+                    and str(requirement.get("consume_node_uuid"))
+                    in prepared.planned_node_uuids
                 ]
                 if not callable(preflight):
                     if active_requirements or normalized_bindings:
@@ -3129,14 +3125,10 @@ class WorkflowService:
                     task_uuid=task_uuid,
                     bindings=normalized_inventory_bindings,
                 )
-            active_nodes = {
-                str(node.get("uuid"))
-                for node in prepared.execution_plan.get("nodes", [])
-                if isinstance(node, Mapping)
-            }
             has_active_requirements = any(
                 isinstance(requirement, Mapping)
-                and str(requirement.get("consume_node_uuid")) in active_nodes
+                and str(requirement.get("consume_node_uuid"))
+                in prepared.planned_node_uuids
                 for requirement in graph.get("inventory_requirements", [])
             )
             if has_active_requirements or normalized_inventory_bindings:

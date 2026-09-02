@@ -38,6 +38,16 @@ class PreparedTaskInput:
     execution_plan: dict[str, Any]
     jobs: list[dict[str, Any]]
 
+    @property
+    def planned_node_uuids(self) -> frozenset[str]:
+        """返回本次冻结计划中的全部节点身份，包括惰性控制流后代。"""
+
+        return frozenset(
+            str(node.get("uuid"))
+            for node in self.execution_plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        )
+
 
 def prepare_task_input(
     *,

@@ -200,16 +200,12 @@ class WorkflowQuantityInventory:
             str(job.get("workflow_node_uuid")): str(job.get("uuid"))
             for job in prepared.jobs
         }
-        planned_nodes = {
-            str(node.get("uuid"))
-            for node in prepared.execution_plan.get("nodes", [])
-            if isinstance(node, Mapping)
-        }
         requirements = [
             dict(requirement)
             for requirement in graph.get("inventory_requirements", [])
             if isinstance(requirement, Mapping)
-            and str(requirement.get("consume_node_uuid")) in planned_nodes
+            and str(requirement.get("consume_node_uuid"))
+            in prepared.planned_node_uuids
         ]
         if any(
             str(requirement.get("consume_node_uuid")) not in job_by_node
