@@ -51,6 +51,13 @@ function initialRunInput(workflow?: WorkflowDefinition): Record<string, string> 
   }))
 }
 
+function serialisePreflightInput(fields: ContractField[], values: Record<string, string>) {
+  return serialiseTaskInput(
+    fields.map((field) => field.required ? { ...field, required: false } : field),
+    values,
+  )
+}
+
 function ReadinessIcon({ tone }: { tone: ReadinessTone }) {
   if (tone === 'loading') return <LoaderCircle className="spin" size={12} />
   if (tone === 'ready') return <Check size={12} />
@@ -133,8 +140,12 @@ export function WorkflowsPage({
     retryDelay: (attempt) => Math.min(300 * 2 ** attempt, 1_200),
   })
   const preflightQuery = useQuery({
-    queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision],
-    queryFn: ({ signal }) => loadWorkflowPreflight(selected!.uuid, signal),
+    queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision, runInput],
+    queryFn: ({ signal }) => loadWorkflowPreflight(
+      selected!.uuid,
+      serialisePreflightInput(selected!.inputContract, runInput),
+      signal,
+    ),
     enabled: false,
     retry: false,
     staleTime: 0,

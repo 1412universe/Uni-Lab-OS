@@ -195,7 +195,7 @@ describe('WorkflowsPage', () => {
   })
 
   it('keeps Preflight as a compact primary action and opens the real Edge report', async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/graph')) {
         return response({ code: 0, data: { workflow: demoWorkflows[0], nodes: [], edges: [] } })
@@ -242,6 +242,21 @@ describe('WorkflowsPage', () => {
     expect(await screen.findByText('运行前诊断')).toBeInTheDocument()
     expect(await screen.findByText('当前条件暂不可用')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '刷新 Preflight' })).toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/run-preflight'),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          run_mode: 'normal',
+          input: {
+            target_powder_mass_g: 1,
+            volume_pump_1: 10,
+            volume_pump_2: 10,
+            pipette_volume_raw: 5000,
+          },
+        }),
+      }),
+    )
   })
 
   it('switches between topology, contract and diagnostics workspaces', () => {

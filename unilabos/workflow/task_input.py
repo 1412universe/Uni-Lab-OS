@@ -286,7 +286,7 @@ def _resolve_resource_slot_values(
         material_uuid = validate_uuid(value["uuid"])
         try:
             material = resource_resolver(material_uuid)
-        except Exception as exc:  # noqa: BLE001 - 解析器错误统一关闭为任务输入失败
+        except Exception as exc:
             raise TaskInputError("工作流任务物料解析失败") from exc
         if not isinstance(material, Mapping):
             raise TaskInputError("工作流任务引用的物料不存在")
@@ -325,7 +325,7 @@ def _bind_active_plan(
     input_bindings: Mapping[str, Mapping[str, Mapping[str, str]]],
     resolved_input: Mapping[str, Any],
 ) -> None:
-    """把已解析输入绑定到活动计划节点与对应首次作业。
+    """把已解析输入绑定到计划节点与已存在的首次作业。
 
     参数：``plan``/``jobs`` 是独立可修改副本，``input_bindings`` 是公共校验器
     产出的节点绑定，``resolved_input`` 是规范值。返回：无，原地完成冻结绑定。
@@ -355,13 +355,27 @@ def _bind_active_plan(
         )
         if isinstance(selector, Mapping) and selector.get("group_key")
     }
+    carry_provider_by_handle = {
+        str(handle_uuid)
+        for node in plan_nodes.values()
+        for handle_uuid in (
+            node.get("carry_bindings")
+            if isinstance(node.get("carry_bindings"), Mapping)
+            else {}
+        )
+    }
     for handle_uuid, handle in plan_handles.items():
         if handle.get("io_type") != "target":
             continue
         node_uuid = str(handle.get("node_uuid") or "")
         node = plan_nodes.get(node_uuid)
+        if node is None:
+            raise TaskInputError("计划连接点未归属唯一活动作业")
         job = jobs_by_node.get(node_uuid)
-        if node is None or job is None:
+        if job is None and not _has_repeat_ancestor(
+            node_uuid=node_uuid,
+            plan_nodes=plan_nodes,
+        ):
             raise TaskInputError("计划连接点未归属唯一活动作业")
         template_handle_uuid = str(handle.get("template_handle_uuid") or "")
         binding = input_bindings.get(node_uuid, {}).get(template_handle_uuid)
@@ -379,9 +393,11 @@ def _bind_active_plan(
         if not data_key:
             raise TaskInputError("计划目标连接点缺少参数键")
         node_param = node.get("param")
-        job_param = job.get("param")
-        if not isinstance(node_param, dict) or not isinstance(job_param, dict):
-            raise TaskInputError("计划节点或作业参数不是对象")
+        if not isinstance(node_param, dict):
+            raise TaskInputError("计划节点参数不是对象")
+        job_param = job.get("param") if job is not None else None
+        if job is not None and not isinstance(job_param, dict):
+            raise TaskInputError("计划作业参数不是对象")
         incoming_edges = incoming.get(handle_uuid, [])
         static_provider = data_key in node_param and node_param[data_key] is not None
         # 固定 existing 物料来源（MaterialSource）在计划构建时把同一条物料边
@@ -401,6 +417,7 @@ def _bind_active_plan(
             + len(incoming_edges)
             + int(binding is not None)
             + int(handle_uuid in group_provider_by_handle)
+            + int(handle_uuid in carry_provider_by_handle)
         )
         if provider_count > 1:
             raise TaskInputError("计划目标输入存在多个提供者")
@@ -412,7 +429,31 @@ def _bind_active_plan(
         if parameter not in resolved_input:
             raise TaskInputError("计划输入绑定引用未解析参数")
         node_param[data_key] = clone_json(resolved_input[parameter])
-        job_param[data_key] = clone_json(resolved_input[parameter])
+        if job_param is not None:
+            job_param[data_key] = clone_json(resolved_input[parameter])
+
+
+def _has_repeat_ancestor(
+    *,
+    node_uuid: str,
+    plan_nodes: Mapping[str, Mapping[str, Any]],
+) -> bool:
+    """判断计划节点是否属于惰性物化的 RepeatUntil 区域。"""
+
+    visited = {node_uuid}
+    current = plan_nodes[node_uuid]
+    while current.get("parent_uuid") is not None:
+        parent_uuid = str(current.get("parent_uuid") or "")
+        if not parent_uuid or parent_uuid in visited:
+            raise TaskInputError("计划控制区域父子关系无效")
+        visited.add(parent_uuid)
+        parent = plan_nodes.get(parent_uuid)
+        if parent is None:
+            raise TaskInputError("计划控制区域父节点不存在")
+        if str(parent.get("kind") or "") == "repeat_until":
+            return True
+        current = parent
+    return False
 
 
 def _freeze_site_selections(
@@ -425,7 +466,7 @@ def _freeze_site_selections(
     """把节点库位选择声明解析成 Task 代际冻结的具体候选 UUID。
 
     参数：``plan`` 与 ``jobs`` 已完成工作流输入绑定；``resolver`` 是库存权威的
-    只读任务准入端口。返回：原位写入同一节点与 Job 的冻结执行策略。异常：
+    只读任务准入端口。返回：原位写入计划节点与已存在 Job 的冻结执行策略。异常：
     选择器、父资源或库存回执不完整时抛 ``TaskInputError``，调用方不得创建任务。
     """
 
@@ -444,12 +485,17 @@ def _freeze_site_selections(
         ):
             raise TaskInputError("计划库位选择器必须是对象列表")
         job = jobs_by_node.get(node_uuid)
-        if job is None:
+        if job is None and not _has_repeat_ancestor(
+            node_uuid=node_uuid,
+            plan_nodes=plan_nodes,
+        ):
             raise TaskInputError("计划库位选择器未归属唯一活动作业")
         node_param = node.get("param")
-        job_param = job.get("param")
-        if not isinstance(node_param, dict) or not isinstance(job_param, dict):
-            raise TaskInputError("计划库位选择器参数不是对象")
+        if not isinstance(node_param, dict):
+            raise TaskInputError("计划库位选择器节点参数不是对象")
+        job_param = job.get("param") if job is not None else None
+        if job is not None and not isinstance(job_param, dict):
+            raise TaskInputError("计划库位选择器作业参数不是对象")
         for raw_selector in raw_selectors:
             parameter = str(raw_selector.get("parameter") or "").strip()
             owner_parameter = str(raw_selector.get("owner_parameter") or "").strip()
@@ -505,7 +551,7 @@ def _freeze_site_selections(
             }
             try:
                 resolution = resolver(request)
-            except Exception as exc:  # noqa: BLE001 - 库存边界统一关闭为任务输入失败
+            except Exception as exc:
                 raise TaskInputError("工作流任务库位选择解析失败") from exc
             raw_site_uuids = resolution.get("site_uuids")
             if (
@@ -521,9 +567,11 @@ def _freeze_site_selections(
             if len(set(site_uuids)) != len(site_uuids):
                 raise TaskInputError("库位选择权威返回了重复 UUID")
             policy = node.get("execution_policy")
-            job_policy = job.get("execution_policy")
-            if not isinstance(policy, dict) or not isinstance(job_policy, dict):
-                raise TaskInputError("计划库位选择执行策略不是对象")
+            if not isinstance(policy, dict):
+                raise TaskInputError("计划库位选择节点执行策略不是对象")
+            job_policy = job.get("execution_policy") if job is not None else None
+            if job is not None and not isinstance(job_policy, dict):
+                raise TaskInputError("计划库位选择作业执行策略不是对象")
             existing = policy.get("target_site_group")
             if existing is not None and list(existing) != site_uuids:
                 raise TaskInputError("库位选择与既有执行策略冲突")
@@ -538,12 +586,14 @@ def _freeze_site_selections(
             }
             policy["target_site_group"] = site_uuids
             policy["target_site_selection"] = selection
-            job_policy["target_site_group"] = clone_json(site_uuids)
-            job_policy["target_site_selection"] = clone_json(selection)
+            if job_policy is not None:
+                job_policy["target_site_group"] = clone_json(site_uuids)
+                job_policy["target_site_selection"] = clone_json(selection)
             # 设备驱动只在派发时接收最终选中的规范库位名；Task 快照不把人类
             # 引用误当成物理动作参数，也避免与冻结候选组形成双选择器。
             node_param.pop(parameter, None)
-            job_param.pop(parameter, None)
+            if job_param is not None:
+                job_param.pop(parameter, None)
 
 
 def _incoming_edges(

@@ -126,7 +126,7 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-async function postData<T>(path: string, payload: unknown): Promise<T> {
+async function postData<T>(path: string, payload: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${EDGE_API_BASE}${path}`, {
     method: 'POST',
     headers: {
@@ -134,6 +134,7 @@ async function postData<T>(path: string, payload: unknown): Promise<T> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal,
   })
   const body = await response.json().catch(() => null)
   if (!response.ok) throw new Error(formatApiError(body, response.status))
@@ -1796,10 +1797,12 @@ export async function loadWorkflowTaskGraph(taskUuid: string, signal?: AbortSign
 
 export async function loadWorkflowPreflight(
   workflowUuid: string,
+  input: Record<string, unknown>,
   signal?: AbortSignal,
 ): Promise<RunPreflightReport> {
-  const report = await requestData<RawRecord>(
-    `/workflows/${encodeURIComponent(workflowUuid)}/run-preflight?run_mode=normal`,
+  const report = await postData<RawRecord>(
+    `/workflows/${encodeURIComponent(workflowUuid)}/run-preflight`,
+    { run_mode: 'normal', input },
     signal,
   )
   const summary = report.summary || {}

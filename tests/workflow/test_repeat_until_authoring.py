@@ -8,12 +8,6 @@ from typing import Any
 
 import pytest
 
-from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
-from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
-from unilabos.workflow.execution_plan import ExecutionPlanBuilder
-from unilabos.workflow.workflow_spec_compiler import WorkflowSpecCompiler
-from unilabos.workflow.store import StoreConflict, WorkflowStore
-from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
 from unilabos.app.scheduler.models import (
     Handle,
@@ -23,6 +17,13 @@ from unilabos.app.scheduler.models import (
     WorkflowSpec,
 )
 from unilabos.app.scheduler.service import EdgeScheduler
+from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
+from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
+from unilabos.workflow.execution_plan import ExecutionPlanBuilder
+from unilabos.workflow.store import StoreConflict, WorkflowStore
+from unilabos.workflow.task_input import TaskInputError, prepare_task_input
+from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
+from unilabos.workflow.workflow_spec_compiler import WorkflowSpecCompiler
 
 from .test_authoring_engine import WORKFLOW_UUID, _compile, _engine, _handle, _template
 from .test_qg01_group_parallel_authoring import _group_template
@@ -442,6 +443,131 @@ def test_repeat_plan_freezes_body_but_creates_no_body_jobs_eagerly() -> None:
     }
     assert (LOOP_NODE_UUID, MEASURE_NODE_UUID) in control_edges
     assert (LOOP_NODE_UUID, FINAL_NODE_UUID) in control_edges
+
+
+def test_task_input_binds_repeat_templates_without_eager_jobs() -> None:
+    """任务输入冻结到循环模板，但不得提前创建任何循环体 Job。"""
+
+    compiled = _compile(_repeat_engine(), _repeat_source())
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    plan, jobs = ExecutionPlanBuilder().build(
+        compiled.graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+    material_uuid = "70000000-0000-4000-8000-000000000031"
+    template_uuid = "71000000-0000-4000-8000-000000000031"
+
+    prepared = prepare_task_input(
+        graph=compiled.graph,
+        raw_input={
+            "sample": {"uuid": material_uuid},
+            "initial_dose": 1,
+        },
+        execution_plan=plan,
+        jobs=jobs,
+        resource_resolver=lambda resolved_uuid: {
+            "uuid": resolved_uuid,
+            "resource_template_uuid": template_uuid,
+        },
+    )
+
+    initial_job_nodes = {job["workflow_node_uuid"] for job in prepared.jobs}
+    assert {LOOP_NODE_UUID, FINAL_NODE_UUID} <= initial_job_nodes
+    assert {MEASURE_NODE_UUID, ADJUST_NODE_UUID}.isdisjoint(initial_job_nodes)
+    nodes = {node["uuid"]: node for node in prepared.execution_plan["nodes"]}
+    assert nodes[MEASURE_NODE_UUID]["param"]["sample"] == {"uuid": material_uuid}
+    assert nodes[ADJUST_NODE_UUID]["param"]["sample"] == {"uuid": material_uuid}
+
+    spec = WorkflowSpecCompiler().compile(
+        {
+            "uuid": "10000000-0000-4000-8000-000000000099",
+            "execution_plan": prepared.execution_plan,
+            "input": prepared.resolved_input,
+            "run_mode": "normal",
+        },
+        prepared.jobs,
+    )
+    region = spec.repeat_regions[LOOP_NODE_UUID]
+    repeat_nodes = {node.id: node for node in region.nodes}
+    assert repeat_nodes[MEASURE_NODE_UUID].param["sample"] == {"uuid": material_uuid}
+    assert repeat_nodes[ADJUST_NODE_UUID].param["sample"] == {"uuid": material_uuid}
+
+    with pytest.raises(TaskInputError, match="计划连接点未归属唯一活动作业"):
+        prepare_task_input(
+            graph=compiled.graph,
+            raw_input={
+                "sample": {"uuid": material_uuid},
+                "initial_dose": 1,
+            },
+            execution_plan=plan,
+            jobs=[job for job in jobs if job["workflow_node_uuid"] != FINAL_NODE_UUID],
+            resource_resolver=lambda resolved_uuid: {
+                "uuid": resolved_uuid,
+                "resource_template_uuid": template_uuid,
+            },
+        )
+
+
+def test_task_input_freezes_repeat_template_site_selection() -> None:
+    """循环体库位候选冻结到模板策略，并由后续轮次 Job 继承。"""
+
+    compiled = _compile(_repeat_engine(), _repeat_source())
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    plan, jobs = ExecutionPlanBuilder().build(
+        compiled.graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+    material_uuid = "70000000-0000-4000-8000-000000000032"
+    template_uuid = "71000000-0000-4000-8000-000000000032"
+    site_uuid = "72000000-0000-4000-8000-000000000032"
+    measure = next(node for node in plan["nodes"] if node["uuid"] == MEASURE_NODE_UUID)
+    measure["site_selectors"] = [
+        {
+            "parameter": "target_site",
+            "owner_parameter": "sample",
+            "group_key": "measurement_sites",
+        }
+    ]
+
+    prepared = prepare_task_input(
+        graph=compiled.graph,
+        raw_input={
+            "sample": {"uuid": material_uuid},
+            "initial_dose": 1,
+        },
+        execution_plan=plan,
+        jobs=jobs,
+        resource_resolver=lambda resolved_uuid: {
+            "uuid": resolved_uuid,
+            "resource_template_uuid": template_uuid,
+        },
+        site_selection_resolver=lambda request: {
+            "site_uuids": [site_uuid],
+            "fingerprint": f"{request['owner_material_uuid']}:measurement_sites",
+        },
+    )
+
+    prepared_measure = next(
+        node
+        for node in prepared.execution_plan["nodes"]
+        if node["uuid"] == MEASURE_NODE_UUID
+    )
+    assert prepared_measure["execution_policy"]["target_site_group"] == [site_uuid]
+    spec = WorkflowSpecCompiler().compile(
+        {
+            "uuid": "10000000-0000-4000-8000-000000000100",
+            "execution_plan": prepared.execution_plan,
+            "input": prepared.resolved_input,
+            "run_mode": "normal",
+        },
+        prepared.jobs,
+    )
+    repeat_nodes = {node.id: node for node in spec.repeat_regions[LOOP_NODE_UUID].nodes}
+    assert repeat_nodes[MEASURE_NODE_UUID].execution_policy["target_site_group"] == [
+        site_uuid
+    ]
 
 
 def test_scheduler_materializes_distinct_jobs_until_strict_condition_is_true() -> None:
