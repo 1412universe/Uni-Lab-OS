@@ -457,57 +457,30 @@ function canonicaliseMatrixValue(value: unknown): unknown {
   )
 }
 
-function withoutStorageTimes(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const semantic = { ...(value as RawRecord) }
-  delete semantic.create_time
-  delete semantic.update_time
-  delete semantic.deleted_at
-  return semantic
-}
-
-function matrixWorkflowSnapshot(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const snapshot = { ...(value as RawRecord) }
-  snapshot.workflow = withoutStorageTimes(snapshot.workflow)
-  ;[
-    'nodes',
-    'edges',
-    'inventory_requirements',
-    'node_templates',
-    'handle_templates',
-  ].forEach((key) => {
-    if (Array.isArray(snapshot[key])) {
-      snapshot[key] = snapshot[key].map(withoutStorageTimes)
-    }
-  })
-  delete snapshot.create_time
-  delete snapshot.update_time
-  delete snapshot.deleted_at
-  return snapshot
-}
-
 function matrixGroupKey(raw: RawRecord): string {
   if (!raw.workflow_snapshot || !raw.execution_plan) {
     return `task:${String(raw.uuid)}`
   }
-  const executionPlan = raw.execution_plan && typeof raw.execution_plan === 'object'
-    ? { ...raw.execution_plan }
-    : {}
-  if (Array.isArray(executionPlan.nodes)) {
-    executionPlan.nodes = executionPlan.nodes.map((node: RawRecord) => {
-      const definition = { ...node }
-      delete definition.param
-      return definition
-    })
-  }
+  const plan = raw.execution_plan as RawRecord
+  const nodes = Array.isArray(plan.nodes) ? plan.nodes.map((node: RawRecord) => ({
+    uuid: node.uuid,
+    name: node.name,
+    actionName: node.action_name,
+    actionType: node.action_type,
+    deviceId: node.device_id,
+    topologicalIndex: node.topological_index,
+    disabled: Boolean(node.disabled),
+  })) : []
+  const edges = Array.isArray(plan.edges) ? plan.edges.map((edge: RawRecord) => ({
+    sourceNodeUuid: edge.source_node_uuid,
+    targetNodeUuid: edge.target_node_uuid,
+  })) : []
   return JSON.stringify(canonicaliseMatrixValue({
     executionKind: raw.execution_kind,
-    revisionFingerprint: raw.revision_fingerprint ?? null,
     workflowUuid: raw.workflow_uuid,
     workflowRevision: raw.workflow_snapshot?.workflow?.revision,
-    workflowSnapshot: matrixWorkflowSnapshot(raw.workflow_snapshot),
-    executionPlan,
+    nodes,
+    edges,
     runMode: raw.run_mode,
     targetNodeUuid: raw.target_node_uuid,
   }))
@@ -602,18 +575,72 @@ function collectTaskMaterialUuids(
   return [...materialUuids]
 }
 
+const SIGNOZ_TRACE_QUERY_NAME = 'A'
+
+function schedulerTraceSearch(taskUuid: string) {
+  const query = {
+    queryType: 'builder',
+    builder: {
+      queryData: [{
+        dataSource: 'traces',
+        queryName: SIGNOZ_TRACE_QUERY_NAME,
+        aggregateAttribute: { id: '----', dataType: '', key: '', type: '' },
+        timeAggregation: 'rate',
+        spaceAggregation: 'sum',
+        filter: { expression: '' },
+        aggregations: [{ expression: 'count() ' }],
+        functions: [],
+        filters: {
+          items: [{
+            id: 'workflow-task-uuid',
+            key: { key: 'workflow.task.uuid', dataType: 'string', type: 'tag' },
+            op: '=',
+            value: taskUuid,
+          }],
+          op: 'AND',
+        },
+        expression: SIGNOZ_TRACE_QUERY_NAME,
+        disabled: false,
+        stepInterval: null,
+        having: [],
+        limit: null,
+        orderBy: [],
+        groupBy: [],
+        legend: '',
+        reduceTo: 'avg',
+      }],
+      queryFormulas: [],
+      queryTraceOperator: [],
+    },
+    promql: [{ name: SIGNOZ_TRACE_QUERY_NAME, query: '', legend: '', disabled: false }],
+    clickhouse_sql: [{ name: SIGNOZ_TRACE_QUERY_NAME, query: '', legend: '', disabled: false }],
+    id: 'unilabos-task-trace',
+    unit: '',
+  }
+  return encodeURIComponent(JSON.stringify(query))
+}
+
 function taskTraceReference(raw: RawRecord, traceUiUrl: string): WorkflowTask['trace'] {
   const traceId = typeof raw.trace_context?.trace_id === 'string'
     ? raw.trace_context.trace_id.toLowerCase()
     : ''
-  if (!/^[0-9a-f]{32}$/.test(traceId) || !traceUiUrl) return undefined
+  if (!traceUiUrl) return undefined
   try {
     const url = new URL(traceUiUrl)
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return undefined
-    url.pathname = `${url.pathname.replace(/\/$/, '')}/trace/${traceId}`
+    if (/^[0-9a-f]{32}$/.test(traceId)) {
+      url.pathname = `${url.pathname.replace(/\/$/, '')}/trace/${traceId}`
+      url.search = ''
+      url.hash = ''
+      return { traceId, url: url.toString(), mode: 'trace' }
+    }
+    const taskUuid = String(raw.uuid || '').trim()
+    if (!taskUuid) return undefined
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/traces-explorer`
     url.search = ''
+    url.searchParams.set('compositeQuery', schedulerTraceSearch(taskUuid))
     url.hash = ''
-    return { traceId, url: url.toString() }
+    return { url: url.toString(), mode: 'search' }
   } catch {
     return undefined
   }
@@ -658,6 +685,16 @@ export function adaptTask(
       device: node.device_id ? String(node.device_id) : undefined,
       materialUuid: node.material_uuid ? String(node.material_uuid) : undefined,
       waitReason: presentWaitReason(job?.wait_reason, node, waitResourceLabels),
+      job: job ? {
+        uuid: String(job.uuid || ''),
+        attempt: job.attempt === undefined ? undefined : Number(job.attempt),
+        param: job.param,
+        feedbackData: job.feedback_data,
+        returnInfo: job.return_info,
+        errorInfo: Array.isArray(job.error_info) ? job.error_info : [],
+        startedAt: job.started_at ? String(job.started_at) : undefined,
+        finishedAt: job.finished_at ? String(job.finished_at) : undefined,
+      } : undefined,
     }
   })
   const incomingNodeUuids = new Map<string, string[]>()

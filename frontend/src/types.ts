@@ -93,6 +93,17 @@ export interface ContractField {
   schema: Record<string, unknown>
 }
 
+export interface TaskNodeJobEvidence {
+  uuid: string
+  attempt?: number
+  param: unknown
+  feedbackData: unknown
+  returnInfo: unknown
+  errorInfo: unknown[]
+  startedAt?: string
+  finishedAt?: string
+}
+
 export interface TaskNode {
   uuid: string
   name: string
@@ -102,6 +113,7 @@ export interface TaskNode {
   device?: string
   materialUuid?: string
   waitReason?: TaskNodeWaitReason
+  job?: TaskNodeJobEvidence
 }
 
 export interface WorkflowTask {
@@ -120,8 +132,9 @@ export interface WorkflowTask {
   runMode: string
   matrixGroupKey: string
   trace?: {
-    traceId: string
+    traceId?: string
     url: string
+    mode: 'trace' | 'search'
   }
 }
 

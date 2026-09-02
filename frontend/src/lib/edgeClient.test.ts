@@ -211,8 +211,104 @@ describe('Edge view model adapters', () => {
     expect(task.trace).toEqual({
       traceId: '0123456789abcdef0123456789abcdef',
       url: 'http://127.0.0.1:30081/trace/0123456789abcdef0123456789abcdef',
+      mode: 'trace',
     })
     expect(unsafe.trace).toBeUndefined()
+  })
+
+  it('links historical tasks without a persisted trace id to a task-filtered scheduler search', () => {
+    const task = adaptTask(
+      {
+        uuid: '21000000-0000-4000-8000-000000000001',
+        workflow_uuid: 'wf-1',
+        status: 'succeeded',
+        trace_context: {},
+        execution_plan: { nodes: [] },
+      },
+      [],
+      '测试工作流',
+      [],
+      undefined,
+      'http://127.0.0.1:30081',
+    )
+
+    expect(task.trace?.mode).toBe('search')
+    expect(task.trace?.traceId).toBeUndefined()
+    expect(task.trace?.url).toContain('/traces-explorer?compositeQuery=')
+    expect(decodeURIComponent(decodeURIComponent(new URL(task.trace!.url).searchParams.get('compositeQuery')!)))
+      .toContain('21000000-0000-4000-8000-000000000001')
+  })
+
+  it('projects authoritative job input, feedback, result, and errors onto each task node', () => {
+    const task = adaptTask(
+      {
+        uuid: 'task-node-evidence',
+        workflow_uuid: 'wf-1',
+        status: 'failed',
+        execution_plan: {
+          nodes: [{ uuid: 'node-1', name: 'S07 投粉', kind: 'device_action', topological_index: 0 }],
+        },
+      },
+      [{
+        uuid: 'job-1',
+        workflow_node_uuid: 'node-1',
+        status: 'failed',
+        attempt: 2,
+        param: { target_mass_g: 1.2 },
+        feedback_data: { current_mass_g: 0.8 },
+        return_info: { success: false, actual_mass_g: 0.81 },
+        error_info: [{ code: 'mass_out_of_range' }],
+        started_at: '2026-09-02T01:00:00Z',
+        finished_at: '2026-09-02T01:00:03Z',
+      }],
+    )
+
+    expect(task.nodes[0].job).toMatchObject({
+      uuid: 'job-1',
+      attempt: 2,
+      param: { target_mass_g: 1.2 },
+      feedbackData: { current_mass_g: 0.8 },
+      returnInfo: { success: false, actual_mass_g: 0.81 },
+      errorInfo: [{ code: 'mass_out_of_range' }],
+      startedAt: '2026-09-02T01:00:00Z',
+      finishedAt: '2026-09-02T01:00:03Z',
+    })
+  })
+
+  it('groups tasks from the same frozen node topology even when snapshot storage metadata differs', () => {
+    const base = {
+      workflow_uuid: 'wf-1',
+      status: 'running',
+      workflow_snapshot: {
+        workflow: { uuid: 'wf-1', revision: 2 },
+        nodes: [{ uuid: 'node-1', name: '投粉' }],
+      },
+      execution_plan: {
+        nodes: [{ uuid: 'node-1', name: '投粉', kind: 'device_action', action_name: 'dose', param: {} }],
+        edges: [],
+      },
+      run_mode: 'normal',
+    }
+    const first = adaptTask({
+      ...base,
+      uuid: 'task-1',
+      revision_fingerprint: 'old-storage-fingerprint',
+      workflow_snapshot: {
+        ...base.workflow_snapshot,
+        workflow: { ...base.workflow_snapshot.workflow, update_time: '2026-09-01T00:00:00Z' },
+      },
+    })
+    const second = adaptTask({
+      ...base,
+      uuid: 'task-2',
+      revision_fingerprint: 'new-storage-fingerprint',
+      workflow_snapshot: {
+        ...base.workflow_snapshot,
+        workflow: { ...base.workflow_snapshot.workflow, update_time: '2026-09-02T00:00:00Z' },
+      },
+    })
+
+    expect(first.matrixGroupKey).toBe(second.matrixGroupKey)
   })
 
   it('preserves skipped, cancellation, and intervention node states', () => {
@@ -490,6 +586,21 @@ describe('Edge view model adapters', () => {
       },
     })
     expect(task('task-a', 3).matrixGroupKey).toBe(reordered.matrixGroupKey)
+    const reclassified = adaptTask({
+      uuid: 'task-reclassified',
+      workflow_uuid: 'wf-1',
+      execution_kind: 'workflow',
+      status: 'running',
+      run_mode: 'normal',
+      workflow_snapshot: snapshot,
+      execution_plan: {
+        version: 1,
+        nodes: [{ uuid: 'node-1', kind: 'material_transfer', topological_index: 0 }],
+        edges: [],
+        handles: [],
+      },
+    })
+    expect(task('task-a', 3).matrixGroupKey).toBe(reclassified.matrixGroupKey)
     expect(task('task-a', 3).matrixGroupKey).not.toBe(task('task-b', 4).matrixGroupKey)
     expect(task('task-a', 3).matrixGroupKey).not.toBe(task('task-b', 3, { volume: 1 }, true).matrixGroupKey)
     expect(adaptTask({ uuid: 'task-missing-a' }).matrixGroupKey).not.toBe(

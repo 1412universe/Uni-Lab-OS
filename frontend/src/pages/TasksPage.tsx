@@ -45,10 +45,20 @@ function matchesFilter(task: WorkflowTask, filter: TaskFilter) {
   return task.status === 'succeeded'
 }
 
-function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
+function NodeMarker({
+  node,
+  index,
+  selected,
+  onSelect,
+}: {
+  node?: TaskNode
+  index: number
+  selected: boolean
+  onSelect: () => void
+}) {
   const status = node?.status || 'pending'
   const waitReason = node?.waitReason
-  const markerRef = useRef<HTMLDivElement>(null)
+  const markerRef = useRef<HTMLButtonElement>(null)
   const tooltipId = useId()
   const [tooltipVisible, setTooltipVisible] = useState(false)
   const [tooltipPosition, setTooltipPosition] = useState({ left: 0, top: 0, above: false })
@@ -82,13 +92,18 @@ function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
 
   const label = `${node?.name || `节点 ${index + 1}`}，${nodeStatusLabels[status]}`
   return (
-    <div
+    <button
+      type="button"
       ref={markerRef}
-      className={`matrix-node matrix-node-${status}`}
+      className={`matrix-node matrix-node-${status} ${selected ? 'matrix-node-selected' : ''}`}
       title={waitReason ? undefined : label}
-      tabIndex={waitReason ? 0 : undefined}
       aria-label={label}
+      aria-pressed={selected}
       aria-describedby={waitReason && tooltipVisible ? tooltipId : undefined}
+      onClick={(event) => {
+        event.stopPropagation()
+        onSelect()
+      }}
       onMouseEnter={showTooltip}
       onMouseLeave={() => setTooltipVisible(false)}
       onFocus={showTooltip}
@@ -97,7 +112,7 @@ function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
         if (event.key === 'Escape') setTooltipVisible(false)
       }}
     >
-      <span>
+      <span className="matrix-node-marker">
         {status === 'succeeded' || status === 'skipped'
           ? <Check size={13} />
           : status === 'running' || status === 'canceling'
@@ -106,6 +121,7 @@ function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
               ? <X size={13} />
               : index + 1}
       </span>
+      <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
       {waitReason && tooltipVisible && typeof document !== 'undefined' && createPortal(
         <div
           id={tooltipId}
@@ -122,22 +138,26 @@ function NodeMarker({ node, index }: { node?: TaskNode; index: number }) {
         </div>,
         document.body,
       )}
-    </div>
+    </button>
   )
 }
 
 function TaskMatrixGroup({
   tasks,
   selectedId,
+  selectedNode,
   onSelect,
+  onSelectNode,
 }: {
   tasks: WorkflowTask[]
   selectedId: string
+  selectedNode?: { taskUuid: string; nodeUuid: string }
   onSelect: (id: string) => void
+  onSelectNode: (taskUuid: string, nodeUuid: string) => void
 }) {
   const referenceTask = [...tasks].sort((left, right) => right.nodes.length - left.nodes.length)[0]
   const stages = referenceTask?.nodes || []
-  const columns = `220px repeat(${Math.max(stages.length, 1)}, minmax(96px, 1fr)) 86px`
+  const columns = `260px repeat(${Math.max(stages.length, 1)}, minmax(126px, 1fr)) 86px`
 
   return (
     <section className="matrix-group">
@@ -146,7 +166,7 @@ function TaskMatrixGroup({
         <div className="matrix-header" style={{ gridTemplateColumns: columns }}>
           <div className="matrix-task-heading">Task / 样品</div>
           {stages.length ? stages.map((stage, index) => (
-            <div key={stage.uuid}><span>{String(index + 1).padStart(2, '0')}</span><strong>{stage.name}</strong></div>
+            <div key={stage.uuid}><span>{String(index + 1).padStart(2, '0')}</span><strong>执行节点</strong></div>
           )) : <div><span>—</span><strong>等待执行图</strong></div>}
           <div><span>RUN</span><strong>进度</strong></div>
         </div>
@@ -158,17 +178,85 @@ function TaskMatrixGroup({
               style={{ gridTemplateColumns: columns }}
               onClick={() => onSelect(task.uuid)}
             >
-              <button type="button" className="matrix-task-cell" onClick={() => onSelect(task.uuid)}>
-                <span className={`task-state-dot task-state-${task.status}`} />
-                <div><strong>{task.uuid}</strong><small>{task.sample} · {task.updatedAt}</small></div>
-              </button>
+              <div className="matrix-task-cell">
+                <button type="button" className="matrix-task-select" onClick={() => onSelect(task.uuid)}>
+                  <span className={`task-state-dot task-state-${task.status}`} />
+                  <span><strong>{task.uuid}</strong><small>{task.sample} · {task.updatedAt}</small></span>
+                </button>
+                {task.trace ? (
+                  <a
+                    className="matrix-trace-link"
+                    href={task.trace.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={`在 SigNoz 中查看 ${task.uuid} 的 Trace`}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <ExternalLink size={12} />Trace
+                  </a>
+                ) : (
+                  <button type="button" className="matrix-trace-disabled" disabled title="Trace 服务未配置">Trace</button>
+                )}
+              </div>
               {(stages.length ? stages : [{ uuid: 'empty' } as TaskNode]).map((stage, index) => (
-                <NodeMarker key={stage.uuid} node={task.nodes.find((node) => node.uuid === stage.uuid)} index={index} />
+                <NodeMarker
+                  key={stage.uuid}
+                  node={task.nodes.find((node) => node.uuid === stage.uuid)}
+                  index={index}
+                  selected={selectedNode?.taskUuid === task.uuid && selectedNode.nodeUuid === stage.uuid}
+                  onSelect={() => onSelectNode(task.uuid, stage.uuid)}
+                />
               ))}
               <div className="matrix-progress-cell"><strong>{task.progress}%</strong><span><i style={{ width: `${task.progress}%` }} /></span></div>
             </div>
           ))}
         </div>
+      </div>
+    </section>
+  )
+}
+
+function jsonEvidence(value: unknown, emptyLabel: string) {
+  if (value === undefined || value === null) return emptyLabel
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function TaskNodeInspector({ task, node, onClose }: { task: WorkflowTask; node: TaskNode; onClose: () => void }) {
+  return (
+    <section className="panel task-node-inspector" role="region" aria-label="节点运行详情">
+      <header>
+        <div>
+          <span>NODE EXECUTION</span>
+          <h2>{node.name}</h2>
+          <p>{task.uuid} · {node.job?.uuid || '尚未创建 Job'} · 第 {node.job?.attempt || 1} 次尝试</p>
+        </div>
+        <div className="node-inspector-status">
+          <span className={`task-state-dot task-state-${task.status}`} />
+          <strong>{nodeStatusLabels[node.status]}</strong>
+          <button type="button" aria-label="关闭节点运行详情" onClick={onClose}><X size={16} /></button>
+        </div>
+      </header>
+      <div className="node-evidence-grid">
+        <article>
+          <div><strong>实际运行参数</strong><small>WorkflowNodeJob.param</small></div>
+          <pre>{jsonEvidence(node.job?.param, '节点尚未进入调度，暂无实际参数')}</pre>
+        </article>
+        <article>
+          <div><strong>运行结果</strong><small>WorkflowNodeJob.return_info</small></div>
+          <pre>{jsonEvidence(node.job?.returnInfo, '节点尚未返回运行结果')}</pre>
+        </article>
+        <article>
+          <div><strong>实时反馈</strong><small>feedback_data</small></div>
+          <pre>{jsonEvidence(node.job?.feedbackData, '暂无反馈数据')}</pre>
+        </article>
+        <article>
+          <div><strong>错误信息</strong><small>{node.job?.startedAt || '未开始'} → {node.job?.finishedAt || '未结束'}</small></div>
+          <pre>{jsonEvidence(node.job?.errorInfo, '暂无错误')}</pre>
+        </article>
       </div>
     </section>
   )
@@ -421,12 +509,31 @@ export function TasksPage({
 }) {
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [selectedId, setSelectedId] = useState(tasks[0]?.uuid || '')
+  const [selectedNodeRef, setSelectedNodeRef] = useState<{ taskUuid: string; nodeUuid: string }>()
   const [createOpen, setCreateOpen] = useState(false)
   const closeCreateDialog = useCallback(() => setCreateOpen(false), [])
+
+  const selectTask = useCallback((taskUuid: string) => {
+    setSelectedId(taskUuid)
+    setSelectedNodeRef(undefined)
+  }, [])
+
+  const selectNode = useCallback((taskUuid: string, nodeUuid: string) => {
+    setSelectedId(taskUuid)
+    setSelectedNodeRef({ taskUuid, nodeUuid })
+  }, [])
 
   useEffect(() => {
     if (!tasks.some((task) => task.uuid === selectedId)) setSelectedId(tasks[0]?.uuid || '')
   }, [tasks, selectedId])
+
+  useEffect(() => {
+    if (!selectedNodeRef) return
+    const task = tasks.find((item) => item.uuid === selectedNodeRef.taskUuid)
+    if (!task?.nodes.some((node) => node.uuid === selectedNodeRef.nodeUuid)) {
+      setSelectedNodeRef(undefined)
+    }
+  }, [tasks, selectedNodeRef])
 
   const filtered = useMemo(() => tasks.filter((task) => matchesFilter(task, filter)), [tasks, filter])
   const groups = useMemo(() => {
@@ -438,6 +545,10 @@ export function TasksPage({
     return [...grouped.entries()]
   }, [filtered])
   const selected = filtered.find((task) => task.uuid === selectedId) || filtered[0]
+  const selectedNodeTask = selectedNodeRef
+    ? tasks.find((task) => task.uuid === selectedNodeRef.taskUuid)
+    : undefined
+  const selectedNode = selectedNodeTask?.nodes.find((node) => node.uuid === selectedNodeRef?.nodeUuid)
   const runningTasks = tasks.filter((task) => task.nodes.some((node) => node.status === 'running' || node.status === 'canceling'))
 
   const counts: Record<TaskFilter, number> = {
@@ -485,8 +596,21 @@ export function TasksPage({
           </div>
           <div className="matrix-legend"><span><i className="node-done" />已完成</span><span><i className="node-running" />正在运行</span><span><i className="node-waiting" />等待</span><span><i className="node-failed" />失败</span></div>
         </div>
-        {groups.length ? groups.map(([key, group]) => <TaskMatrixGroup key={key} tasks={group} selectedId={selected?.uuid || ''} onSelect={setSelectedId} />) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
+        {groups.length ? groups.map(([key, group]) => (
+          <TaskMatrixGroup
+            key={key}
+            tasks={group}
+            selectedId={selected?.uuid || ''}
+            selectedNode={selectedNodeRef}
+            onSelect={selectTask}
+            onSelectNode={selectNode}
+          />
+        )) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>
+
+      {selectedNodeTask && selectedNode ? (
+        <TaskNodeInspector task={selectedNodeTask} node={selectedNode} onClose={() => setSelectedNodeRef(undefined)} />
+      ) : null}
 
       <section className="task-detail-grid">
         <Panel className="selected-task-card">
@@ -508,8 +632,8 @@ export function TasksPage({
                   rel="noopener noreferrer"
                   aria-label="在 SigNoz 中查看 Trace"
                 >
-                  <span><ExternalLink size={15} />查看 Trace</span>
-                  <code>{selected.trace.traceId}</code>
+                  <span><ExternalLink size={15} />{selected.trace.mode === 'trace' ? '查看完整 Trace' : '检索历史调度 Trace'}</span>
+                  <code>{selected.trace.traceId || selected.uuid}</code>
                 </a>
               ) : null}
             </>
@@ -522,7 +646,7 @@ export function TasksPage({
             {runningTasks.length ? runningTasks.map((task) => {
               const active = task.nodes.find((node) => node.status === 'running' || node.status === 'canceling')
               return (
-                <button key={task.uuid} onClick={() => setSelectedId(task.uuid)}><span className="active-job-pulse" /><div><strong>{active?.name || task.current}</strong><small>{task.uuid} · {task.sample}</small></div><em>{task.progress}%</em></button>
+                <button key={task.uuid} onClick={() => selectTask(task.uuid)}><span className="active-job-pulse" /><div><strong>{active?.name || task.current}</strong><small>{task.uuid} · {task.sample}</small></div><em>{task.progress}%</em></button>
               )
             }) : <EmptyState title="没有正在运行的节点" description="Edge 当前任务均已结束或尚未开始。" />}
           </div>
@@ -531,8 +655,8 @@ export function TasksPage({
         <Panel className="task-attention-card">
           <PanelHeader title="阻塞与异常" description="按操作优先级展示" action={<span className="count-badge">{counts.waiting + counts.failed}</span>} />
           <div className="mini-attention-list">
-            {tasks.filter((task) => matchesFilter(task, 'waiting')).slice(0, 2).map((task) => <button key={task.uuid} onClick={() => setSelectedId(task.uuid)}><span className="warn"><Clock3 size={15} /></span><div><strong>{task.uuid} 等待资源</strong><small>{task.current}</small></div><ChevronRight size={15} /></button>)}
-            {tasks.filter((task) => matchesFilter(task, 'failed')).slice(0, 2).map((task) => <button key={task.uuid} onClick={() => setSelectedId(task.uuid)}><span className="danger"><AlertCircle size={15} /></span><div><strong>{task.uuid} 需要处理</strong><small>{task.current}</small></div><ChevronRight size={15} /></button>)}
+            {tasks.filter((task) => matchesFilter(task, 'waiting')).slice(0, 2).map((task) => <button key={task.uuid} onClick={() => selectTask(task.uuid)}><span className="warn"><Clock3 size={15} /></span><div><strong>{task.uuid} 等待资源</strong><small>{task.current}</small></div><ChevronRight size={15} /></button>)}
+            {tasks.filter((task) => matchesFilter(task, 'failed')).slice(0, 2).map((task) => <button key={task.uuid} onClick={() => selectTask(task.uuid)}><span className="danger"><AlertCircle size={15} /></span><div><strong>{task.uuid} 需要处理</strong><small>{task.current}</small></div><ChevronRight size={15} /></button>)}
             {!counts.waiting && !counts.failed ? <EmptyState title="没有阻塞或异常" description="当前任务队列运行正常。" /> : null}
           </div>
         </Panel>

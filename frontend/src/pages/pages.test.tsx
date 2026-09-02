@@ -393,6 +393,8 @@ describe('TasksPage', () => {
 
     expect(container.querySelectorAll('.matrix-row')).toHaveLength(demoTasks.length)
     expect(container.querySelectorAll('.matrix-node-running')).toHaveLength(3)
+    expect(container.querySelectorAll('.matrix-node-title').length).toBeGreaterThan(0)
+    expect(container.querySelectorAll('.matrix-trace-link, .matrix-trace-disabled')).toHaveLength(demoTasks.length)
   })
 
   it('opens the selected task trace in SigNoz without replacing the console', () => {
@@ -401,6 +403,7 @@ describe('TasksPage', () => {
       trace: {
         traceId: '0123456789abcdef0123456789abcdef',
         url: 'http://127.0.0.1:30081/trace/0123456789abcdef0123456789abcdef',
+        mode: 'trace' as const,
       },
     }
     renderWithQuery(
@@ -418,6 +421,41 @@ describe('TasksPage', () => {
     expect(link).toHaveAttribute('href', tracedTask.trace.url)
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+  })
+
+  it('opens authoritative node parameters and execution results from a matrix node', () => {
+    const task = {
+      ...demoTasks[0],
+      nodes: demoTasks[0].nodes.map((node, index) => index === 2
+        ? {
+            ...node,
+            job: {
+              uuid: 'job-dose-1',
+              attempt: 2,
+              param: { target_mass_g: 1.2 },
+              feedbackData: { current_mass_g: 0.8 },
+              returnInfo: { success: true, actual_mass_g: 1.19 },
+              errorInfo: [],
+            },
+          }
+        : node),
+    }
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /粉桶扫码.*已完成/ }))
+    const details = screen.getByRole('region', { name: '节点运行详情' })
+    expect(details).toHaveTextContent('job-dose-1')
+    expect(details).toHaveTextContent('target_mass_g')
+    expect(details).toHaveTextContent('actual_mass_g')
   })
 
   it('shows a waiting reason only while its node is hovered or keyboard-focused', () => {
