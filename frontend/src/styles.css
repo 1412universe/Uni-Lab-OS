@@ -822,7 +822,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .matrix-legend { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 9px; }
 .matrix-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .matrix-legend i { width: 8px; height: 8px; border-radius: 50%; }
-.node-done { background: var(--green); }.node-running { background: var(--blue); box-shadow: 0 0 0 3px #dfe7ff; }.node-waiting { background: var(--amber); }.node-failed { background: var(--red); }
+.node-done { background: var(--green); }.node-running { background: var(--blue); box-shadow: 0 0 0 3px #dfe7ff; }.node-waiting { background: var(--amber); }.node-failed { background: var(--red); }.node-pending { background: #98a2b3; }
 
 .task-matrix-scroll { overflow-x: auto; overscroll-behavior-inline: contain; }
 .matrix-body { width: 100%; }
@@ -862,6 +862,16 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .matrix-node-waiting span { color: #fff; background: var(--amber); border-color: var(--amber); box-shadow: 0 0 0 4px #fff0ce; }
 .matrix-node-failed span, .matrix-node-canceled span { color: #fff; background: var(--red); border-color: var(--red); box-shadow: 0 0 0 4px #ffe4e8; }
 .matrix-node-attention span { color: #fff; background: #7a271a; border-color: #7a271a; box-shadow: 0 0 0 4px #fee4e2; }
+.matrix-node-succeeded { background: #effaf5; }
+.matrix-node-running, .matrix-node-canceling { background: #eef3ff; }
+.matrix-node-waiting, .matrix-node-attention { background: #fff8e8; }
+.matrix-node-failed, .matrix-node-canceled { background: #fff1f2; }
+.matrix-node-pending, .matrix-node-skipped { background: #f7f8fa; }
+.matrix-node-succeeded:hover { background: #e5f7ef; }
+.matrix-node-running:hover, .matrix-node-canceling:hover { background: #e3eaff; }
+.matrix-node-waiting:hover, .matrix-node-attention:hover { background: #fff1d2; }
+.matrix-node-failed:hover, .matrix-node-canceled:hover { background: #ffe4e7; }
+.matrix-node-pending:hover, .matrix-node-skipped:hover { background: #eef0f3; }
 .matrix-node:focus-visible { outline: 2px solid #6d8cf5; outline-offset: -3px; }
 .node-wait-tooltip { position: fixed; z-index: 120; width: 284px; padding: 12px 13px; color: #f8fafc; background: #1d2939; border: 1px solid #344054; border-radius: 10px; box-shadow: 0 12px 30px rgba(16,24,40,.25); pointer-events: none; }
 .node-wait-tooltip-above { transform: translate(-50%, -100%); }

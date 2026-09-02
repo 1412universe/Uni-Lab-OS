@@ -610,7 +610,13 @@ export function TasksPage({
               <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}<span>{counts[key]}</span></button>
             ))}
           </div>
-          <div className="matrix-legend"><span><i className="node-done" />已完成</span><span><i className="node-running" />正在运行</span><span><i className="node-waiting" />等待</span><span><i className="node-failed" />失败</span></div>
+          <div className="matrix-legend" aria-label="节点状态颜色">
+            <span><i className="node-done" />运行成功</span>
+            <span><i className="node-running" />正在运行</span>
+            <span><i className="node-waiting" />等待运行</span>
+            <span><i className="node-failed" />运行失败</span>
+            <span><i className="node-pending" />未运行</span>
+          </div>
         </div>
         {filtered.length ? (
           <TaskMatrix

@@ -417,6 +417,37 @@ describe('WorkflowsPage', () => {
 })
 
 describe('TasksPage', () => {
+  it('distinguishes successful, running, waiting, failed, and not-run nodes in the matrix', () => {
+    const statuses = ['succeeded', 'running', 'waiting', 'failed', 'pending'] as const
+    const task = {
+      ...demoTasks[0],
+      nodes: statuses.map((status, index) => ({
+        ...demoTasks[0].nodes[index],
+        uuid: `visual-state-${status}`,
+        name: `状态节点 ${status}`,
+        status,
+      })),
+    }
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('未运行')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /状态节点 succeeded，已完成/ })).toHaveClass('matrix-node-succeeded')
+    expect(screen.getByRole('button', { name: /状态节点 running，正在运行/ })).toHaveClass('matrix-node-running')
+    expect(screen.getByRole('button', { name: /状态节点 waiting，等待资源/ })).toHaveClass('matrix-node-waiting')
+    expect(screen.getByRole('button', { name: /状态节点 failed，失败/ })).toHaveClass('matrix-node-failed')
+    expect(screen.getByRole('button', { name: /状态节点 pending，待运行/ })).toHaveClass('matrix-node-pending')
+  })
+
   it('renders one matrix row per task and lights every running task node', () => {
     const { container } = renderWithQuery(
       <TasksPage
