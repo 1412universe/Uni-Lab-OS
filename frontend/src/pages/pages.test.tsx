@@ -148,6 +148,44 @@ describe('MaterialsPage', () => {
 })
 
 describe('WorkflowsPage', () => {
+  it('selects the workflow targeted by a task navigation', async () => {
+    const target = demoWorkflows[1]
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/workflow-tasks/task-target')) {
+        return response({
+          code: 0,
+          data: {
+            uuid: 'task-target',
+            workflow_uuid: target.uuid,
+            workflow_snapshot: {
+              workflow: target,
+              nodes: [{ uuid: 'frozen-node', name: '冻结修订节点', type: 'ILab' }],
+              edges: [],
+            },
+          },
+        })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+
+    renderWithQuery(
+      <WorkflowsPage
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        onNavigate={vi.fn()}
+        onNotify={vi.fn()}
+        targetWorkflow={{ workflowUuid: target.uuid, revision: target.revision, taskUuid: 'task-target' }}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: new RegExp(`r${target.revision}`) })).toHaveClass('active')
+    expect(await screen.findByRole('heading', { name: target.name })).toBeInTheDocument()
+    expect(await screen.findByText('冻结修订节点')).toBeInTheDocument()
+    expect(screen.getByText('Task 冻结版本')).toBeInTheDocument()
+  })
+
   it('shows a neutral state until it reads the real Edge Preflight report', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
@@ -388,13 +426,39 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
       />,
     )
 
     expect(container.querySelectorAll('.matrix-row')).toHaveLength(demoTasks.length)
+    expect(container.querySelectorAll('.task-matrix-scroll')).toHaveLength(1)
+    expect(container.querySelector('.matrix-header')).not.toBeInTheDocument()
+    expect(container.querySelector('.matrix-group-title')).not.toBeInTheDocument()
     expect(container.querySelectorAll('.matrix-node-running')).toHaveLength(3)
     expect(container.querySelectorAll('.matrix-node-title').length).toBeGreaterThan(0)
     expect(container.querySelectorAll('.matrix-trace-link, .matrix-trace-disabled')).toHaveLength(demoTasks.length)
+  })
+
+  it('opens the task workflow and revision from the sticky task identity card', () => {
+    const onOpenWorkflow = vi.fn()
+    renderWithQuery(
+      <TasksPage
+        tasks={[demoTasks[0]]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={onOpenWorkflow}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: /打开工作流.*Task/ }))
+    expect(onOpenWorkflow).toHaveBeenCalledWith({
+      workflowUuid: demoTasks[0].workflowUuid,
+      revision: demoTasks[0].workflowRevision,
+      taskUuid: demoTasks[0].uuid,
+    })
   })
 
   it('opens the selected task trace in SigNoz without replacing the console', () => {
@@ -414,6 +478,7 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
       />,
     )
 
@@ -448,6 +513,7 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
       />,
     )
 
@@ -486,6 +552,7 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
       />,
     )
 
@@ -510,6 +577,31 @@ describe('TasksPage', () => {
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument()
   })
 
+  it('shows the complete node title and status in a tooltip on hover', () => {
+    const task = {
+      ...demoTasks[0],
+      nodes: demoTasks[0].nodes.map((node, index) => index === 2
+        ? { ...node, name: 'dose_powder_with_two_materials_and_a_very_long_suffix' }
+        : node),
+    }
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const marker = screen.getByRole('button', { name: /dose_powder_with_two_materials_and_a_very_long_suffix/ })
+    fireEvent.mouseEnter(marker)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('dose_powder_with_two_materials_and_a_very_long_suffix')
+    expect(screen.getByRole('tooltip')).toHaveTextContent('已完成')
+  })
+
   it('filters the matrix to failed tasks', () => {
     const { container } = renderWithQuery(
       <TasksPage
@@ -519,6 +611,7 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
       />,
     )
 
@@ -527,16 +620,25 @@ describe('TasksPage', () => {
     expect(container.querySelector('.matrix-row')).toHaveTextContent('TK-240831-015')
   })
 
-  it('separates different frozen execution plans even when workflow UUID is shared', () => {
+  it('renders different workflow plans as adjacent rows in one shared scroll region', () => {
     const tasks = [
       demoTasks[0],
-      { ...demoTasks[1], matrixGroupKey: 'single-node-debug-plan', workflowRevision: 4 },
+      {
+        ...demoTasks[1],
+        workflowUuid: demoWorkflows[1].uuid,
+        workflowName: demoWorkflows[1].name,
+        workflowRevision: demoWorkflows[1].revision,
+        matrixGroupKey: 'single-node-debug-plan',
+        nodes: demoTasks[1].nodes.slice(0, 4),
+      },
     ]
     const { container } = renderWithQuery(
-      <TasksPage tasks={tasks} workflows={demoWorkflows} materials={demoMaterials} connected={false} onRefresh={vi.fn()} onNotify={vi.fn()} />,
+      <TasksPage tasks={tasks} workflows={demoWorkflows} materials={demoMaterials} connected={false} onRefresh={vi.fn()} onNotify={vi.fn()} onOpenWorkflow={vi.fn()} />,
     )
 
-    expect(container.querySelectorAll('.matrix-group')).toHaveLength(2)
+    expect(container.querySelectorAll('.task-matrix-scroll')).toHaveLength(1)
+    expect(container.querySelectorAll('.matrix-row')).toHaveLength(2)
+    expect(container.querySelector('.matrix-group')).not.toBeInTheDocument()
   })
 
   it('renders ResourceSlot inputs as Edge material selectors', () => {
@@ -548,6 +650,7 @@ describe('TasksPage', () => {
         connected={false}
         onRefresh={vi.fn()}
         onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
       />,
     )
 

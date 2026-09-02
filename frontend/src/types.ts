@@ -53,6 +53,12 @@ export interface WorkflowDefinition {
   operationCategoryUuid?: string
 }
 
+export interface WorkflowTarget {
+  workflowUuid: string
+  revision?: number
+  taskUuid?: string
+}
+
 export interface WorkflowGraphNode {
   uuid: string
   name: string

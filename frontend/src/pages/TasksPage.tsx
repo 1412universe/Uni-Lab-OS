@@ -11,7 +11,6 @@ import {
   Clock3,
   ExternalLink,
   FlaskConical,
-  GitBranch,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -20,10 +19,14 @@ import {
   X,
 } from 'lucide-react'
 import { createWorkflowTask } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTask } from '../types'
+import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTarget, WorkflowTask } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
+
+const TASK_IDENTITY_COLUMN_WIDTH = 300
+const TASK_NODE_COLUMN_WIDTH = 160
+const TASK_PROGRESS_COLUMN_WIDTH = 86
 
 const nodeStatusLabels: Record<TaskNode['status'], string> = {
   succeeded: '已完成',
@@ -63,7 +66,7 @@ function NodeMarker({
   const [tooltipVisible, setTooltipVisible] = useState(false)
   const [tooltipPosition, setTooltipPosition] = useState({ left: 0, top: 0, above: false })
   const showTooltip = useCallback(() => {
-    if (!waitReason || !markerRef.current) return
+    if (!markerRef.current) return
     const rect = markerRef.current.getBoundingClientRect()
     const above = rect.top > 190
     const halfWidth = 142
@@ -73,7 +76,7 @@ function NodeMarker({
       above,
     })
     setTooltipVisible(true)
-  }, [waitReason])
+  }, [])
 
   useEffect(() => {
     if (!tooltipVisible) return undefined
@@ -86,20 +89,15 @@ function NodeMarker({
     }
   }, [tooltipVisible])
 
-  useEffect(() => {
-    if (!waitReason) setTooltipVisible(false)
-  }, [waitReason])
-
   const label = `${node?.name || `节点 ${index + 1}`}，${nodeStatusLabels[status]}`
   return (
     <button
       type="button"
       ref={markerRef}
       className={`matrix-node matrix-node-${status} ${selected ? 'matrix-node-selected' : ''}`}
-      title={waitReason ? undefined : label}
       aria-label={label}
       aria-pressed={selected}
-      aria-describedby={waitReason && tooltipVisible ? tooltipId : undefined}
+      aria-describedby={tooltipVisible ? tooltipId : undefined}
       onClick={(event) => {
         event.stopPropagation()
         onSelect()
@@ -121,20 +119,27 @@ function NodeMarker({
               ? <X size={13} />
               : index + 1}
       </span>
+      <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {nodeStatusLabels[status]}</small>
       <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
-      {waitReason && tooltipVisible && typeof document !== 'undefined' && createPortal(
+      {tooltipVisible && typeof document !== 'undefined' && createPortal(
         <div
           id={tooltipId}
           role="tooltip"
           className={`node-wait-tooltip ${tooltipPosition.above ? 'node-wait-tooltip-above' : 'node-wait-tooltip-below'}`}
           style={{ left: tooltipPosition.left, top: tooltipPosition.top }}
         >
-          <strong>{waitReason.title}</strong>
-          <p>{waitReason.message}</p>
-          {waitReason.details.length > 0 && (
-            <ul>{waitReason.details.map((detail) => <li key={detail}>{detail}</li>)}</ul>
-          )}
-          {waitReason.waitingSince && <small>等待开始：{waitReason.waitingSince}</small>}
+          <strong>{node?.name || `节点 ${index + 1}`}</strong>
+          <p>{nodeStatusLabels[status]}</p>
+          {waitReason ? (
+            <>
+              <em>{waitReason.title}</em>
+              <p>{waitReason.message}</p>
+              {waitReason.details.length > 0 && (
+                <ul>{waitReason.details.map((detail) => <li key={detail}>{detail}</li>)}</ul>
+              )}
+              {waitReason.waitingSince && <small>等待开始：{waitReason.waitingSince}</small>}
+            </>
+          ) : null}
         </div>,
         document.body,
       )}
@@ -142,36 +147,33 @@ function NodeMarker({
   )
 }
 
-function TaskMatrixGroup({
+function TaskMatrix({
   tasks,
   selectedId,
   selectedNode,
   onSelect,
   onSelectNode,
+  onOpenWorkflow,
 }: {
   tasks: WorkflowTask[]
   selectedId: string
   selectedNode?: { taskUuid: string; nodeUuid: string }
   onSelect: (id: string) => void
   onSelectNode: (taskUuid: string, nodeUuid: string) => void
+  onOpenWorkflow: (target: WorkflowTarget) => void
 }) {
-  const referenceTask = [...tasks].sort((left, right) => right.nodes.length - left.nodes.length)[0]
-  const stages = referenceTask?.nodes || []
-  const columns = `260px repeat(${Math.max(stages.length, 1)}, minmax(126px, 1fr)) 86px`
+  const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
+  const matrixWidth = TASK_IDENTITY_COLUMN_WIDTH
+    + maxNodeCount * TASK_NODE_COLUMN_WIDTH
+    + TASK_PROGRESS_COLUMN_WIDTH
 
   return (
-    <section className="matrix-group">
-      <div className="matrix-group-title"><GitBranch size={15} /><strong>{tasks[0]?.workflowName}</strong><span>{tasks[0]?.workflowRevision ? `r${tasks[0].workflowRevision} · ` : ''}{tasks[0]?.runMode || 'normal'} · {tasks.length} 个任务</span></div>
-      <div className="task-matrix-scroll">
-        <div className="matrix-header" style={{ gridTemplateColumns: columns }}>
-          <div className="matrix-task-heading">Task / 样品</div>
-          {stages.length ? stages.map((stage, index) => (
-            <div key={stage.uuid}><span>{String(index + 1).padStart(2, '0')}</span><strong>执行节点</strong></div>
-          )) : <div><span>—</span><strong>等待执行图</strong></div>}
-          <div><span>RUN</span><strong>进度</strong></div>
-        </div>
-        <div className="matrix-body">
-          {tasks.map((task) => (
+    <div className="task-matrix-scroll">
+      <div className="matrix-body" style={{ minWidth: matrixWidth }}>
+        {tasks.map((task) => {
+          const nodes: (TaskNode | undefined)[] = task.nodes.length ? task.nodes : [undefined]
+          const columns = `${TASK_IDENTITY_COLUMN_WIDTH}px repeat(${nodes.length}, ${TASK_NODE_COLUMN_WIDTH}px) ${TASK_PROGRESS_COLUMN_WIDTH}px minmax(0, 1fr)`
+          return (
             <div
               key={task.uuid}
               className={`matrix-row ${selectedId === task.uuid ? 'selected' : ''}`}
@@ -179,9 +181,26 @@ function TaskMatrixGroup({
               onClick={() => onSelect(task.uuid)}
             >
               <div className="matrix-task-cell">
-                <button type="button" className="matrix-task-select" onClick={() => onSelect(task.uuid)}>
+                <button
+                  type="button"
+                  className="matrix-task-select"
+                  aria-label={`打开工作流 ${task.workflowName}，Task ${task.uuid}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onOpenWorkflow({
+                      workflowUuid: task.workflowUuid,
+                      revision: task.workflowRevision,
+                      taskUuid: task.uuid,
+                    })
+                  }}
+                >
                   <span className={`task-state-dot task-state-${task.status}`} />
-                  <span><strong>{task.uuid}</strong><small>{task.sample} · {task.updatedAt}</small></span>
+                  <span>
+                    <strong>{task.workflowName}</strong>
+                    <small>{task.uuid}</small>
+                    <small>{task.sample} · {task.updatedAt}</small>
+                  </span>
+                  <em>{task.workflowRevision ? `r${task.workflowRevision}` : '—'}</em>
                 </button>
                 {task.trace ? (
                   <a
@@ -198,21 +217,24 @@ function TaskMatrixGroup({
                   <button type="button" className="matrix-trace-disabled" disabled title="Trace 服务未配置">Trace</button>
                 )}
               </div>
-              {(stages.length ? stages : [{ uuid: 'empty' } as TaskNode]).map((stage, index) => (
+              {nodes.map((node, index) => (
                 <NodeMarker
-                  key={stage.uuid}
-                  node={task.nodes.find((node) => node.uuid === stage.uuid)}
+                  key={node?.uuid || `empty-${task.uuid}`}
+                  node={node}
                   index={index}
-                  selected={selectedNode?.taskUuid === task.uuid && selectedNode.nodeUuid === stage.uuid}
-                  onSelect={() => onSelectNode(task.uuid, stage.uuid)}
+                  selected={Boolean(node && selectedNode?.taskUuid === task.uuid && selectedNode.nodeUuid === node.uuid)}
+                  onSelect={() => {
+                    if (node) onSelectNode(task.uuid, node.uuid)
+                  }}
                 />
               ))}
               <div className="matrix-progress-cell"><strong>{task.progress}%</strong><span><i style={{ width: `${task.progress}%` }} /></span></div>
+              <div className="matrix-row-tail" aria-hidden="true" />
             </div>
-          ))}
-        </div>
+          )
+        })}
       </div>
-    </section>
+    </div>
   )
 }
 
@@ -499,6 +521,7 @@ export function TasksPage({
   connected,
   onRefresh,
   onNotify,
+  onOpenWorkflow,
 }: {
   tasks: WorkflowTask[]
   workflows: WorkflowDefinition[]
@@ -506,6 +529,7 @@ export function TasksPage({
   connected: boolean
   onRefresh: () => void
   onNotify: (message: string) => void
+  onOpenWorkflow: (target: WorkflowTarget) => void
 }) {
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [selectedId, setSelectedId] = useState(tasks[0]?.uuid || '')
@@ -536,14 +560,6 @@ export function TasksPage({
   }, [tasks, selectedNodeRef])
 
   const filtered = useMemo(() => tasks.filter((task) => matchesFilter(task, filter)), [tasks, filter])
-  const groups = useMemo(() => {
-    const grouped = new Map<string, WorkflowTask[]>()
-    filtered.forEach((task) => {
-      const key = `${task.workflowUuid}:r${task.workflowRevision ?? 'unknown'}:${task.matrixGroupKey}`
-      grouped.set(key, [...(grouped.get(key) || []), task])
-    })
-    return [...grouped.entries()]
-  }, [filtered])
   const selected = filtered.find((task) => task.uuid === selectedId) || filtered[0]
   const selectedNodeTask = selectedNodeRef
     ? tasks.find((task) => task.uuid === selectedNodeRef.taskUuid)
@@ -570,7 +586,7 @@ export function TasksPage({
       <PageHeader
         eyebrow="PARALLEL TASK MONITOR"
         title="并行任务运行矩阵"
-        description="每行一个 Task，按工作流分组并横向对齐真实执行节点；运行到哪个节点，哪个节点就亮起。"
+        description="不同工作流连续逐行展示；节点轨道同步横向滚动，运行到哪个节点，哪个节点就亮起。"
         actions={
           <>
             <Button icon={<RefreshCw size={16} />} onClick={onRefresh}>刷新状态</Button>
@@ -596,16 +612,16 @@ export function TasksPage({
           </div>
           <div className="matrix-legend"><span><i className="node-done" />已完成</span><span><i className="node-running" />正在运行</span><span><i className="node-waiting" />等待</span><span><i className="node-failed" />失败</span></div>
         </div>
-        {groups.length ? groups.map(([key, group]) => (
-          <TaskMatrixGroup
-            key={key}
-            tasks={group}
+        {filtered.length ? (
+          <TaskMatrix
+            tasks={filtered}
             selectedId={selected?.uuid || ''}
             selectedNode={selectedNodeRef}
             onSelect={selectTask}
             onSelectNode={selectNode}
+            onOpenWorkflow={onOpenWorkflow}
           />
-        )) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
+        ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>
 
       {selectedNodeTask && selectedNode ? (

@@ -1499,6 +1499,19 @@ export async function importWorkflowPython(file: File): Promise<WorkflowDefiniti
   return adaptWorkflow({ ...(imported.workflow || {}), nodes: imported.nodes || [] })
 }
 
+export async function loadWorkflowTaskGraph(taskUuid: string, signal?: AbortSignal): Promise<WorkflowGraph> {
+  const task = await requestData<RawRecord>(`/workflow-tasks/${encodeURIComponent(taskUuid)}`, signal)
+  const snapshot = task.workflow_snapshot
+  if (!snapshot?.workflow || !Array.isArray(snapshot.nodes) || !Array.isArray(snapshot.edges)) {
+    throw new Error('Task 没有可用的冻结工作流快照')
+  }
+  return {
+    workflow: adaptWorkflow({ ...snapshot.workflow, nodes: snapshot.nodes }),
+    nodes: snapshot.nodes.map(adaptWorkflowGraphNode),
+    edges: snapshot.edges.map(adaptWorkflowGraphEdge),
+  }
+}
+
 export async function loadWorkflowPreflight(
   workflowUuid: string,
   signal?: AbortSignal,

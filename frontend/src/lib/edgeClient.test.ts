@@ -11,6 +11,7 @@ import {
   lookupCompoundByCas,
   loadEdgeSnapshot,
   loadReagentHistory,
+  loadWorkflowTaskGraph,
   unwrapEnvelope,
 } from './edgeClient'
 
@@ -27,6 +28,32 @@ describe('unwrapEnvelope', () => {
 
   it('rejects an Edge business error even if HTTP succeeded', () => {
     expect(() => unwrapEnvelope({ code: 1000, error: { msg: 'invalid cursor' } })).toThrow('invalid cursor')
+  })
+})
+
+describe('loadWorkflowTaskGraph', () => {
+  it('loads the exact frozen workflow revision from a task snapshot', async () => {
+    const fetchMock = vi.fn(async () => response({
+      code: 0,
+      data: {
+        uuid: 'task-1',
+        workflow_snapshot: {
+          workflow: { uuid: 'wf-1', name: '冻结流程', revision: 4 },
+          nodes: [{ uuid: 'node-1', name: '冻结节点', type: 'ILab' }],
+          edges: [],
+        },
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const graph = await loadWorkflowTaskGraph('task-1')
+
+    expect(graph.workflow).toMatchObject({ uuid: 'wf-1', revision: 4 })
+    expect(graph.nodes[0]).toMatchObject({ uuid: 'node-1', name: '冻结节点' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/workflow-tasks/task-1',
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    )
   })
 })
 

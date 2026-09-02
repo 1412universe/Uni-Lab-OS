@@ -20,8 +20,8 @@ import {
   Send,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
-import { createWorkflowTask, importWorkflowJson, importWorkflowPython, loadWorkflowGraph, loadWorkflowPreflight } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, PageId, WorkflowDefinition } from '../types'
+import { createWorkflowTask, importWorkflowJson, importWorkflowPython, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
+import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
 import { WorkflowDag } from '../components/WorkflowDag'
@@ -71,15 +71,23 @@ export function WorkflowsPage({
   connected,
   onNavigate,
   onNotify,
+  onSelectWorkflow,
+  targetWorkflow,
 }: {
   workflows: WorkflowDefinition[]
   materials: MaterialRecord[]
   connected: boolean
   onNavigate: (page: PageId) => void
   onNotify: (message: string) => void
+  onSelectWorkflow?: (target: WorkflowTarget) => void
+  targetWorkflow?: WorkflowTarget
 }) {
   const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState(workflows[0]?.uuid || '')
+  const [selectedId, setSelectedId] = useState(
+    workflows.some((workflow) => workflow.uuid === targetWorkflow?.workflowUuid)
+      ? targetWorkflow?.workflowUuid || ''
+      : workflows[0]?.uuid || '',
+  )
   const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
@@ -89,10 +97,14 @@ export function WorkflowsPage({
   const [knownNodeCounts, setKnownNodeCounts] = useState<Record<string, number>>({})
 
   useEffect(() => {
+    if (targetWorkflow?.workflowUuid && workflows.some((workflow) => workflow.uuid === targetWorkflow.workflowUuid)) {
+      setSelectedId(targetWorkflow.workflowUuid)
+      return
+    }
     if (!workflows.some((workflow) => workflow.uuid === selectedId)) {
       setSelectedId(workflows[0]?.uuid || '')
     }
-  }, [workflows, selectedId])
+  }, [workflows, selectedId, targetWorkflow?.workflowUuid])
 
   const visibleWorkflows = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -104,9 +116,14 @@ export function WorkflowsPage({
   }, [query, workflows])
 
   const selected = visibleWorkflows.find((workflow) => workflow.uuid === selectedId) || visibleWorkflows[0]
+  const selectedTaskSnapshotUuid = selected?.uuid === targetWorkflow?.workflowUuid
+    ? targetWorkflow.taskUuid
+    : undefined
   const graphQuery = useQuery({
-    queryKey: ['workflow-graph', selected?.uuid],
-    queryFn: ({ signal }) => loadWorkflowGraph(selected!.uuid, signal),
+    queryKey: ['workflow-graph', selected?.uuid, selectedTaskSnapshotUuid],
+    queryFn: ({ signal }) => selectedTaskSnapshotUuid
+      ? loadWorkflowTaskGraph(selectedTaskSnapshotUuid, signal)
+      : loadWorkflowGraph(selected!.uuid, signal),
     enabled: Boolean(selected),
     retry: false,
   })
@@ -261,7 +278,10 @@ export function WorkflowsPage({
                   type="button"
                   className={`workflow-list-item ${selected?.uuid === workflow.uuid ? 'active' : ''}`}
                   key={workflow.uuid}
-                  onClick={() => setSelectedId(workflow.uuid)}
+                  onClick={() => {
+                    setSelectedId(workflow.uuid)
+                    onSelectWorkflow?.({ workflowUuid: workflow.uuid, revision: workflow.revision })
+                  }}
                 >
                   <span className="workflow-list-icon"><GitBranch size={17} /></span>
                   <div><strong>{workflow.name}</strong><small>r{workflow.revision} · {hasLoadedNodeCount || workflow.nodeCount > 0 ? `${nodeCount} 节点` : '节点数待加载'}</small></div>
@@ -290,7 +310,11 @@ export function WorkflowsPage({
               </div>
               <div className="definition-metrics">
                 <div><span>工作流 UUID</span><code>{detail.uuid}</code></div>
-                <div><span>应用修订</span><strong>r{detail.revision}</strong></div>
+                <div>
+                  <span>应用修订</span>
+                  <strong>r{detail.revision}</strong>
+                  {selectedTaskSnapshotUuid ? <small className="revision-target-warning">Task 冻结修订</small> : null}
+                </div>
                 <div><span>拓扑规模</span><strong>{graphNodes.length || detail.nodeCount || '—'} 节点 · {graphEdges.length} 连线</strong></div>
                 <div><span>来源</span><code>{detail.sourcePath || 'Edge runtime'}</code></div>
               </div>
@@ -398,8 +422,8 @@ export function WorkflowsPage({
           </Panel>
 
           <Panel className="revision-panel">
-            <PanelHeader title="版本信息" description="当前加载修订" />
-            <div className="revision-current"><span>r{detail?.revision || 1}</span><div><strong>{detail ? tagForWorkflow(detail) : '—'}</strong><small>Edge 当前版本</small></div><ChevronRight size={16} /></div>
+            <PanelHeader title="版本信息" description={selectedTaskSnapshotUuid ? 'Task 提交时冻结修订' : '当前加载修订'} />
+            <div className="revision-current"><span>r{detail?.revision || 1}</span><div><strong>{detail ? tagForWorkflow(detail) : '—'}</strong><small>{selectedTaskSnapshotUuid ? 'Task 冻结版本' : 'Edge 当前版本'}</small></div><ChevronRight size={16} /></div>
             <dl className="property-list compact">
               <div><dt>状态</dt><dd>{detail?.status || '—'}</dd></div>
               <div><dt>源码</dt><dd>{detail?.sourcePath?.split('/').at(-1) || 'runtime'}</dd></div>

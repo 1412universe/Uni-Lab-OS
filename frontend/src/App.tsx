@@ -2,18 +2,19 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
 import { useEdgeData } from './hooks/useEdgeData'
-import { pageFromSearch } from './lib/routes'
+import { pageFromSearch, searchForWorkflow, searchWithPage, workflowTargetFromSearch } from './lib/routes'
 import { MaterialsPage } from './pages/MaterialsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { TasksPage } from './pages/TasksPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { OperationsPage } from './pages/OperationsPage'
 import { ReagentsPage } from './pages/ReagentsPage'
-import type { PageId } from './types'
+import type { PageId, WorkflowTarget } from './types'
 
 export default function App() {
   const [searchParams, setSearchParams] = useSearchParams()
   const page = pageFromSearch(`?${searchParams.toString()}`)
+  const workflowTarget = workflowTargetFromSearch(`?${searchParams.toString()}`)
   const { snapshot, connection, error, refetch } = useEdgeData()
   const [toast, setToast] = useState('')
 
@@ -24,11 +25,14 @@ export default function App() {
   }, [toast])
 
   const navigate = useCallback((nextPage: PageId) => {
-    setSearchParams((current) => {
-      const next = new URLSearchParams(current)
-      next.set('page', nextPage)
-      return next
-    })
+    setSearchParams((current) => new URLSearchParams(searchWithPage(`?${current.toString()}`, nextPage)))
+  }, [setSearchParams])
+
+  const openWorkflow = useCallback((target: WorkflowTarget) => {
+    setSearchParams((current) => new URLSearchParams(searchForWorkflow(
+      `?${current.toString()}`,
+      target,
+    )))
   }, [setSearchParams])
 
   const refresh = useCallback(() => {
@@ -65,9 +69,25 @@ export default function App() {
       ) : page === 'reagents' ? (
         <ReagentsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
       ) : page === 'workflows' ? (
-        <WorkflowsPage workflows={snapshot.workflows} materials={snapshot.materials} connected={connection === 'connected'} onNavigate={navigate} onNotify={setToast} />
+        <WorkflowsPage
+          workflows={snapshot.workflows}
+          materials={snapshot.materials}
+          connected={connection === 'connected'}
+          onNavigate={navigate}
+          onNotify={setToast}
+          onSelectWorkflow={openWorkflow}
+          targetWorkflow={workflowTarget}
+        />
       ) : (
-        <TasksPage tasks={snapshot.tasks} workflows={snapshot.workflows} materials={snapshot.materials} connected={connection === 'connected'} onRefresh={refresh} onNotify={setToast} />
+        <TasksPage
+          tasks={snapshot.tasks}
+          workflows={snapshot.workflows}
+          materials={snapshot.materials}
+          connected={connection === 'connected'}
+          onRefresh={refresh}
+          onNotify={setToast}
+          onOpenWorkflow={openWorkflow}
+        />
       )}
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
     </AppShell>
