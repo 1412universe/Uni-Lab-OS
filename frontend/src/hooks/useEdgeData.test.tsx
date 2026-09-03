@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EdgeSnapshot } from '../types'
 import { loadEdgeSnapshot, loadEdgeTasks } from '../lib/edgeClient'
 import { useEdgeData } from './useEdgeData'
@@ -43,14 +43,27 @@ const authoritativeSnapshot: EdgeSnapshot = {
   workflowTotal: 1,
 }
 
+class FakeEventSource {
+  static latest: FakeEventSource | undefined
+  listeners = new Map<string, EventListener>()
+  closed = false
+  constructor(public url: string) { FakeEventSource.latest = this }
+  addEventListener(type: string, listener: EventListener) { this.listeners.set(type, listener) }
+  close() { this.closed = true }
+  emit(type: string) { this.listeners.get(type)?.(new Event(type)) }
+}
+
+afterEach(() => vi.unstubAllGlobals())
+
 describe('useEdgeData', () => {
   beforeEach(() => {
+    FakeEventSource.latest = undefined
     vi.mocked(loadEdgeSnapshot).mockReset()
     vi.mocked(loadEdgeTasks).mockReset()
     vi.mocked(loadEdgeTasks).mockResolvedValue([])
   })
 
-  it('clears stale authoritative projections when a later Edge refresh fails', async () => {
+  it('keeps the last authoritative projection read-only when a later Edge refresh fails', async () => {
     vi.mocked(loadEdgeSnapshot)
       .mockResolvedValueOnce(authoritativeSnapshot)
       .mockRejectedValueOnce(new Error('Edge unavailable'))
@@ -67,13 +80,14 @@ describe('useEdgeData', () => {
 
     await act(async () => { await result.current.refetch() })
 
-    await waitFor(() => expect(result.current.connection).toBe('error'))
+    await waitFor(() => expect(result.current.connection).toBe('reconnecting'))
     expect(result.current.snapshot).toMatchObject({
       workflows: [],
       tasks: [],
-      materials: [],
-      materialTotal: 0,
+      materials: [expect.objectContaining({ uuid: 'material-authoritative' })],
+      materialTotal: 1,
     })
+    expect(result.current.lastSuccessfulAt).toBeGreaterThan(0)
   })
 
   it('refreshes task runtime data without reloading workflows and materials', async () => {
@@ -102,16 +116,35 @@ describe('useEdgeData', () => {
     expect(loadEdgeTasks).toHaveBeenCalledTimes(1)
   })
 
-  it('invalidates the shared task query when the scheduler SSE announces manual confirmation', async () => {
-    class FakeEventSource {
-      static latest: FakeEventSource | undefined
-      listeners = new Map<string, EventListener>()
-      closed = false
-      constructor(public url: string) { FakeEventSource.latest = this }
-      addEventListener(type: string, listener: EventListener) { this.listeners.set(type, listener) }
-      close() { this.closed = true }
-      emit(type: string) { this.listeners.get(type)?.(new Event(type)) }
+  it('keeps the last task matrix when a runtime-only refresh fails', async () => {
+    const previousTask = {
+      uuid: 'task-previous', workflowUuid: 'wf-1', workflowName: '流程', status: 'running' as const,
+      priority: 'normal' as const,
+      sample: 'sample-1', description: 'task', current: '运行中', progress: 20,
+      updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal' as const,
+      controlStatus: 'active', matrixGroupKey: 'wf-1',
     }
+    vi.mocked(loadEdgeSnapshot).mockResolvedValue({
+      ...authoritativeSnapshot,
+      tasks: [previousTask],
+    })
+    vi.mocked(loadEdgeTasks).mockRejectedValue(new Error('Edge busy'))
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useEdgeData(), { wrapper })
+
+    await waitFor(() => expect(result.current.connection).toBe('connected'))
+    await act(async () => {
+      await queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+    })
+
+    await waitFor(() => expect(result.current.connection).toBe('reconnecting'))
+    expect(result.current.snapshot.tasks).toEqual([previousTask])
+  })
+
+  it('invalidates the shared task query when the scheduler SSE announces manual confirmation', async () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     vi.mocked(loadEdgeSnapshot).mockResolvedValue(authoritativeSnapshot)
     vi.mocked(loadEdgeTasks).mockResolvedValue([])
@@ -130,5 +163,88 @@ describe('useEdgeData', () => {
     const source = FakeEventSource.latest
     unmount()
     expect(source?.closed).toBe(true)
+  })
+
+  it('coalesces a burst of scheduler SSE events into one trailing task refresh', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.mocked(loadEdgeSnapshot).mockResolvedValue(authoritativeSnapshot)
+    vi.mocked(loadEdgeTasks).mockResolvedValue([])
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useEdgeData(), { wrapper })
+
+    await waitFor(() => expect(result.current.connection).toBe('connected'))
+    await waitFor(() => expect(FakeEventSource.latest?.url).toBe('/api/v1/events'))
+    const callsBeforeEvents = vi.mocked(loadEdgeTasks).mock.calls.length
+
+    await act(async () => {
+      FakeEventSource.latest?.emit('workflow.runtime.changed')
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      FakeEventSource.latest?.emit('workflow.runtime.changed')
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      FakeEventSource.latest?.emit('manual_confirmation.required')
+    })
+
+    await waitFor(
+      () => expect(loadEdgeTasks).toHaveBeenCalledTimes(callsBeforeEvents + 1),
+      { timeout: 1_000 },
+    )
+  })
+
+  it('keeps a queued SSE refresh while a full snapshot object is replaced', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.mocked(loadEdgeSnapshot)
+      .mockResolvedValueOnce(authoritativeSnapshot)
+      .mockResolvedValueOnce({ ...authoritativeSnapshot, workflowLoaded: 2 })
+    vi.mocked(loadEdgeTasks).mockResolvedValue([])
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useEdgeData(), { wrapper })
+
+    await waitFor(() => expect(result.current.connection).toBe('connected'))
+    await waitFor(() => expect(FakeEventSource.latest?.url).toBe('/api/v1/events'))
+    const source = FakeEventSource.latest
+    act(() => source?.emit('workflow.runtime.changed'))
+    await act(async () => { await result.current.refetch() })
+
+    await waitFor(() => expect(loadEdgeTasks).toHaveBeenCalledTimes(1), { timeout: 1_000 })
+    expect(FakeEventSource.latest).toBe(source)
+  })
+
+  it('runs at most one task refresh and preserves one trailing refresh while it is busy', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.mocked(loadEdgeSnapshot).mockResolvedValue(authoritativeSnapshot)
+    let releaseFirstRefresh: (() => void) | undefined
+    vi.mocked(loadEdgeTasks)
+      .mockImplementationOnce(() => new Promise<Awaited<ReturnType<typeof loadEdgeTasks>>>((resolve) => {
+        releaseFirstRefresh = () => resolve([])
+      }))
+      .mockResolvedValue([])
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    )
+    const { result } = renderHook(() => useEdgeData(), { wrapper })
+
+    await waitFor(() => expect(result.current.connection).toBe('connected'))
+    act(() => FakeEventSource.latest?.emit('workflow.runtime.changed'))
+    await waitFor(() => expect(loadEdgeTasks).toHaveBeenCalledTimes(1))
+
+    act(() => {
+      FakeEventSource.latest?.emit('workflow.runtime.changed')
+      FakeEventSource.latest?.emit('manual_confirmation.required')
+    })
+    await new Promise((resolve) => window.setTimeout(resolve, 350))
+    expect(loadEdgeTasks).toHaveBeenCalledTimes(1)
+
+    await act(async () => { releaseFirstRefresh?.() })
+    await waitFor(
+      () => expect(loadEdgeTasks).toHaveBeenCalledTimes(2),
+      { timeout: 1_000 },
+    )
   })
 })

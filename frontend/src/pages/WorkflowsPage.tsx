@@ -220,6 +220,7 @@ export function WorkflowsPage({
   }) || []
   const taskMutation = useMutation({
     mutationFn: async () => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       if (!detail) throw new Error('请选择工作流')
       return createWorkflowTask({
         workflowUuid: detail.uuid,
@@ -232,12 +233,13 @@ export function WorkflowsPage({
     onMutate: () => onNavigate('tasks'),
     onSuccess: (task) => {
       onNotify(`任务 ${task.uuid || ''} 已提交到 Edge`)
-      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
 
   async function importFile(file: File, kind: 'python' | 'json') {
+    if (!connected) return
     try {
       const imported = kind === 'python' ? await importWorkflowPython(file) : await importWorkflowJson(file, 'normal')
       onNotify(`已导入工作流“${imported.name}”（${imported.uuid}）`)
@@ -247,6 +249,7 @@ export function WorkflowsPage({
     }
   }
   async function referenceChildWorkflow(contract: Record<string, any>) {
+    if (!connected) return
     if (!detail) return
     const contractUuid = String(contract.uuid || '')
     if (!contractUuid) { onNotify('引用失败：发布合同缺少 UUID'); return }

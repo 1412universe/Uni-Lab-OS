@@ -13,6 +13,7 @@ import {
   loadEdgeSnapshot,
   loadReagentHistory,
   loadWorkflowGraph,
+  loadWorkflowTaskDetail,
   loadWorkflowTaskGraph,
   unwrapEnvelope,
   updateExperimentOperation,
@@ -57,6 +58,47 @@ describe('loadWorkflowTaskGraph', () => {
       '/api/v1/workflow-tasks/task-1',
       expect.objectContaining({ headers: { Accept: 'application/json' } }),
     )
+  })
+})
+
+describe('loadWorkflowTaskDetail', () => {
+  it('loads heavy node evidence only for the selected task', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/workflow-tasks/task-1')) return response({
+        code: 0,
+        data: {
+          uuid: 'task-1',
+          workflow_uuid: 'wf-1',
+          status: 'running',
+          input: { sample_id: 'sample-1' },
+          workflow_snapshot: { workflow: { uuid: 'wf-1', name: '详情流程', revision: 2 } },
+          execution_plan: {
+            nodes: [{ uuid: 'node-1', name: '称量', topological_index: 0 }],
+            edges: [],
+          },
+        },
+      })
+      if (url.endsWith('/workflow-tasks/task-1/jobs')) return response({
+        code: 0,
+        data: [{
+          uuid: 'job-1', workflow_node_uuid: 'node-1', status: 'running',
+          param: { target: 1.2 }, feedback_data: { actual: 0.8 }, return_info: {},
+          error_info: [],
+        }],
+      })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const task = await loadWorkflowTaskDetail('task-1', [])
+
+    expect(task.nodes[0].job).toMatchObject({
+      uuid: 'job-1',
+      param: { target: 1.2 },
+      feedbackData: { actual: 0.8 },
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -981,7 +1023,7 @@ describe('loadEdgeSnapshot', () => {
           }],
         })
       }
-      if (url.includes('/workflow-task-presentations?status=running')) {
+      if (url.includes('/workflow-task-presentations?view=matrix')) {
         return response({
           code: 0,
           data: {
@@ -1125,7 +1167,7 @@ describe('loadEdgeSnapshot', () => {
     ])
   })
 
-  it('uses the frozen task input contract when projecting ResourceSlot references', async () => {
+  it('uses compact task material identities when projecting ResourceSlot references', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/readiness')) return response({ status: 'ready' })
@@ -1143,7 +1185,7 @@ describe('loadEdgeSnapshot', () => {
         })
       }
       if (url.includes('/workflow-tasks/task-frozen/jobs')) return response({ code: 0, data: [] })
-      if (url.includes('/workflow-task-presentations?status=running')) {
+      if (url.includes('/workflow-task-presentations?view=matrix')) {
         return response({
           code: 0,
           data: {
@@ -1151,19 +1193,13 @@ describe('loadEdgeSnapshot', () => {
               uuid: 'task-frozen',
               workflow_uuid: 'wf-1',
               status: 'running',
-              input: { vessel: { uuid: 'material-frozen' } },
+              input: { sample_id: 'sample-1' },
+              material_uuids: ['material-frozen'],
               workflow_snapshot: {
                 workflow: {
                   uuid: 'wf-1',
                   name: '冻结流程',
                   revision: 1,
-                  meta_data: {
-                    unilab: {
-                      input_contract: {
-                        parameters: [{ name: 'vessel', schema: { $slot: 'ResourceSlot' } }],
-                      },
-                    },
-                  },
                 },
                 nodes: [],
                 edges: [],
@@ -1197,7 +1233,7 @@ describe('loadEdgeSnapshot', () => {
     })
   })
 
-  it('follows Edge material pagination and separately requests every active task state', async () => {
+  it('follows Edge material pagination and loads the task matrix in one request', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.endsWith('/readiness')) {
@@ -1236,20 +1272,12 @@ describe('loadEdgeSnapshot', () => {
       expect.stringContaining('/materials?page=2&page_size=100'),
       expect.any(Object),
     )
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/workflow-task-presentations?status=running&page=1&page_size=100'),
-      expect.any(Object),
-    )
-    for (const status of ['succeeded', 'failed', 'canceled', 'timeout']) {
-      expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining(`/workflow-task-presentations?status=${status}&page=1&page_size=20`),
-        expect.any(Object),
-      )
-    }
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/workflow-task-presentations?cleanup_status=requires_attention&page=1&page_size=100'),
-      expect.any(Object),
-    )
+    const presentationUrls = fetchMock.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) => url.includes('/workflow-task-presentations?'))
+    expect(presentationUrls).toEqual([
+      expect.stringContaining('/workflow-task-presentations?view=matrix&terminal_limit=20'),
+    ])
   })
 
   it('fails the snapshot when the authoritative task projection omits Jobs', async () => {
@@ -1269,5 +1297,46 @@ describe('loadEdgeSnapshot', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(loadEdgeSnapshot()).rejects.toThrow('Edge 任务展示投影缺少 jobs')
+  })
+
+  it('times out a shared task projection and allows the next refresh to recover', async () => {
+    vi.useFakeTimers()
+    let projectionAttempts = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/readiness')) return response({ status: 'ready' })
+      if (url.includes('/workflows?')) {
+        return response({ code: 0, data: { items: [], total: 0, has_more: false } })
+      }
+      if (url.includes('/workflow-task-presentations?view=matrix')) {
+        projectionAttempts += 1
+        if (projectionAttempts === 1) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('Aborted', 'AbortError'))
+            })
+          })
+        }
+        return response({ code: 0, data: { items: [], total: 0 } })
+      }
+      if (url.endsWith('/materials/graph')) return response({ code: 0, data: { nodes: [] } })
+      if (url.includes('/materials?')) {
+        return response({ code: 0, data: { items: [], total: 0, has_more: false } })
+      }
+      if (url.endsWith('/devices')) return response({ code: 0, data: [] })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    try {
+      const timedOut = expect(loadEdgeSnapshot()).rejects.toThrow()
+      await vi.advanceTimersByTimeAsync(15_000)
+      await timedOut
+
+      await expect(loadEdgeSnapshot()).resolves.toMatchObject({ tasks: [] })
+      expect(projectionAttempts).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

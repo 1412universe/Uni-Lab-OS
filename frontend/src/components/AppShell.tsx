@@ -37,6 +37,7 @@ const pageLabels: Record<PageId, string> = {
 const connectionLabels: Record<ConnectionMode, string> = {
   loading: '正在连接 Edge',
   connected: 'Edge 已连接',
+  reconnecting: 'Edge 正在重连',
   demo: '演示数据',
   error: 'Edge 连接异常',
 }
@@ -159,6 +160,8 @@ export function AppShell({
                 ? '实验室在线'
                 : connection === 'loading'
                   ? '正在连接'
+                  : connection === 'reconnecting'
+                    ? '只读快照'
                   : connection === 'demo'
                     ? '演示模式'
                     : '状态未知'}

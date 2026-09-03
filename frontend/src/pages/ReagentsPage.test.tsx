@@ -10,6 +10,14 @@ function response(body: unknown) {
 }
 
 describe('ReagentsPage', () => {
+  it('disables reagent mutations while showing a stale read-only snapshot', () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ReagentsPage materials={[]} connected={false} onNotify={vi.fn()} /></QueryClientProvider>)
+
+    expect(screen.getByRole('button', { name: '新增试剂目录' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '录入试剂' })).toBeDisabled()
+  })
+
   it('opens the immutable operation history for a reagent container', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)

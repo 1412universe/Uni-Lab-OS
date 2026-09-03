@@ -1131,7 +1131,155 @@ def test_http_task_presentation_batches_compact_plan_and_jobs(
         assert task["execution_plan"]["edges"] == []
         assert NODE_UUID in {job["workflow_node_uuid"] for job in task["jobs"]}
         assert all("execution_policy" not in job for job in task["jobs"])
+        assert all("param" not in job for job in task["jobs"])
+        assert all("feedback_data" not in job for job in task["jobs"])
+        assert all("return_info" not in job for job in task["jobs"])
+        assert set(task["input"]) == {"sample", "sample_id"}
         assert "nodes" in created["workflow_snapshot"]
+    finally:
+        store.close()
+
+
+def test_http_task_presentation_keeps_resource_slot_material_identities(
+    tmp_path: Path,
+) -> None:
+    """紧凑展示投影须保留冻结输入合同解析出的物料稳定身份。"""
+
+    client, store = _client(tmp_path / "task-presentation-materials.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        created = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "run_mode": "normal",
+                "input": {"count": 7},
+                "meta_data": {},
+            },
+        ).json()["data"]
+        frozen_snapshot = deepcopy(created["workflow_snapshot"])
+        frozen_snapshot["workflow"]["meta_data"]["unilab"]["input_contract"][
+            "parameters"
+        ].append(
+            {
+                "name": "vessel",
+                "schema": {"$slot": "ResourceSlot"},
+                "required": True,
+            }
+        )
+        store._conn.execute(
+            "UPDATE workflow_task SET workflow_snapshot = ?, input = ? WHERE uuid = ?",
+            (
+                encode_json(frozen_snapshot, sort_keys=True).decode("utf-8"),
+                encode_json(
+                    {
+                        "count": 7,
+                        "label": "automatic",
+                        "vessel": {"uuid": MATERIAL_UUID},
+                    },
+                    sort_keys=True,
+                ).decode("utf-8"),
+                created["uuid"],
+            ),
+        )
+        store._conn.commit()
+
+        response = client.get(
+            "/api/v1/workflow-task-presentations",
+            params={"view": "matrix", "terminal_limit": 20},
+        )
+
+        assert response.status_code == 200
+        task = response.json()["data"]["items"][0]
+        assert task["material_uuids"] == [MATERIAL_UUID]
+        assert set(task["input"]) == {"sample", "sample_id"}
+        assert "input_contract" not in task["workflow_snapshot"]["workflow"]
+    finally:
+        store.close()
+
+
+def test_http_task_presentation_matrix_returns_active_attention_and_recent_terminal_tasks(
+    tmp_path: Path,
+) -> None:
+    """矩阵视图应以一次请求返回全部活动项、关注项和有限近期终态项。"""
+
+    client, store = _client(tmp_path / "task-presentation-matrix.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        tasks: list[dict[str, Any]] = []
+        for index in range(6):
+            response = client.post(
+                "/api/v1/workflow-tasks",
+                json={
+                    "workflow_uuid": workflow_uuid,
+                    "run_mode": "normal",
+                    "input": {"count": index + 1},
+                    "meta_data": {"sample_id": f"sample-{index}"},
+                },
+            )
+            assert response.status_code == 201, response.text
+            tasks.append(response.json()["data"])
+            # 开发模式只允许一个非终态 Task；这里只为构造矩阵读取夹具临时关闭
+            # 当前 Task，全部创建完成后再安装测试所需的并行状态集合。
+            store._conn.execute(
+                "UPDATE workflow_task SET status = 'succeeded' WHERE uuid = ?",
+                (tasks[-1]["uuid"],),
+            )
+            store._conn.commit()
+
+        fixtures = (
+            (tasks[0]["uuid"], "pending", "none", "2026-01-01T00:00:00Z", None),
+            (tasks[1]["uuid"], "running", "none", "2026-01-01T00:00:01Z", None),
+            # 该任务创建最早、完成最晚，必须按终态发生时间而不是创建时间入选。
+            (tasks[2]["uuid"], "succeeded", "none", "2025-01-01T00:00:00Z", "2026-01-02T00:00:06Z"),
+            (tasks[3]["uuid"], "failed", "none", "2026-01-01T00:00:03Z", "2026-01-01T00:00:03Z"),
+            (tasks[4]["uuid"], "timeout", "none", "2026-01-01T00:00:04Z", "2026-01-01T00:00:04Z"),
+            (
+                tasks[5]["uuid"],
+                "canceled",
+                "requires_attention",
+                "2026-01-01T00:00:05Z",
+                "2026-01-01T00:00:05Z",
+            ),
+        )
+        store._conn.executemany(
+            """
+            UPDATE workflow_task
+            SET status = ?, cleanup_status = ?, create_time = ?, update_time = ?,
+                finished_at = ?
+            WHERE uuid = ?
+            """,
+            [
+                (
+                    status,
+                    cleanup_status,
+                    created_at,
+                    finished_at or created_at,
+                    finished_at,
+                    task_uuid,
+                )
+                for task_uuid, status, cleanup_status, created_at, finished_at in fixtures
+            ],
+        )
+        store._conn.commit()
+
+        response = client.get(
+            "/api/v1/workflow-task-presentations",
+            params={"view": "matrix", "terminal_limit": 2},
+        )
+
+        assert response.status_code == 200
+        page = response.json()["data"]
+        returned = {item["uuid"] for item in page["items"]}
+        assert returned == {
+            tasks[0]["uuid"],
+            tasks[1]["uuid"],
+            tasks[4]["uuid"],
+            tasks[2]["uuid"],
+            tasks[5]["uuid"],
+        }
+        assert page["total"] == 5
+        assert all("jobs" in item for item in page["items"])
     finally:
         store.close()
 

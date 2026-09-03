@@ -1630,11 +1630,15 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         execution_kind: str = Query(default=""),
         status: str = Query(default=""),
         cleanup_status: str = Query(default=""),
+        view: str = Query(default=""),
+        terminal_limit: int = Query(default=20),
     ) -> JSONResponse:
         """返回 Edge 控制台任务矩阵所需的紧凑只读投影。
 
         这是明确的 Edge-only 展示接口，不改变共享 ``/workflow-tasks`` 合同；
         每个 Task 已批量嵌入紧凑 Job 状态，调用方不应再逐任务查询 Job。
+        ``view=matrix`` 一次返回全部活动/需关注 Task 与最多 ``terminal_limit``
+        个近期终态 Task，消除按状态拆分的轮询请求风暴。
         """
 
         return _success(
@@ -1645,6 +1649,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 execution_kind=execution_kind,
                 status=status,
                 cleanup_status=cleanup_status,
+                view=view,
+                terminal_limit=terminal_limit,
             )
         )
 

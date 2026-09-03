@@ -600,6 +600,7 @@ function collectTaskMaterialUuids(
   const add = (value: unknown) => {
     if (typeof value === 'string' && value) materialUuids.add(value)
   }
+  if (Array.isArray(raw.material_uuids)) raw.material_uuids.forEach(add)
   const planNodes = Array.isArray(raw.execution_plan?.nodes) ? raw.execution_plan.nodes : []
   const planNodeByUuid = new Map<string, RawRecord>()
   planNodes.forEach((node: RawRecord) => {
@@ -1573,40 +1574,29 @@ async function taskWithJobs(
 }
 
 const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
+let taskPresentationRowsInFlight: Promise<RawRecord[]> | undefined
+const taskPresentationRequestTimeoutMs = 15_000
 
-function selectRecentTerminalTasks(pages: PageData<RawRecord>[], limit = 20): RawRecord[] {
-  const terminalStatuses = new Set<string>(terminalTaskStatusValues)
-  return pages
-    .flatMap((page) => page.items || [])
-    .filter((task) => terminalStatuses.has(String(task.status)))
-    .sort((left, right) => {
-      const timeOrder = String(right.create_time || '').localeCompare(String(left.create_time || ''))
-      return timeOrder || String(right.uuid || '').localeCompare(String(left.uuid || ''))
-    })
-    .slice(0, limit)
-}
-
-async function loadTaskPresentationRows(signal?: AbortSignal): Promise<RawRecord[]> {
-  const [terminalTaskPages, runningTaskPage, pendingTaskPage, cancelingTaskPage, attentionTaskPage] = await Promise.all([
-    Promise.all(terminalTaskStatusValues.map((status) => requestData<PageData<RawRecord>>(
-      `/workflow-task-presentations?status=${status}&page=1&page_size=20`,
-      signal,
-    ))),
-    requestAllPages<RawRecord>('/workflow-task-presentations?status=running', signal),
-    requestAllPages<RawRecord>('/workflow-task-presentations?status=pending', signal),
-    requestAllPages<RawRecord>('/workflow-task-presentations?status=canceling', signal),
-    requestAllPages<RawRecord>('/workflow-task-presentations?cleanup_status=requires_attention', signal),
-  ])
-  const taskRowsByUuid = new Map<string, RawRecord>()
-  const taskRows = [
-    ...selectRecentTerminalTasks(terminalTaskPages),
-    ...(runningTaskPage.items || []),
-    ...(pendingTaskPage.items || []),
-    ...(cancelingTaskPage.items || []),
-    ...(attentionTaskPage.items || []),
-  ]
-  taskRows.forEach((task) => taskRowsByUuid.set(String(task.uuid), task))
-  return [...taskRowsByUuid.values()]
+async function loadTaskPresentationRows(_signal?: AbortSignal): Promise<RawRecord[]> {
+  // 矩阵查询由完整快照、定时刷新和 SSE 共同使用。共享内部请求不绑定任一调用
+  // 方的取消信号，但设置硬超时，避免半开连接永久占住后续刷新。
+  if (taskPresentationRowsInFlight) return taskPresentationRowsInFlight
+  const controller = new AbortController()
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    taskPresentationRequestTimeoutMs,
+  )
+  const request = requestData<PageData<RawRecord>>(
+    '/workflow-task-presentations?view=matrix&terminal_limit=20',
+    controller.signal,
+  ).then((page) => page.items || [])
+  taskPresentationRowsInFlight = request
+  try {
+    return await request
+  } finally {
+    window.clearTimeout(timeout)
+    if (taskPresentationRowsInFlight === request) taskPresentationRowsInFlight = undefined
+  }
 }
 
 function waitResourceLabelsFromView(
@@ -1647,6 +1637,40 @@ export async function loadEdgeTasks(
     traceUiUrl,
     waitResourceLabels,
   ))
+}
+
+export async function loadWorkflowTaskDetail(
+  taskUuid: string,
+  materials: MaterialRecord[],
+  signal?: AbortSignal,
+): Promise<WorkflowTask> {
+  const [task, jobs] = await Promise.all([
+    requestData<RawRecord>(`/workflow-tasks/${encodeURIComponent(taskUuid)}`, signal),
+    requestData<RawRecord[]>(`/workflow-tasks/${encodeURIComponent(taskUuid)}/jobs`, signal),
+  ])
+  const frozenWorkflow = task.workflow_snapshot?.workflow
+  const inputContract = adaptContractFields(
+    frozenWorkflow?.meta_data?.unilab?.input_contract?.parameters,
+    'parameters',
+  )
+  const labels = emptyWaitResourceLabels([])
+  materials.forEach((material) => {
+    labels.materials[material.uuid] = material.name
+    material.sites.forEach((site) => {
+      labels.sites[site.uuid] = `${material.name} / ${site.name}`
+    })
+    if (material.sourceNodeId) labels.devices[material.sourceNodeId] = material.name
+    labels.devices[material.uuid] = material.name
+  })
+  return adaptTask(
+    task,
+    jobs,
+    String(frozenWorkflow?.name || '未命名工作流'),
+    inputContract,
+    new Set(materials.map((material) => material.uuid)),
+    '',
+    labels,
+  )
 }
 
 export function materialsWithTaskReferences(

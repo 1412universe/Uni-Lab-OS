@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
 import styles from '../styles.css?inline'
 import { MaterialsPage } from './MaterialsPage'
+import { OperationsPage } from './OperationsPage'
 import { serialiseTaskInput, TasksPage } from './TasksPage'
 import { WorkflowsPage } from './WorkflowsPage'
 
@@ -121,7 +122,7 @@ describe('MaterialsPage', () => {
       resourceTemplateUuid: 'template-rejected',
       currentLocation: { kind: 'unassigned' as const, label: '未分配权威库位' },
     }
-    renderWithQuery(<MaterialsPage materials={[owner, allowed, rejected]} total={3} connected={false} onNotify={notify} />)
+    renderWithQuery(<MaterialsPage materials={[owner, allowed, rejected]} total={3} connected onNotify={notify} />)
 
     expect(screen.getByText('库位允许放置的物料')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '上料' }))
@@ -140,11 +141,36 @@ describe('MaterialsPage', () => {
       currentLocation: { kind: 'structural' as const, label: '结构资源', siteCount: 1 },
       sites: [{ uuid: 'empty-site', name: 'L1' }],
     }
-    renderWithQuery(<MaterialsPage materials={[owner]} total={1} connected={false} onNotify={notify} />)
+    renderWithQuery(<MaterialsPage materials={[owner]} total={1} connected onNotify={notify} />)
 
     fireEvent.click(screen.getByRole('button', { name: '下料' }))
     expect(notify).toHaveBeenCalledWith('库位“L1”上没有物料，无法下料')
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('keeps stale material snapshots read-only while preserving read actions', () => {
+    renderWithQuery(
+      <MaterialsPage materials={demoMaterials} total={demoMaterials.length} connected={false} onNotify={vi.fn()} />,
+    )
+
+    expect(screen.getByRole('button', { name: '从模板实例化' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '扫码核验' })).toBeEnabled()
+    const loadingButton = screen.queryByRole('button', { name: '上料' })
+    if (loadingButton) expect(loadingButton).toBeDisabled()
+    const removalButton = screen.queryByRole('button', { name: '下料' })
+    if (removalButton) expect(removalButton).toBeDisabled()
+  })
+})
+
+describe('OperationsPage', () => {
+  it('disables authoring entry points while the Edge snapshot is stale', () => {
+    renderWithQuery(
+      <OperationsPage materials={demoMaterials} connected={false} onNotify={vi.fn()} />,
+    )
+
+    expect(screen.getByRole('button', { name: '导入 Python' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '导入 JSON' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '创建实验操作' })).toBeDisabled()
   })
 })
 

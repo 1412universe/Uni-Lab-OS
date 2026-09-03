@@ -1,6 +1,6 @@
 export type PageId = 'overview' | 'materials' | 'reagents' | 'operations' | 'workflows' | 'tasks'
 
-export type ConnectionMode = 'loading' | 'connected' | 'demo' | 'error'
+export type ConnectionMode = 'loading' | 'connected' | 'reconnecting' | 'demo' | 'error'
 
 /** 只用于界面展示；不会作为 Shared Interface 的 Workflow Task 状态回写。 */
 export type TaskPresentationStatus =

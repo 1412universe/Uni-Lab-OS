@@ -44,6 +44,10 @@ body {
 .connection-alert span { font-size: 9px; }
 .connection-alert button { min-height: 30px; padding: 0 11px; color: #912018; background: #fff; border: 1px solid #fda29b; border-radius: 8px; font-size: 9px; font-weight: 700; }
 .connection-alert-demo { color: #7a2e0e; background: #fffaeb; border-color: #fedf89; }
+.connection-alert-reconnecting { color: #7a2e0e; background: #fffaeb; border-color: #fedf89; }
+.connection-alert-reconnecting button { color: #7a2e0e; border-color: #fdb022; }
+.operations-page[data-writable='false'] .operation-row-actions button:not([title='查看']),
+.operations-page[data-writable='false'] .operation-detail > footer button { opacity: .45; pointer-events: none; }
 
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
@@ -171,6 +175,8 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .edge-meter span { display: block; width: 38%; height: 100%; background: #84adff; border-radius: inherit; }
 .edge-connected .edge-card-head { color: #6ce9b4; }
 .edge-connected .edge-meter span { width: 100%; background: #32d583; }
+.edge-reconnecting .edge-card-head { color: #fec84b; }
+.edge-reconnecting .edge-meter span { width: 62%; background: #f79009; }
 .edge-error .edge-card-head { color: #fda29b; }
 .edge-error .edge-meter span { width: 24%; background: #f97066; }
 
@@ -220,8 +226,8 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
 .live-chip { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; color: #067647; background: #ecfdf3; border: 1px solid #abefc6; border-radius: 999px; font-size: 11px; font-weight: 600; }
 .live-chip i { width: 7px; height: 7px; background: #17b26a; border-radius: 50%; box-shadow: 0 0 0 3px #d1fadf; }
-.live-chip-loading, .live-chip-demo { color: #975a0c; background: #fffaeb; border-color: #fedf89; }
-.live-chip-loading i, .live-chip-demo i { background: #f79009; box-shadow: 0 0 0 3px #fef0c7; }
+.live-chip-loading, .live-chip-reconnecting, .live-chip-demo { color: #975a0c; background: #fffaeb; border-color: #fedf89; }
+.live-chip-loading i, .live-chip-reconnecting i, .live-chip-demo i { background: #f79009; box-shadow: 0 0 0 3px #fef0c7; }
 .live-chip-error { color: #667085; background: #f2f4f7; border-color: #d0d5dd; }
 .live-chip-error i { background: #98a2b3; box-shadow: 0 0 0 3px #eaecf0; }
 

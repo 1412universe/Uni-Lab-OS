@@ -3992,8 +3992,10 @@ class WorkflowService:
         execution_kind: str = "",
         status: str = "",
         cleanup_status: str = "",
+        view: str = "",
+        terminal_limit: int = 20,
     ) -> dict[str, Any]:
-        """分页返回控制台矩阵所需 Task/Jobs 紧凑只读投影。"""
+        """分页或按矩阵窗口返回 Task/Jobs 紧凑只读投影。"""
 
         (
             page,
@@ -4010,6 +4012,14 @@ class WorkflowService:
             status=status,
             cleanup_status=cleanup_status,
         )
+        view = view.strip().lower()
+        if view not in {"", "matrix"}:
+            raise WorkflowError("invalid_input")
+        if view == "matrix":
+            if status or cleanup_status or page != 1:
+                raise WorkflowError("invalid_input")
+            if isinstance(terminal_limit, bool) or not 0 <= terminal_limit <= 100:
+                raise WorkflowError("invalid_input")
         result = self._store.list_task_presentations(
             page=page,
             page_size=page_size,
@@ -4017,6 +4027,8 @@ class WorkflowService:
             execution_kind=execution_kind,
             status=status,
             cleanup_status=cleanup_status,
+            view=view,
+            terminal_limit=terminal_limit,
         )
         jobs_by_task = self._store.list_jobs_for_tasks(
             str(task["uuid"]) for task in result["items"]

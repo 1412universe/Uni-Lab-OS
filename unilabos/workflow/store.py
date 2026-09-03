@@ -85,6 +85,60 @@ def _load(value: Optional[str], fallback: Any) -> Any:
     return decode_json_bytes(value.encode("utf-8"))
 
 
+def _collect_resource_slot_uuids(
+    schema: Any,
+    value: Any,
+    output: set[str],
+) -> None:
+    """按冻结输入 Schema 收集物料占位符（ResourceSlot）的稳定身份。"""
+
+    if not isinstance(schema, Mapping) or value is None:
+        return
+    members = schema.get("anyOf")
+    if isinstance(members, list):
+        for member in members:
+            _collect_resource_slot_uuids(member, value, output)
+        return
+    if schema.get("$slot") == "ResourceSlot":
+        if isinstance(value, Mapping):
+            material_uuid = value.get("uuid")
+            if isinstance(material_uuid, str) and material_uuid:
+                output.add(material_uuid)
+        return
+    if schema.get("type") == "array":
+        if isinstance(value, list):
+            for item in value:
+                _collect_resource_slot_uuids(schema.get("items"), item, output)
+        return
+    properties = schema.get("properties")
+    if isinstance(value, Mapping) and isinstance(properties, Mapping):
+        for name, child_schema in properties.items():
+            _collect_resource_slot_uuids(child_schema, value.get(name), output)
+
+
+def _task_input_material_uuids(
+    contract_parameters: Any,
+    task_input: Any,
+) -> List[str]:
+    """从冻结任务输入合同生成紧凑展示所需的物料 UUID 列表。"""
+
+    if not isinstance(contract_parameters, list) or not isinstance(task_input, Mapping):
+        return []
+    result: set[str] = set()
+    for parameter in contract_parameters:
+        if not isinstance(parameter, Mapping):
+            continue
+        name = parameter.get("name")
+        if not isinstance(name, str) or name not in task_input:
+            continue
+        _collect_resource_slot_uuids(
+            parameter.get("schema"),
+            task_input[name],
+            result,
+        )
+    return sorted(result)
+
+
 def _stored_task_priority(value: Any) -> str | float:
     """规范工作流任务（WorkflowTask）落库值并兼容旧的数值优先级。
 
@@ -2285,12 +2339,15 @@ class WorkflowStore:
         execution_kind: str = "",
         status: str = "",
         cleanup_status: str = "",
+        view: str = "",
+        terminal_limit: int = 20,
     ) -> Dict[str, Any]:
         """分页读取 Edge 控制台需要的紧凑 Task 冻结事实。
 
         查询在 SQLite JSON 层裁剪大体积工作流快照与执行计划，避免先把完整图、
         参数 Schema 和执行策略解码成 Python 对象后再丢弃。返回只读展示投影，
-        筛选和分页语义与 ``list_tasks`` 一致。
+        筛选和分页语义与 ``list_tasks`` 一致；``view=matrix`` 返回活动窗口并仅
+        保留矩阵绘制、等待原因和状态计算所需字段，节点证据由详情接口按需读取。
         """
 
         clauses = ["task.deleted_at IS NULL"]
@@ -2304,6 +2361,41 @@ class WorkflowStore:
             if value:
                 clauses.append(f"task.{field} = ?")
                 values.append(value)
+        if view == "matrix":
+            recent_clauses = ["recent.deleted_at IS NULL"]
+            recent_values: List[Any] = []
+            for field, value in (
+                ("workflow_uuid", workflow_uuid),
+                ("execution_kind", execution_kind),
+            ):
+                if value:
+                    recent_clauses.append(f"recent.{field} = ?")
+                    recent_values.append(value)
+            clauses.append(
+                """
+                (
+                    task.status IN ('pending', 'running', 'canceling')
+                    OR task.cleanup_status = 'requires_attention'
+                    OR task.uuid IN (
+                        SELECT recent.uuid
+                        FROM workflow_task AS recent
+                        WHERE {}
+                          AND recent.cleanup_status <> 'requires_attention'
+                          AND recent.status IN (
+                              'succeeded', 'failed', 'canceled', 'timeout'
+                          )
+                        ORDER BY COALESCE(
+                            recent.finished_at,
+                            recent.update_time,
+                            recent.create_time
+                        ) DESC, recent.uuid DESC
+                        LIMIT ?
+                    )
+                )
+                """.format(" AND ".join(recent_clauses))
+            )
+            values.extend(recent_values)
+            values.append(terminal_limit)
         where = " AND ".join(clauses)
         offset = (page - 1) * page_size
         with self._lock:
@@ -2311,6 +2403,8 @@ class WorkflowStore:
                 f"SELECT COUNT(*) FROM workflow_task AS task WHERE {where}",
                 values,
             ).fetchone()[0]
+            pagination = "" if view == "matrix" else "LIMIT ? OFFSET ?"
+            row_values = values if view == "matrix" else [*values, page_size, offset]
             rows = self._conn.execute(
                 f"""
                 SELECT
@@ -2333,14 +2427,6 @@ class WorkflowStore:
                             ),
                             'revision', json_extract(
                                 task.workflow_snapshot, '$.workflow.revision'
-                            ),
-                            'meta_data', json_object(
-                                'unilab', json_object(
-                                    'input_contract', json_extract(
-                                        task.workflow_snapshot,
-                                        '$.workflow.meta_data.unilab.input_contract'
-                                    )
-                                )
                             )
                         )
                     ) AS workflow_snapshot,
@@ -2398,23 +2484,31 @@ class WorkflowStore:
                     task.cleanup_status,
                     task.wait_reason,
                     task.trace_context,
-                    task.input,
-                    task.error_info,
+                    json_extract(
+                        task.workflow_snapshot,
+                        '$.workflow.meta_data.unilab.input_contract.parameters'
+                    ) AS input_contract_parameters,
+                    task.input AS task_input_source,
+                    json_object(
+                        'sample_id', json_extract(task.input, '$.sample_id'),
+                        'sample', json_extract(task.input, '$.sample')
+                    ) AS input,
+                    '[]' AS error_info,
                     task.attention_reason,
                     task.started_at,
                     task.finished_at
                 FROM workflow_task AS task
                 WHERE {where}
                 ORDER BY task.create_time DESC, task.uuid
-                LIMIT ? OFFSET ?
+                {pagination}
                 """,
-                (*values, page_size, offset),
+                row_values,
             ).fetchall()
         return {
             "items": [self._task_presentation_row(row) for row in rows],
             "total": total,
             "page": page,
-            "page_size": page_size,
+            "page_size": len(rows) if view == "matrix" else page_size,
         }
 
     def list_recoverable_tasks(
@@ -2486,15 +2580,12 @@ class WorkflowStore:
                     executor_kind,
                     status,
                     attempt,
-                    param,
-                    feedback_data,
-                    return_info,
                     json_object(
                         'actual_executor', json_extract(
                             control_data, '$.actual_executor'
                         )
                     ) AS control_data,
-                    error_info,
+                    '[]' AS error_info,
                     wait_reason,
                     json_object(
                         'material_uuid', json_extract(
@@ -4288,6 +4379,10 @@ class WorkflowStore:
             "wait_reason": _load(row["wait_reason"], {}),
             "trace_context": _load(row["trace_context"], {}),
             "input": _load(row["input"], {}),
+            "material_uuids": _task_input_material_uuids(
+                _load(row["input_contract_parameters"], []),
+                _load(row["task_input_source"], {}),
+            ),
             "error_info": _load(row["error_info"], []),
         }
         cls._add_optional(
@@ -4370,9 +4465,6 @@ class WorkflowStore:
             "executor_kind": row["executor_kind"],
             "status": row["status"],
             "attempt": row["attempt"],
-            "param": _load(row["param"], {}),
-            "feedback_data": _load(row["feedback_data"], {}),
-            "return_info": _load(row["return_info"], {}),
             "control_data": _load(row["control_data"], {}),
             "error_info": _load(row["error_info"], []),
             "wait_reason": _load(row["wait_reason"], {}),

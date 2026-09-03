@@ -84,6 +84,48 @@ def test_submit_only_wakes_reconcile_worker() -> None:
     assert all(thread_id != submit_thread for thread_id in reconcile_threads)
 
 
+def test_persistent_drain_scan_does_not_hold_the_scheduler_lock() -> None:
+    """慢持久扫描不得阻塞设备状态等 Scheduler 内存读接口。"""
+
+    scheduler, _dispatcher = _make()
+    provider_started = threading.Event()
+    release_provider = threading.Event()
+    drain_finished = threading.Event()
+
+    def blocking_provider() -> set[str]:
+        provider_started.set()
+        assert release_provider.wait(timeout=2)
+        return {"persisted-job"}
+
+    scheduler.set_drain_blocker_provider(blocking_provider)
+
+    def read_drain() -> None:
+        scheduler.drain_status()
+        drain_finished.set()
+
+    drain_thread = threading.Thread(target=read_drain)
+    drain_thread.start()
+    assert provider_started.wait(timeout=1)
+
+    device_read_finished = threading.Event()
+
+    def read_devices() -> None:
+        scheduler.device_status()
+        device_read_finished.set()
+
+    device_thread = threading.Thread(target=read_devices)
+    device_thread.start()
+    try:
+        assert device_read_finished.wait(timeout=0.5)
+        assert not drain_finished.is_set()
+    finally:
+        release_provider.set()
+        drain_thread.join(timeout=2)
+        device_thread.join(timeout=2)
+
+    assert drain_finished.is_set()
+
+
 def test_transfer_node_type_is_canonical_but_not_executable_as_ilab():
     assert "Transfer" in NODE_TYPES
     node = WorkflowNode(id="transfer", node_type=normalize_node_type("transfer"))

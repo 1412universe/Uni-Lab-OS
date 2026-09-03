@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.responses import JSONResponse, Response
 
 from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
@@ -219,6 +220,7 @@ app.add_middleware(
     ],
     expose_headers=["trace_id", "span_id"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 @app.middleware("http")

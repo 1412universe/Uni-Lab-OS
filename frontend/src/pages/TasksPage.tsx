@@ -22,7 +22,7 @@ import {
   StepForward,
   X,
 } from 'lucide-react'
-import { commandWorkflowTask, createWorkflowTask, decideManualConfirmation, loadWorkflowTaskStepState } from '../lib/edgeClient'
+import { commandWorkflowTask, createWorkflowTask, decideManualConfirmation, loadWorkflowTaskDetail, loadWorkflowTaskStepState } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTarget, WorkflowTask } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
@@ -70,6 +70,7 @@ function NodeMarker({
   index,
   selected,
   ready,
+  writable,
   onSelect,
   onNotify,
 }: {
@@ -77,6 +78,7 @@ function NodeMarker({
   index: number
   selected: boolean
   ready?: boolean
+  writable: boolean
   onSelect: () => void
   onNotify: (message: string) => void
 }) {
@@ -91,9 +93,12 @@ function NodeMarker({
   const confirmation = node?.job?.manualConfirmation
   const awaitingConfirmation = confirmation?.status === 'pending'
   const decision = useMutation({
-    mutationFn: (action: 'approve' | 'reject') => decideManualConfirmation(node?.job?.uuid || '', action),
+    mutationFn: (action: 'approve' | 'reject') => {
+      if (!writable) throw new Error('Edge 未连接，写操作已暂停')
+      return decideManualConfirmation(node?.job?.uuid || '', action)
+    },
     onSuccess: (_result, action) => {
-      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
       onNotify(action === 'approve' ? '人工确认已批准，设备动作将继续执行。' : '人工确认已拒绝，任务正在取消。')
     },
     onError: (error) => onNotify(error instanceof Error ? error.message : '人工确认提交失败'),
@@ -174,8 +179,8 @@ function NodeMarker({
         <div className="manual-confirmation-actions" onClick={(event) => event.stopPropagation()}>
           <small>剩余 {remainingSeconds}s</small>
           <span>
-            <button type="button" disabled={decision.isPending} onClick={() => decision.mutate('reject')}>拒绝</button>
-            <button type="button" disabled={decision.isPending} onClick={() => decision.mutate('approve')}>批准</button>
+            <button type="button" disabled={!writable || decision.isPending} onClick={() => decision.mutate('reject')}>拒绝</button>
+            <button type="button" disabled={!writable || decision.isPending} onClick={() => decision.mutate('approve')}>批准</button>
           </span>
         </div>
       ) : null}
@@ -213,6 +218,7 @@ function TaskMatrix({
   onSelectNode,
   onOpenWorkflow,
   onNotify,
+  writable,
   readyNodeUuids = new Set<string>(),
 }: {
   tasks: WorkflowTask[]
@@ -222,6 +228,7 @@ function TaskMatrix({
   onSelectNode: (taskUuid: string, nodeUuid: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
   onNotify: (message: string) => void
+  writable: boolean
   readyNodeUuids?: ReadonlySet<string>
 }) {
   const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
@@ -299,6 +306,7 @@ function TaskMatrix({
                     && task.uuid === selectedId
                     && readyNodeUuids.has(node.uuid)
                   )}
+                  writable={writable}
                   onSelect={() => {
                     if (node) onSelectNode(task.uuid, node.uuid)
                   }}
@@ -505,6 +513,7 @@ function CreateTaskDialog({
 
   const mutation = useMutation({
     mutationFn: () => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       if (!workflow) throw new Error('请选择可运行的工作流')
       return createWorkflowTask({
         workflowUuid: workflow.uuid,
@@ -515,7 +524,7 @@ function CreateTaskDialog({
     onMutate: () => onClose(),
     onSuccess: (created) => {
       onNotify(`任务 ${created.uuid || ''} 已提交到 Edge`)
-      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
@@ -639,9 +648,20 @@ export function TasksPage({
   }, [tasks, selectedNodeRef])
 
   const filtered = useMemo(() => tasks.filter((task) => matchesFilter(task, filter)), [tasks, filter])
-  const selected = filtered.find((task) => task.uuid === selectedId) || filtered[0]
+  const selectedSummary = filtered.find((task) => task.uuid === selectedId) || filtered[0]
+  const selectedDetailQuery = useQuery({
+    queryKey: ['workflow-task-detail', selectedSummary?.uuid],
+    queryFn: ({ signal }) => loadWorkflowTaskDetail(selectedSummary!.uuid, materials, signal),
+    enabled: connected && Boolean(selectedSummary) && selectedNodeRef?.taskUuid === selectedSummary?.uuid,
+    staleTime: 10_000,
+  })
+  const selected = selectedDetailQuery.data && selectedDetailQuery.data.uuid === selectedSummary?.uuid
+    ? { ...selectedDetailQuery.data, trace: selectedSummary.trace }
+    : selectedSummary
   const selectedNodeTask = selectedNodeRef
-    ? tasks.find((task) => task.uuid === selectedNodeRef.taskUuid)
+    ? selected?.uuid === selectedNodeRef.taskUuid
+      ? selected
+      : tasks.find((task) => task.uuid === selectedNodeRef.taskUuid)
     : undefined
   const selectedNode = selectedNodeTask?.nodes.find((node) => node.uuid === selectedNodeRef?.nodeUuid)
   const runningTasks = tasks.filter((task) => task.nodes.some((node) => node.status === 'running' || node.status === 'canceling'))
@@ -668,13 +688,14 @@ export function TasksPage({
     }
   }, [stepState, selectedStepNodeUuid])
   const controlMutation = useMutation({
-    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => (
-      commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid)
-    ),
+    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
+      return commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid)
+    },
     onSuccess: (_command, variables) => {
       const labels = { step: '单步命令已提交', pause: '已进入单步切换', resume: '已继续自动运行', cancel: '取消命令已提交' }
       onNotify(labels[variables.type])
-      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] })
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: ['workflow-task-step-state', selected?.uuid] })
     },
     onError: (error) => onNotify(`任务控制失败：${error instanceof Error ? error.message : '未知错误'}`),
@@ -740,6 +761,7 @@ export function TasksPage({
             onSelectNode={selectNode}
             onOpenWorkflow={onOpenWorkflow}
             onNotify={onNotify}
+            writable={connected}
             readyNodeUuids={selected?.uuid ? readyNodeUuids : new Set<string>()}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
@@ -773,10 +795,10 @@ export function TasksPage({
                   ) : null}
                   {effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? <small className="step-control-note">当前没有可执行节点</small> : null}
                   <div className="task-step-actions">
-                    {effectiveExecutionMode === 'normal' ? <Button icon={<Pause size={14} />} disabled={controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button> : null}
+                    {effectiveExecutionMode === 'normal' ? <Button icon={<Pause size={14} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button> : null}
                     {effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={14} />} disabled>等待切换</Button> : null}
-                    {effectiveExecutionMode === 'step' ? <><Button tone="primary" icon={<StepForward size={14} />} disabled={controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>{stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}</Button><Button icon={<Play size={14} />} disabled={controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button></> : null}
-                    <Button tone="danger" icon={<Square size={14} />} disabled={controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
+                    {effectiveExecutionMode === 'step' ? <><Button tone="primary" icon={<StepForward size={14} />} disabled={!connected || controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>{stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}</Button><Button icon={<Play size={14} />} disabled={!connected || controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button></> : null}
+                    <Button tone="danger" icon={<Square size={14} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
                   </div>
                 </div>
               ) : null}

@@ -242,7 +242,10 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
     })
   }
 
-  function beginCreate() { setCreating(true); setEditingUuid(''); setSelectedOperation(null); setName(''); setDescription(''); setCategoryUuid(''); setInputContractFields([]); setOutputContractFields([]); setChildWorkflowRefs([]); setChildPickerOpen(false); setDraft([]) }
+  function beginCreate() {
+    if (!connected) return
+    setCreating(true); setEditingUuid(''); setSelectedOperation(null); setName(''); setDescription(''); setCategoryUuid(''); setInputContractFields([]); setOutputContractFields([]); setChildWorkflowRefs([]); setChildPickerOpen(false); setDraft([])
+  }
   async function viewOperation(operation: WorkflowDefinition) {
     setSelectedOperation(operation)
     setSelectedOperationNodes([])
@@ -253,6 +256,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
     } catch (error) { onNotify(`读取实验操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
   async function beginEdit(operation: WorkflowDefinition) {
+    if (!connected) return
     try {
       const graph = await loadWorkflowGraph(operation.uuid)
       const actions = await Promise.all(graph.nodes.filter((node) => node.workflow_node_template_uuid && !node.meta_data?.unilab?.composite).map(async (node) => ({
@@ -273,6 +277,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
     } catch (error) { onNotify(`读取实验操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
   async function addAction(templateUuid: string) {
+    if (!connected) return
     const template = actionsQuery.data?.find((item) => item.uuid === templateUuid)
     if (!template) return
     const device = materials.find((material) => material.resourceTemplateUuid === template.resourceTemplate.uuid)
@@ -299,6 +304,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
     })
   }
   async function submit() {
+    if (!connected) return
     if (saveProblem) { onNotify(saveProblem); return }
     setSaving(true)
     let createdNewWorkflow = false
@@ -359,11 +365,13 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
   }
 
   async function publish(operation: WorkflowDefinition) {
+    if (!connected) return
     try { await publishExperimentOperation(operation.uuid, operation.revision); onNotify(`实验操作“${operation.name}”已发布`); await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] }) }
     catch (error) { onNotify(`发布失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
 
   async function remove(operation: WorkflowDefinition) {
+    if (!connected) return
     if (!window.confirm(`确认删除实验操作“${operation.name}”？该操作不可恢复。`)) return
     try { await deleteExperimentOperation(operation.uuid); setSelectedOperation(null); onNotify(`已删除实验操作“${operation.name}”`); await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] }) }
     catch (error) { onNotify(`删除失败：${error instanceof Error ? error.message : '未知错误'}`) }
@@ -372,6 +380,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
   const expandedAction = draft.find((action) => action.id === expandedActionId)
 
   async function importFile(file: File, kind: 'python' | 'json') {
+    if (!connected) return
     try {
       const imported = kind === 'python' ? await importWorkflowPython(file) : await importWorkflowJson(file, 'experiment_operation')
       if (imported.workflowType !== 'experiment_operation') {
@@ -384,15 +393,15 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
     } catch (error) { onNotify(`导入失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
 
- return <div className="page operations-page">
-    <PageHeader eyebrow="EXPERIMENT OPERATIONS" title="实验室操作" description="实验操作是由设备 Action 节点组成、可被普通工作流引用的子工作流。" actions={creating ? <Button icon={<ChevronLeft size={15} />} onClick={() => setCreating(false)}>返回实验操作</Button> : <><input ref={pythonImportRef} hidden type="file" accept=".py,text/x-python" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file, 'python') }} /><input ref={jsonImportRef} hidden type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file, 'json') }} /><Button disabled={!connected} icon={<FileInput size={15} />} onClick={() => pythonImportRef.current?.click()}>导入 Python</Button><Button disabled={!connected} icon={<FileJson size={15} />} onClick={() => jsonImportRef.current?.click()}>导入 JSON</Button><Button tone="primary" icon={<Sparkles size={16} />} onClick={beginCreate}>创建实验操作</Button></>} />
+ return <div className="page operations-page" data-writable={connected}>
+    <PageHeader eyebrow="EXPERIMENT OPERATIONS" title="实验室操作" description="实验操作是由设备 Action 节点组成、可被普通工作流引用的子工作流。" actions={creating ? <Button icon={<ChevronLeft size={15} />} onClick={() => setCreating(false)}>返回实验操作</Button> : <><input ref={pythonImportRef} hidden type="file" accept=".py,text/x-python" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file, 'python') }} /><input ref={jsonImportRef} hidden type="file" accept=".json,application/json" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void importFile(file, 'json') }} /><Button disabled={!connected} icon={<FileInput size={15} />} onClick={() => pythonImportRef.current?.click()}>导入 Python</Button><Button disabled={!connected} icon={<FileJson size={15} />} onClick={() => jsonImportRef.current?.click()}>导入 JSON</Button><Button tone="primary" icon={<Sparkles size={16} />} disabled={!connected} onClick={beginCreate}>创建实验操作</Button></>} />
     <div className={`operation-authoring-layout ${creating ? 'is-creating' : ''}`}>
       <Panel className="device-action-browser"><PanelHeader title="设备模板" description={`${deviceGroups.length} 个设备 · ${actionsQuery.data?.length || 0} 个 Action`} />
         <label className="search-field"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索当前设备的 Action" /></label>
         <div className="device-template-list">{deviceGroups.map((device) => <button key={device.uuid} className={selectedDevice?.uuid === device.uuid ? 'active' : ''} onClick={() => { setSelectedDeviceUuid(device.uuid); setQuery('') }}><span><FlaskConical size={15} /></span><div><strong>{device.name}</strong><small>{device.actions.length} 个 Action</small></div><ChevronRight size={13} /></button>)}</div>
-        {selectedDevice ? <section className="device-actions"><header><strong>{selectedDevice.name}</strong><span>{visibleActions.length} 个 Action</span></header>{visibleActions.map((action) => <button key={action.uuid} disabled={!creating} onClick={() => creating ? void addAction(action.uuid) : undefined}><div><strong>{action.displayName}</strong><code>{action.name}</code></div>{creating ? <Plus size={14} /> : null}</button>)}</section> : null}
+        {selectedDevice ? <section className="device-actions"><header><strong>{selectedDevice.name}</strong><span>{visibleActions.length} 个 Action</span></header>{visibleActions.map((action) => <button key={action.uuid} disabled={!connected || !creating} onClick={() => creating ? void addAction(action.uuid) : undefined}><div><strong>{action.displayName}</strong><code>{action.name}</code></div>{creating ? <Plus size={14} /> : null}</button>)}</section> : null}
       </Panel>
-      {creating ? <Panel className="operation-builder"><div className="builder-heading"><div><span>EXPERIMENT OPERATION EDITOR</span><h2>{editingUuid ? '编辑实验操作' : '创建实验操作'}</h2>{editingUuid ? <code>{editingUuid}</code> : null}<p>{editingUuid ? '保存修改后状态退回 source，需要重新发布。' : '选择设备 Action 或引用已发布实验操作，组成可复用子工作流。'}</p></div><div className="builder-heading-actions"><strong>{draft.length + childWorkflowRefs.length} 个节点</strong><Button tone="primary" icon={<Save size={15} />} disabled={saving} title={saveProblem || undefined} onClick={() => void submit()}>{saving ? '正在保存…' : '保存实验操作'}</Button></div></div>
+      {creating ? <Panel className="operation-builder"><div className="builder-heading"><div><span>EXPERIMENT OPERATION EDITOR</span><h2>{editingUuid ? '编辑实验操作' : '创建实验操作'}</h2>{editingUuid ? <code>{editingUuid}</code> : null}<p>{editingUuid ? '保存修改后状态退回 source，需要重新发布。' : '选择设备 Action 或引用已发布实验操作，组成可复用子工作流。'}</p></div><div className="builder-heading-actions"><strong>{draft.length + childWorkflowRefs.length} 个节点</strong><Button tone="primary" icon={<Save size={15} />} disabled={!connected || saving} title={saveProblem || undefined} onClick={() => void submit()}>{saving ? '正在保存…' : '保存实验操作'}</Button></div></div>
         <div className="operation-meta"><label><span>操作名称</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：S09 移液并混匀" /></label><label><span>操作类别</span><select value={categoryUuid} onChange={(event) => setCategoryUuid(event.target.value)}><option value="">未分类</option>{categoriesQuery.data?.map((category) => <option key={category.uuid} value={category.uuid}>{category.name}</option>)}</select></label><label className="wide"><span>说明</span><input value={description} onChange={(event) => setDescription(event.target.value)} placeholder="描述该实验操作的目的和约束" /></label></div>
         <div className="save-requirements" data-ready={!saveProblem || undefined}>{saveProblem || `配置完整 · ${workflowParameters.length} 个工作流参数`}</div>
         <section className="workflow-contract-editor"><header><div><strong>工作流参数</strong><span>对外暴露给父工作流的输入和输出合同</span></div><span className="contract-editor-hint">参数名称需唯一；保存时由 OS 做最终校验</span></header><div className="workflow-contract-editors"><ContractEditor kind="input" fields={inputContractFields} setFields={setInputContractFields} /><ContractEditor kind="output" fields={outputContractFields} setFields={setOutputContractFields} /></div></section>

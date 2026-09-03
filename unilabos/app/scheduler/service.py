@@ -3367,7 +3367,8 @@ class EdgeScheduler:
 
         with self._lock:
             self._draining = True
-            return self._drain_status_locked()
+            snapshot = self._capture_drain_status_locked()
+        return self._resolve_drain_status(snapshot)
 
     def set_drain_blocker_provider(
         self,
@@ -3386,12 +3387,14 @@ class EdgeScheduler:
     def drain_status(self) -> dict[str, Any]:
         """查询调度器是否已经安全排空。
 
-        参数：无。返回：排空阶段以及仍在设备侧执行的作业列表。异常：不主动
-        抛出异常；快照在调度锁内构造，不会把同一作业同时报告为空闲和在途。
+        参数：无。返回：排空阶段以及仍在设备侧执行的作业列表。异常：持久
+        阻塞项读取失败原样传播，关闭式拒绝把未知执行报告成已排空。调度内存
+        快照在锁内复制，较慢的持久 Task/Job 扫描在锁外完成，不阻塞重排。
         """
 
         with self._lock:
-            return self._drain_status_locked()
+            snapshot = self._capture_drain_status_locked()
+        return self._resolve_drain_status(snapshot)
 
     def resume_from_drain(self) -> dict[str, Any]:
         """退出排空状态并立即继续派发此前被门禁拦住的作业。
@@ -3403,27 +3406,39 @@ class EdgeScheduler:
         with self._lock:
             self._draining = False
             dispatched = self._reschedule_locked()
-            return {
-                **self._drain_status_locked(),
-                "dispatched": dispatched,
-            }
+            snapshot = self._capture_drain_status_locked()
+        return {
+            **self._resolve_drain_status(snapshot),
+            "dispatched": dispatched,
+        }
 
-    def _drain_status_locked(self) -> dict[str, Any]:
-        """在持有调度锁时构造排空状态，不创建第二份作业事实。"""
+    def _capture_drain_status_locked(
+        self,
+    ) -> tuple[bool, set[str], Callable[[], set[str]] | None]:
+        """在调度锁内复制排空内存事实和持久事实读取端口。"""
 
-        active_device_job_ids = sorted(
+        return (
+            self._draining,
             {
                 job_id
                 for job_id, job in self._inflight.items()
                 if self._is_device_job_active_locked(job)
-            }
-            | (
-                set(self._drain_blocker_provider())
-                if self._drain_blocker_provider is not None
-                else set()
-            )
+            },
+            self._drain_blocker_provider,
         )
-        if not self._draining:
+
+    @staticmethod
+    def _resolve_drain_status(
+        snapshot: tuple[bool, set[str], Callable[[], set[str]] | None],
+    ) -> dict[str, Any]:
+        """在调度锁外合并持久阻塞项并构造关闭式排空投影。"""
+
+        draining, memory_job_ids, blocker_provider = snapshot
+        persisted_job_ids = (
+            set(blocker_provider()) if blocker_provider is not None else set()
+        )
+        active_device_job_ids = sorted(memory_job_ids | persisted_job_ids)
+        if not draining:
             phase = "running"
         elif active_device_job_ids:
             phase = "draining"
@@ -3431,7 +3446,7 @@ class EdgeScheduler:
             phase = "drained"
         return {
             "phase": phase,
-            "accepting_new_dispatches": not self._draining,
+            "accepting_new_dispatches": not draining,
             "active_device_job_count": len(active_device_job_ids),
             "active_device_job_ids": active_device_job_ids,
         }
@@ -3459,7 +3474,7 @@ class EdgeScheduler:
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
-            return {
+            snapshot = {
                 "workflows": {
                     wid: run.snapshot() for wid, run in self._workflows.items()
                 },
@@ -3478,8 +3493,12 @@ class EdgeScheduler:
                     for job_id, j in self._inflight.items()
                 },
                 "reschedule_count": self._reschedule_count,
-                "drain": self._drain_status_locked(),
             }
+            drain_snapshot = self._capture_drain_status_locked()
+        return {
+            **snapshot,
+            "drain": self._resolve_drain_status(drain_snapshot),
+        }
 
     def cancel_workflow(self, workflow_id: str) -> bool:
         """停止后续派发并请求执行器取消全部在途设备作业。
