@@ -138,8 +138,8 @@ class DomainWorkflowSourceTarget:
 
         参数：``registration`` 必须由当前目标生成；``python_source`` 是已经完成
         AST、目录和图固定点校验的规范源码。返回已发布注册。源码先发布，manifest
-        后发布；若进程在两步之间退出，只会留下未登记孤儿文件，启动扫描不会把它
-        当成工作流权威，后续相同导入可以安全接管。
+        后发布；manifest 发布失败时会按源码内容校验删除本次新建文件，避免留下
+        未登记孤儿。已有同内容源码不会被覆盖，发生并发变化时关闭式失败。
         """
 
         encoded = python_source.encode("utf-8")
@@ -161,15 +161,17 @@ class DomainWorkflowSourceTarget:
                 raise DomainWorkflowSourceError("source_identity_conflict")
 
             source_row = _registration_row(registration)
+            intended_hash = _sha256(encoded)
+            source_created = False
             try:
                 existing = read_registered_source(source_row)
-                intended_hash = _sha256(encoded)
                 if existing is None:
                     write_registered_source(
                         source_row,
                         encoded,
                         expected_hash=None,
                     )
+                    source_created = True
                 elif existing.draft_hash != intended_hash:
                     raise DomainWorkflowSourceError("source_identity_conflict")
             except DomainWorkflowSourceError:
@@ -211,15 +213,61 @@ class DomainWorkflowSourceTarget:
                     expected_hash=_sha256(manifest_bytes),
                 )
             except (SourceManifestError, SourcePublicationError) as error:
+                try:
+                    self._rollback_new_source(
+                        source_row,
+                        source_created=source_created,
+                        expected_hash=intended_hash,
+                    )
+                except (
+                    SourcePublicationConflict,
+                    SourceWorkspaceError,
+                ) as rollback_error:
+                    raise DomainWorkflowSourceError(
+                        "source_publication_failed"
+                    ) from rollback_error
                 raise DomainWorkflowSourceError("source_publication_failed") from error
             except SourcePublicationConflict as error:
-                if source_bytes is not None:
-                    try:
-                        write_registered_source(source_row, source_bytes, expected_hash=None)
-                    except SourceWorkspaceError:
-                        raise DomainWorkflowSourceError("source_publication_failed") from error
+                try:
+                    self._rollback_new_source(
+                        source_row,
+                        source_created=source_created,
+                        expected_hash=intended_hash,
+                    )
+                except (
+                    SourcePublicationConflict,
+                    SourceWorkspaceError,
+                ) as rollback_error:
+                    raise DomainWorkflowSourceError(
+                        "source_publication_failed"
+                    ) from rollback_error
                 raise DomainWorkflowSourceError("source_identity_conflict") from error
         return registration
+
+    @staticmethod
+    def _rollback_new_source(
+        source_row: dict[str, str],
+        *,
+        source_created: bool,
+        expected_hash: str,
+    ) -> None:
+        """manifest 发布失败时按内容校验清理本次新建源码。
+
+        参数：``source_row`` 是待清理的来源身份；``source_created`` 表示本次调用
+        是否新建了源码；``expected_hash`` 是本次源码内容哈希。返回：源码原本存在
+        或已被其他写入者改变时不删除；内容仍是本次新建版本时删除文件。异常：路径
+        不安全、文件读取失败或删除失败抛出 ``SourceWorkspaceError``；并发内容变化
+        抛出 ``SourcePublicationConflict``，调用方必须把导入关闭式判为失败。
+        """
+
+        if not source_created:
+            return
+        current = read_registered_source(source_row)
+        if current is None:
+            return
+        if current.draft_hash != expected_hash:
+            raise SourcePublicationConflict("draft_hash_conflict")
+        delete_registered_source(source_row)
 
     def unregister(
         self,

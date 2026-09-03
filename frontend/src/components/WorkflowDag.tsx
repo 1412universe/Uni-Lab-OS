@@ -28,9 +28,12 @@ const edgeKindLabels: Record<WorkflowEdgeKind, string> = {
   parallel_join: '并行汇合',
 }
 
+/** 将节点类型翻译为实验人员能直接理解的名称。 */
 function nodeTypeLabel(node: WorkflowGraphNode) {
   if (node.kind === 'material_source') return '物料源'
   if (node.kind === 'group') return '分组'
+  if (node.type.toLowerCase() === 'condition') return '条件节点'
+  if (node.type.toLowerCase() === 'repeat_until') return '循环节点'
   return node.deviceId || node.type || '工作流节点'
 }
 

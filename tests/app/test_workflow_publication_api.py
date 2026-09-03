@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from unilabos.app.workflow_api import create_workflow_app
+from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.json_codec import decode_json_bytes
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
@@ -16,6 +17,13 @@ def _client(tmp_path):
     store = WorkflowStore(tmp_path / "workflow_publication.db")
     service = WorkflowService(store)
     return TestClient(create_workflow_app(service)), store
+
+
+class _EmptyTemplateProjection:
+    """本地动作目录投影；发布的组合模板不属于该目录。"""
+
+    def snapshot(self) -> AuthoringCatalogSnapshot:
+        return AuthoringCatalogSnapshot.from_entities([], [])
 
 
 def _create_workflow_with_one_node(
@@ -327,6 +335,54 @@ def test_composite_invocation_expands_one_frozen_contract_into_parent(tmp_path) 
     assert child["parent_uuid"] == invocation_uuid
     assert child["name"] == "人工确认"
     store.close()
+
+
+def test_composite_invocation_resolves_published_template_with_catalog_projection(
+    tmp_path,
+) -> None:
+    """本地动作目录存在时，父图仍须解析发布合同生成的组合节点模板。"""
+
+    projection = _EmptyTemplateProjection()
+    store = WorkflowStore(
+        tmp_path / "workflow_publication_local.db",
+        template_snapshot_provider=projection,
+    )
+    service = WorkflowService(store)
+    client = TestClient(
+        create_workflow_app(service, template_snapshot_provider=projection)
+    )
+    try:
+        child_uuid, child_revision = _create_workflow_with_one_node(
+            client,
+            workflow_type="experiment_operation",
+        )
+        contract = client.post(
+            f"/api/v1/workflows/{child_uuid}/publications",
+            json={"revision": child_revision},
+        ).json()["data"]
+        parent = client.post(
+            "/api/v1/workflows",
+            json={"name": "本地目录父工作流", "tags": [], "meta_data": {}},
+        ).json()["data"]
+
+        inserted = client.post(
+            f"/api/v1/workflows/{parent['uuid']}/composite-invocations",
+            json={
+                "revision": parent["revision"],
+                "contract_uuid": contract["uuid"],
+                "device_bindings": {},
+                "pose": {"x": 120, "y": 80},
+                "param": {},
+            },
+        )
+        assert inserted.status_code == 200
+        assert inserted.json()["code"] == 0
+        graph = inserted.json()["data"]
+        root = next(node for node in graph["nodes"] if node["type"] == "workflow")
+        assert root["workflow_node_template_uuid"] == contract["node_template_uuid"]
+        assert len(graph["nodes"]) == 2
+    finally:
+        store.close()
 
 
 def test_only_published_experiment_operation_can_be_composite_child(tmp_path) -> None:

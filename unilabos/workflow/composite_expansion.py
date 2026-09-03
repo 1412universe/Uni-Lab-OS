@@ -1373,7 +1373,9 @@ def _failed_expansion(code: str, path: str) -> CompositeExpansion:
                 "code": code,
                 "path": path,
                 "severity": "error",
-                "message": "组合工作流创作合同校验失败",
+                # 路径是服务端可定位的合同字段，不泄露快照内容；保留它能让
+                # 前端在插入组合节点失败时直接指出是来源、目录还是合同 pin。
+                "message": f"组合工作流创作合同校验失败（{path}）",
             },
         ),
     )

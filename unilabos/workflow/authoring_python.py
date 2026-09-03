@@ -146,14 +146,17 @@ def render_authoring_python(
     typing_names: set[str] = {"TypedDict"} if explicit_output_bindings else set()
     needs_field = False
     needs_resource_slot = False
+    needs_json_value = False
     annotation_resource_imports: set[tuple[str, str]] = set()
     for _name, annotation, _default, imports, resource_imports in annotations:
         typing_names.update(imports & {"Annotated", "Literal"})
+        needs_json_value = needs_json_value or "JSONValue" in imports
         annotation_resource_imports.update(resource_imports)
         needs_field = needs_field or "Field(" in annotation
         needs_resource_slot = needs_resource_slot or "ResourceSlot" in annotation
     for annotation, imports, resource_imports in output_annotations.values():
         typing_names.update(imports & {"Annotated", "Literal"})
+        needs_json_value = needs_json_value or "JSONValue" in imports
         annotation_resource_imports.update(resource_imports)
         needs_field = needs_field or "Field(" in annotation
         needs_resource_slot = needs_resource_slot or "ResourceSlot" in annotation
@@ -175,6 +178,8 @@ def render_authoring_python(
         lines.append(
             "from unilabos.registry.annotations import AllowedResourceTemplates"
         )
+    if needs_json_value:
+        lines.append("from unilabos.registry.annotations import JSONValue")
     if needs_resource_slot:
         lines.append("from unilabos.registry.placeholder_type import ResourceSlot")
     group_nodes = [
@@ -1530,7 +1535,10 @@ def _render_schema_base(schema: dict[str, Any]) -> tuple[str, set[str]]:
         "integer": "int",
         "number": "float",
         "boolean": "bool",
-        "object": "dict[str, object]",
+        # Keep generated dictionaries compatible with the AST parser's
+        # recursive JSON value contract so generated source compiles back to
+        # the same workflow input schema.
+        "object": "dict[str, JSONValue]",
     }
     if "enum" in schema:
         values = schema.get("enum")
@@ -1556,10 +1564,11 @@ def _render_schema_base(schema: dict[str, Any]) -> tuple[str, set[str]]:
         if schema_key in schema:
             field_arguments.append(f"{field_key}={schema[schema_key]!r}")
     if field_arguments:
-        return f"Annotated[{annotation}, Field({', '.join(field_arguments)})]", {
-            "Annotated"
-        }
-    return annotation, set()
+        imports = {"Annotated"}
+        if value_type == "object":
+            imports.add("JSONValue")
+        return f"Annotated[{annotation}, Field({', '.join(field_arguments)})]", imports
+    return annotation, {"JSONValue"} if value_type == "object" else set()
 
 
 def _resource_template_allowlist(schema: Mapping[str, Any]) -> list[str] | None:

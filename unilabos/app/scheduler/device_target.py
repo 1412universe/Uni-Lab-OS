@@ -206,6 +206,20 @@ def resolve_registered_fixed_device_target(
         ),
         None,
     )
+    if target is None and material_uuid and local_device_id == material_uuid:
+        # ExecutionPlan 的固定绑定只持久化设备物料 UUID；Edge 注册同时拥有
+        # 该 UUID 与本地驱动 ID。此处把“物料 UUID 作为 device_id”的计划字段
+        # 解析为实际 local_id，避免把 UUID 错当成驱动路径；只有两者相等时才
+        # 启用别名，防止一个任意错误的 local_device_id 被静默改写为另一设备。
+        target = next(
+            (
+                device
+                for device in devices
+                if isinstance(device, Mapping)
+                and str(device.get("material_uuid") or "").strip() == material_uuid
+            ),
+            None,
+        )
     if target is None:
         raise DeviceTargetUnavailable(
             "device_not_registered", "固定设备身份不在当前执行进程注册快照中"
@@ -225,10 +239,15 @@ def resolve_registered_fixed_device_target(
                 },
             ),
         )
-    candidate = ResolvedDeviceTarget(local_device_id, material_uuid)
+    resolved_local_device_id = str(target.get("local_id") or "").strip()
+    if not resolved_local_device_id:
+        raise DeviceTargetUnavailable(
+            "invalid_edge_registration", "注册设备缺少本地驱动身份"
+        )
+    candidate = ResolvedDeviceTarget(resolved_local_device_id, material_uuid)
     if {
-        f"/devices/{local_device_id}",
-        f"/devices/{local_device_id}/{action_name}",
+        f"/devices/{resolved_local_device_id}",
+        f"/devices/{resolved_local_device_id}/{action_name}",
         f"/devices/{material_uuid}",
     } & busy_keys:
         raise DeviceTargetUnavailable(
@@ -238,8 +257,8 @@ def resolve_registered_fixed_device_target(
                 {
                     "scope": "device",
                     "device_id": material_uuid,
-                    "local_device_id": local_device_id,
-                    "device_name": str(target.get("name") or local_device_id),
+                    "local_device_id": resolved_local_device_id,
+                    "device_name": str(target.get("name") or resolved_local_device_id),
                 },
             ),
         )

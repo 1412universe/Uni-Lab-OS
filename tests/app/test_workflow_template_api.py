@@ -11,6 +11,8 @@ from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 
 NODE_TEMPLATE_A = "20000000-0000-4000-8000-000000000001"
 NODE_TEMPLATE_B = "20000000-0000-4000-8000-000000000002"
+CONDITION_TEMPLATE = "20000000-0000-4000-8000-000000000003"
+REPEAT_TEMPLATE = "20000000-0000-4000-8000-000000000004"
 HANDLE_TEMPLATE_A = "30000000-0000-4000-8000-000000000001"
 RESOURCE_TEMPLATE_UUID = "10000000-0000-4000-8000-000000000001"
 
@@ -73,6 +75,47 @@ def _node(
         "header": None,
         "footer": None,
         "node_type": "device_action",
+    }
+
+
+def _control_node(*, template_uuid: str, node_type: str, display_name: str) -> dict[str, Any]:
+    """构造一个结构化控制节点模板，供公开目录接口测试使用。
+
+    参数说明：``template_uuid`` 是稳定模板身份，``node_type`` 是调度器控制类型，
+    ``display_name`` 是前端展示名称；返回值只包含控制节点所需的目录元数据，
+    不伪造普通设备动作句柄。
+    """
+
+    return {
+        "uuid": template_uuid,
+        "create_time": "2026-08-04T00:00:02Z",
+        "update_time": "2026-08-04T00:00:02Z",
+        "description": "由调度器处理的结构化工作流控制节点。",
+        "meta_data": {
+            "unilab": {
+                "resource_template": {
+                    "uuid": RESOURCE_TEMPLATE_UUID,
+                    "name": "host_node",
+                    "display_name": "工作流控制",
+                },
+                "executor_kind": node_type,
+                "parameter_schema": {
+                    "type": "object",
+                    "description": "控制节点参数由工作流图保存，并由调度器在运行时校验。",
+                },
+            }
+        },
+        "resource_template_uuid": RESOURCE_TEMPLATE_UUID,
+        "name": node_type,
+        "display_name": display_name,
+        "class": f"unilabos.workflow.authoring:{node_type}",
+        "goal": {},
+        "goal_default": {},
+        "feedback": {},
+        "result": {},
+        "schema": None,
+        "type": node_type,
+        "node_type": node_type,
     }
 
 
@@ -200,3 +243,52 @@ def test_workflow_template_query_uses_backend_business_errors() -> None:
     assert missing_template.status_code == 200
     assert missing_template.json()["code"] == 5001
     assert missing_template.json()["error"]["msg"]
+
+
+def test_workflow_template_list_exposes_scheduler_control_nodes() -> None:
+    """默认模板目录应同时暴露条件和循环节点，供实验操作前端选择和说明参数。"""
+
+    snapshot = AuthoringCatalogSnapshot.from_entities(
+        [
+            _node(
+                template_uuid=NODE_TEMPLATE_A,
+                action_name="transfer",
+                display_name="输送",
+                create_time="2026-08-04T00:00:00Z",
+            ),
+            _control_node(
+                template_uuid=CONDITION_TEMPLATE,
+                node_type="condition",
+                display_name="条件",
+            ),
+            _control_node(
+                template_uuid=REPEAT_TEMPLATE,
+                node_type="repeat_until",
+                display_name="重复直到",
+            ),
+        ],
+        [],
+    )
+    client = TestClient(create_workflow_template_app(SnapshotProvider(snapshot)))
+
+    response = client.get(
+        "/api/v1/workflow-node-templates",
+        params={"page": 1, "page_size": 20},
+    )
+
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert {item["node_type"] for item in items} == {"device_action", "condition", "repeat_until"}
+
+    condition = client.get(f"/api/v1/workflow-node-templates/{CONDITION_TEMPLATE}")
+    assert condition.status_code == 200
+    condition_data = condition.json()["data"]
+    assert condition_data["handles"] == []
+    assert condition_data["template"]["meta_data"]["unilab"]["executor_kind"] == "condition"
+    assert condition_data["template"]["meta_data"]["unilab"]["parameter_schema"]["type"] == "object"
+
+    repeat = client.get(
+        "/api/v1/workflow-node-templates",
+        params={"node_type": "repeat_until", "page": 1, "page_size": 20},
+    )
+    assert [item["uuid"] for item in repeat.json()["data"]["items"]] == [REPEAT_TEMPLATE]

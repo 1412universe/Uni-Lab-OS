@@ -773,6 +773,11 @@ def _record_composite_output_schemas(
             schema = {"$slot": "ResourceSlot"}
             if isinstance(template_uuid, str):
                 schema["allowed_resource_template_uuids"] = [template_uuid]
+        elif binding.kind == "literal":
+            # 子工作流参数可以在父节点上直接填写固定值。此时没有上游节点
+            # 可用于推导类型，但子工作流输入合同已经给出权威 Schema；用它
+            # 证明透传输出的类型，避免把“固定值调用”误判为边界映射损坏。
+            schema = input_schemas.get(parameter_name)
         else:
             schema = None
         if not isinstance(schema, Mapping):

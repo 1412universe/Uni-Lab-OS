@@ -10,7 +10,7 @@ from uuid import UUID, uuid4, uuid5
 
 import rfc8785
 
-from unilabos.workflow.handle_projection import workflow_handle_type
+from unilabos.workflow.handle_projection import resource_slot_schema, workflow_handle_type
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.store import WorkflowStore, utc_now
 from unilabos.workflow.workflow_io import (
@@ -175,6 +175,8 @@ def _published_template_projection(
     output_handle_by_name: dict[str, str] = {}
     for descriptor in input_contract["parameters"]:
         name = str(descriptor["name"])
+        schema_value = descriptor["schema"]
+        slot_schema = resource_slot_schema(schema_value)
         handle_uuid = _handle_uuid(node_template_uuid, "target", name)
         input_handle_by_name[name] = handle_uuid
         handles.append(
@@ -184,15 +186,32 @@ def _published_template_projection(
                 "io_type": "target",
                 "display_name": str(descriptor.get("title") or name),
                 "description": descriptor.get("description"),
-                "type": workflow_handle_type(descriptor["schema"]),
+                "type": workflow_handle_type(schema_value),
                 "required": bool(descriptor.get("required", False)),
                 "data_source": "goal",
                 "data_key": name,
-                "meta_data": {"unilab": {"value_schema": descriptor["schema"]}},
+                "meta_data": {
+                    "unilab": {
+                        "value_schema": schema_value,
+                        "editor_control": (
+                            "material_port"
+                            if slot_schema is not None
+                            else "variable_selector"
+                        ),
+                        "allowed_resource_template_uuids": (
+                            slot_schema.get("allowed_resource_template_uuids")
+                            if slot_schema is not None
+                            else None
+                        ),
+                        "implicit_passthrough": False,
+                    }
+                },
             }
         )
     for descriptor in output_contract["outputs"]:
         name = str(descriptor["name"])
+        schema_value = descriptor["schema"]
+        slot_schema = resource_slot_schema(schema_value)
         handle_uuid = _handle_uuid(node_template_uuid, "source", name)
         output_handle_by_name[name] = handle_uuid
         handles.append(
@@ -202,11 +221,26 @@ def _published_template_projection(
                 "io_type": "source",
                 "display_name": str(descriptor.get("title") or name),
                 "description": descriptor.get("description"),
-                "type": workflow_handle_type(descriptor["schema"]),
+                "type": workflow_handle_type(schema_value),
                 "required": False,
                 "data_source": "result",
                 "data_key": name,
-                "meta_data": {"unilab": {"value_schema": descriptor["schema"]}},
+                "meta_data": {
+                    "unilab": {
+                        "value_schema": schema_value,
+                        "editor_control": (
+                            "material_port"
+                            if slot_schema is not None
+                            else "variable_selector"
+                        ),
+                        "allowed_resource_template_uuids": (
+                            slot_schema.get("allowed_resource_template_uuids")
+                            if slot_schema is not None
+                            else None
+                        ),
+                        "implicit_passthrough": bool(descriptor.get("implicit", False)),
+                    }
+                },
             }
         )
     for io_type in ("target", "source"):

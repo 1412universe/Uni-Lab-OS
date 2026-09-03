@@ -243,6 +243,11 @@ export interface ActionTemplateRecord {
   resourceTemplate: { uuid: string; name: string; displayName: string }
 }
 
+/** 调度器结构控制节点模板；它没有设备句柄，参数保存在工作流节点 param 中。 */
+export interface ControlTemplateRecord extends ActionTemplateRecord {
+  parameterSchema: Record<string, unknown>
+}
+
 export interface ActionParameterRecord {
   handleUuid: string
   key: string

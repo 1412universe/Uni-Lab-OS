@@ -1,6 +1,7 @@
 import type { PropsWithChildren } from 'react'
 import {
   Bell,
+  BookOpen,
   Boxes,
   ChevronDown,
   FlaskConical,
@@ -88,6 +89,16 @@ export function AppShell({
               {itemPage === 'tasks' && activeTaskCount > 0 ? <em>{activeTaskCount}</em> : null}
             </button>
           ))}
+          <a
+            className="nav-item"
+            href="/api/docs"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="打开 Swagger 接口文档"
+          >
+            <BookOpen size={19} />
+            <span>Swagger</span>
+          </a>
         </nav>
 
         <div className={`edge-card edge-${connection}`}>
