@@ -1,21 +1,25 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AppShell } from './AppShell'
 
 describe('AppShell', () => {
   it('shows the Edge startup mode in the global header', () => {
+    const onStartupModeClick = vi.fn()
     const props = {
       page: 'tasks' as const,
       connection: 'connected' as const,
       activeTaskCount: 0,
       onNavigate: vi.fn(),
       onNotify: vi.fn(),
+      onStartupModeClick,
     }
     const { rerender } = render(
       <AppShell {...props} startupMode="develop"><div>content</div></AppShell>,
     )
 
     expect(screen.getByText('开发模式')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '当前为开发模式，切换至生产模式' }))
+    expect(onStartupModeClick).toHaveBeenCalledOnce()
 
     rerender(
       <AppShell {...props} startupMode="product"><div>content</div></AppShell>,

@@ -2530,6 +2530,47 @@ class WorkflowStore:
             "page_size": page_size,
         }
 
+    def list_startup_mode_switch_blockers(
+        self,
+        *,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """读取阻止 develop/product 热切换的执行事实。
+
+        参数：``limit`` 限制返回给控制台的诊断数量。返回：仍在运行或尚未完成
+        清理的 Task 身份、业务状态与清理状态。异常：``limit`` 非正数时抛出
+        ``ValueError``。状态不变量：查询只读，不改变 Task、Job 或资源占用事实。
+        """
+
+        if limit <= 0:
+            raise ValueError("limit 必须大于零")
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT uuid, status, cleanup_status, workflow_uuid,
+                       execution_kind, create_time
+                FROM workflow_task
+                WHERE deleted_at IS NULL
+                  AND (
+                    status IN ('pending', 'running', 'canceling')
+                    OR cleanup_status NOT IN ('none', 'settled')
+                  )
+                ORDER BY create_time, uuid
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "task_uuid": str(row["uuid"]),
+                "status": str(row["status"]),
+                "cleanup_status": str(row["cleanup_status"]),
+                "workflow_uuid": str(row["workflow_uuid"]),
+                "execution_kind": str(row["execution_kind"] or "workflow"),
+            }
+            for row in rows
+        ]
+
     def list_task_presentations(
         self,
         *,

@@ -2,6 +2,24 @@ export type PageId = 'overview' | 'materials' | 'reagents' | 'operations' | 'wor
 
 export type ConnectionMode = 'loading' | 'connected' | 'reconnecting' | 'demo' | 'error'
 
+export type StartupMode = 'develop' | 'product'
+
+export interface StartupModeSwitchBlocker {
+  taskUuid: string
+  workflowUuid: string
+  status: string
+  cleanupStatus: string
+  executionKind: string
+}
+
+export interface StartupModeSwitchResult {
+  previousMode: StartupMode
+  mode: StartupMode
+  changed: boolean
+  scope: 'runtime_session'
+  requiresRestart: boolean
+}
+
 /** 只用于界面展示；不会作为 Shared Interface 的 Workflow Task 状态回写。 */
 export type TaskPresentationStatus =
   | 'running'
@@ -376,7 +394,7 @@ export interface WorkflowStepState {
 }
 
 export interface EdgeSnapshot {
-  startupMode: 'develop' | 'product'
+  startupMode: StartupMode
   workflows: WorkflowDefinition[]
   tasks: WorkflowTask[]
   materials: MaterialRecord[]

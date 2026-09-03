@@ -78,6 +78,7 @@ export function AppShell({
   activeTaskCount,
   onNavigate,
   onNotify,
+  onStartupModeClick,
   children,
 }: PropsWithChildren<{
   page: PageId
@@ -86,6 +87,7 @@ export function AppShell({
   activeTaskCount: number
   onNavigate: (page: PageId) => void
   onNotify: (message: string) => void
+  onStartupModeClick?: () => void
 }>) {
   const modePresentation = startupMode
     ? startupModePresentation[startupMode]
@@ -173,13 +175,19 @@ export function AppShell({
               <input readOnly aria-label="全局搜索（待接入）" placeholder="全局搜索待接入" onFocus={() => onNotify('请使用物料和工作流页面内的搜索框')} />
               <kbd>⌘ K</kbd>
             </label>
-            <span
+            <button
+              type="button"
               className={`startup-mode-chip startup-mode-${startupMode || 'unknown'}`}
               title={modePresentation.title}
+              aria-label={startupMode
+                ? `当前为${modePresentation.label}，切换至${startupMode === 'develop' ? '生产模式' : '开发模式'}`
+                : '启动模式未知，暂不可切换'}
+              disabled={!startupMode || !onStartupModeClick}
+              onClick={onStartupModeClick}
             >
               <StartupModeIcon size={14} />
               {modePresentation.label}
-            </span>
+            </button>
             <span className={`live-chip live-chip-${connection}`}>
               <i />
               {connection === 'connected'

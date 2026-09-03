@@ -484,6 +484,13 @@ class WorkflowTaskCreateRequest(_BackendModel):
         return normalize_json_object(value)
 
 
+class StartupModeSwitchRequest(_StrictModel):
+    """Runtime 会话内的 develop/product 模式切换请求。"""
+
+    mode: Literal["develop", "product"]
+    expected_mode: Literal["develop", "product"]
+
+
 class WorkflowRunPreflightRequest(_BackendModel):
     """以候选任务入口载荷执行只读运行预检。"""
 
@@ -758,6 +765,8 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         "invalid_composite_child_status",
         "develop_task_conflict",
         "preflight_failed",
+        "startup_mode_conflict",
+        "startup_mode_switch_blocked",
     }
     if error.code in {"invalid_input", "invalid_composite_child_type"}:
         business_code = 1000
@@ -777,10 +786,14 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         "develop_mode_required",
         "develop_task_conflict",
         "preflight_failed",
+        "startup_mode_conflict",
+        "startup_mode_switch_blocked",
     }:
         # product Backend 包络保持 HTTP 200；该窄符号码让前端区分身份拒绝与
         # 需要重读远端版本的普通 3003 CAS 冲突。
         error_content["code"] = error.code
+    if error.details:
+        error_content["details"] = error.details
     return _BackendJSONResponse(
         status_code=200,
         content={
@@ -859,7 +872,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         return workflow
 
     def _require_develop_execution() -> None:
-        """拒绝生产模式中的单步、调试和模式切换写操作。"""
+        """拒绝生产模式中的单步和调试写操作。"""
 
         if get_startup_mode().value != "develop":
             raise WorkflowError("develop_mode_required")
@@ -894,6 +907,22 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             for item in result["items"]
         ):
             raise WorkflowError("not_found")
+
+    @router.put("/startup-mode")
+    def switch_startup_mode(body: StartupModeSwitchRequest) -> JSONResponse:
+        """在没有活动或未清理 Task 时切换当前 Runtime 会话模式。
+
+        参数：``body.mode`` 是目标模式，``expected_mode`` 防止旧页面覆盖新状态。
+        返回：切换前后模式和会话级作用域；无需重启。异常：存在阻塞 Task 时返回
+        稳定冲突码及阻塞者列表，模式保持不变。
+        """
+
+        return _success(
+            service.switch_startup_mode(
+                mode=body.mode,
+                expected_mode=body.expected_mode,
+            )
+        )
 
     def _empty_workflow_page(page: int, page_size: int) -> dict[str, Any]:
         """构造生产模式下隐藏筛选条件对应的空工作流页。
@@ -1976,6 +2005,7 @@ def install_workflow_api(
         """
 
         workflow_prefixes = (
+            "/api/v1/startup-mode",
             "/api/v1/experiment-operation-categories",
             "/api/v1/local/workflows",
             "/api/v1/workflows",

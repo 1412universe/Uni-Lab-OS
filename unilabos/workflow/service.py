@@ -18,6 +18,13 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from unilabos.app.startup_mode import (
+    OSStartupMode,
+    get_startup_mode,
+    is_workflow_visible,
+    set_startup_mode,
+    startup_mode_admission,
+)
 from unilabos.workflow.authoring_ast import parse_authoring_source
 from unilabos.workflow.authoring_candidate_hash import (
     AuthoringCandidateHashError,
@@ -165,6 +172,11 @@ _ERRORS = {
     "develop_mode_required": (403, "单步调度仅在 develop 启动模式可用"),
     "develop_task_conflict": (409, "develop 模式已有未结束的执行任务"),
     "preflight_failed": (409, "Step Task 创建前的 Preflight 未通过"),
+    "startup_mode_conflict": (409, "启动模式已变化，请刷新后重试"),
+    "startup_mode_switch_blocked": (
+        409,
+        "存在未结束或未完成清理的任务，不能切换模式",
+    ),
     "not_found": (404, "请求的资源不存在"),
     "conflict": (409, "资源已发生冲突，请刷新后重试"),
     "workflow_not_found": (404, "工作流不存在或已被删除"),
@@ -354,7 +366,13 @@ _INVENTORY_REQUIREMENT_REQUIRED_READ_FIELDS = {
 class WorkflowError(RuntimeError):
     """面向前端的稳定 Workflow 错误。"""
 
-    def __init__(self, code: str, *, message: str | None = None):
+    def __init__(
+        self,
+        code: str,
+        *,
+        message: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ):
         """创建稳定业务错误并允许安全的可行动消息覆盖。
 
         参数：``code`` 是公共错误码，``message`` 可提供不含源码内容的具体提示。
@@ -367,6 +385,7 @@ class WorkflowError(RuntimeError):
         self.status = status
         self.code = code
         self.message = message
+        self.details = dict(details or {})
 
 
 class WorkflowConflict(WorkflowError):
@@ -3355,30 +3374,36 @@ class WorkflowService:
                 discard(task_uuid)
 
         try:
-            with self._authoring_lock(workflow_uuid):
-                applied_graph = (
-                    frozen_graph
-                    if frozen_graph is not None
-                    else self.get_graph(workflow_uuid)
-                )
-                task = self._store.create_task_with_jobs(
-                    workflow_uuid=workflow_uuid,
-                    task_uuid=task_uuid,
-                    run_mode=run_mode,
-                    target_node_uuid=target_node_uuid,
-                    description=description,
-                    meta_data=meta_data,
-                    plan_builder=plan_builder,
-                    inventory_allocation_builder=inventory_allocation_builder,
-                    applied_graph=applied_graph,
-                    backend_task_uuid=backend_task_uuid,
-                    invocation_key=invocation_key,
-                    priority=priority,
-                    request_fingerprint=request_fingerprint,
-                    revision_fingerprint=revision_fingerprint,
-                    deadline=deadline,
-                    reject_if_nonterminal_task_exists=self._develop_execution_mode(),
-                )
+            with startup_mode_admission():
+                if get_startup_mode() is OSStartupMode.PRODUCT:
+                    if run_mode != "normal":
+                        raise WorkflowError("develop_mode_required")
+                    if not is_workflow_visible(self.get_workflow(workflow_uuid)):
+                        raise WorkflowError("not_found")
+                with self._authoring_lock(workflow_uuid):
+                    applied_graph = (
+                        frozen_graph
+                        if frozen_graph is not None
+                        else self.get_graph(workflow_uuid)
+                    )
+                    task = self._store.create_task_with_jobs(
+                        workflow_uuid=workflow_uuid,
+                        task_uuid=task_uuid,
+                        run_mode=run_mode,
+                        target_node_uuid=target_node_uuid,
+                        description=description,
+                        meta_data=meta_data,
+                        plan_builder=plan_builder,
+                        inventory_allocation_builder=inventory_allocation_builder,
+                        applied_graph=applied_graph,
+                        backend_task_uuid=backend_task_uuid,
+                        invocation_key=invocation_key,
+                        priority=priority,
+                        request_fingerprint=request_fingerprint,
+                        revision_fingerprint=revision_fingerprint,
+                        deadline=deadline,
+                        reject_if_nonterminal_task_exists=self._develop_execution_mode(),
+                    )
             task_created = bool(task.pop("_station_submission_created", True))
             if not task_created:
                 return task
@@ -3839,16 +3864,17 @@ class WorkflowService:
         try:
             # ``aggregate`` 是已原子持久化的标准工作流任务（WorkflowTask）和
             # 工作流节点作业（WorkflowNodeJob）；只有首次创建才允许物理派发。
-            aggregate = self._device_action_runs.create(
-                material_uuid=material_uuid,
-                workflow_node_template_uuid=workflow_node_template_uuid,
-                param=param,
-                execution_policy=execution_policy,
-                idempotency_key=idempotency_key,
-                description=description,
-                meta_data=meta_data,
-                reject_if_nonterminal_task_exists=self._develop_execution_mode(),
-            )
+            with startup_mode_admission():
+                aggregate = self._device_action_runs.create(
+                    material_uuid=material_uuid,
+                    workflow_node_template_uuid=workflow_node_template_uuid,
+                    param=param,
+                    execution_policy=execution_policy,
+                    idempotency_key=idempotency_key,
+                    description=description,
+                    meta_data=meta_data,
+                    reject_if_nonterminal_task_exists=self._develop_execution_mode(),
+                )
             if aggregate["created"] is True and self._task_scheduler_bridge is not None:
                 scheduled = self._task_scheduler_bridge.submit(aggregate["task"])
                 # ``scheduled_jobs`` 是公共桥返回的同一任务作业集合；设备单动作
@@ -3890,6 +3916,62 @@ class WorkflowService:
         from unilabos.app.startup_mode import OSStartupMode, get_startup_mode
 
         return get_startup_mode() is OSStartupMode.DEVELOP
+
+    def switch_startup_mode(
+        self,
+        *,
+        mode: str,
+        expected_mode: str,
+    ) -> dict[str, Any]:
+        """在本次 Runtime 会话空闲时原地切换 develop/product。
+
+        参数：``mode`` 是目标模式，``expected_mode`` 是前端最后观察到的模式。
+        返回：切换前后模式、是否发生变化及会话级作用域。异常：模式非法、观察值
+        已过期，或存在活动/未清理 Task 时抛稳定业务错误。状态不变量：空闲检查与
+        模式写入同 Task 创建准入锁串行，切换不修改部署配置，也不重启 Runtime。
+        """
+
+        try:
+            target = OSStartupMode(mode)
+            expected = OSStartupMode(expected_mode)
+        except (TypeError, ValueError):
+            raise WorkflowError("invalid_input") from None
+        with startup_mode_admission():
+            current = get_startup_mode()
+            if current is not expected:
+                raise WorkflowConflict(
+                    "startup_mode_conflict",
+                    details={
+                        "current_mode": current.value,
+                        "expected_mode": expected.value,
+                    },
+                )
+            if current is target:
+                return {
+                    "previous_mode": current.value,
+                    "mode": target.value,
+                    "changed": False,
+                    "scope": "runtime_session",
+                    "requires_restart": False,
+                }
+            blockers = self._store.list_startup_mode_switch_blockers()
+            if blockers:
+                raise WorkflowConflict(
+                    "startup_mode_switch_blocked",
+                    details={
+                        "current_mode": current.value,
+                        "target_mode": target.value,
+                        "blockers": blockers,
+                    },
+                )
+            set_startup_mode(target)
+            return {
+                "previous_mode": current.value,
+                "mode": target.value,
+                "changed": True,
+                "scope": "runtime_session",
+                "requires_restart": False,
+            }
 
     def list_task_inventory_consumptions(self, task_uuid: str) -> list[dict[str, Any]]:
         """读取一个工作流任务的数量型库存消费事实。

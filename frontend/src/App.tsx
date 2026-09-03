@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { StartupModeDialog } from './components/StartupModeDialog'
 import { useEdgeData } from './hooks/useEdgeData'
+import { EdgeApiError, startupModeSwitchBlockers, switchStartupMode } from './lib/edgeClient'
 import { pageFromSearch, searchForWorkflow, searchWithPage, workflowTargetFromSearch } from './lib/routes'
 import { MaterialsPage } from './pages/MaterialsPage'
 import { OverviewPage } from './pages/OverviewPage'
@@ -9,7 +11,7 @@ import { TasksPage } from './pages/TasksPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { OperationsPage } from './pages/OperationsPage'
 import { ReagentsPage } from './pages/ReagentsPage'
-import type { PageId, WorkflowTarget } from './types'
+import type { PageId, StartupModeSwitchBlocker, WorkflowTarget } from './types'
 
 export default function App() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -17,6 +19,10 @@ export default function App() {
   const workflowTarget = workflowTargetFromSearch(`?${searchParams.toString()}`)
   const { snapshot, connection, error, refetch, lastSuccessfulAt } = useEdgeData()
   const [toast, setToast] = useState('')
+  const [modeDialogOpen, setModeDialogOpen] = useState(false)
+  const [modeSwitchPending, setModeSwitchPending] = useState(false)
+  const [modeSwitchError, setModeSwitchError] = useState('')
+  const [modeSwitchBlockers, setModeSwitchBlockers] = useState<StartupModeSwitchBlocker[]>([])
 
   useEffect(() => {
     if (!toast) return
@@ -41,6 +47,48 @@ export default function App() {
     })
   }, [refetch])
 
+  const openModeDialog = useCallback(() => {
+    if (connection !== 'connected') {
+      setToast('Edge 未连接，当前不能切换模式')
+      return
+    }
+    setModeSwitchError('')
+    setModeSwitchBlockers([])
+    setModeDialogOpen(true)
+  }, [connection])
+
+  const closeModeDialog = useCallback(() => {
+    setModeDialogOpen(false)
+  }, [])
+
+  const confirmModeSwitch = useCallback(async () => {
+    const currentMode = snapshot.startupMode
+    const targetMode = currentMode === 'develop' ? 'product' : 'develop'
+    setModeSwitchPending(true)
+    setModeSwitchError('')
+    setModeSwitchBlockers([])
+    try {
+      const result = await switchStartupMode(targetMode, currentMode)
+      const refreshed = await refetch()
+      setModeDialogOpen(false)
+      setToast(refreshed.isError
+        ? `已切换至${result.mode === 'develop' ? '开发模式' : '生产模式'}，但页面数据刷新失败，请手动刷新`
+        : `已切换至${result.mode === 'develop' ? '开发模式' : '生产模式'}`)
+    } catch (error) {
+      if (error instanceof EdgeApiError && error.code === 'startup_mode_conflict') {
+        await refetch()
+        setModeDialogOpen(false)
+        setToast('启动模式已被其他页面切换，已刷新当前状态')
+        return
+      }
+      setModeSwitchBlockers(startupModeSwitchBlockers(error))
+      setModeSwitchError(error instanceof Error ? error.message : '模式切换失败，请稍后重试')
+      void refetch()
+    } finally {
+      setModeSwitchPending(false)
+    }
+  }, [refetch, snapshot.startupMode])
+
   return (
     <AppShell
       page={page}
@@ -49,6 +97,7 @@ export default function App() {
       activeTaskCount={snapshot.tasks.filter((task) => task.status === 'running' || task.status === 'canceling').length}
       onNavigate={navigate}
       onNotify={setToast}
+      onStartupModeClick={connection === 'connected' ? openModeDialog : undefined}
     >
       {connection === 'error' ? (
         <div className="connection-alert" role="alert">
@@ -107,6 +156,16 @@ export default function App() {
         />
       )}
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
+      {modeDialogOpen ? (
+        <StartupModeDialog
+          currentMode={snapshot.startupMode}
+          pending={modeSwitchPending}
+          blockers={modeSwitchBlockers}
+          errorMessage={modeSwitchError || undefined}
+          onClose={closeModeDialog}
+          onConfirm={() => { void confirmModeSwitch() }}
+        />
+      ) : null}
     </AppShell>
   )
 }

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -12,11 +14,12 @@ from unilabos.app.main import normalize_startup_mode_argv, parse_args
 from unilabos.app.runtime_topology import resolve_runtime_process_plan
 from unilabos.app.startup_mode import (
     OSStartupMode,
+    get_startup_mode,
     reset_startup_mode,
     set_startup_mode,
 )
 from unilabos.app.workflow_api import create_workflow_app
-from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.service import WorkflowConflict, WorkflowService
 from unilabos.workflow.store import WorkflowStore
 
 
@@ -138,6 +141,191 @@ def test_local_startup_does_not_enable_cloud_websocket() -> None:
         resolve_runtime_process_plan(
             {"control_plane": "local", "app_bridges": ["websocket"]}
         )
+
+
+def test_idle_runtime_switches_startup_mode_without_restart(tmp_path: Path) -> None:
+    """空闲 Runtime 可原地往返切换模式，并立即改变工作流可见范围。"""
+
+    client, service, store = _client(tmp_path)
+    try:
+        source_workflow = client.post(
+            "/api/v1/workflows",
+            json={"name": "仅开发可见", "tags": [], "meta_data": {}},
+        ).json()["data"]["uuid"]
+
+        switched = client.put(
+            "/api/v1/startup-mode",
+            json={"mode": "product", "expected_mode": "develop"},
+        )
+
+        assert switched.status_code == 200
+        assert switched.json() == {
+            "code": 0,
+            "data": {
+                "previous_mode": "develop",
+                "mode": "product",
+                "changed": True,
+                "scope": "runtime_session",
+                "requires_restart": False,
+            },
+        }
+        product_list = client.get("/api/v1/workflows").json()["data"]["items"]
+        assert source_workflow not in {item["uuid"] for item in product_list}
+
+        restored = client.put(
+            "/api/v1/startup-mode",
+            json={"mode": "develop", "expected_mode": "product"},
+        )
+        assert restored.json()["data"]["mode"] == "develop"
+        develop_list = client.get("/api/v1/workflows").json()["data"]["items"]
+        assert source_workflow in {item["uuid"] for item in develop_list}
+    finally:
+        reset_startup_mode()
+        service.close()
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "cleanup_status"),
+    [("running", "none"), ("failed", "requires_attention")],
+)
+def test_startup_mode_switch_reports_task_blockers(
+    tmp_path: Path,
+    status: str,
+    cleanup_status: str,
+) -> None:
+    """活动 Task 或未结算清理会阻止切换，并返回前端可展示的权威原因。"""
+
+    client, service, store = _client(tmp_path)
+    task_uuid = str(uuid4())
+    try:
+        workflow_uuid = client.post(
+            "/api/v1/workflows",
+            json={"name": "模式切换占用者", "tags": [], "meta_data": {}},
+        ).json()["data"]["uuid"]
+        with store.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO workflow_task(
+                    uuid, create_time, update_time, meta_data, workflow_uuid,
+                    status, workflow_snapshot, execution_plan, run_mode,
+                    execution_mode, control_status, cleanup_status,
+                    trace_context, input, output, error_info
+                ) VALUES (?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                          '{}', ?, ?, '{}',
+                          '{"version":1,"nodes":[],"edges":[],"handles":[]}',
+                          'normal', 'normal', 'active', ?, '{}', '{}', '{}', '[]')
+                """,
+                (task_uuid, workflow_uuid, status, cleanup_status),
+            )
+
+        response = client.put(
+            "/api/v1/startup-mode",
+            json={"mode": "product", "expected_mode": "develop"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["code"] == 3003
+        error = response.json()["error"]
+        assert error["code"] == "startup_mode_switch_blocked"
+        assert error["details"]["blockers"] == [
+            {
+                "task_uuid": task_uuid,
+                "status": status,
+                "cleanup_status": cleanup_status,
+                "workflow_uuid": workflow_uuid,
+                "execution_kind": "workflow",
+            }
+        ]
+        assert get_startup_mode().value == "develop"
+    finally:
+        reset_startup_mode()
+        service.close()
+        store.close()
+
+
+def test_startup_mode_switch_rejects_a_stale_observation(tmp_path: Path) -> None:
+    """旧页面不能用过期 expected_mode 覆盖另一页面已完成的模式切换。"""
+
+    client, service, store = _client(tmp_path)
+    try:
+        set_startup_mode("product")
+        response = client.put(
+            "/api/v1/startup-mode",
+            json={"mode": "product", "expected_mode": "develop"},
+        )
+
+        assert response.json()["error"]["code"] == "startup_mode_conflict"
+        assert response.json()["error"]["details"] == {
+            "current_mode": "product",
+            "expected_mode": "develop",
+        }
+    finally:
+        reset_startup_mode()
+        service.close()
+        store.close()
+
+
+def test_task_creation_and_mode_switch_share_one_admission_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """切换不能越过已进入首次写入的 Task，随后必须看到该阻塞事实。"""
+
+    client, service, store = _client(tmp_path)
+    task_entered_store = Event()
+    allow_task_write = Event()
+    switch_started = Event()
+    original_create = store.create_task_with_jobs
+
+    def paused_create(*args: object, **kwargs: object) -> dict[str, object]:
+        task_entered_store.set()
+        assert allow_task_write.wait(timeout=2)
+        return original_create(*args, **kwargs)
+
+    monkeypatch.setattr(store, "create_task_with_jobs", paused_create)
+    try:
+        workflow_uuid = _create_and_publish(
+            client,
+            name="并发准入测试",
+            workflow_type="normal",
+        )
+
+        def create_task() -> dict[str, object]:
+            return service.create_workflow_task(
+                workflow_uuid=workflow_uuid,
+                run_mode="normal",
+                target_node_uuid=None,
+                input_value={},
+                description=None,
+                meta_data={},
+            )
+
+        def switch_mode() -> dict[str, object]:
+            switch_started.set()
+            return service.switch_startup_mode(
+                mode="product",
+                expected_mode="develop",
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            task_future = executor.submit(create_task)
+            assert task_entered_store.wait(timeout=2)
+            switch_future = executor.submit(switch_mode)
+            assert switch_started.wait(timeout=2)
+            assert not switch_future.done()
+            allow_task_write.set()
+            assert task_future.result(timeout=2)["status"] == "pending"
+            with pytest.raises(WorkflowConflict) as blocked:
+                switch_future.result(timeout=2)
+
+        assert blocked.value.code == "startup_mode_switch_blocked"
+        assert get_startup_mode() is OSStartupMode.DEVELOP
+    finally:
+        allow_task_write.set()
+        reset_startup_mode()
+        service.close()
+        store.close()
 
 
 def test_develop_mode_rejects_a_second_nonterminal_task(tmp_path: Path) -> None:

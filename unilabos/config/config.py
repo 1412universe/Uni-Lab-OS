@@ -14,7 +14,7 @@ class BasicConfig:
     # 控制面固定由本站 OS 提供；Backend 上游模式已移除，不再建立远端连接。
     control_plane: Literal["local"] = "local"
     # OS 启动可见范围：develop 展示全部工作流定义，product 仅展示已发布普通工作流。
-    # 该字段由 unilab develop/product 启动命令写入，不参与物料或调度权威选择。
+    # 该字段记录部署启动默认值；会话内热切换的权威值由 app.startup_mode 持有。
     startup_mode: Literal["develop", "product"] = "develop"
     # combined 保持历史单进程；Workbench 使用 workspace_backend + edge_runtime。
     process_role: Literal["combined", "workspace_backend", "edge_runtime"] = (

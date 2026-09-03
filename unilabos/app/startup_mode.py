@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from enum import Enum
-from typing import Any
+from threading import RLock
+from typing import Any, Iterator
 
 
 class OSStartupMode(str, Enum):
@@ -15,6 +17,7 @@ class OSStartupMode(str, Enum):
 
 
 _startup_mode = OSStartupMode.DEVELOP
+_startup_mode_lock = RLock()
 
 
 def set_startup_mode(mode: str | OSStartupMode) -> OSStartupMode:
@@ -23,16 +26,19 @@ def set_startup_mode(mode: str | OSStartupMode) -> OSStartupMode:
     参数：``mode`` 必须是 ``develop`` 或 ``product``，用于决定当前进程公开的
     工作流定义范围。返回：规范化后的 ``OSStartupMode``。异常：传入未知模式时
     抛出 ``ValueError``，且不会改变已有模式。状态不变量：模式是进程级全局值，
-    由启动命令在装配 HTTP 服务前设置一次。
+    通常由启动命令初始化，也可由空闲检查保护的控制接口在会话内切换。
     """
 
     global _startup_mode
-    try:
-        normalized = mode if isinstance(mode, OSStartupMode) else OSStartupMode(mode)
-    except (TypeError, ValueError) as error:
-        raise ValueError("OS 启动模式必须是 develop 或 product") from error
-    _startup_mode = normalized
-    return normalized
+    with _startup_mode_lock:
+        try:
+            normalized = (
+                mode if isinstance(mode, OSStartupMode) else OSStartupMode(mode)
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("OS 启动模式必须是 develop 或 product") from error
+        _startup_mode = normalized
+        return normalized
 
 
 def get_startup_mode() -> OSStartupMode:
@@ -42,7 +48,21 @@ def get_startup_mode() -> OSStartupMode:
     时返回 ``develop``，保持旧版直接启动的可见范围不变。
     """
 
-    return _startup_mode
+    with _startup_mode_lock:
+        return _startup_mode
+
+
+@contextmanager
+def startup_mode_admission() -> Iterator[None]:
+    """串行化启动模式切换与新执行任务准入。
+
+    参数：无。返回：持有进程级可重入互斥锁的上下文。异常：上下文内异常原样
+    传播。状态不变量：调用方必须在同一上下文内完成模式读取以及 Task 首次写入，
+    或完成空闲检查以及模式写入，防止二者之间出现检查后创建的竞态。
+    """
+
+    with _startup_mode_lock:
+        yield
 
 
 def reset_startup_mode() -> OSStartupMode:
@@ -125,5 +145,6 @@ __all__ = [
     "is_workflow_visible",
     "reset_startup_mode",
     "set_startup_mode",
+    "startup_mode_admission",
     "visible_workflow_filter",
 ]

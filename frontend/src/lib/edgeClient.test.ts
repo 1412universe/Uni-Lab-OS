@@ -8,6 +8,7 @@ import {
   createReagent,
   createReagentInfo,
   deleteReagentInfo,
+  EdgeApiError,
   instantiateMaterial,
   lookupCompoundByCas,
   loadActionTemplates,
@@ -17,6 +18,8 @@ import {
   loadWorkflowGraph,
   loadWorkflowTaskDetail,
   loadWorkflowTaskGraph,
+  startupModeSwitchBlockers,
+  switchStartupMode,
   unwrapEnvelope,
   updateExperimentOperation,
 } from './edgeClient'
@@ -34,6 +37,67 @@ describe('unwrapEnvelope', () => {
 
   it('rejects an Edge business error even if HTTP succeeded', () => {
     expect(() => unwrapEnvelope({ code: 1000, error: { msg: 'invalid cursor' } })).toThrow('invalid cursor')
+  })
+})
+
+describe('switchStartupMode', () => {
+  it('switches the runtime session using the last observed mode', async () => {
+    const fetchMock = vi.fn(async () => response({
+      code: 0,
+      data: {
+        previous_mode: 'develop',
+        mode: 'product',
+        changed: true,
+        scope: 'runtime_session',
+        requires_restart: false,
+      },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(switchStartupMode('product', 'develop')).resolves.toEqual({
+      previousMode: 'develop',
+      mode: 'product',
+      changed: true,
+      scope: 'runtime_session',
+      requiresRestart: false,
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/startup-mode', expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ mode: 'product', expected_mode: 'develop' }),
+    }))
+  })
+
+  it('preserves blocker details from a successful HTTP business error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({
+      code: 3003,
+      error: {
+        code: 'startup_mode_switch_blocked',
+        msg: '存在未结束或未完成清理的任务，不能切换模式',
+        details: {
+          blockers: [{
+            task_uuid: 'task-1',
+            workflow_uuid: 'workflow-1',
+            status: 'running',
+            cleanup_status: 'none',
+            execution_kind: 'workflow',
+          }],
+        },
+      },
+    })))
+
+    const failure = await switchStartupMode('product', 'develop').catch((error) => error)
+    expect(failure).toBeInstanceOf(EdgeApiError)
+    expect(failure).toMatchObject({
+      code: 'startup_mode_switch_blocked',
+      details: { blockers: [{ task_uuid: 'task-1', status: 'running' }] },
+    })
+    expect(startupModeSwitchBlockers(failure)).toEqual([{
+      taskUuid: 'task-1',
+      workflowUuid: 'workflow-1',
+      status: 'running',
+      cleanupStatus: 'none',
+      executionKind: 'workflow',
+    }])
   })
 })
 

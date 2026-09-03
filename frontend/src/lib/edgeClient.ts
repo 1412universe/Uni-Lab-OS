@@ -26,6 +26,9 @@ import type {
   ReagentRecord,
   ReagentHistoryRecord,
   CompoundLookupResult,
+  StartupMode,
+  StartupModeSwitchBlocker,
+  StartupModeSwitchResult,
 } from '../types'
 
 type RawRecord = Record<string, any>
@@ -36,6 +39,7 @@ interface EdgeEnvelope<T> {
   error?: {
     code?: string
     msg?: string
+    details?: RawRecord
   }
 }
 
@@ -49,6 +53,18 @@ interface PageData<T> {
 
 const configuredEndpoint = (import.meta.env.VITE_EDGE_API_URL as string | undefined)?.replace(/\/$/, '')
 export const EDGE_API_BASE = configuredEndpoint ? `${configuredEndpoint}/api/v1` : '/api/v1'
+
+export class EdgeApiError extends Error {
+  code?: string
+  details: RawRecord
+
+  constructor(message: string, options: { code?: string; details?: RawRecord } = {}) {
+    super(message)
+    this.name = 'EdgeApiError'
+    this.code = options.code
+    this.details = options.details || {}
+  }
+}
 
 const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
 const taskStatuses = new Set<TaskPresentationStatus>([
@@ -66,9 +82,28 @@ const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusV
 
 export function unwrapEnvelope<T>(body: EdgeEnvelope<T>): T {
   if (!body || body.code !== 0 || body.data === undefined) {
-    throw new Error(body?.error?.msg || `Edge API 返回业务错误：${body?.code ?? 'unknown'}`)
+    throw new EdgeApiError(
+      body?.error?.msg || `Edge API 返回业务错误：${body?.code ?? 'unknown'}`,
+      { code: body?.error?.code, details: body?.error?.details },
+    )
   }
   return body.data
+}
+
+export function startupModeSwitchBlockers(error: unknown): StartupModeSwitchBlocker[] {
+  if (!(error instanceof EdgeApiError) || !Array.isArray(error.details.blockers)) return []
+  return error.details.blockers.flatMap((value: unknown) => {
+    if (!value || typeof value !== 'object') return []
+    const blocker = value as RawRecord
+    if (!blocker.task_uuid) return []
+    return [{
+      taskUuid: String(blocker.task_uuid),
+      workflowUuid: String(blocker.workflow_uuid || ''),
+      status: String(blocker.status || 'unknown'),
+      cleanupStatus: String(blocker.cleanup_status || 'unknown'),
+      executionKind: String(blocker.execution_kind || 'workflow'),
+    }]
+  })
 }
 
 async function requestJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -172,6 +207,7 @@ async function writeData<T>(method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', path: s
   if (!response.ok) throw new Error(`${formatApiError(body, response.status)}（${method} ${path}）`)
   if (body?.code === 0 && body.data === undefined) return undefined as T
   try { return unwrapEnvelope(body as EdgeEnvelope<T>) } catch (error) {
+    if (error instanceof EdgeApiError) throw error
     throw new Error(`${error instanceof Error ? error.message : 'Edge API 业务错误'}（${method} ${path}）`)
   }
 }
@@ -2083,6 +2119,23 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
 export async function loadMaterialDetail(materialUuid: string, signal?: AbortSignal) {
   const material = await requestData<RawRecord>(`/materials/${encodeURIComponent(materialUuid)}`, signal)
   return adaptMaterial(material)
+}
+
+export async function switchStartupMode(
+  mode: StartupMode,
+  expectedMode: StartupMode,
+): Promise<StartupModeSwitchResult> {
+  const result = await writeData<RawRecord>('PUT', '/startup-mode', {
+    mode,
+    expected_mode: expectedMode,
+  })
+  return {
+    previousMode: result.previous_mode === 'develop' ? 'develop' : 'product',
+    mode: result.mode === 'develop' ? 'develop' : 'product',
+    changed: Boolean(result.changed),
+    scope: 'runtime_session',
+    requiresRestart: Boolean(result.requires_restart),
+  }
 }
 
 export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSignal): Promise<WorkflowGraph> {
