@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, ChevronLeft, ChevronRight, Eye, FileInput, FileJson, FlaskConical, GripVertical, Pencil, Plus, Save, Search, Send, Sparkles, Trash2, Workflow } from 'lucide-react'
-import { createExperimentOperation, deleteExperimentOperation, ensureWorkflowSequenceEdges, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadActionParameters, loadActionTemplates, loadControlTemplates, loadExperimentOperations, loadOperationCategories, loadPublishedWorkflowContracts, loadWorkflowGraph, patchWorkflowNode, publishExperimentOperation, updateExperimentOperation } from '../lib/edgeClient'
+import { createExperimentOperation, deleteExperimentOperation, ensureWorkflowSequenceEdges, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadActionParameters, loadActionTemplates, loadControlTemplates, loadExperimentOperations, loadOperationCategories, loadPublishedWorkflowContracts, loadWorkflowGraph, patchWorkflowNode, publishWorkflow, updateExperimentOperation } from '../lib/edgeClient'
 import type { ActionParameterRecord, ActionTemplateRecord, ControlTemplateRecord, ContractField, MaterialRecord, WorkflowDefinition } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { ControlParameterEditor } from '../components/ControlParameterEditor'
@@ -475,7 +475,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
   }
 
   async function publish(operation: WorkflowDefinition) {
-    try { await publishExperimentOperation(operation.uuid, operation.revision); onNotify(`实验操作“${operation.name}”已发布`); await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] }) }
+    try { await publishWorkflow(operation.uuid, operation.revision); onNotify(`实验操作“${operation.name}”已发布`); await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] }) }
     catch (error) { onNotify(`发布失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
 

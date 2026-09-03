@@ -19,7 +19,7 @@ import {
   Send,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
-import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
+import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph, publishWorkflow } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
@@ -191,6 +191,19 @@ export function WorkflowsPage({
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
+  const publishMutation = useMutation({
+    mutationFn: ({ workflowUuid, revision }: { workflowUuid: string; revision: number; name: string }) => (
+      publishWorkflow(workflowUuid, revision)
+    ),
+    onSuccess: async (_contract, workflow) => {
+      onNotify(`工作流“${workflow.name}”已发布`)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workflow-graph', workflow.workflowUuid] }),
+        queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] }),
+      ])
+    },
+    onError: (error) => onNotify(`发布失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
 
   async function importFile(file: File, kind: 'python' | 'json') {
     try {
@@ -317,6 +330,13 @@ export function WorkflowsPage({
                 <div><span className="definition-tag">{tagForWorkflow(detail)}</span><h2>{detail.name}</h2><p>{detail.description}</p></div>
                 <div className="definition-actions">
                   <Button tone="ghost" icon={<Code2 size={15} />} onClick={() => onNotify(detail.sourcePath ? `源文件：${detail.sourcePath}` : '该定义没有可编辑源文件')}>查看源码</Button>
+                  {!selectedTaskSnapshotUuid && detail.status !== 'published' ? (
+                    <Button
+                      icon={publishMutation.isPending ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}
+                      disabled={!connected || publishMutation.isPending}
+                      onClick={() => publishMutation.mutate({ workflowUuid: detail.uuid, revision: detail.revision, name: detail.name })}
+                    >{publishMutation.isPending ? '发布中…' : '发布'}</Button>
+                  ) : null}
                   <Button
                     icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
                     disabled={!connected || preflightQuery.isFetching}

@@ -1244,7 +1244,7 @@ export async function ensureWorkflowSequenceEdges(workflowUuid: string, orderedN
   return revision
 }
 
-export async function publishExperimentOperation(workflowUuid: string, revision: number) {
+export async function publishWorkflow(workflowUuid: string, revision: number) {
   return writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/publications`, { revision })
 }
 

@@ -391,7 +391,7 @@ class LegacyWorkflowImportRequest(_BackendModel):
 
 
 class PublishWorkflowContractRequest(_StrictModel):
-    """把指定修订的实验操作切换为可复用状态的发布命令。"""
+    """把指定修订的工作流切换为已发布状态的命令。"""
 
     revision: int = Field(
         ge=1,
@@ -987,8 +987,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         status: Optional[Literal["source", "published"]] = Query(
             default=None,
             description=(
-                "按当前源码/已发布状态筛选；published 表示可被其他工作流引用；"
-                "不传时返回全部状态"
+                "按当前源码/已发布状态筛选；published 表示当前修订已经发布；"
+                "只有已发布的实验操作可以被其他工作流引用；不传时返回全部状态"
             ),
         ),
         operation_category_uuid: Optional[str] = Query(
@@ -1287,7 +1287,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.post(
         "/workflows/{workflow_uuid}/publications",
-        summary="发布实验操作",
+        summary="发布工作流",
         status_code=201,
         response_model=WorkflowPublishSuccessResponse,
         responses={
@@ -1301,13 +1301,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         workflow_uuid: WorkflowUUIDPath,
         body: PublishWorkflowContractRequest,
     ) -> JSONResponse:
-        """把当前实验操作修订发布为可复用状态。
+        """把当前工作流修订切换为已发布状态。
 
         参数：``workflow_uuid`` 是待发布工作流的稳定 UUID，``body.revision`` 是
         调用方确认的当前修订。返回：发布结果；发布成功后，工作流列表和详情会
-        返回 ``status=published``，其他工作流即可选择它作为子工作流。异常：服务层
-        错误按既有 Backend 包络返回。该接口不是“新增发布记录”操作，返回中的历史
-        扩展字段仅为旧客户端兼容保留，前端不应据此实现版本管理。
+        返回 ``status=published``。其中，已发布的普通工作流可在生产模式运行；
+        已发布的实验操作还可被其他工作流引用。异常：服务层错误按既有 Backend
+        包络返回。该接口不是“新增发布记录”操作，返回中的历史扩展字段仅为旧客户端
+        兼容保留，前端不应据此实现版本管理。
         """
 
         return _success(

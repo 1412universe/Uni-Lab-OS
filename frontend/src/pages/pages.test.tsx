@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { demoMaterials, demoTasks, demoWorkflows } from '../data/demo'
 import styles from '../styles.css?inline'
@@ -149,6 +149,33 @@ describe('MaterialsPage', () => {
 })
 
 describe('WorkflowsPage', () => {
+  it('publishes the selected source workflow from the workflow detail', async () => {
+    const sourceWorkflow = { ...demoWorkflows[2], status: 'source' }
+    const notify = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith(`/workflows/${sourceWorkflow.uuid}/graph`)) {
+        return response({ code: 0, data: { workflow: sourceWorkflow, nodes: [], edges: [] } })
+      }
+      if (url.endsWith(`/workflows/${sourceWorkflow.uuid}/publications`) && init?.method === 'POST') {
+        return response({ code: 0, data: { workflow_uuid: sourceWorkflow.uuid, workflow_revision: sourceWorkflow.revision } })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <WorkflowsPage workflows={[sourceWorkflow]} materials={demoMaterials} connected onNavigate={vi.fn()} onNotify={notify} />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '发布' }))
+
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(`工作流“${sourceWorkflow.name}”已发布`))
+    const publishCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith(`/workflows/${sourceWorkflow.uuid}/publications`))
+    expect(publishCall?.[1]?.method).toBe('POST')
+    expect(JSON.parse(String(publishCall?.[1]?.body))).toEqual({ revision: sourceWorkflow.revision })
+  })
+
   it('selects the workflow targeted by a task navigation', async () => {
     const target = demoWorkflows[1]
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

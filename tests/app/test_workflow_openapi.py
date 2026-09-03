@@ -126,11 +126,11 @@ def test_workflow_swagger_marks_required_fields_and_real_responses(
             "WorkflowListSuccessResponse",
         )
         # 历史合同查询仍是运行时兼容入口，不在 Swagger 中制造“发布记录”业务概念；
-        # 发布动作本身必须公开，作用是把当前定义切换为可被复用的 published 状态。
+        # 发布动作本身必须公开，普通工作流与实验操作共用 published 状态。
         assert "/api/v1/published-workflow-contracts" not in schema["paths"]
         publish_path = "/api/v1/workflows/{workflow_uuid}/publications"
         publish_operation = schema["paths"][publish_path]["post"]
-        assert publish_operation["summary"] == "发布实验操作"
+        assert publish_operation["summary"] == "发布工作流"
         assert _parameter(publish_operation, "workflow_uuid")["required"] is True
         request_schema = publish_operation["requestBody"]["content"][
             "application/json"
