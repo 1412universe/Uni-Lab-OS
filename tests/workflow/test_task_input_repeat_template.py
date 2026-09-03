@@ -123,33 +123,46 @@ def _graph() -> dict[str, Any]:
     }
 
 
-def test_repeat_body_input_is_frozen_without_a_first_round_job() -> None:
-    """循环体输入应写入计划模板，而不是要求创建阶段已有动态 Job。"""
+def _plan(*, child_parent_uuid: str) -> dict[str, Any]:
+    """构造直接或隔着条件控制节点的循环体输入计划。"""
 
-    plan = {
-        "version": 2,
-        "nodes": [
+    nodes = [
+        {
+            "uuid": REPEAT_UUID,
+            "kind": "repeat_until",
+            "param": {},
+            "execution_policy": {},
+        }
+    ]
+    if child_parent_uuid == CONDITION_UUID:
+        nodes.append(
             {
-                "uuid": REPEAT_UUID,
-                "kind": "repeat_until",
-                "param": {},
-                "execution_policy": {},
-            },
-            {
-                "uuid": CHILD_UUID,
+                "uuid": CONDITION_UUID,
                 "parent_uuid": REPEAT_UUID,
-                "kind": "device_action",
+                "kind": "condition",
                 "param": {},
                 "execution_policy": {},
-                "inputs": [
-                    {
-                        "handle_uuid": TARGET_RUNTIME_HANDLE_UUID,
-                        "data_key": "position",
-                        "required": True,
-                    }
-                ],
-            },
-        ],
+            }
+        )
+    nodes.append(
+        {
+            "uuid": CHILD_UUID,
+            "parent_uuid": child_parent_uuid,
+            "kind": "device_action",
+            "param": {},
+            "execution_policy": {},
+            "inputs": [
+                {
+                    "handle_uuid": TARGET_RUNTIME_HANDLE_UUID,
+                    "data_key": "position",
+                    "required": True,
+                }
+            ],
+        }
+    )
+    return {
+        "version": 2,
+        "nodes": nodes,
         "handles": [
             {
                 "uuid": TARGET_RUNTIME_HANDLE_UUID,
@@ -162,7 +175,12 @@ def test_repeat_body_input_is_frozen_without_a_first_round_job() -> None:
         ],
         "edges": [],
     }
-    jobs = [
+
+
+def _jobs() -> list[dict[str, Any]]:
+    """仅创建循环控制 Job，循环体 Job 留待逐轮物化。"""
+
+    return [
         {
             "uuid": "78000000-0000-4000-8000-000000000101",
             "workflow_node_uuid": REPEAT_UUID,
@@ -171,11 +189,15 @@ def test_repeat_body_input_is_frozen_without_a_first_round_job() -> None:
         }
     ]
 
+
+def test_repeat_body_input_is_frozen_without_a_first_round_job() -> None:
+    """循环体输入应写入计划模板，而不是要求创建阶段已有动态 Job。"""
+
     prepared = prepare_task_input(
         graph=_graph(),
         raw_input={"position": 4},
-        execution_plan=plan,
-        jobs=jobs,
+        execution_plan=_plan(child_parent_uuid=REPEAT_UUID),
+        jobs=_jobs(),
     )
 
     child = next(
@@ -205,63 +227,11 @@ def test_repeat_condition_branch_input_is_frozen_without_a_first_round_job() -> 
         },
     )
     graph["nodes"][2]["parent_uuid"] = CONDITION_UUID
-    plan = {
-        "version": 2,
-        "nodes": [
-            {
-                "uuid": REPEAT_UUID,
-                "kind": "repeat_until",
-                "param": {},
-                "execution_policy": {},
-            },
-            {
-                "uuid": CONDITION_UUID,
-                "parent_uuid": REPEAT_UUID,
-                "kind": "condition",
-                "param": {},
-                "execution_policy": {},
-            },
-            {
-                "uuid": CHILD_UUID,
-                "parent_uuid": CONDITION_UUID,
-                "kind": "device_action",
-                "param": {},
-                "execution_policy": {},
-                "inputs": [
-                    {
-                        "handle_uuid": TARGET_RUNTIME_HANDLE_UUID,
-                        "data_key": "position",
-                        "required": True,
-                    }
-                ],
-            },
-        ],
-        "handles": [
-            {
-                "uuid": TARGET_RUNTIME_HANDLE_UUID,
-                "node_uuid": CHILD_UUID,
-                "template_handle_uuid": TARGET_TEMPLATE_HANDLE_UUID,
-                "handle_key": "position",
-                "data_key": "position",
-                "io_type": "target",
-            }
-        ],
-        "edges": [],
-    }
-    jobs = [
-        {
-            "uuid": "78000000-0000-4000-8000-000000000101",
-            "workflow_node_uuid": REPEAT_UUID,
-            "executor_kind": "repeat_until",
-            "param": {},
-        }
-    ]
-
     prepared = prepare_task_input(
         graph=graph,
         raw_input={"position": 4},
-        execution_plan=plan,
-        jobs=jobs,
+        execution_plan=_plan(child_parent_uuid=CONDITION_UUID),
+        jobs=_jobs(),
     )
 
     child = next(
