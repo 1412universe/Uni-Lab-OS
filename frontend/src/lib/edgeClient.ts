@@ -1389,6 +1389,28 @@ function controlMembership(param: Record<string, unknown>): string[] {
   return [...new Set(refs)]
 }
 
+/** 从控制区域提取各自的顺序组；条件节点的不同分支不能互相连 ready 边。 */
+function controlReadyGroups(param: Record<string, unknown>): string[][] {
+  const groups: string[][] = []
+  const append = (value: unknown) => {
+    if (Array.isArray(value)) {
+      const refs = value.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      if (refs.length > 1) groups.push([...new Set(refs)])
+    }
+  }
+  const branches = Array.isArray(param.branches) ? param.branches : []
+  if (branches.length > 0) {
+    branches.forEach((branch) => {
+      if (branch && typeof branch === 'object' && !Array.isArray(branch)) {
+        append((branch as RawRecord).node_uuids)
+      }
+    })
+  } else {
+    append(param.node_uuids)
+  }
+  return groups
+}
+
 /** 只在同一控制区域内建立 ready 顺序边；控制节点本身由 Scheduler 生成依赖边。 */
 async function createOperationReadyEdges(workflowUuid: string, groups: string[][], nodeByUuid: Map<string, RawRecord>) {
   const existingGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
@@ -1621,7 +1643,10 @@ export async function createExperimentOperation(payload: { name: string; descrip
     const topLevelActions = actionNodes.filter((node) => !memberRefs.has(node.uuid)).map((node) => node.uuid)
     // 控制节点的前后关系写在其 param（predecessor/successor）中；只在没有
     // 控制区域时建立整条线性 Action ready 链，避免把分支成员错误串成一条线。
-    const readyGroups = controlInputs.length ? controlGroups : [topLevelActions]
+    // 控制节点下的每个条件分支是独立路径，只能在同一分支内建立顺序边；
+    // 把所有分支拍平成一个组会错误地连接“if”末尾与“else”开头。
+    const branchReadyGroups = controlInputs.flatMap((control) => controlReadyGroups(control.param || {}))
+    const readyGroups = controlInputs.length ? branchReadyGroups : [topLevelActions]
     await createOperationReadyEdges(workflowUuid, readyGroups, nodeByUuid)
     const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
     const revision = Number(graph.workflow?.revision)

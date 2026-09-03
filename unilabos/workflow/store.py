@@ -7,6 +7,7 @@ import math
 import sqlite3
 import threading
 from contextlib import contextmanager
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic, sleep
@@ -1947,20 +1948,36 @@ class WorkflowStore:
             return result
         submitted_unilab = result.pop("unilab", None)
         existing = _load(existing_json, {}) if existing_json is not None else {}
-        if isinstance(existing, dict) and "unilab" in existing:
-            result["unilab"] = existing["unilab"]
+        existing_unilab = (
+            existing.get("unilab") if isinstance(existing, dict) else None
+        )
+        if isinstance(existing_unilab, Mapping):
+            # 节点的执行器、源码身份和组合展开事实由服务端维护；工作流
+            # 输入绑定是前端编辑的业务语义，必须允许在保存时更新。只合并
+            # 这一项，避免公共 Graph PUT 伪造其他保留字段。
+            protected_unilab = deepcopy(dict(existing_unilab))
+            if isinstance(submitted_unilab, Mapping):
+                input_bindings = submitted_unilab.get("input_bindings")
+                if input_bindings is not None:
+                    protected_unilab["input_bindings"] = deepcopy(input_bindings)
+            result["unilab"] = protected_unilab
             return result
         # 完整 Graph PUT 由前端一次性提交新控制节点，公共接口不能依赖逐节点
         # POST 的服务端顺序分配。只允许这一项创建顺序穿过保护边界；执行器绑定、
         # 组合调用等系统事实仍不可由客户端写入。
         if isinstance(submitted_unilab, Mapping):
+            input_bindings = submitted_unilab.get("input_bindings")
+            if isinstance(input_bindings, Mapping):
+                result["unilab"] = {
+                    "input_bindings": deepcopy(dict(input_bindings)),
+                }
             source_order = submitted_unilab.get("authoring_source_order")
             if (
                 isinstance(source_order, int)
                 and not isinstance(source_order, bool)
                 and source_order >= 0
             ):
-                result["unilab"] = {"authoring_source_order": source_order}
+                result.setdefault("unilab", {})["authoring_source_order"] = source_order
         return result
 
     @staticmethod
