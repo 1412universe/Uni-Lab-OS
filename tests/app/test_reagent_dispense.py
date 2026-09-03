@@ -364,3 +364,84 @@ def test_dispense_cannot_take_quantity_reserved_by_workflow(tmp_path) -> None:
 
     # 分装后源瓶剩 80，正好等于活动预留；预留本身未被触碰。
     assert scene.reserved_on_source() == 80
+
+
+def test_dispensed_bottle_can_be_dispensed_again_with_a_lineage_chain(tmp_path) -> None:
+    """二级分装：分装出来的瓶是普通试剂记录，可再作源瓶；血缘按"直接来源"逐级相连。"""
+
+    scene = _Scene(tmp_path, empty_containers=2)
+    first = execute_command(
+        scene.service,
+        _dispense_command(
+            "dispense-l1",
+            scene.source["uuid"],
+            scene.source["revision"],
+            [{"material_uuid": scene.targets[0], "quantity": 100}],
+        ),
+    )
+    assert first["status"] == "completed", first
+    middle = _reagents_on(scene.client, scene.targets[0])[0]
+
+    second = execute_command(
+        scene.service,
+        _dispense_command(
+            "dispense-l2",
+            middle["uuid"],
+            middle["revision"],
+            [{"material_uuid": scene.targets[1], "quantity": 30}],
+        ),
+    )
+    assert second["status"] == "completed", second
+
+    middle_after = _reagent(scene.client, middle["uuid"])
+    leaf = _reagents_on(scene.client, scene.targets[1])[0]
+    root_after = _reagent(scene.client, scene.source["uuid"])
+    # 守恒：根 400 + 中间 70 + 叶 30 = 500。
+    assert (root_after["quantity"], middle_after["quantity"], leaf["quantity"]) == (400, 70, 30)
+    assert middle_after["revision"] == middle["revision"] + 1
+    # 叶的直接来源是中间瓶，中间瓶的直接来源是根；身份与浓度沿链继承。
+    assert leaf["meta_data"]["source_reagent_uuid"] == middle["uuid"]
+    assert middle_after["meta_data"]["source_reagent_uuid"] == scene.source["uuid"]
+    assert leaf["reagent_info_uuid"] == scene.info_uuid
+    assert leaf["concentration_value"] == 95
+    ledger = _ledger(scene.store)
+    level_two = [entry for entry in ledger if entry["causation_id"] == "dispense-l2"]
+    assert sorted(entry["op_type"] for entry in level_two) == [
+        "reagent.dispense_source",
+        "reagent.dispense_target",
+    ]
+    assert {entry["material_uuid"] for entry in level_two} == {
+        scene.targets[0],
+        scene.targets[1],
+    }
+
+
+def test_emptied_bottle_with_a_record_is_not_an_empty_container(tmp_path) -> None:
+    """分到 0 mL 的瓶仍占着容器：记录未移除前不能再作分装目标，避免两条记录叠在一个瓶里。"""
+
+    scene = _Scene(tmp_path, empty_containers=2)
+    drained = execute_command(
+        scene.service,
+        _dispense_command(
+            "dispense-all",
+            scene.source["uuid"],
+            scene.source["revision"],
+            [{"material_uuid": scene.targets[0], "quantity": 500}],
+        ),
+    )
+    assert drained["status"] == "completed", drained
+    assert _reagent(scene.client, scene.source["uuid"])["quantity"] == 0
+    child = _reagents_on(scene.client, scene.targets[0])[0]
+
+    back_into_source = execute_command(
+        scene.service,
+        _dispense_command(
+            "dispense-back",
+            child["uuid"],
+            child["revision"],
+            [{"material_uuid": scene.source_material, "quantity": 10}],
+        ),
+    )
+    assert back_into_source["status"] == "rejected", back_into_source
+    assert back_into_source["error_code"] == "4002"
+    assert _reagent(scene.client, child["uuid"])["quantity"] == 500
