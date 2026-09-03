@@ -7,11 +7,13 @@ import {
   createReagent,
   createReagentInfo,
   deleteReagentInfo,
+  createWorkflowTask,
   dispenseReagent,
   instantiateMaterial,
   lookupCompoundByCas,
   loadEdgeSnapshot,
   loadReagentHistory,
+  loadWorkflowGraph,
   loadWorkflowTaskGraph,
   unwrapEnvelope,
   updateExperimentOperation,
@@ -1206,5 +1208,50 @@ describe('loadEdgeSnapshot', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(loadEdgeSnapshot()).rejects.toThrow('jobs unavailable')
+  })
+})
+
+describe('createWorkflowTask', () => {
+  it('sends reagent bindings as inventory_bindings on the wire', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0, data: { uuid: 'task-1' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await createWorkflowTask({
+      workflowUuid: 'wf-1',
+      description: '预留测试',
+      input: {},
+      inventoryBindings: [{ requirementKey: 'solvent_a', inventoryType: 'reagent', inventoryUuid: 'rg-1', reservedQuantity: 10, quantityUnit: 'mL' }],
+    })
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/workflow-tasks')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      workflow_uuid: 'wf-1',
+      inventory_bindings: [{ requirement_key: 'solvent_a', inventory_type: 'reagent', inventory_uuid: 'rg-1', reserved_quantity: 10, quantity_unit: 'mL' }],
+    })
+  })
+
+  it('sends an empty binding list when the workflow declares no quantity', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0, data: { uuid: 'task-2' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await createWorkflowTask({ workflowUuid: 'wf-1', description: '', input: {} })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body)).inventory_bindings).toEqual([])
+  })
+})
+
+describe('loadWorkflowGraph', () => {
+  it('maps inventory_requirements compiled from material_source quantities', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: {
+      workflow: { uuid: 'wf-1', name: 'w', revision: 3, status: 'source' },
+      nodes: [], edges: [], node_templates: [], handle_templates: [],
+      inventory_requirements: [{
+        uuid: 'req-1', requirement_key: 'solvent_a', consume_node_uuid: 'node-9', target_type: 'reagent_info',
+        reagent_info_uuid: null, required_quantity: 10, quantity_unit: 'mL', allow_split: false,
+        meta_data: { material_source_node_uuid: 'node-2' },
+      }],
+    } })))
+    const graph = await loadWorkflowGraph('wf-1')
+    expect(graph.inventoryRequirements).toEqual([{
+      uuid: 'req-1', requirementKey: 'solvent_a', consumeNodeUuid: 'node-9', targetType: 'reagent_info',
+      reagentInfoUuid: undefined, requiredQuantity: 10, quantityUnit: 'mL', allowSplit: false,
+      description: undefined, materialSourceNodeUuid: 'node-2',
+    }])
   })
 })

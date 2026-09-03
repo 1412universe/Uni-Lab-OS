@@ -74,6 +74,7 @@ from unilabos.workflow.intervention import WorkflowInterventionStore
 from unilabos.workflow.job_evidence import JobEvidenceStore
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
 from unilabos.workflow.models import (
+    WorkflowInventoryRequirementWrite,
     CandidateChangeset,
     CandidateCompilation,
     CandidateDiagnostic,
@@ -1753,6 +1754,9 @@ class WorkflowService:
         revision: int,
         nodes: list[WorkflowNodeWrite | dict[str, Any]],
         edges: list[WorkflowEdgeWrite | dict[str, Any]],
+        inventory_requirements: (
+            list[WorkflowInventoryRequirementWrite | dict[str, Any]] | None
+        ) = None,
     ) -> dict[str, Any]:
         """以严格工作流输入/输出（Workflow I/O）合同保存完整图。
 
@@ -1769,6 +1773,7 @@ class WorkflowService:
             revision=revision,
             nodes=nodes,
             edges=edges,
+            inventory_requirements=inventory_requirements,
             protect_reserved_metadata=True,
         )
 
@@ -1779,6 +1784,9 @@ class WorkflowService:
         revision: int,
         nodes: list[WorkflowNodeWrite | dict[str, Any]],
         edges: list[WorkflowEdgeWrite | dict[str, Any]],
+        inventory_requirements: (
+            list[WorkflowInventoryRequirementWrite | dict[str, Any]] | None
+        ) = None,
     ) -> dict[str, Any]:
         """保存由 OS 生成、并已完成组合合同校验的完整工作流图。
 
@@ -1793,6 +1801,7 @@ class WorkflowService:
             revision=revision,
             nodes=nodes,
             edges=edges,
+            inventory_requirements=inventory_requirements,
             protect_reserved_metadata=False,
         )
 
@@ -1804,6 +1813,9 @@ class WorkflowService:
         nodes: list[WorkflowNodeWrite | dict[str, Any]],
         edges: list[WorkflowEdgeWrite | dict[str, Any]],
         protect_reserved_metadata: bool,
+        inventory_requirements: (
+            list[WorkflowInventoryRequirementWrite | dict[str, Any]] | None
+        ) = None,
     ) -> dict[str, Any]:
         """在线性化锁内执行公共或系统生成图的统一保存事务。
 
@@ -1829,12 +1841,25 @@ class WorkflowService:
                     else WorkflowEdgeWrite.model_validate(item)
                     for item in edges
                 ]
+                # ``requirement_values`` 为 None 表示调用方不改动库存需求；空列表表示
+                # 显式清空。两者都交给 Store 在同一事务里核对。
+                requirement_values = (
+                    None
+                    if inventory_requirements is None
+                    else [
+                        item
+                        if isinstance(item, WorkflowInventoryRequirementWrite)
+                        else WorkflowInventoryRequirementWrite.model_validate(item)
+                        for item in inventory_requirements
+                    ]
+                )
                 if self._has_active_source(identity):
                     candidate = self._definition_store.preview_graph_replacement(
                         identity,
                         revision=revision,
                         nodes=node_values,
                         edges=edge_values,
+                        inventory_requirements=requirement_values,
                         protect_reserved_metadata=protect_reserved_metadata,
                         validate_workflow_io_contract=True,
                     )
@@ -1848,6 +1873,7 @@ class WorkflowService:
                     revision=revision,
                     nodes=node_values,
                     edges=edge_values,
+                    inventory_requirements=requirement_values,
                     protect_reserved_metadata=protect_reserved_metadata,
                     validate_workflow_io_contract=True,
                 )
@@ -6112,6 +6138,10 @@ class WorkflowService:
             ],
             "handle_templates": [
                 omit_none(item) for item in (graph.get("handle_templates") or [])
+            ],
+            "inventory_requirements": [
+                omit_none(item)
+                for item in (graph.get("inventory_requirements") or [])
             ],
         }
 

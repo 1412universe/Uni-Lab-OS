@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sys
+import uuid
+
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
@@ -36,6 +39,7 @@ from unilabos.workflow.authoring_kernel import (
 from unilabos.workflow.authoring_material import (
     MaterialAuthoringError,
     MaterialSourceDeclaration,
+    ReagentReferenceResolver,
     build_material_source_node,
 )
 from unilabos.workflow.composite import CompositeAuthoring, CompositeExpansion
@@ -67,6 +71,7 @@ def build_candidate_graph(
     applied_graph: Mapping[str, Any],
     resource_reference_resolver: ResourceReferenceResolver | None = None,
     composite_authoring: CompositeAuthoring | None = None,
+    reagent_reference_resolver: ReagentReferenceResolver | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """把静态作者程序构造为完整候选图和变更集（Changeset）。
 
@@ -93,6 +98,8 @@ def build_candidate_graph(
     result_output_schemas: dict[tuple[str, str], dict[str, Any]] = {}
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
+    # ``material_declarations`` 保留声明了数量的物料来源，编译为库存需求。
+    material_declarations: list[MaterialSourceDeclaration] = []
     parent_by_node = dict(program.parent_by_node)
     source_order = {
         node_uuid: index for index, node_uuid in enumerate(program.source_order)
@@ -272,11 +279,13 @@ def build_candidate_graph(
                     declaration,
                     catalog=catalog,
                     resource_reference_resolver=resource_reference_resolver,
+                    reagent_reference_resolver=reagent_reference_resolver,
                 )
             except MaterialAuthoringError as error:
                 raise AuthoringGraphError(error.code, error.message) from error
             action_catalog[declaration.node_uuid] = catalog_action
             result_nodes[declaration.result_name] = (declaration, catalog_action)
+            material_declarations.append(declaration)
             nodes.append(
                 _apply_authoring_structure(
                     node,
@@ -346,6 +355,14 @@ def build_candidate_graph(
                 )
             )
 
+    # ``inventory_requirements`` 由声明数量的试剂来源与其首个消费动作推导。
+    inventory_requirements = _material_quantity_requirements(
+        workflow_uuid=program.workflow_uuid,
+        declarations=material_declarations,
+        nodes=nodes,
+        edges=edges,
+        source_order=source_order,
+    )
     # ``order_dependencies`` 只在相邻执行片段没有真实数据边时补 ready 控制边。
     data_pairs = {
         (edge["source_node_uuid"], edge["target_node_uuid"]) for edge in edges
@@ -520,6 +537,7 @@ def build_candidate_graph(
         "edges": projection.edges,
         "node_templates": projection.node_templates,
         "handle_templates": projection.handle_templates,
+        "inventory_requirements": inventory_requirements,
     }
     try:
         validate_material_graph_projection(graph)
@@ -527,6 +545,69 @@ def build_candidate_graph(
         raise AuthoringGraphError(error.code, error.message) from error
     changeset = candidate_changeset(graph=graph, applied_graph=applied)
     return graph, changeset
+
+
+def _material_quantity_requirements(
+    *,
+    workflow_uuid: str,
+    declarations: list[MaterialSourceDeclaration],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    source_order: Mapping[str, int],
+) -> list[dict[str, Any]]:
+    """把声明了数量的试剂来源编译为工作流库存需求。
+
+    参数：``declarations`` 是本次编译的全部物料来源；``edges`` 是候选数据边，
+    用于确定首个消费动作；``source_order`` 是节点源码顺序。返回：与
+    ``WorkflowInventoryRequirementWrite`` 同形状的需求列表，身份由工作流与
+    来源节点确定性派生，重复编译不产生新 UUID。异常：声明数量却没有任何动作
+    消费时抛出 ``AuthoringGraphError``。
+    """
+    requirements: list[dict[str, Any]] = []
+    node_by_uuid = {str(node["uuid"]): node for node in nodes}
+    for declaration in declarations:
+        if declaration.quantity is None or declaration.quantity_unit is None:
+            continue
+        # ``resolved`` 是节点构造期已把 CAS 解析成的试剂身份；缺失即编译器缺陷。
+        resolved = node_by_uuid[declaration.node_uuid]["meta_data"]["unilab"][
+            "quantity_requirement"
+        ]
+        consumers = sorted(
+            (
+                str(edge["target_node_uuid"])
+                for edge in edges
+                if str(edge.get("source_node_uuid")) == declaration.node_uuid
+            ),
+            key=lambda node_uuid: (source_order.get(node_uuid, sys.maxsize), node_uuid),
+        )
+        if not consumers:
+            raise AuthoringGraphError(
+                "invalid_material_source",
+                f"声明数量的物料来源 {declaration.result_name} 必须被至少一个动作消费",
+            )
+        requirements.append(
+            {
+                "uuid": str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"unilab:inventory-requirement:{workflow_uuid}:{declaration.node_uuid}",
+                    )
+                ),
+                "consume_node_uuid": consumers[0],
+                "requirement_key": declaration.result_name,
+                "target_type": "reagent_info",
+                "reagent_info_uuid": str(resolved["reagent_info_uuid"]),
+                "required_quantity": declaration.quantity,
+                "quantity_unit": declaration.quantity_unit,
+                "allow_split": False,
+                "description": declaration.title,
+                "meta_data": {
+                    "material_source_node_uuid": declaration.node_uuid,
+                    "reagent_cas": declaration.reagent_cas,
+                },
+            }
+        )
+    return requirements
 
 
 def _composite_keyword_arguments(

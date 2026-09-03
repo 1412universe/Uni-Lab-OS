@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from unilabos.app.scheduler.inventory.resource_reference import (
+    build_inventory_reagent_reference_resolver,
     build_inventory_resource_reference_resolver,
 )
 from unilabos.app.scheduler.inventory.site_selection import (
@@ -624,6 +625,9 @@ def compose_local_workflow_template_runtime(
             resource_reference_resolver = build_inventory_resource_reference_resolver(
                 inventory_store
             )
+            reagent_reference_resolver = build_inventory_reagent_reference_resolver(
+                inventory_store
+            )
             site_selection_resolver = build_inventory_site_selection_resolver(
                 inventory_store
             )
@@ -648,6 +652,7 @@ def compose_local_workflow_template_runtime(
                 return WorkflowAuthoringEngine(
                     catalog=snapshot,
                     resource_reference_resolver=resource_reference_resolver,
+                    reagent_reference_resolver=reagent_reference_resolver,
                     composite_authoring=CompositeAuthoring(
                         snapshot_provider=publication_store,
                         catalog=snapshot,

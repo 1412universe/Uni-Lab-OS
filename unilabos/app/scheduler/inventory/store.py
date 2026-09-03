@@ -1282,6 +1282,17 @@ class InventoryStore:
 
     # -- 只读 helper ---------------------------------------------------------
 
+    @contextmanager
+    def read_connection(self) -> Iterator[sqlite3.Connection]:
+        """在锁内借出共享连接做只读查询，不开启事务。
+
+        供需要 ``sqlite3.Connection`` 的只读汇总（如活动预留量）使用；调用方在
+        事务内再次进入时因可重入锁不会阻塞，也不会触发嵌套 ``BEGIN``。调用方
+        绝不能在此连接上写入或提交。
+        """
+        with self._lock:
+            yield self._conn
+
     def query_one(self, sql: str, params: tuple = ()) -> Optional[Dict[str, Any]]:
         with self._lock:
             row = self._conn.execute(sql, params).fetchone()

@@ -3233,6 +3233,12 @@ class WorkflowStore:
                     )
                     for item in graph.get("edges", [])
                 ]
+                # ``requirements`` 来自候选图顶层的库存需求；旧候选没有该键时为空列表，
+                # 与 Store 合同一致地显式清空历史需求，避免残留过期数量。
+                requirements = [
+                    WorkflowInventoryRequirementWrite.model_validate(item)
+                    for item in graph.get("inventory_requirements", [])
+                ]
                 self._ensure_authoring_catalog_projection(
                     conn,
                     node_templates=graph.get("node_templates", []),
@@ -3248,6 +3254,7 @@ class WorkflowStore:
                     expected_revision=expected_revision,
                     nodes=nodes,
                     edges=edges,
+                    inventory_requirements=requirements,
                     advance_revision=True,
                     protect_reserved_metadata=False,
                     semantic_workflow_meta_data=candidate_meta,

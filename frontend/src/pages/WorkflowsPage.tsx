@@ -19,8 +19,8 @@ import {
   Send,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
-import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget } from '../types'
+import { createWorkflowTask, loadReagents, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
+import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget, WorkflowInventoryBinding} from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
 import { WorkflowDag } from '../components/WorkflowDag'
@@ -88,6 +88,8 @@ export function WorkflowsPage({
   const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
   const [childPickerOpen, setChildPickerOpen] = useState(false)
   const [runInput, setRunInput] = useState<Record<string, string>>({})
+  /** requirementKey → 试剂 UUID；每条库存需求都绑定后才允许建任务。 */
+  const [reagentBindings, setReagentBindings] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
   const pythonImportRef = useRef<HTMLInputElement>(null)
   const jsonImportRef = useRef<HTMLInputElement>(null)
@@ -167,6 +169,25 @@ export function WorkflowsPage({
     }
   })
   const preflight = preflightQuery.data
+  const inventoryRequirements = graphQuery.data?.inventoryRequirements || []
+  const reagentsQuery = useQuery({
+    queryKey: ['reagents-for-binding'],
+    queryFn: ({ signal }) => loadReagents(signal),
+    enabled: inventoryRequirements.length > 0,
+  })
+  const reagents = reagentsQuery.data || []
+  useEffect(() => setReagentBindings({}), [detail?.uuid, detail?.revision])
+  const inventoryBindings: WorkflowInventoryBinding[] = inventoryRequirements.flatMap((requirement) => {
+    const reagent = reagents.find((item) => item.uuid === reagentBindings[requirement.requirementKey])
+    return reagent ? [{
+      requirementKey: requirement.requirementKey,
+      inventoryType: 'reagent' as const,
+      inventoryUuid: reagent.uuid,
+      reservedQuantity: requirement.requiredQuantity,
+      quantityUnit: requirement.quantityUnit,
+    }] : []
+  })
+  const bindingsReady = inventoryBindings.length === inventoryRequirements.length
   useEffect(() => setRunInput(initialRunInput(detail)), [detail?.uuid, detail?.revision])
   const requiredInputReady = Boolean(detail) && detail.inputContract.every((field) => (
     !field.required || field.defaultValue !== undefined || Boolean(runInput[field.name]?.trim())
@@ -178,10 +199,12 @@ export function WorkflowsPage({
   const taskMutation = useMutation({
     mutationFn: async () => {
       if (!detail) throw new Error('请选择工作流')
+      if (!bindingsReady) throw new Error('还有试剂需求未绑定')
       return createWorkflowTask({
         workflowUuid: detail.uuid,
         description: runDescription,
         input: serialiseTaskInput(detail.inputContract, runInput),
+        inventoryBindings,
       })
     },
     onSuccess: async (task) => {
@@ -395,6 +418,30 @@ export function WorkflowsPage({
                         {!detail.inputContract.length ? <EmptyState title="无需运行输入" description="该工作流可直接进入 Preflight。" /> : null}
                       </div>
                     </section>
+                    {inventoryRequirements.length ? (
+                      <section className="run-input-panel reagent-binding-panel">
+                        <div className="run-section-title"><span>01b</span><div><strong>试剂预留</strong><small>{inventoryRequirements.length} 条数量需求 · 建任务时按所选瓶预留，成功后按用量扣减</small></div></div>
+                        <div className="run-fields">
+                          {inventoryRequirements.map((requirement) => {
+                            const options = reagents.filter((reagent) => (
+                              reagent.quantityUnit === requirement.quantityUnit
+                              && ((reagent.quantity ?? 0) - (reagent.activeWorkflowReservedQuantity ?? 0)) >= requirement.requiredQuantity
+                              && (!requirement.reagentInfoUuid || reagent.reagentInfoUuid === requirement.reagentInfoUuid)
+                            ))
+                            return (
+                              <label className="run-field resource-binding-field" key={requirement.uuid}>
+                                <span><code>{requirement.requirementKey}</code><em>需 {requirement.requiredQuantity} {requirement.quantityUnit}</em></span>
+                                <select value={reagentBindings[requirement.requirementKey] || ''} onChange={(event) => setReagentBindings((current) => ({ ...current, [requirement.requirementKey]: event.target.value }))}>
+                                  <option value="">选择试剂瓶</option>
+                                  {options.map((reagent) => <option key={reagent.uuid} value={reagent.uuid}>{reagent.name} · {reagent.containerName || reagent.materialUuid.slice(0, 8)} · 余 {reagent.quantity} {reagent.quantityUnit}{reagent.activeWorkflowReservedQuantity ? ` · 预留中 ${reagent.activeWorkflowReservedQuantity}` : ''}</option>)}
+                                </select>
+                                {!options.length ? <small className="binding-hint">没有单位为 {requirement.quantityUnit} 且余量 ≥ {requirement.requiredQuantity} 的试剂瓶，请先录入或分装</small> : null}
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </section>
+                    ) : null}
                     <aside className="run-context-panel">
                       <div className="run-section-title"><span>02</span><div><strong>物料上下文</strong><small>权威库位与未结束任务引用</small></div></div>
                       <div className="bound-material-list">

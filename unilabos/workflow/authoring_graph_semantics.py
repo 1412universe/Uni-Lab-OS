@@ -108,7 +108,8 @@ def graph_containers(graph: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     required = {"workflow", "nodes", "edges", "node_templates", "handle_templates"}
-    if not isinstance(graph, Mapping) or set(graph) != required:
+    # ``inventory_requirements`` 是可选的第六集合（试剂数量需求），不参与五集合合同。
+    if not isinstance(graph, Mapping) or set(graph) - {"inventory_requirements"} != required:
         raise AuthoringGraphError("candidate_invalid", "工作流图必须包含完整五集合")
     copied = deepcopy(dict(graph))
     if not isinstance(copied["workflow"], dict) or any(

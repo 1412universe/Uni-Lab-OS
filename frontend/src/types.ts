@@ -86,10 +86,35 @@ export interface WorkflowGraphEdge {
   targetNodeUuid: string
 }
 
+/** 工作流定义里不绑定具体库存实例的逻辑数量需求；建任务时必须逐条绑定并预留。 */
+export interface WorkflowInventoryRequirement {
+  uuid: string
+  requirementKey: string
+  consumeNodeUuid: string
+  targetType: 'reagent_info' | 'current_substance' | string
+  reagentInfoUuid?: string
+  requiredQuantity: number
+  quantityUnit: string
+  allowSplit: boolean
+  description?: string
+  materialSourceNodeUuid?: string
+}
+
+/** 建任务时把一条数量需求绑定到一个库存实例（试剂瓶）的预留声明。 */
+export interface WorkflowInventoryBinding {
+  requirementKey: string
+  inventoryType: 'reagent' | 'current_substance'
+  inventoryUuid: string
+  reservedQuantity: number
+  quantityUnit: string
+}
+
 export interface WorkflowGraph {
   workflow: WorkflowDefinition
   nodes: WorkflowGraphNode[]
   edges: WorkflowGraphEdge[]
+  /** 编译自 material_source(quantity=…, quantity_unit=…) 的库存需求。 */
+  inventoryRequirements?: WorkflowInventoryRequirement[]
   /** 完整图返回的模板快照，包含发布子工作流的合成节点句柄。 */
   nodeTemplates?: Array<Record<string, any>>
   handleTemplates?: Array<Record<string, any>>
@@ -277,6 +302,8 @@ export interface ReagentRecord {
   densityGPerMl?: number
   containerName?: string
   containerBarcode?: string
+  /** 未结束任务对该瓶的活动预留量，与 quantity 同单位。 */
+  activeWorkflowReservedQuantity?: number
   /** 由分装产生时指向源瓶试剂；手工录入的瓶子为空。 */
   sourceReagentUuid?: string
   dispenseCommandId?: string

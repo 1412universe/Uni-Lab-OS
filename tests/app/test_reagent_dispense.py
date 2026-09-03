@@ -329,6 +329,8 @@ def test_dispense_cannot_take_quantity_reserved_by_workflow(tmp_path) -> None:
     }
     scene.service.admit_task_materials(task_uuid, [source], [allocation])
     assert scene.reserved_on_source() == 80
+    # 预留量必须在公共试剂接口外露，控制台据此过滤可绑定的瓶。
+    assert _reagent(scene.client, scene.source["uuid"])["active_workflow_reserved_quantity"] == 80
     ledger_before = _ledger(scene.store)
 
     too_much = execute_command(

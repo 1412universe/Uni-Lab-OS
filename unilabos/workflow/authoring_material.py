@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ast
 import json
+import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from unilabos.workflow.authoring_kernel import (
     AuthoringCatalogAction,
@@ -51,6 +53,11 @@ _SELECTOR_FIELDS = frozenset(
     }
 )
 _LEGACY_SELECTOR_FIELDS = _SELECTOR_FIELDS - {"custody_policy"}
+# ``_QUANTITY_FIELDS`` 是试剂来源可选的数量声明；两者必须同时出现，编译为
+# 工作流库存需求（inventory_requirements），供任务创建时预留与扣减。
+_QUANTITY_FIELDS = frozenset({"quantity", "quantity_unit", "reagent_cas"})
+# ``_CAS_PATTERN`` 与库存试剂目录的 CAS 合同一致：2-7 位、2 位、1 位校验位。
+_CAS_PATTERN = re.compile(r"^(\d{2,7})-(\d{2})-(\d)$")
 
 
 class MaterialAuthoringError(ValueError):
@@ -87,6 +94,9 @@ class MaterialSourceDeclaration:
     custody_policy: str
     source_node: ast.Assign
     arguments: tuple[tuple[str, Any], ...] = ()
+    quantity: float | None = None
+    quantity_unit: str | None = None
+    reagent_cas: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +143,13 @@ def parse_material_source_declaration(
         if item.arg is None or item.arg in keywords:
             _fail("物料来源参数重复或包含 ** 展开", call)
         keywords[item.arg] = item.value
-    if set(keywords) not in {_SELECTOR_FIELDS, _LEGACY_SELECTOR_FIELDS}:
+    quantity_keywords = set(keywords) & _QUANTITY_FIELDS
+    if quantity_keywords and quantity_keywords != _QUANTITY_FIELDS:
+        _fail("物料来源的 quantity、quantity_unit 与 reagent_cas 必须同时声明", call)
+    if set(keywords) - _QUANTITY_FIELDS not in {
+        _SELECTOR_FIELDS,
+        _LEGACY_SELECTOR_FIELDS,
+    }:
         _fail("物料来源必须完整声明规范选择器字段", call)
 
     resource_expression = keywords["resource_template"]
@@ -168,6 +184,23 @@ def parse_material_source_declaration(
         if "custody_policy" in keywords
         else MATERIAL_CUSTODY_POLICY_VALUES["TASK_EXCLUSIVE"]
     )
+    quantity: float | None = None
+    quantity_unit: str | None = None
+    reagent_cas: str | None = None
+    if quantity_keywords:
+        if MATERIAL_FLOW_ROLE_MEMBERS.get(flow_role) != "REAGENT":
+            _fail("只有试剂（REAGENT）物料来源可以声明数量", call)
+        quantity = _positive_number_literal(
+            keywords["quantity"],
+            label="物料来源数量",
+        )
+        quantity_unit = _literal_string(
+            keywords["quantity_unit"],
+            label="物料来源数量单位",
+        ).strip()
+        if not quantity_unit:
+            _fail("物料来源数量单位不能为空", keywords["quantity_unit"])
+        reagent_cas = _cas_literal(keywords["reagent_cas"], label="物料来源试剂 CAS")
     node_uuid = anchors.get(statement.lineno - 1)
     if node_uuid is None:
         _fail("每个物料来源前必须有相邻节点 UUID 锚点", statement)
@@ -186,6 +219,9 @@ def parse_material_source_declaration(
         flow_role=flow_role,
         custody_policy=custody_policy,
         source_node=statement,
+        quantity=quantity,
+        quantity_unit=quantity_unit,
+        reagent_cas=reagent_cas,
     )
 
 
@@ -194,6 +230,7 @@ def build_material_source_node(
     *,
     catalog: AuthoringCatalogSnapshot,
     resource_reference_resolver: ResourceReferenceResolver | None = None,
+    reagent_reference_resolver: ReagentReferenceResolver | None = None,
 ) -> tuple[dict[str, Any], AuthoringCatalogAction]:
     """把静态物料来源声明投影为后端形状节点。
 
@@ -287,6 +324,16 @@ def build_material_source_node(
                 "resource_refs": {
                     "mount": {"resource_id": declaration.mount_resource_id}
                 },
+                **(
+                    {
+                        "quantity_requirement": _quantity_requirement_metadata(
+                            declaration,
+                            reagent_reference_resolver=reagent_reference_resolver,
+                        )
+                    }
+                    if declaration.quantity is not None
+                    else {}
+                ),
             }
         },
     }
@@ -360,10 +407,124 @@ def render_material_source_call(
         f"flow_role=MaterialFlowRole.{role_member}",
         f"custody_policy=MaterialCustodyPolicy.{policy_member}",
     ]
+    quantity_requirement = (
+        unilab.get("quantity_requirement") if isinstance(unilab, Mapping) else None
+    )
+    if quantity_requirement is not None:
+        quantity, quantity_unit, reagent_cas = _quantity_requirement_values(
+            quantity_requirement
+        )
+        arguments.append(f"quantity={_render_number(quantity)}")
+        arguments.append(f"quantity_unit={quantity_unit!r}")
+        arguments.append(f"reagent_cas={reagent_cas!r}")
     return RenderedMaterialSource(
         resource_import=(module, symbol),
         call=f"material_source({', '.join(arguments)})",
     )
+
+
+def _positive_number_literal(expression: ast.expr, *, label: str) -> float:
+    """把正数字面量解析为 float；拒绝布尔、非数字、非有限或非正值。"""
+    if (
+        not isinstance(expression, ast.Constant)
+        or isinstance(expression.value, bool)
+        or not isinstance(expression.value, (int, float))
+    ):
+        _fail(f"{label}必须是数字字面量", expression)
+    value = float(expression.value)
+    if not math.isfinite(value) or value <= 0:
+        _fail(f"{label}必须是正数", expression)
+    return value
+
+
+def _quantity_requirement_values(raw: Any) -> tuple[float, str, str]:
+    """校验候选节点保留元数据里的数量声明；不合法时抛出稳定诊断。"""
+    if not isinstance(raw, Mapping):
+        raise MaterialAuthoringError("invalid_material_source", "物料来源数量声明不是对象")
+    quantity = raw.get("required_quantity")
+    unit = raw.get("quantity_unit")
+    if (
+        isinstance(quantity, bool)
+        or not isinstance(quantity, (int, float))
+        or not math.isfinite(float(quantity))
+        or float(quantity) <= 0
+        or not isinstance(unit, str)
+        or not unit.strip()
+        or not isinstance(raw.get("reagent_cas"), str)
+        or not str(raw.get("reagent_cas")).strip()
+    ):
+        raise MaterialAuthoringError("invalid_material_source", "物料来源数量声明不完整")
+    return float(quantity), unit.strip(), str(raw["reagent_cas"]).strip()
+
+
+class ReagentReferenceResolver(Protocol):
+    """只读试剂目录端口：把 CAS 解析为当前实验室的试剂身份。"""
+
+    def resolve_reagent_cas(self, cas: str) -> str | None:
+        """返回 ``reagent_info_uuid``；目录中不存在该 CAS 时返回 ``None``。"""
+
+
+def _quantity_requirement_metadata(
+    declaration: MaterialSourceDeclaration,
+    *,
+    reagent_reference_resolver: ReagentReferenceResolver | None,
+) -> dict[str, Any]:
+    """把数量声明投影为保留元数据，并在编译期把 CAS 解析为试剂身份。
+
+    参数：``declaration`` 已通过静态校验；``reagent_reference_resolver`` 是只读
+    试剂目录端口。返回：含 ``reagent_info_uuid`` 的元数据。异常：没有端口或
+    目录中没有该 CAS 时抛出稳定的 ``MaterialAuthoringError``，让工作流停在
+    草稿无效而不是在任务准入时才发现。
+    """
+    assert declaration.quantity is not None and declaration.reagent_cas is not None
+    if reagent_reference_resolver is None:
+        raise MaterialAuthoringError(
+            "reagent_reference_unavailable",
+            "当前编译路径没有试剂目录端口，无法解析 reagent_cas",
+            declaration.source_node,
+        )
+    try:
+        reagent_info_uuid = reagent_reference_resolver.resolve_reagent_cas(
+            declaration.reagent_cas
+        )
+    except Exception as error:
+        raise MaterialAuthoringError(
+            "reagent_reference_resolution_error",
+            f"试剂目录解析 CAS {declaration.reagent_cas} 失败：{error}",
+            declaration.source_node,
+        ) from error
+    if not isinstance(reagent_info_uuid, str) or not reagent_info_uuid:
+        raise MaterialAuthoringError(
+            "reagent_reference_resolution_error",
+            f"试剂目录中没有 CAS {declaration.reagent_cas}，请先录入试剂目录",
+            declaration.source_node,
+        )
+    return {
+        "required_quantity": declaration.quantity,
+        "quantity_unit": declaration.quantity_unit,
+        "reagent_cas": declaration.reagent_cas,
+        "reagent_info_uuid": reagent_info_uuid,
+    }
+
+
+def _cas_literal(expression: ast.expr, *, label: str) -> str:
+    """把 CAS 字面量按试剂目录合同校验（格式 + 校验位）。"""
+    cas = _literal_string(expression, label=label).strip()
+    match = _CAS_PATTERN.fullmatch(cas)
+    if match is None:
+        _fail(f"{label}格式无效", expression)
+    digits = "".join(match.groups()[:2])
+    checksum = sum(
+        int(char) * weight for weight, char in enumerate(reversed(digits), 1)
+    ) % 10
+    if checksum != int(match.group(3)):
+        _fail(f"{label}校验位无效", expression)
+    return cas
+
+
+def _render_number(value: float) -> str:
+    """确定性渲染数量字面量：整数值不带小数点，其余用 repr。"""
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
 
 
 def _literal_string(expression: ast.expr, *, label: str) -> str:

@@ -35,6 +35,9 @@ _GRAPH_FIELDS = {
     "node_templates",
     "handle_templates",
 }
+# ``_OPTIONAL_GRAPH_FIELDS`` 是可选的第六集合：由试剂来源数量声明编译出的库存
+# 需求。缺省表示没有数量需求，旧候选与不含数量的工作流保持五集合形状。
+_OPTIONAL_GRAPH_FIELDS = {"inventory_requirements"}
 
 
 class CandidateBundleError(ValueError):
@@ -139,9 +142,18 @@ def _closed_graph(value: Any) -> dict[str, Any]:
     抛出 ``CandidateBundleError``。
     """
 
-    if not isinstance(value, Mapping) or set(value) != _GRAPH_FIELDS:
+    if (
+        not isinstance(value, Mapping)
+        or set(value) - _OPTIONAL_GRAPH_FIELDS != _GRAPH_FIELDS
+    ):
         _fail("候选图必须且只能包含完整五集合")
     graph = dict(value)
+    requirements = graph.get("inventory_requirements")
+    if requirements is not None and (
+        not isinstance(requirements, list)
+        or any(not isinstance(item, Mapping) for item in requirements)
+    ):
+        _fail("候选图库存需求必须是对象数组")
     if not isinstance(graph["workflow"], Mapping) or any(
         not isinstance(graph[field], list) for field in _GRAPH_FIELDS - {"workflow"}
     ):

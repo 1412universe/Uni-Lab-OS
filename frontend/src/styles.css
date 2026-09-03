@@ -1106,3 +1106,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .dispense-form .dispense-summary-over { background: var(--signal-red-soft, #fef3f2); }
 .dispense-form .form-error { flex-basis: 100%; color: var(--signal-red, #d92d20); font-size: 12px; }
 .reagent-inventory-table .reagent-lineage { display: block; margin-top: 2px; color: var(--action-blue, #155eef); font-size: 10px; }
+
+/* 试剂预留：运行页里按库存需求绑定试剂瓶 */
+.reagent-binding-panel { border-top: 1px dashed var(--line, #d9dee7); padding-top: 12px; }
+.reagent-binding-panel .binding-hint { display: block; margin-top: 4px; color: var(--muted, #8a93a6); font-size: 12px; }

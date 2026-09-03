@@ -25,6 +25,7 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
 )
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.scheduler.inventory.workflow_quantity import (
+    active_workflow_reserved_quantity,
     WorkflowQuantityReservationError,
     assert_workflow_quantity_mutation_allowed,
 )
@@ -802,12 +803,32 @@ class BackendReagentService:
             + " ORDER BY LOWER(reagent_info.name),reagent.uuid LIMIT ? OFFSET ?",
             (*params, page_size, (page - 1) * page_size),
         )
+        items = [_reagent_row(row) for row in rows]
+        self._annotate_active_reservations(items)
         return {
-            "items": [_reagent_row(row) for row in rows],
+            "items": items,
             "total": int(count["count"]),
             "page": page,
             "page_size": page_size,
         }
+
+    def _annotate_active_reservations(self, items: List[Dict[str, Any]]) -> None:
+        """为试剂投影补上工作流活动预留量（与数量同单位）。
+
+        参数：``items`` 是已投影的试剂行，原地写入
+        ``active_workflow_reserved_quantity``。预留在建任务事务内生效、任务结算或
+        取消后释放；读侧只在只读连接上汇总，不开事务、不改动库存。异常：预留载荷损坏时由
+        ``active_workflow_reserved_quantity`` 关闭式失败，原样上抛。
+        """
+        if not items:
+            return
+        with self.store.read_connection() as conn:
+            for item in items:
+                item["active_workflow_reserved_quantity"] = active_workflow_reserved_quantity(
+                    conn,
+                    inventory_type="reagent",
+                    inventory_uuid=str(item["uuid"]),
+                )
 
     def get_reagent(self, identity: str) -> Dict[str, Any]:
         """读取一个活动试剂详情；不存在时返回资源未找到。"""
@@ -820,7 +841,9 @@ class BackendReagentService:
         )
         if row is None:
             raise BackendContractError(RESOURCE_NOT_FOUND, "reagent does not exist")
-        return _reagent_row(row)
+        item = _reagent_row(row)
+        self._annotate_active_reservations([item])
+        return item
 
     def update_reagent(self, identity: str, values: Dict[str, Any]) -> Dict[str, Any]:
         """以期望修订更新余量；单位与化学身份保持不可变，并原子追加台账。"""

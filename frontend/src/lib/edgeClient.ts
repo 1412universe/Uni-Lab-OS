@@ -21,6 +21,8 @@ import type {
   ReagentRecord,
   ReagentHistoryRecord,
   CompoundLookupResult,
+  WorkflowInventoryRequirement,
+  WorkflowInventoryBinding,
 } from '../types'
 
 type RawRecord = Record<string, any>
@@ -1016,6 +1018,7 @@ export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[
     densityGPerMl: raw.density_g_per_ml == null ? undefined : Number(raw.density_g_per_ml),
     containerName: raw.container_name ? String(raw.container_name) : undefined,
     containerBarcode: raw.container_barcode ? String(raw.container_barcode) : undefined,
+    activeWorkflowReservedQuantity: raw.active_workflow_reserved_quantity === undefined || raw.active_workflow_reserved_quantity === null ? undefined : Number(raw.active_workflow_reserved_quantity),
     sourceReagentUuid: typeof raw.meta_data?.source_reagent_uuid === 'string' ? raw.meta_data.source_reagent_uuid : undefined,
     dispenseCommandId: typeof raw.meta_data?.dispense_command_id === 'string' ? raw.meta_data.dispense_command_id : undefined,
     revision: Number(raw.revision || 1), updatedAt: timeLabel(raw.update_time),
@@ -1711,6 +1714,22 @@ export async function loadMaterialDetail(materialUuid: string, signal?: AbortSig
   return adaptMaterial(material)
 }
 
+function adaptInventoryRequirement(raw: RawRecord): WorkflowInventoryRequirement {
+  const meta = (raw.meta_data && typeof raw.meta_data === 'object' ? raw.meta_data : {}) as Record<string, unknown>
+  return {
+    uuid: String(raw.uuid || ''),
+    requirementKey: String(raw.requirement_key || ''),
+    consumeNodeUuid: String(raw.consume_node_uuid || ''),
+    targetType: String(raw.target_type || ''),
+    reagentInfoUuid: raw.reagent_info_uuid ? String(raw.reagent_info_uuid) : undefined,
+    requiredQuantity: Number(raw.required_quantity),
+    quantityUnit: String(raw.quantity_unit || ''),
+    allowSplit: Boolean(raw.allow_split),
+    description: raw.description ? String(raw.description) : undefined,
+    materialSourceNodeUuid: meta.material_source_node_uuid ? String(meta.material_source_node_uuid) : undefined,
+  }
+}
+
 export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSignal): Promise<WorkflowGraph> {
   const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`, signal)
   const nodes = Array.isArray(graph.nodes) ? graph.nodes.map(adaptWorkflowGraphNode) : []
@@ -1720,6 +1739,9 @@ export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSign
     edges: Array.isArray(graph.edges) ? graph.edges.map(adaptWorkflowGraphEdge) : [],
     nodeTemplates: Array.isArray(graph.node_templates) ? graph.node_templates : [],
     handleTemplates: Array.isArray(graph.handle_templates) ? graph.handle_templates : [],
+    inventoryRequirements: Array.isArray(graph.inventory_requirements)
+      ? graph.inventory_requirements.map(adaptInventoryRequirement)
+      : [],
   }
 }
 
@@ -1810,10 +1832,13 @@ export async function createWorkflowTask({
   workflowUuid,
   input,
   description,
+  inventoryBindings = [],
 }: {
   workflowUuid: string
   input: Record<string, unknown>
   description: string
+  /** 每条库存需求一条绑定；Edge 在同一事务里校验并预留。 */
+  inventoryBindings?: WorkflowInventoryBinding[]
 }) {
   return postData<RawRecord>('/workflow-tasks', {
     workflow_uuid: workflowUuid,
@@ -1821,5 +1846,12 @@ export async function createWorkflowTask({
     input,
     description,
     meta_data: { source: 'unilabos-frontend' },
+    inventory_bindings: inventoryBindings.map((binding) => ({
+      requirement_key: binding.requirementKey,
+      inventory_type: binding.inventoryType,
+      inventory_uuid: binding.inventoryUuid,
+      reserved_quantity: binding.reservedQuantity,
+      quantity_unit: binding.quantityUnit,
+    })),
   })
 }
