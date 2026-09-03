@@ -42,6 +42,20 @@ function containerTagLabel(tag: string) {
   return containerTagLabels[tag] || tag.replaceAll('_', ' ')
 }
 
+function filterContainersByTag(containers: MaterialRecord[], templateTags: Map<string, Set<string>>, selectedTag: string) {
+  return selectedTag ? containers.filter((item) => item.resourceTemplateUuid && templateTags.get(item.resourceTemplateUuid)?.has(selectedTag)) : containers
+}
+
+function ContainerTagFilter({ tags, selectedTag, containers, templateTags, onChange }: { tags: string[]; selectedTag: string; containers: MaterialRecord[]; templateTags: Map<string, Set<string>>; onChange: (tag: string) => void }) {
+  if (!tags.length) return null
+  const count = (tag: string) => filterContainersByTag(containers, templateTags, tag).length
+  return <div className="container-tag-filter" role="group" aria-label="按容器标签筛选">
+    <span>容器类型</span>
+    <button type="button" aria-pressed={!selectedTag} onClick={() => onChange('')}>全部<em>{containers.length}</em></button>
+    {tags.map((tag) => <button key={tag} type="button" aria-pressed={selectedTag === tag} onClick={() => onChange(tag)}>{containerTagLabel(tag)}<em>{count(tag)}</em></button>)}
+  </div>
+}
+
 /** 生成分装命令 ID；同一次弹窗内重试复用，服务端按它幂等重放。 */
 function newCommandId() {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `dispense-${Date.now()}-${Math.random().toString(16).slice(2)}`
@@ -221,7 +235,7 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
     </Panel>
     {historyReagent ? <ReagentHistoryDrawer reagent={historyReagent} items={historyQuery.data || []} loading={historyQuery.isLoading || historyQuery.isFetching} error={historyQuery.error} onClose={() => setHistoryReagent(null)} /> : null}
     {dialog ? <div className="dialog-backdrop" role="presentation"><div className={`material-write-dialog reagent-dialog ${dialog === 'catalog' ? 'reagent-dialog-wide' : ''} ${dialog === 'dispense' ? 'reagent-dialog-dispense' : ''}`} role="dialog" aria-modal="true"><header><div><span>REAGENT COMMAND</span><h2>{dialog === 'catalog' ? '新增试剂目录' : dialog === 'dispense' ? '分装' : '录入试剂'}</h2>{dialog === 'dispense' && dispenseSource ? <p>把源瓶里的试剂分到若干空容器；同一化学身份与浓度，数量守恒，一次提交。</p> : null}{dialog === 'catalog' ? <p>输入 CAS 可自动补全化学信息；无 CAS 的自配物质可直接填写名称。</p> : null}</div><button aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
-      {dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : dialog === 'dispense' && dispenseSource ? <DispenseForm source={dispenseSource} rows={dispenseRows} setRows={setDispenseRows} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} preferredTag={preferredContainerTag} saving={saving} onSave={() => void saveDispense()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} saving={saving} onSave={() => void saveRegistration()} />}
+      {dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : dialog === 'dispense' && dispenseSource ? <DispenseForm source={dispenseSource} rows={dispenseRows} setRows={setDispenseRows} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} preferredTag={preferredContainerTag} saving={saving} onSave={() => void saveDispense()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} saving={saving} onSave={() => void saveRegistration()} />}
     </div></div> : null}
   </div>
 }
@@ -254,8 +268,27 @@ function CatalogForm({ form, setForm, lookup, error, customParameters, setCustom
   </div>
 }
 
-function RegisterForm({ form, setForm, infos, containers, saving, onSave }: { form: { materialUuid: string; reagentInfoUuid: string; quantity: string; quantityUnit: string; concentrationValue: string; concentrationUnit: string; description: string }; setForm: React.Dispatch<React.SetStateAction<typeof form>>; infos: ReagentInfoRecord[]; containers: MaterialRecord[]; saving: boolean; onSave: () => void }) {
-  return <div className="dialog-content reagent-form"><label className="form-field wide"><span>试剂目录 *</span><select value={form.reagentInfoUuid} onChange={(e) => setForm({ ...form, reagentInfoUuid: e.target.value })}><option value="">选择试剂目录项</option>{infos.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.cas || '无 CAS'}</option>)}</select></label><label className="form-field wide"><span>试剂容器 *</span><select value={form.materialUuid} onChange={(e) => setForm({ ...form, materialUuid: e.target.value })}><option value="">选择未登记试剂的容器</option>{containers.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label><label className="form-field"><span>数量 *</span><input type="number" min="0" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label><label className="form-field"><span>单位 *</span><select value={form.quantityUnit} onChange={(e) => setForm({ ...form, quantityUnit: e.target.value })}>{['mL', 'L', 'g', 'mg', 'μL', 'mmol'].map((unit) => <option key={unit}>{unit}</option>)}</select></label><label className="form-field"><span>浓度</span><input type="number" min="0" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label><label className="form-field"><span>浓度单位</span><select value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })}>{['%', 'mol/L', 'mmol/L', 'mg/mL'].map((unit) => <option key={unit}>{unit}</option>)}</select></label><label className="form-field wide"><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || !form.materialUuid || !form.reagentInfoUuid || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button></div>
+export function RegisterForm({ form, setForm, infos, containers, templates, filterTags, saving, onSave }: { form: { materialUuid: string; reagentInfoUuid: string; quantity: string; quantityUnit: string; concentrationValue: string; concentrationUnit: string; description: string }; setForm: React.Dispatch<React.SetStateAction<typeof form>>; infos: ReagentInfoRecord[]; containers: MaterialRecord[]; templates: ResourceTemplateRecord[]; filterTags: string[]; saving: boolean; onSave: () => void }) {
+  const [selectedTag, setSelectedTag] = useState('')
+  const templateTags = useMemo(() => new Map(templates.map((template) => [template.uuid, new Set(template.tags || [])])), [templates])
+  const taggedContainers = filterContainersByTag(containers, templateTags, selectedTag)
+  const changeTag = (tag: string) => {
+    setSelectedTag(tag)
+    if (form.materialUuid && !filterContainersByTag(containers, templateTags, tag).some((item) => item.uuid === form.materialUuid)) setForm({ ...form, materialUuid: '' })
+  }
+  return <div className="dialog-content reagent-form">
+    <label className="form-field wide"><span>试剂目录 *</span><select value={form.reagentInfoUuid} onChange={(e) => setForm({ ...form, reagentInfoUuid: e.target.value })}><option value="">选择试剂目录项</option>{infos.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.cas || '无 CAS'}</option>)}</select></label>
+    <div className="reagent-container-picker wide">
+      <ContainerTagFilter tags={filterTags} selectedTag={selectedTag} containers={containers} templateTags={templateTags} onChange={changeTag} />
+      <label className="form-field"><span>试剂容器 *</span><select aria-label="试剂容器" value={form.materialUuid} onChange={(e) => setForm({ ...form, materialUuid: e.target.value })}><option value="">{taggedContainers.length ? '选择未登记试剂的容器' : '该类型暂无可用容器'}</option>{taggedContainers.map((item) => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}</select></label>
+    </div>
+    <label className="form-field"><span>数量 *</span><input type="number" min="0" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label>
+    <label className="form-field"><span>单位 *</span><select value={form.quantityUnit} onChange={(e) => setForm({ ...form, quantityUnit: e.target.value })}>{['mL', 'L', 'g', 'mg', 'μL', 'mmol'].map((unit) => <option key={unit}>{unit}</option>)}</select></label>
+    <label className="form-field"><span>浓度</span><input type="number" min="0" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label>
+    <label className="form-field"><span>浓度单位</span><select value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })}>{['%', 'mol/L', 'mmol/L', 'mg/mL'].map((unit) => <option key={unit}>{unit}</option>)}</select></label>
+    <label className="form-field wide"><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
+    <Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || !form.materialUuid || !form.reagentInfoUuid || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button>
+  </div>
 }
 
 export function DispenseForm({ source, rows, setRows, containers, templates, filterTags, preferredTag, saving, onSave }: { source: ReagentRecord; rows: DispenseRow[]; setRows: React.Dispatch<React.SetStateAction<DispenseRow[]>>; containers: MaterialRecord[]; templates: ResourceTemplateRecord[]; filterTags: string[]; preferredTag: string; saving: boolean; onSave: () => void }) {
@@ -265,8 +298,7 @@ export function DispenseForm({ source, rows, setRows, containers, templates, fil
   const summary = summariseDispense(rows, available)
   const chosen = new Set(rows.map((row) => row.materialUuid).filter(Boolean))
   const templateTags = useMemo(() => new Map(templates.map((template) => [template.uuid, new Set(template.tags || [])])), [templates])
-  const taggedContainers = selectedTag ? containers.filter((item) => item.resourceTemplateUuid && templateTags.get(item.resourceTemplateUuid)?.has(selectedTag)) : containers
-  const tagCounts = new Map(filterTags.map((tag) => [tag, containers.filter((item) => item.resourceTemplateUuid && templateTags.get(item.resourceTemplateUuid)?.has(tag)).length]))
+  const taggedContainers = filterContainersByTag(containers, templateTags, selectedTag)
   const unchosenContainerCount = taggedContainers.filter((item) => !chosen.has(item.uuid)).length
   const hasAnotherContainer = unchosenContainerCount > rows.filter((row) => !row.materialUuid).length
   const addRow = () => setRows((current) => [...current, { id: (current.at(-1)?.id || 0) + 1, materialUuid: '', quantity: '' }])
@@ -283,11 +315,7 @@ export function DispenseForm({ source, rows, setRows, containers, templates, fil
         <div><strong>目标容器</strong><small>选择空容器并填写本次转移数量</small></div>
         <Button type="button" className="dispense-add" icon={<Plus size={15} />} onClick={addRow} disabled={!hasAnotherContainer}>添加容器</Button>
       </header>
-      {filterTags.length ? <div className="dispense-tag-filter" role="group" aria-label="按容器标签筛选">
-        <span>容器类型</span>
-        <button type="button" aria-pressed={!selectedTag} onClick={() => setSelectedTag('')}>全部<em>{containers.length}</em></button>
-        {filterTags.map((tag) => <button key={tag} type="button" aria-pressed={selectedTag === tag} onClick={() => setSelectedTag(tag)}>{containerTagLabel(tag)}<em>{tagCounts.get(tag) || 0}</em></button>)}
-      </div> : null}
+      <ContainerTagFilter tags={filterTags} selectedTag={selectedTag} containers={containers} templateTags={templateTags} onChange={setSelectedTag} />
       <div className="dispense-target-list">
         {rows.map((row, index) => {
           const duplicate = row.materialUuid !== '' && rows.some((other) => other.id !== row.id && other.materialUuid === row.materialUuid)

@@ -3,7 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { demoMaterials } from '../data/demo'
 import type { ResourceTemplateRecord } from '../types'
-import { deriveContainerFilterTags, DispenseForm, ReagentsPage, summariseDispense } from './ReagentsPage'
+import { deriveContainerFilterTags, DispenseForm, ReagentsPage, RegisterForm, summariseDispense } from './ReagentsPage'
 
 function row(id: number, materialUuid: string, quantity: string) {
   return { id, materialUuid, quantity }
@@ -57,6 +57,39 @@ describe('DispenseForm container filters', () => {
     fireEvent.click(screen.getByRole('button', { name: /粉末试剂瓶/ }))
     expect(within(targetSelect).getByRole('option', { name: '注粉瓶 L1C2' })).toBeInTheDocument()
     expect(within(targetSelect).queryByRole('option', { name: '液体瓶 R1C2' })).not.toBeInTheDocument()
+  })
+})
+
+describe('RegisterForm container filters', () => {
+  it('shows tag filters before choosing a reagent container and omits barcodes', () => {
+    const templates = [
+      template('liquid-template', ['szlab_poly_studio', 'container', 'liquid_reagent']),
+      template('beaker-template', ['szlab_poly_studio', 'container', 'beaker']),
+    ]
+    const containers = [
+      { ...demoMaterials[0], uuid: 'liquid-1', name: '液体瓶 R1C2', barcode: 'UNILAB-GRAPH-s10-liquid-R1C2', resourceTemplateUuid: 'liquid-template', isStructural: false },
+      { ...demoMaterials[0], uuid: 'beaker-1', name: '烧杯 L1A1', barcode: 'UNILAB-GRAPH-s3-beaker-L1A1', resourceTemplateUuid: 'beaker-template', isStructural: false },
+    ]
+    render(<RegisterForm
+      form={{ materialUuid: '', reagentInfoUuid: '', quantity: '', quantityUnit: 'mL', concentrationValue: '', concentrationUnit: '%', description: '' }}
+      setForm={vi.fn()}
+      infos={[]}
+      containers={containers}
+      templates={templates}
+      filterTags={deriveContainerFilterTags(templates)}
+      saving={false}
+      onSave={vi.fn()}
+    />)
+
+    const containerSelect = screen.getByRole('combobox', { name: '试剂容器' })
+    expect(screen.getByRole('group', { name: '按容器标签筛选' })).toBeInTheDocument()
+    expect(within(containerSelect).getByRole('option', { name: '液体瓶 R1C2' })).toBeInTheDocument()
+    expect(within(containerSelect).getByRole('option', { name: '烧杯 L1A1' })).toBeInTheDocument()
+    expect(containerSelect.textContent).not.toContain('UNILAB-GRAPH')
+
+    fireEvent.click(screen.getByRole('button', { name: /液体试剂瓶/ }))
+    expect(within(containerSelect).getByRole('option', { name: '液体瓶 R1C2' })).toBeInTheDocument()
+    expect(within(containerSelect).queryByRole('option', { name: '烧杯 L1A1' })).not.toBeInTheDocument()
   })
 })
 
