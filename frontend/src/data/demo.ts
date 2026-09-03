@@ -106,6 +106,7 @@ function demoTask(
   return {
     uuid,
     status,
+    priority: 'normal',
     current,
     progress,
     sample,

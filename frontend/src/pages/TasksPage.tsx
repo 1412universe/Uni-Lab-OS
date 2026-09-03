@@ -44,6 +44,19 @@ const nodeStatusLabels: Record<TaskNode['status'], string> = {
   attention: '需要人工确认',
 }
 
+const taskPriorityLabels = {
+  urgent: '紧急优先级',
+  high: '高优先级',
+  normal: '普通优先级',
+  low: '低优先级',
+  unknown: '优先级未知',
+} as const
+
+function presentTaskPriority(priority: WorkflowTask['priority']) {
+  if (typeof priority === 'number') return { label: `权重 ${priority}`, tone: 'custom' }
+  return { label: taskPriorityLabels[priority], tone: priority }
+}
+
 function matchesFilter(task: WorkflowTask, filter: TaskFilter) {
   if (filter === 'all') return true
   if (filter === 'running') return task.status === 'running' || task.status === 'canceling'
@@ -222,6 +235,7 @@ function TaskMatrix({
         {tasks.map((task) => {
           const nodes: (TaskNode | undefined)[] = task.nodes.length ? task.nodes : [undefined]
           const columns = `${TASK_IDENTITY_COLUMN_WIDTH}px repeat(${nodes.length}, ${TASK_NODE_COLUMN_WIDTH}px) ${TASK_PROGRESS_COLUMN_WIDTH}px minmax(0, 1fr)`
+          const priority = presentTaskPriority(task.priority)
           return (
             <div
               key={task.uuid}
@@ -249,7 +263,15 @@ function TaskMatrix({
                     <small>{task.uuid}</small>
                     <small>{task.sample} · {task.updatedAt}</small>
                   </span>
-                  <em>{task.workflowRevision ? `r${task.workflowRevision}` : '—'}</em>
+                  <span className="matrix-task-badges">
+                    <span
+                      className={`matrix-task-priority matrix-task-priority-${priority.tone}`}
+                      title={`任务优先级：${priority.label}`}
+                    >
+                      {priority.label}
+                    </span>
+                    <em className="matrix-task-revision">{task.workflowRevision ? `r${task.workflowRevision}` : '—'}</em>
+                  </span>
                 </button>
                 {task.trace ? (
                   <a

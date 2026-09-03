@@ -295,6 +295,7 @@ describe('Edge view model adapters', () => {
         uuid: 'task-1',
         workflow_uuid: 'wf-1',
         status: 'running',
+        priority: 'high',
         description: '联调任务',
         input: { sample_id: 'sample-1' },
         update_time: '2026-08-31T18:00:00Z',
@@ -314,8 +315,25 @@ describe('Edge view model adapters', () => {
     )
 
     expect(task.progress).toBe(33)
+    expect(task.priority).toBe('high')
     expect(task.current).toBe('add_liquid')
     expect(task.nodes.map((node) => node.status)).toEqual(['succeeded', 'running', 'pending'])
+  })
+
+  it('preserves legacy numeric task priority instead of silently relabeling it', () => {
+    const task = adaptTask(
+      {
+        uuid: 'task-legacy-priority',
+        workflow_uuid: 'wf-1',
+        status: 'succeeded',
+        priority: 50,
+        execution_plan: { nodes: [] },
+      },
+      [],
+      '测试工作流',
+    )
+
+    expect(task.priority).toBe(50)
   })
 
   it('projects a safe SigNoz trace reference from the task response', () => {

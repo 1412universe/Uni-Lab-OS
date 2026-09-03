@@ -852,7 +852,14 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .matrix-task-select strong, .matrix-task-select small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .matrix-task-select strong { color: #344054; font-size: 9px; }
 .matrix-task-select small { margin-top: 3px; color: var(--subtle); font: 7.5px 'JetBrains Mono', monospace; }
-.matrix-task-select em { align-self: start; padding: 3px 5px; color: #3159c9; background: #edf2ff; border-radius: 5px; font: 7px 'JetBrains Mono', monospace; }
+.matrix-task-badges { align-self: start; display: grid; gap: 4px; justify-items: end; }
+.matrix-task-revision { padding: 3px 5px; color: #3159c9; background: #edf2ff; border-radius: 5px; font: 7px 'JetBrains Mono', monospace; font-style: normal; }
+.matrix-task-priority { display: inline-flex; align-items: center; min-height: 18px; padding: 0 6px; border: 1px solid transparent; border-radius: 999px; font-size: 7px; font-weight: 750; line-height: 1; white-space: nowrap; }
+.matrix-task-priority-high { color: #b54708; background: #fff4e5; border-color: #fec84b; }
+.matrix-task-priority-normal { color: #475467; background: #f2f4f7; border-color: #d0d5dd; }
+.matrix-task-priority-urgent { color: #b42318; background: #fef3f2; border-color: #fda29b; }
+.matrix-task-priority-low { color: #475467; background: #f9fafb; border-color: #eaecf0; }
+.matrix-task-priority-custom, .matrix-task-priority-unknown { color: #6941c6; background: #f4f3ff; border-color: #d9d6fe; }
 .matrix-trace-link, .matrix-trace-disabled { display: inline-flex; align-items: center; gap: 4px; min-height: 27px; padding: 0 8px; color: #3159c9; background: #f2f6ff; border: 1px solid #cbd8ff; border-radius: 7px; font-size: 8px; font-weight: 700; text-decoration: none; }
 .matrix-trace-link:hover { color: #2448af; background: #e8efff; border-color: #8ba6f5; }
 .matrix-trace-disabled { color: #98a2b3; background: #f8fafc; border-color: #e4e7ec; cursor: not-allowed; }

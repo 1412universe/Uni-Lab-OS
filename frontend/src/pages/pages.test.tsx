@@ -759,6 +759,27 @@ describe('TasksPage', () => {
     expect(container.querySelectorAll('.matrix-trace-link, .matrix-trace-disabled')).toHaveLength(demoTasks.length)
   })
 
+  it('shows the authoritative task priority in each matrix identity card', () => {
+    const tasks = [
+      { ...demoTasks[0], priority: 'high' as const },
+      { ...demoTasks[1], priority: 'normal' as const },
+    ]
+    renderWithQuery(
+      <TasksPage
+        tasks={tasks}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('高优先级')).toHaveClass('matrix-task-priority-high')
+    expect(screen.getByText('普通优先级')).toHaveClass('matrix-task-priority-normal')
+  })
+
   it('opens the task workflow and revision from the sticky task identity card', () => {
     const onOpenWorkflow = vi.fn()
     renderWithQuery(

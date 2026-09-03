@@ -152,12 +152,14 @@ export interface TaskNode {
 }
 
 export type WorkflowTaskPriority = 'normal' | 'high'
+export type WorkflowTaskPresentationPriority = WorkflowTaskPriority | 'urgent' | 'low' | 'unknown' | number
 
 export interface WorkflowTask {
   uuid: string
   workflowUuid: string
   workflowName: string
   status: TaskPresentationStatus
+  priority: WorkflowTaskPresentationPriority
   sample: string
   description: string
   current: string

@@ -81,6 +81,7 @@ describe('useEdgeData', () => {
     vi.mocked(loadEdgeTasks)
       .mockResolvedValueOnce([{
         uuid: 'task-new', workflowUuid: 'wf-1', workflowName: '流程', status: 'running',
+        priority: 'normal',
         sample: 'sample-1', description: 'task', current: '运行中', progress: 0,
         updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal', controlStatus: 'active', matrixGroupKey: 'wf-1',
       }])

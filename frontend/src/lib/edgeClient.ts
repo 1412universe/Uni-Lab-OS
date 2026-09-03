@@ -837,6 +837,7 @@ export function adaptTask(
     workflowUuid: String(raw.workflow_uuid || raw.workflow?.uuid || ''),
     workflowName: String(raw.workflow_snapshot?.workflow?.name || workflowName),
     status,
+    priority: taskPriority(raw.priority),
     sample: String(raw.input?.sample_id || raw.input?.sample || raw.meta_data?.sample_id || '未命名样品'),
     description: String(raw.description || workflowName),
     current: String(
@@ -861,6 +862,13 @@ export function adaptTask(
     matrixGroupKey: matrixGroupKey(raw),
     trace: taskTraceReference(raw, traceUiUrl),
   }
+}
+
+function taskPriority(value: unknown): WorkflowTask['priority'] {
+  if (value === 'urgent' || value === 'high' || value === 'normal' || value === 'low') return value
+  if (value === undefined || value === null || value === '') return 'normal'
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 'unknown'
 }
 
 function configuredSourceLabel(sourceNodeId: unknown): string {
