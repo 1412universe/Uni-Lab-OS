@@ -14,6 +14,7 @@ CONTROL_TEMPLATE_UUID = "74000000-0000-4000-8000-000000000101"
 CHILD_TEMPLATE_UUID = "75000000-0000-4000-8000-000000000101"
 TARGET_TEMPLATE_HANDLE_UUID = "76000000-0000-4000-8000-000000000101"
 TARGET_RUNTIME_HANDLE_UUID = "77000000-0000-4000-8000-000000000101"
+CONDITION_UUID = "79000000-0000-4000-8000-000000000101"
 
 
 def _graph() -> dict[str, Any]:
@@ -172,6 +173,92 @@ def test_repeat_body_input_is_frozen_without_a_first_round_job() -> None:
 
     prepared = prepare_task_input(
         graph=_graph(),
+        raw_input={"position": 4},
+        execution_plan=plan,
+        jobs=jobs,
+    )
+
+    child = next(
+        node for node in prepared.execution_plan["nodes"] if node["uuid"] == CHILD_UUID
+    )
+    assert child["param"] == {"position": 4}
+    assert all(job["workflow_node_uuid"] != CHILD_UUID for job in prepared.jobs)
+
+
+def test_repeat_condition_branch_input_is_frozen_without_a_first_round_job() -> None:
+    """循环内条件分支动作即使隔着控制节点，也仍是动态作业模板。"""
+
+    graph = _graph()
+    graph["nodes"].insert(
+        1,
+        {
+            "uuid": CONDITION_UUID,
+            "parent_uuid": REPEAT_UUID,
+            "name": "循环内条件",
+            "type": "condition",
+            "pose": {},
+            "param": {},
+            "execution_policy": {},
+            "disabled": False,
+            "minimized": False,
+            "meta_data": {},
+        },
+    )
+    graph["nodes"][2]["parent_uuid"] = CONDITION_UUID
+    plan = {
+        "version": 2,
+        "nodes": [
+            {
+                "uuid": REPEAT_UUID,
+                "kind": "repeat_until",
+                "param": {},
+                "execution_policy": {},
+            },
+            {
+                "uuid": CONDITION_UUID,
+                "parent_uuid": REPEAT_UUID,
+                "kind": "condition",
+                "param": {},
+                "execution_policy": {},
+            },
+            {
+                "uuid": CHILD_UUID,
+                "parent_uuid": CONDITION_UUID,
+                "kind": "device_action",
+                "param": {},
+                "execution_policy": {},
+                "inputs": [
+                    {
+                        "handle_uuid": TARGET_RUNTIME_HANDLE_UUID,
+                        "data_key": "position",
+                        "required": True,
+                    }
+                ],
+            },
+        ],
+        "handles": [
+            {
+                "uuid": TARGET_RUNTIME_HANDLE_UUID,
+                "node_uuid": CHILD_UUID,
+                "template_handle_uuid": TARGET_TEMPLATE_HANDLE_UUID,
+                "handle_key": "position",
+                "data_key": "position",
+                "io_type": "target",
+            }
+        ],
+        "edges": [],
+    }
+    jobs = [
+        {
+            "uuid": "78000000-0000-4000-8000-000000000101",
+            "workflow_node_uuid": REPEAT_UUID,
+            "executor_kind": "repeat_until",
+            "param": {},
+        }
+    ]
+
+    prepared = prepare_task_input(
+        graph=graph,
         raw_input={"position": 4},
         execution_plan=plan,
         jobs=jobs,

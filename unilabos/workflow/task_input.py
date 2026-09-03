@@ -525,6 +525,10 @@ def _is_repeat_template_node(
     父子关系成环时抛 ``TaskInputError``，避免把损坏的计划当作可延迟作业。
     """
 
+    template_node = plan_nodes.get(node_uuid)
+    if template_node is None:
+        raise TaskInputError("计划节点父子关系引用未知节点")
+    template_kind = str(template_node.get("kind") or "")
     current = node_uuid
     visited: set[str] = set()
     while current not in visited:
@@ -539,7 +543,7 @@ def _is_repeat_template_node(
         if parent is None:
             raise TaskInputError("计划节点父子关系引用未知父节点")
         if str(parent.get("kind") or "") == "repeat_until":
-            return str(node.get("kind") or "") not in {
+            return template_kind not in {
                 "condition",
                 "repeat_until",
             }
