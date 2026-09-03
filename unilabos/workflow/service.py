@@ -4744,10 +4744,18 @@ class WorkflowService:
                 self._workspace_activation_batch = previous_batch_state
 
             if not deferred_results:
+                # 发布合同文件是跨重启保留实验操作身份的权威。子工作流刚刚
+                # 应用完成后，必须先把它恢复到内存目录，再尝试下一层父工作流；
+                # 否则父源码会在恢复合同之前被编译为
+                # ``composite_child_not_found``，其嵌套图就无法重新生成。
+                self.restore_published_workflow_contracts()
                 continue
             self._rebuild_workspace_activation_catalog()
             for result in deferred_results:
                 self._require_workspace_activation_apply_complete(result)
+            # 同一层的候选已经提交且模板目录已换代。此时恢复本层刚激活的
+            # 实验操作发布合同，下一层（或固定点补偿轮）才能解析组合节点。
+            self.restore_published_workflow_contracts()
         unresolved_sources = any(
             self.get_authoring(workflow_uuid).get("state") != "applied"
             for workflow_uuid in registrations_by_uuid
@@ -4774,6 +4782,10 @@ class WorkflowService:
 
         blocked: set[str] = set()
         for _pass in range(len(workflow_uuids)):
+            # 上一轮可能刚应用了一个同时作为子工作流的来源。它的发布合同在
+            # 该来源真正存在之前不能恢复；每轮开始重新投影一次，才能让更深层
+            # 的“孙工作流”继续被父工作流解析，而不是停在上一层诊断。
+            self.restore_published_workflow_contracts()
             applied_any = False
             for workflow_uuid in workflow_uuids:
                 if workflow_uuid in blocked:
