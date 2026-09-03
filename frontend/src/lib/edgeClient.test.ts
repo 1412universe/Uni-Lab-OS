@@ -283,6 +283,101 @@ describe('Edge view model adapters', () => {
     expect(JSON.parse(String(metadataCall?.[1]?.body))).toMatchObject({ meta_data: { unilab: { output_bindings: { success: { kind: 'node_output', workflow_node_uuid: expect.any(String), source_handle_uuid: 'success-source' } } } } })
   })
 
+  /** 验证保存实验操作时写入真实数据句柄，并继续建立 ready 顺序边。 */
+  it('persists an upstream action output as a workflow data edge', async () => {
+    let graphBody: Record<string, any> | undefined
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-data-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-source')) return response({ code: 0, data: {
+        template: { uuid: 'template-source', node_type: 'compute', type: 'UniLabJsonCommand' },
+        handles: [
+          { uuid: 'ready-source-1', handle_key: 'ready', io_type: 'source' },
+          { uuid: 'ready-target-1', handle_key: 'ready', io_type: 'target' },
+          { uuid: 'output-sample', handle_key: 'sample_id', data_key: 'sample_id', io_type: 'source', type: 'string' },
+        ],
+      } })
+      if (url.endsWith('/workflow-node-templates/template-target')) return response({ code: 0, data: {
+        template: { uuid: 'template-target', node_type: 'compute', type: 'UniLabJsonCommand' },
+        handles: [
+          { uuid: 'ready-source-2', handle_key: 'ready', io_type: 'source' },
+          { uuid: 'ready-target-2', handle_key: 'ready', io_type: 'target' },
+          { uuid: 'input-sample', handle_key: 'sample_id', data_key: 'sample_id', io_type: 'target', required: true, type: 'string' },
+        ],
+      } })
+      if (url.endsWith('/workflows/operation-data-1/graph') && init?.method === 'PUT') {
+        graphBody = JSON.parse(String(init.body)) as Record<string, any>
+        return response({ code: 0, data: { workflow: { uuid: 'operation-data-1', revision: 2 } } })
+      }
+      if (url.endsWith('/workflows/operation-data-1/graph') && (!init?.method || init.method === 'GET')) return response({ code: 0, data: { workflow: { uuid: 'operation-data-1', revision: 1 }, nodes: [], edges: graphBody?.edges || [] } })
+      if (url.endsWith('/workflows/operation-data-1/edges') && init?.method === 'POST') return response({ code: 0, data: { workflow: { uuid: 'operation-data-1', revision: 3 }, edges: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createExperimentOperation({
+      name: '上游输出传递', description: '',
+      actions: [
+        { draftId: 'first', templateUuid: 'template-source', materialUuid: 'device-1', deviceId: 'device-1', name: '产出样品', param: {}, inputBindings: {} },
+        { draftId: 'second', templateUuid: 'template-target', materialUuid: 'device-2', deviceId: 'device-2', name: '使用样品', param: {}, inputBindings: { 'input-sample': { kind: 'node_output', sourceNodeId: 'first', sourceHandleUuid: 'output-sample' } } },
+      ],
+    })
+
+    expect(graphBody?.edges).toEqual([expect.objectContaining({
+      source_node_uuid: graphBody?.nodes[0].uuid,
+      target_node_uuid: graphBody?.nodes[1].uuid,
+      source_handle_uuid: 'output-sample',
+      target_handle_uuid: 'input-sample',
+      meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } },
+    })])
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/workflows/operation-data-1/edges') && init?.method === 'POST' && String(init.body).includes('ready-source-1'))).toBe(true)
+  })
+
+  /**
+   * 证明编辑节点输入来源时会替换旧的数据边，同时保留原有 ready 顺序边。
+   * 这能防止一个输入句柄在重复编辑后同时连接多个上游输出。
+   */
+  it('replaces a generated data edge without removing the ready sequence edge', async () => {
+    let savedGraph: Record<string, any> | undefined
+    const initialGraph = {
+      workflow: { uuid: 'wf-data-edit', revision: 4 },
+      nodes: [
+        { uuid: 'source-node', workflow_node_template_uuid: 'template-source', meta_data: { unilab: { sequence_index: 0 } } },
+        { uuid: 'target-node', workflow_node_template_uuid: 'template-target', meta_data: { unilab: { sequence_index: 1 } } },
+      ],
+      edges: [
+        { uuid: 'ready-edge', source_node_uuid: 'source-node', target_node_uuid: 'target-node', source_handle_uuid: 'ready-source', target_handle_uuid: 'ready-target', meta_data: { unilab: { generated_by: 'operation-builder' } } },
+        { uuid: 'old-data-edge', source_node_uuid: 'source-node', target_node_uuid: 'target-node', source_handle_uuid: 'old-output', target_handle_uuid: 'target-input', meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } } },
+      ],
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows/wf-data-edit') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'wf-data-edit' } })
+      if (url.endsWith('/workflows/wf-data-edit/graph') && init?.method === 'PUT') {
+        savedGraph = JSON.parse(String(init.body)) as Record<string, any>
+        return response({ code: 0, data: { workflow: { uuid: 'wf-data-edit', revision: 5 } } })
+      }
+      if (url.endsWith('/workflows/wf-data-edit/graph')) return response({ code: 0, data: savedGraph
+        ? { workflow: { uuid: 'wf-data-edit', revision: 5 }, nodes: savedGraph.nodes, edges: savedGraph.edges }
+        : initialGraph })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateExperimentOperation({
+      workflowUuid: 'wf-data-edit', name: '修改数据来源', description: '',
+      actions: [
+        { draftId: 'source-draft', nodeUuid: 'source-node', templateUuid: 'template-source', materialUuid: 'device-1', deviceId: 'device-1', name: '来源动作', param: {}, inputBindings: {} },
+        { draftId: 'target-draft', nodeUuid: 'target-node', templateUuid: 'template-target', materialUuid: 'device-2', deviceId: 'device-2', name: '目标动作', param: {}, inputBindings: { 'target-input': { kind: 'node_output', sourceNodeId: 'source-draft', sourceHandleUuid: 'new-output' } } },
+      ],
+    })
+
+    expect(savedGraph?.edges).toEqual([
+      expect.objectContaining({ uuid: 'ready-edge', source_handle_uuid: 'ready-source', target_handle_uuid: 'ready-target' }),
+      expect.objectContaining({ source_handle_uuid: 'new-output', target_handle_uuid: 'target-input', meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } } }),
+    ])
+  })
+
   it('keeps the previous new node template when editing multiple actions', async () => {
     const edgeBodies: Record<string, unknown>[] = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
