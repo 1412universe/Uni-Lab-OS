@@ -1173,3 +1173,24 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 /* 试剂预留：运行页里按库存需求绑定试剂瓶 */
 .reagent-binding-panel { border-top: 1px dashed var(--line, #d9dee7); padding-top: 12px; }
 .reagent-binding-panel .binding-hint { display: block; margin-top: 4px; color: var(--muted, #8a93a6); font-size: 12px; }
+
+/* 试剂库存：按化学身份分组，组内按分装血缘缩进 */
+.reagent-inventory-table > header, .reagent-inventory-table .reagent-bottle { display: grid; grid-template-columns: minmax(260px,1.6fr) minmax(130px,.7fr) minmax(90px,.5fr) 150px 70px; gap: 14px; align-items: center; padding: 10px 16px; }
+.reagent-inventory-table .reagent-bottle { font-size: 12px; border-top: 1px solid var(--line-soft); }
+.reagent-inventory-table .reagent-bottle > span:first-child, .reagent-inventory-table .reagent-bottle > span:nth-child(2) { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.reagent-inventory-table .reagent-bottle > span:first-child strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reagent-group { border-top: 1px solid var(--line); }
+.reagent-group-header { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 10px 16px; background: var(--panel-soft); }
+.reagent-group-header > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.reagent-group-header strong { font-size: 13px; }
+.reagent-group-header small { color: var(--muted); font-size: 11px; }
+.reagent-group-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--action-blue, #155eef); background: #e7edff; }
+.reagent-group-totals { text-align: right; }
+.reagent-group-totals strong { font-size: 14px; }
+.reagent-bottle-child { background: #fbfcfe; }
+.reagent-branch { margin-right: 6px; color: var(--muted); font-style: normal; }
+.reagent-lineage-chip { display: inline-block; width: fit-content; margin-top: 2px; padding: 1px 7px; border-radius: 999px; color: var(--action-blue, #155eef); background: #e7edff; font-size: 10px; }
+.reagent-lineage-chip.muted { color: var(--muted); background: var(--panel-soft); }
+.reagent-reserved { color: #b54708; }
+.reagent-updated { color: var(--muted); font-size: 11px; }
+.reagent-history-drawer header code.reagent-uuid { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }

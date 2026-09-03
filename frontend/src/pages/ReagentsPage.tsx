@@ -342,11 +342,116 @@ export function DispenseForm({ source, rows, setRows, containers, templates, fil
   </form>
 }
 
-function InventoryTable({ items, materials, hasCatalog, onHistory, onDispense }: { items: Awaited<ReturnType<typeof loadReagents>>; materials: MaterialRecord[]; hasCatalog: boolean; onHistory: (item: ReagentRecord) => void; onDispense: (item: ReagentRecord) => void }) { return <div className="reagent-table reagent-inventory-table"><header><span>试剂</span><span>容器</span><span>数量</span><span>浓度</span><span>修订</span><span>操作</span></header>{items.map((item) => { const origin = item.sourceReagentUuid ? items.find((other) => other.uuid === item.sourceReagentUuid) : undefined; return <article key={item.uuid}><span><strong>{item.name}</strong><small>{item.cas || '无 CAS'} · {item.molecularFormula || '无分子式'}</small>{item.sourceReagentUuid ? <small className="reagent-lineage" title={`分装命令 ${item.dispenseCommandId || ''}`}>分装自 {origin?.containerName || origin?.containerBarcode || `${item.sourceReagentUuid.slice(0, 8)}…`}</small> : null}<code>{item.uuid}</code></span><span><strong>{item.containerName || materials.find((m) => m.uuid === item.materialUuid)?.name || '未知容器'}</strong><small>{item.containerBarcode || materials.find((m) => m.uuid === item.materialUuid)?.barcode || item.materialUuid}</small></span><span><strong>{item.quantity ?? '—'} {item.quantityUnit || ''}</strong><small>{item.quantity != null && item.quantity > 0 ? '可用' : '已空'}</small></span><span>{item.concentrationValue == null ? '—' : `${item.concentrationValue} ${item.concentrationUnit || ''}`}</span><span>r{item.revision}</span><span className="reagent-row-actions history-action"><button aria-label={`分装 ${item.name} ${item.uuid}`} title={item.quantity != null && item.quantity > 0 ? '分装到其他容器' : '源瓶已空，无法分装'} disabled={!(item.quantity != null && item.quantity > 0)} onClick={() => onDispense(item)}><PackagePlus size={14} /></button><button aria-label={`查看操作历史 ${item.name} ${item.uuid}`} title="查看操作历史" onClick={() => onHistory(item)}><History size={14} /></button></span></article> })}{!items.length ? <EmptyState title="暂无试剂库存" description={hasCatalog ? '点击“录入试剂”，把目录项登记到具体容器。' : '请先新增试剂目录，再录入容器库存。'} /> : null}</div> }
+/** 一瓶试剂在分组列表里的位置：``depth`` 为 0 是源瓶或独立瓶，大于 0 表示挂在上一级分装源瓶之下。 */
+export type InventoryBottle = { item: ReagentRecord; depth: number; source?: ReagentRecord; sourceLocation?: string; orphanSource: boolean; location?: string }
+export type InventoryGroup = { key: string; name: string; cas?: string; molecularFormula?: string; bottles: InventoryBottle[]; totals: Array<{ unit: string; available: number; reserved: number }>; emptyCount: number }
+
+function inventoryGroupKey(item: ReagentRecord) { return item.reagentInfoUuid || `${item.name}|${item.cas || ''}` }
+function formatQuantity(value: number) { return Number(value.toFixed(3)).toString() }
+/** 图引导生成的物料把 UNILAB-GRAPH-… 写进条码字段，那是系统身份不是实物条码，列表不展示。 */
+export function displayBarcode(barcode?: string) { return barcode && !barcode.startsWith('UNILAB-GRAPH-') ? barcode : undefined }
+/** 库位标签形如“试剂瓶堆栈 / R3C2”，血缘标签只需要最后一段代号。 */
+export function shortLocation(location?: string) { const last = location?.split('/').map((part) => part.trim()).filter(Boolean).pop(); return last || undefined }
+
+/**
+ * 把平铺的试剂记录整理成"按化学身份分组、组内按分装血缘成树"的展示结构。
+ * 源瓶（有分装子瓶的）排在组内最前，子瓶紧随其源瓶并缩进；源瓶已不在库的子瓶按独立瓶处理并标记。
+ * 汇总按单位分别相加，避免 mL 与 g 混算。
+ */
+export function groupInventory(items: ReagentRecord[], materials: MaterialRecord[]): InventoryGroup[] {
+  const byUuid = new Map(items.map((item) => [item.uuid, item]))
+  const locationOf = new Map(materials.map((material) => [material.uuid, material.currentLocation?.label]))
+  const groups = new Map<string, InventoryGroup>()
+  const members = new Map<string, ReagentRecord[]>()
+  for (const item of items) {
+    const key = inventoryGroupKey(item)
+    if (!groups.has(key)) groups.set(key, { key, name: item.name, cas: item.cas, molecularFormula: item.molecularFormula, bottles: [], totals: [], emptyCount: 0 })
+    members.set(key, [...(members.get(key) || []), item])
+  }
+  const byContainer = (left: ReagentRecord, right: ReagentRecord) => (left.containerName || '').localeCompare(right.containerName || '', 'zh-CN')
+  for (const group of groups.values()) {
+    const own = members.get(group.key) || []
+    const children = new Map<string, ReagentRecord[]>()
+    const roots: ReagentRecord[] = []
+    for (const item of own) {
+      const source = item.sourceReagentUuid ? byUuid.get(item.sourceReagentUuid) : undefined
+      if (source && inventoryGroupKey(source) === group.key && source.uuid !== item.uuid) children.set(source.uuid, [...(children.get(source.uuid) || []), item])
+      else roots.push(item)
+    }
+    roots.sort((left, right) => Number(children.has(right.uuid)) - Number(children.has(left.uuid)) || byContainer(left, right))
+    const visited = new Set<string>()
+    const walk = (item: ReagentRecord, depth: number) => {
+      if (visited.has(item.uuid)) return
+      visited.add(item.uuid)
+      const source = item.sourceReagentUuid ? byUuid.get(item.sourceReagentUuid) : undefined
+      group.bottles.push({ item, depth, source, sourceLocation: source ? locationOf.get(source.materialUuid) : undefined, orphanSource: Boolean(item.sourceReagentUuid) && !source, location: locationOf.get(item.materialUuid) })
+      for (const child of [...(children.get(item.uuid) || [])].sort(byContainer)) walk(child, depth + 1)
+    }
+    roots.forEach((root) => walk(root, 0))
+    // 数据成环时 walk 不会重复进入；这里兜底把没走到的瓶按独立瓶补上，保证一瓶不漏。
+    own.filter((item) => !visited.has(item.uuid)).sort(byContainer).forEach((item) => walk(item, 0))
+    const totals = new Map<string, { available: number; reserved: number }>()
+    for (const item of own) {
+      const unit = item.quantityUnit || ''
+      const total = totals.get(unit) || { available: 0, reserved: 0 }
+      total.available += item.quantity ?? 0
+      total.reserved += item.activeWorkflowReservedQuantity ?? 0
+      totals.set(unit, total)
+      if (!((item.quantity ?? 0) > 0)) group.emptyCount += 1
+    }
+    group.totals = [...totals].map(([unit, total]) => ({ unit, ...total }))
+  }
+  return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+}
+
+function InventoryTable({ items, materials, hasCatalog, onHistory, onDispense }: { items: Awaited<ReturnType<typeof loadReagents>>; materials: MaterialRecord[]; hasCatalog: boolean; onHistory: (item: ReagentRecord) => void; onDispense: (item: ReagentRecord) => void }) {
+  const groups = groupInventory(items, materials)
+  return <div className="reagent-table reagent-inventory-table">
+    <header><span>容器 · 来源</span><span>可用量</span><span>浓度</span><span>更新时间</span><span>操作</span></header>
+    {groups.map((group) => {
+      const reserved = group.totals.filter((total) => total.reserved > 0).map((total) => `${formatQuantity(total.reserved)} ${total.unit}`).join(' + ')
+      return <section className="reagent-group" key={group.key} aria-label={`${group.name} 库存`}>
+        <div className="reagent-group-header">
+          <span className="reagent-group-icon"><FlaskConical size={15} /></span>
+          <div><strong>{group.name}</strong><small>{group.cas || '无 CAS'} · {group.molecularFormula || '无分子式'}</small></div>
+          <div className="reagent-group-totals">
+            <strong>{group.totals.map((total) => `${formatQuantity(total.available)} ${total.unit}`).join(' + ') || '—'}</strong>
+            <small>{group.bottles.length} 瓶{group.emptyCount ? ` · ${group.emptyCount} 瓶已空` : ''}{reserved ? ` · 预留中 ${reserved}` : ''}</small>
+          </div>
+        </div>
+        {group.bottles.map(({ item, depth, source, sourceLocation, orphanSource, location }) => {
+          const barcode = displayBarcode(item.containerBarcode)
+          const available = item.quantity ?? 0
+          const reservedHere = item.activeWorkflowReservedQuantity ?? 0
+          const containerName = item.containerName || materials.find((material) => material.uuid === item.materialUuid)?.name || '未知容器'
+          return <article key={item.uuid} className={depth ? 'reagent-bottle reagent-bottle-child' : 'reagent-bottle'} data-depth={depth}>
+            <span style={{ paddingLeft: depth * 22 }}>
+              <strong>{depth ? <i className="reagent-branch" aria-hidden="true">↳</i> : null}{containerName}</strong>
+              <small>{location || barcode || '库位未知'}{location && barcode ? ` · ${barcode}` : ''}</small>
+              {source ? <small className="reagent-lineage-chip" title={`分装自 ${source.containerName || '源瓶'}${item.dispenseCommandId ? `（命令 ${item.dispenseCommandId}）` : ''}`}>分装自 {shortLocation(sourceLocation) || source.containerName || '源瓶'}</small> : orphanSource ? <small className="reagent-lineage-chip muted">分装自已不在库的源瓶</small> : null}
+            </span>
+            <span>
+              <strong>{item.quantity ?? '—'} {item.quantityUnit || ''}</strong>
+              <small className={reservedHere > 0 ? 'reagent-reserved' : undefined}>{available > 0 ? (reservedHere > 0 ? `预留中 ${formatQuantity(reservedHere)} ${item.quantityUnit || ''}` : '可用') : '已空'}</small>
+            </span>
+            <span>{item.concentrationValue == null ? '—' : `${item.concentrationValue} ${item.concentrationUnit || ''}`}</span>
+            <span className="reagent-updated">{formatHistoryTime(item.updatedAt)}</span>
+            <span className="reagent-row-actions history-action">
+              <button aria-label={`分装 ${item.name} ${item.uuid}`} title={available > 0 ? '分装到其他容器' : '源瓶已空，无法分装'} disabled={!(available > 0)} onClick={() => onDispense(item)}><PackagePlus size={14} /></button>
+              <button aria-label={`查看操作历史 ${item.name} ${item.uuid}`} title="查看操作历史" onClick={() => onHistory(item)}><History size={14} /></button>
+            </span>
+          </article>
+        })}
+      </section>
+    })}
+    {!items.length ? <EmptyState title="暂无试剂库存" description={hasCatalog ? '点击“录入试剂”，把目录项登记到具体容器。' : '请先新增试剂目录，再录入容器库存。'} /> : null}
+  </div>
+}
+
 function CatalogTable({ items, deleting, onDelete }: { items: ReagentInfoRecord[]; deleting: boolean; onDelete: (item: ReagentInfoRecord) => void }) { return <div className="reagent-table identity-table"><header><span>试剂目录</span><span>CAS</span><span>分子式</span><span>物态</span><span>操作</span></header>{items.map((item) => <article key={item.uuid}><span><strong>{item.name}</strong><small>{item.nameEn || item.aliases.join('、') || '无别名'}</small><code>{item.uuid}</code></span><span>{item.cas || '—'}</span><span>{item.molecularFormula || '—'}</span><span>{physicalStateLabels[item.physicalState]}</span><span className="reagent-row-actions"><button disabled={deleting} aria-label={`删除试剂目录 ${item.name}`} title="删除试剂目录" onClick={() => onDelete(item)}><Trash2 size={14} /></button></span></article>)}{!items.length ? <EmptyState title="暂无试剂目录" description="创建化学品目录项后，才可以录入具体容器。" /> : null}</div> }
 
 function ReagentHistoryDrawer({ reagent, items, loading, error, onClose }: { reagent: ReagentRecord; items: ReagentHistoryRecord[]; loading: boolean; error: Error | null; onClose: () => void }) {
-  return <div className="reagent-history-backdrop" role="presentation"><aside className="reagent-history-drawer" role="dialog" aria-modal="true" aria-label={`${reagent.name} 操作历史`}><header><div><span>REAGENT LEDGER</span><h2>操作历史</h2><p>{reagent.name} · {reagent.containerName || reagent.materialUuid}</p></div><button aria-label="关闭操作历史" onClick={onClose}>×</button></header><section className="reagent-history-summary"><div><small>当前余量</small><strong>{reagent.quantity ?? '—'} {reagent.quantityUnit || ''}</strong></div><div><small>当前修订</small><strong>r{reagent.revision}</strong></div><div><small>历史记录</small><strong>{items.length}</strong></div></section><div className="reagent-history-identities"><span>试剂 UUID<code>{reagent.uuid}</code></span><span>容器物料 UUID<code>{reagent.materialUuid}</code></span></div><section className="reagent-history-timeline">{loading ? <EmptyState title="正在读取操作历史" description="正在从本地不可变台账读取记录。" /> : error ? <EmptyState title="操作历史读取失败" description={error.message} /> : items.length ? items.map((item) => <ReagentHistoryItem key={item.uuid} item={item} />) : <EmptyState title="暂无操作历史" description="该试剂尚未产生台账记录。" />}</section></aside></div>
+  return <div className="reagent-history-backdrop" role="presentation"><aside className="reagent-history-drawer" role="dialog" aria-modal="true" aria-label={`${reagent.name} 操作历史`}><header><div><span>REAGENT LEDGER</span><h2>操作历史</h2><p>{reagent.name} · {reagent.containerName || reagent.materialUuid}</p><code className="reagent-uuid" title="试剂记录 UUID">{reagent.uuid}</code></div><button aria-label="关闭操作历史" onClick={onClose}>×</button></header><section className="reagent-history-summary"><div><small>当前余量</small><strong>{reagent.quantity ?? '—'} {reagent.quantityUnit || ''}</strong></div><div><small>当前修订</small><strong>r{reagent.revision}</strong></div><div><small>历史记录</small><strong>{items.length}</strong></div></section><div className="reagent-history-identities"><span>试剂 UUID<code>{reagent.uuid}</code></span><span>容器物料 UUID<code>{reagent.materialUuid}</code></span></div><section className="reagent-history-timeline">{loading ? <EmptyState title="正在读取操作历史" description="正在从本地不可变台账读取记录。" /> : error ? <EmptyState title="操作历史读取失败" description={error.message} /> : items.length ? items.map((item) => <ReagentHistoryItem key={item.uuid} item={item} />) : <EmptyState title="暂无操作历史" description="该试剂尚未产生台账记录。" />}</section></aside></div>
 }
 
 function ReagentHistoryItem({ item }: { item: ReagentHistoryRecord }) {
