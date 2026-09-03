@@ -9,9 +9,11 @@ import type {
   TaskNodeWaitReason,
   TaskPresentationStatus,
   WorkflowDefinition,
+  WorkflowAuthoringState,
   WorkflowGraph,
   WorkflowGraphEdge,
   WorkflowGraphNode,
+  WorkflowSource,
   WorkflowTask,
   WorkflowStepState,
   ResourceTemplateRecord,
@@ -1761,6 +1763,39 @@ export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSign
     edges: Array.isArray(graph.edges) ? graph.edges.map(adaptWorkflowGraphEdge) : [],
     nodeTemplates: Array.isArray(graph.node_templates) ? graph.node_templates : [],
     handleTemplates: Array.isArray(graph.handle_templates) ? graph.handle_templates : [],
+  }
+}
+
+function adaptWorkflowAuthoringState(value: unknown): WorkflowAuthoringState {
+  const state = String(value || '')
+  switch (state) {
+    case 'applied':
+    case 'applied_source_stale':
+    case 'candidate_stale':
+    case 'draft_invalid':
+    case 'draft_missing':
+    case 'unapplied_graph':
+    case 'unapplied_source_only':
+      return state
+    default:
+      return 'unknown'
+  }
+}
+
+export async function loadWorkflowSource(workflowUuid: string, signal?: AbortSignal): Promise<WorkflowSource> {
+  const authoring = await requestData<RawRecord>(
+    `/workflows/${encodeURIComponent(workflowUuid)}/authoring`,
+    signal,
+  )
+  const draft = authoring.draft
+  if (!draft || typeof draft !== 'object' || typeof draft.python_source !== 'string') {
+    throw new Error('该工作流没有可读取的 Python 源码')
+  }
+  return {
+    workflowRevision: Number(authoring.workflow_revision || 1),
+    state: adaptWorkflowAuthoringState(authoring.state),
+    sourceUri: String(draft.source_uri || ''),
+    pythonSource: draft.python_source,
   }
 }
 

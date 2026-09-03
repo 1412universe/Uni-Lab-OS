@@ -59,6 +59,23 @@ export interface WorkflowTarget {
   taskUuid?: string
 }
 
+export type WorkflowAuthoringState =
+  | 'applied'
+  | 'applied_source_stale'
+  | 'candidate_stale'
+  | 'draft_invalid'
+  | 'draft_missing'
+  | 'unapplied_graph'
+  | 'unapplied_source_only'
+  | 'unknown'
+
+export interface WorkflowSource {
+  workflowRevision: number
+  state: WorkflowAuthoringState
+  sourceUri: string
+  pythonSource: string
+}
+
 export interface WorkflowGraphNode {
   uuid: string
   name: string

@@ -155,6 +155,64 @@ describe('WorkflowsPage', () => {
     )).not.toThrow()
   })
 
+  it('opens the selected workflow Python source in a read-only viewer', async () => {
+    const workflow = demoWorkflows[0]
+    const pythonSource = [
+      'from unilabos.workflow import Workflow',
+      '',
+      `def ${workflow.uuid.replaceAll('-', '_')}():`,
+      '    return Workflow(name="源码查看验收")',
+      '',
+    ].join('\n')
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/graph')) {
+        return response({ code: 0, data: { workflow, nodes: [], edges: [] } })
+      }
+      if (url.endsWith('/authoring')) {
+        return response({
+          code: 0,
+          data: {
+            workflow_uuid: workflow.uuid,
+            workflow_revision: workflow.revision,
+            state: 'applied',
+            draft: {
+              source_uri: `package://szlab/${workflow.sourcePath}`,
+              python_source: pythonSource,
+              draft_hash: `sha256:${'a'.repeat(64)}`,
+              update_time: '2026-09-03T09:30:00Z',
+            },
+          },
+        })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <WorkflowsPage
+        workflows={[workflow]}
+        materials={demoMaterials}
+        connected
+        onNavigate={vi.fn()}
+        onNotify={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '查看源码' }))
+
+    const dialog = await screen.findByRole('dialog', { name: `${workflow.name} 源码` })
+    expect(within(dialog).getByText(workflow.sourcePath!)).toBeInTheDocument()
+    expect((await within(dialog).findByLabelText('Python 源码')).textContent).toBe(pythonSource)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/workflows/${workflow.uuid}/authoring`,
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    )
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭源码查看器' }))
+    expect(screen.queryByRole('dialog', { name: `${workflow.name} 源码` })).not.toBeInTheDocument()
+  })
+
   it('selects the workflow targeted by a task navigation', async () => {
     const target = demoWorkflows[1]
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

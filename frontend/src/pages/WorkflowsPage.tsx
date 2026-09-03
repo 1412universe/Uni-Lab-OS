@@ -5,6 +5,7 @@ import {
   Check,
   CircleDot,
   Code2,
+  Copy,
   FileInput,
   FileJson,
   FlaskConical,
@@ -18,8 +19,9 @@ import {
   ShieldCheck,
   Send,
   Workflow as WorkflowIcon,
+  X,
 } from 'lucide-react'
-import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
+import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowSource, loadWorkflowTaskGraph } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
@@ -99,6 +101,11 @@ export function WorkflowsPage({
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
   const [runMode, setRunMode] = useState<'normal' | 'step'>('normal')
+  const [sourceTarget, setSourceTarget] = useState<{
+    uuid: string
+    name: string
+    path: string
+  } | null>(null)
   const pythonImportRef = useRef<HTMLInputElement>(null)
   const jsonImportRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
@@ -154,6 +161,22 @@ export function WorkflowsPage({
     retry: false,
     staleTime: 0,
   })
+  const sourceQuery = useQuery({
+    queryKey: ['workflow-source', sourceTarget?.uuid],
+    queryFn: ({ signal }) => loadWorkflowSource(sourceTarget!.uuid, signal),
+    enabled: Boolean(sourceTarget && connected),
+    retry: false,
+    staleTime: 0,
+  })
+
+  useEffect(() => {
+    if (!sourceTarget) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSourceTarget(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [sourceTarget])
 
   useEffect(() => {
     if (!selected || !graphQuery.data) return
@@ -255,6 +278,16 @@ export function WorkflowsPage({
     onNotify(result.isError ? 'Preflight 读取失败' : 'Preflight 报告已更新')
   }
 
+  async function copySource() {
+    if (!sourceQuery.data) return
+    try {
+      await navigator.clipboard.writeText(sourceQuery.data.pythonSource)
+      onNotify('工作流源码已复制')
+    } catch {
+      onNotify('复制失败，请在源码区域手动选择复制')
+    }
+  }
+
   const preflightTone: ReadinessTone = preflightQuery.isFetching
     ? 'loading'
     : preflightQuery.isError
@@ -336,7 +369,18 @@ export function WorkflowsPage({
                 <span className="definition-icon"><WorkflowIcon size={22} /></span>
                 <div><span className="definition-tag">{tagForWorkflow(detail)}</span><h2>{detail.name}</h2><p>{detail.description}</p></div>
                 <div className="definition-actions">
-                  <Button tone="ghost" icon={<Code2 size={15} />} onClick={() => onNotify(detail.sourcePath ? `源文件：${detail.sourcePath}` : '该定义没有可编辑源文件')}>查看源码</Button>
+                  <Button
+                    tone="ghost"
+                    icon={<Code2 size={15} />}
+                    disabled={!connected}
+                    onClick={() => {
+                      if (!detail.sourcePath) {
+                        onNotify('该定义没有可读取的 Python 源文件')
+                        return
+                      }
+                      setSourceTarget({ uuid: detail.uuid, name: detail.name, path: detail.sourcePath })
+                    }}
+                  >查看源码</Button>
                   <Button
                     icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
                     disabled={!connected || preflightQuery.isFetching}
@@ -455,6 +499,53 @@ export function WorkflowsPage({
         ) : <Panel><EmptyState title="没有工作流定义" description="确认 Edge 已加载工作流运行时。" /></Panel>}
 
       </div>
+      {sourceTarget ? (
+        <div
+          className="dialog-backdrop workflow-source-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSourceTarget(null)
+          }}
+        >
+          <section
+            className="workflow-source-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workflow-source-title"
+          >
+            <header>
+              <div>
+                <span>PYTHON WORKFLOW SOURCE</span>
+                <h2 id="workflow-source-title">{sourceTarget.name} 源码</h2>
+                <p>只读展示 Edge 当前授权工作区中的源码文件。</p>
+              </div>
+              <button type="button" aria-label="关闭源码查看器" onClick={() => setSourceTarget(null)}><X size={17} /></button>
+            </header>
+            <div className="workflow-source-toolbar">
+              <div><Code2 size={15} /><code>{sourceTarget.path}</code></div>
+              <Button icon={<Copy size={14} />} disabled={!sourceQuery.data} onClick={() => void copySource()}>复制源码</Button>
+            </div>
+            <div className="workflow-source-content">
+              {sourceQuery.isFetching ? <EmptyState title="正在读取源码" description="正在从 Edge 授权工作区读取 Python 文件。" /> : null}
+              {sourceQuery.isError ? (
+                <div className="workflow-source-error" role="alert">
+                  <AlertCircle size={18} />
+                  <div><strong>源码读取失败</strong><p>{sourceQuery.error instanceof Error ? sourceQuery.error.message : '未知错误'}</p></div>
+                  <Button icon={<RefreshCw size={14} />} onClick={() => void sourceQuery.refetch()}>重试</Button>
+                </div>
+              ) : null}
+              {sourceQuery.data ? <pre aria-label="Python 源码"><code>{sourceQuery.data.pythonSource}</code></pre> : null}
+            </div>
+            {sourceQuery.data ? (
+              <footer>
+                <span>当前源码状态：{sourceQuery.data.state}</span>
+                <span>工作流修订：r{sourceQuery.data.workflowRevision}</span>
+                <code title={sourceQuery.data.sourceUri}>{sourceQuery.data.sourceUri}</code>
+              </footer>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
     </div>
   )
 }

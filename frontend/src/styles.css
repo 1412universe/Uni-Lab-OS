@@ -658,6 +658,14 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .definition-hero h2 { margin-top: 7px; font-size: 16px; }
 .definition-hero p { max-width: 720px; margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.55; }
 .definition-actions { display: flex; gap: 6px; }
+.workflow-source-backdrop { z-index: 90; }
+.workflow-source-dialog { display: grid; grid-template-rows: auto auto minmax(0,1fr) auto; width: min(1080px,100%); height: min(780px,calc(100vh - 48px)); overflow: hidden; background: #0b1220; border: 1px solid #344054; border-radius: 15px; box-shadow: 0 28px 80px rgba(2,6,23,.45); }
+.workflow-source-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 17px 19px; color: #f8fafc; background: linear-gradient(120deg,#101828,#1d2939); border-bottom: 1px solid #344054; }
+.workflow-source-dialog > header span { color: #9db5ff; font-size: 8px; font-weight: 800; letter-spacing: .13em; }.workflow-source-dialog > header h2 { margin-top: 5px; font-size: 17px; }.workflow-source-dialog > header p { margin-top: 5px; color: #98a2b3; font-size: 9px; }
+.workflow-source-dialog > header button { display: grid; place-items: center; width: 32px; height: 32px; color: #d0d5dd; background: #ffffff0d; border: 1px solid #ffffff1f; border-radius: 8px; }.workflow-source-dialog > header button:hover { color: #fff; background: #ffffff17; }
+.workflow-source-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 50px; padding: 8px 14px; background: #111827; border-bottom: 1px solid #344054; }.workflow-source-toolbar > div { display: flex; align-items: center; min-width: 0; gap: 8px; color: #84adff; }.workflow-source-toolbar code { overflow: hidden; color: #d0d5dd; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }.workflow-source-toolbar .button { flex: 0 0 auto; color: #e4e7ec; background: #ffffff0d; border-color: #475467; }
+.workflow-source-content { min-height: 0; overflow: auto; background: #0b1220; }.workflow-source-content .empty-state { color: #98a2b3; }.workflow-source-content pre { min-width: max-content; margin: 0; padding: 20px 22px 36px; color: #d6e4ff; font: 12px/1.65 ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",Menlo,monospace; tab-size: 4; white-space: pre; }.workflow-source-content pre code { font: inherit; }
+.workflow-source-error { display: grid; grid-template-columns: 28px minmax(0,1fr) auto; align-items: center; gap: 10px; margin: 18px; padding: 13px; color: #fda29b; background: #7a271a33; border: 1px solid #b42318; border-radius: 9px; }.workflow-source-error strong { color: #fef3f2; font-size: 10px; }.workflow-source-error p { margin-top: 4px; color: #fda29b; font-size: 9px; }.workflow-source-dialog > footer { display: flex; align-items: center; gap: 16px; min-height: 40px; padding: 8px 14px; color: #98a2b3; background: #111827; border-top: 1px solid #344054; font-size: 8px; }.workflow-source-dialog > footer code { min-width: 0; margin-left: auto; overflow: hidden; color: #667085; text-overflow: ellipsis; white-space: nowrap; }
 .definition-metrics { display: grid; grid-template-columns: 1.45fr .55fr .65fr 1fr; background: #fafbfc; border-bottom: 1px solid var(--line); }
 .definition-metrics > div { min-width: 0; padding: 11px 13px; border-right: 1px solid var(--line); }
 .definition-metrics > div:last-child { border: 0; }
@@ -1065,6 +1073,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   .task-input-grid { grid-template-columns: 1fr; }
   .dialog-backdrop { padding: 10px; }
   .task-dialog { max-height: calc(100vh - 20px); }
+  .workflow-source-dialog { height: calc(100vh - 20px); }.workflow-source-dialog > footer { align-items: flex-start; flex-direction: column; gap: 4px; }.workflow-source-dialog > footer code { width: 100%; margin-left: 0; }
 }
 
 .reagents-page { display: grid; gap: 18px; }.reagent-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }.reagent-summary > div { display: flex; align-items: center; gap: 12px; min-height: 76px; padding: 14px 18px; color: var(--primary); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }.reagent-summary span { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 12px; }.reagent-summary strong { color: var(--text); font-size: 22px; }
