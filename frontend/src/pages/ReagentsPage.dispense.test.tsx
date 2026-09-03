@@ -1,12 +1,64 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { demoMaterials } from '../data/demo'
-import { ReagentsPage, summariseDispense } from './ReagentsPage'
+import type { ResourceTemplateRecord } from '../types'
+import { deriveContainerFilterTags, DispenseForm, ReagentsPage, summariseDispense } from './ReagentsPage'
 
 function row(id: number, materialUuid: string, quantity: string) {
   return { id, materialUuid, quantity }
 }
+
+function template(uuid: string, tags: string[]): ResourceTemplateRecord {
+  return { uuid, name: uuid, displayName: uuid, description: '', resourceType: 'resource', tags, availableSites: [] }
+}
+
+describe('deriveContainerFilterTags', () => {
+  it('keeps discriminating container tags and removes shared package tags', () => {
+    const tags = deriveContainerFilterTags([
+      template('liquid', ['szlab_poly_studio', 'container', 'liquid_reagent']),
+      template('powder', ['szlab_poly_studio', 'container', 'powder_reagent']),
+      template('device', ['szlab_poly_studio', 'device']),
+    ])
+    expect(tags).toEqual(expect.arrayContaining(['liquid_reagent', 'powder_reagent']))
+    expect(tags).not.toContain('container')
+    expect(tags).not.toContain('szlab_poly_studio')
+  })
+})
+
+describe('DispenseForm container filters', () => {
+  it('defaults to the source container tag and hides long barcodes from options', () => {
+    const templates = [
+      template('liquid-template', ['szlab_poly_studio', 'container', 'liquid_reagent']),
+      template('powder-template', ['szlab_poly_studio', 'container', 'powder_reagent']),
+    ]
+    const containers = [
+      { ...demoMaterials[0], uuid: 'liquid-1', name: '液体瓶 R1C2', barcode: 'UNILAB-GRAPH-s10-liquid-R1C2', resourceTemplateUuid: 'liquid-template', isStructural: false },
+      { ...demoMaterials[0], uuid: 'powder-1', name: '注粉瓶 L1C2', barcode: 'UNILAB-GRAPH-powder-L1C2', resourceTemplateUuid: 'powder-template', isStructural: false },
+    ]
+    render(<DispenseForm
+      source={{ uuid: 'source-reagent', materialUuid: 'source-material', reagentInfoUuid: 'info', name: '乙醇', physicalState: 'liquid', quantity: 100, quantityUnit: 'mL', revision: 1, updatedAt: '' }}
+      rows={[row(1, '', '')]}
+      setRows={vi.fn()}
+      containers={containers}
+      templates={templates}
+      filterTags={deriveContainerFilterTags(templates)}
+      preferredTag="liquid_reagent"
+      saving={false}
+      onSave={vi.fn()}
+    />)
+
+    const targetSelect = screen.getByRole('combobox', { name: '目标容器 1' })
+    expect(screen.getByRole('button', { name: /液体试剂瓶/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(targetSelect).getByRole('option', { name: '液体瓶 R1C2' })).toBeInTheDocument()
+    expect(within(targetSelect).queryByRole('option', { name: '注粉瓶 L1C2' })).not.toBeInTheDocument()
+    expect(targetSelect.textContent).not.toContain('UNILAB-GRAPH')
+
+    fireEvent.click(screen.getByRole('button', { name: /粉末试剂瓶/ }))
+    expect(within(targetSelect).getByRole('option', { name: '注粉瓶 L1C2' })).toBeInTheDocument()
+    expect(within(targetSelect).queryByRole('option', { name: '液体瓶 R1C2' })).not.toBeInTheDocument()
+  })
+})
 
 describe('summariseDispense', () => {
   it('sums valid rows and reports the remaining source quantity', () => {

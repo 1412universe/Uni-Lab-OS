@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BookOpen, FlaskConical, History, PackagePlus, Plus, Search, Trash2 } from 'lucide-react'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { createReagent, createReagentInfo, deleteReagentInfo, dispenseReagent, loadReagentHistory, loadReagentInfos, loadReagents, loadResourceTemplates, lookupCompoundByCas } from '../lib/edgeClient'
-import type { CompoundLookupResult, MaterialRecord, ReagentHistoryRecord, ReagentInfoRecord, ReagentRecord } from '../types'
+import type { CompoundLookupResult, MaterialRecord, ReagentHistoryRecord, ReagentInfoRecord, ReagentRecord, ResourceTemplateRecord } from '../types'
 
 const physicalStateLabels: Record<ReagentInfoRecord['physicalState'], string> = {
   solid: '固体', liquid: '液体', gas: '气体', other: '其他', unknown: '未知',
@@ -15,6 +15,32 @@ type IdentityForm = {
 }
 type CustomParameter = { id: number; name: string; value: string }
 type DispenseRow = { id: number; materialUuid: string; quantity: string }
+
+const containerTagLabels: Record<string, string> = {
+  liquid_reagent: '液体试剂瓶',
+  powder_reagent: '粉末试剂瓶',
+  sample_vial: '样品瓶',
+  beaker: '烧杯',
+}
+
+/** 从领域包容器模板中提取有区分度的标签，排除 container 和所有模板共有的包级标签。 */
+export function deriveContainerFilterTags(templates: ResourceTemplateRecord[]) {
+  const containerTemplates = templates.filter((template) => (template.tags || []).includes('container'))
+  const frequency = new Map<string, number>()
+  for (const template of containerTemplates) {
+    for (const tag of new Set((template.tags || []).map((value) => value.trim()).filter((value) => value && value !== 'container'))) {
+      frequency.set(tag, (frequency.get(tag) || 0) + 1)
+    }
+  }
+  return [...frequency]
+    .filter(([, count]) => containerTemplates.length <= 1 || count < containerTemplates.length)
+    .map(([tag]) => tag)
+    .sort((left, right) => containerTagLabel(left).localeCompare(containerTagLabel(right), 'zh-CN'))
+}
+
+function containerTagLabel(tag: string) {
+  return containerTagLabels[tag] || tag.replaceAll('_', ' ')
+}
 
 /** 生成分装命令 ID；同一次弹窗内重试复用，服务端按它幂等重放。 */
 function newCommandId() {
@@ -67,6 +93,10 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
   // 模板尚未加载时不放行任何容器，避免列表先宽后窄闪动。
   const containerTemplateIds = useMemo(() => new Set((templatesQuery.data || []).filter((template) => (template.tags || []).includes('container')).map((template) => template.uuid)), [templatesQuery.data])
   const containers = materials.filter((material) => !material.isStructural && !reagentMaterialIds.has(material.uuid) && Boolean(material.resourceTemplateUuid) && containerTemplateIds.has(material.resourceTemplateUuid as string))
+  const containerFilterTags = useMemo(() => deriveContainerFilterTags(templatesQuery.data || []), [templatesQuery.data])
+  const sourceMaterial = dispenseSource ? materials.find((material) => material.uuid === dispenseSource.materialUuid) : undefined
+  const sourceTemplateTags = (templatesQuery.data || []).find((template) => template.uuid === sourceMaterial?.resourceTemplateUuid)?.tags || []
+  const preferredContainerTag = containerFilterTags.find((tag) => sourceTemplateTags.includes(tag)) || ''
   const keyword = query.trim().toLowerCase()
   const infos = useMemo(() => (infosQuery.data || []).filter((item) => !keyword || [item.name, item.nameEn, item.cas, item.molecularFormula, ...item.aliases].some((value) => value?.toLowerCase().includes(keyword))), [infosQuery.data, keyword])
   const inventory = useMemo(() => (reagentsQuery.data || []).filter((item) => !keyword || [item.name, item.cas, item.containerName, item.containerBarcode].some((value) => value?.toLowerCase().includes(keyword))), [reagentsQuery.data, keyword])
@@ -191,7 +221,7 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
     </Panel>
     {historyReagent ? <ReagentHistoryDrawer reagent={historyReagent} items={historyQuery.data || []} loading={historyQuery.isLoading || historyQuery.isFetching} error={historyQuery.error} onClose={() => setHistoryReagent(null)} /> : null}
     {dialog ? <div className="dialog-backdrop" role="presentation"><div className={`material-write-dialog reagent-dialog ${dialog === 'catalog' ? 'reagent-dialog-wide' : ''} ${dialog === 'dispense' ? 'reagent-dialog-dispense' : ''}`} role="dialog" aria-modal="true"><header><div><span>REAGENT COMMAND</span><h2>{dialog === 'catalog' ? '新增试剂目录' : dialog === 'dispense' ? '分装' : '录入试剂'}</h2>{dialog === 'dispense' && dispenseSource ? <p>把源瓶里的试剂分到若干空容器；同一化学身份与浓度，数量守恒，一次提交。</p> : null}{dialog === 'catalog' ? <p>输入 CAS 可自动补全化学信息；无 CAS 的自配物质可直接填写名称。</p> : null}</div><button aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
-      {dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : dialog === 'dispense' && dispenseSource ? <DispenseForm source={dispenseSource} rows={dispenseRows} setRows={setDispenseRows} containers={containers} saving={saving} onSave={() => void saveDispense()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} saving={saving} onSave={() => void saveRegistration()} />}
+      {dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : dialog === 'dispense' && dispenseSource ? <DispenseForm source={dispenseSource} rows={dispenseRows} setRows={setDispenseRows} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} preferredTag={preferredContainerTag} saving={saving} onSave={() => void saveDispense()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} saving={saving} onSave={() => void saveRegistration()} />}
     </div></div> : null}
   </div>
 }
@@ -228,11 +258,17 @@ function RegisterForm({ form, setForm, infos, containers, saving, onSave }: { fo
   return <div className="dialog-content reagent-form"><label className="form-field wide"><span>试剂目录 *</span><select value={form.reagentInfoUuid} onChange={(e) => setForm({ ...form, reagentInfoUuid: e.target.value })}><option value="">选择试剂目录项</option>{infos.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.cas || '无 CAS'}</option>)}</select></label><label className="form-field wide"><span>试剂容器 *</span><select value={form.materialUuid} onChange={(e) => setForm({ ...form, materialUuid: e.target.value })}><option value="">选择未登记试剂的容器</option>{containers.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label><label className="form-field"><span>数量 *</span><input type="number" min="0" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label><label className="form-field"><span>单位 *</span><select value={form.quantityUnit} onChange={(e) => setForm({ ...form, quantityUnit: e.target.value })}>{['mL', 'L', 'g', 'mg', 'μL', 'mmol'].map((unit) => <option key={unit}>{unit}</option>)}</select></label><label className="form-field"><span>浓度</span><input type="number" min="0" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label><label className="form-field"><span>浓度单位</span><select value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })}>{['%', 'mol/L', 'mmol/L', 'mg/mL'].map((unit) => <option key={unit}>{unit}</option>)}</select></label><label className="form-field wide"><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label><Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || !form.materialUuid || !form.reagentInfoUuid || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button></div>
 }
 
-function DispenseForm({ source, rows, setRows, containers, saving, onSave }: { source: ReagentRecord; rows: DispenseRow[]; setRows: React.Dispatch<React.SetStateAction<DispenseRow[]>>; containers: MaterialRecord[]; saving: boolean; onSave: () => void }) {
+export function DispenseForm({ source, rows, setRows, containers, templates, filterTags, preferredTag, saving, onSave }: { source: ReagentRecord; rows: DispenseRow[]; setRows: React.Dispatch<React.SetStateAction<DispenseRow[]>>; containers: MaterialRecord[]; templates: ResourceTemplateRecord[]; filterTags: string[]; preferredTag: string; saving: boolean; onSave: () => void }) {
+  const [selectedTag, setSelectedTag] = useState(preferredTag)
   const available = source.quantity ?? 0
   const unit = source.quantityUnit || ''
   const summary = summariseDispense(rows, available)
   const chosen = new Set(rows.map((row) => row.materialUuid).filter(Boolean))
+  const templateTags = useMemo(() => new Map(templates.map((template) => [template.uuid, new Set(template.tags || [])])), [templates])
+  const taggedContainers = selectedTag ? containers.filter((item) => item.resourceTemplateUuid && templateTags.get(item.resourceTemplateUuid)?.has(selectedTag)) : containers
+  const tagCounts = new Map(filterTags.map((tag) => [tag, containers.filter((item) => item.resourceTemplateUuid && templateTags.get(item.resourceTemplateUuid)?.has(tag)).length]))
+  const unchosenContainerCount = taggedContainers.filter((item) => !chosen.has(item.uuid)).length
+  const hasAnotherContainer = unchosenContainerCount > rows.filter((row) => !row.materialUuid).length
   const addRow = () => setRows((current) => [...current, { id: (current.at(-1)?.id || 0) + 1, materialUuid: '', quantity: '' }])
   const update = (id: number, patch: Partial<DispenseRow>) => setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   const remove = (id: number) => setRows((current) => (current.length > 1 ? current.filter((row) => row.id !== id) : current))
@@ -245,14 +281,20 @@ function DispenseForm({ source, rows, setRows, containers, saving, onSave }: { s
     <section className="dispense-targets">
       <header>
         <div><strong>目标容器</strong><small>选择空容器并填写本次转移数量</small></div>
-        <Button type="button" className="dispense-add" icon={<Plus size={15} />} onClick={addRow} disabled={containers.length <= rows.length}>添加容器</Button>
+        <Button type="button" className="dispense-add" icon={<Plus size={15} />} onClick={addRow} disabled={!hasAnotherContainer}>添加容器</Button>
       </header>
+      {filterTags.length ? <div className="dispense-tag-filter" role="group" aria-label="按容器标签筛选">
+        <span>容器类型</span>
+        <button type="button" aria-pressed={!selectedTag} onClick={() => setSelectedTag('')}>全部<em>{containers.length}</em></button>
+        {filterTags.map((tag) => <button key={tag} type="button" aria-pressed={selectedTag === tag} onClick={() => setSelectedTag(tag)}>{containerTagLabel(tag)}<em>{tagCounts.get(tag) || 0}</em></button>)}
+      </div> : null}
       <div className="dispense-target-list">
         {rows.map((row, index) => {
           const duplicate = row.materialUuid !== '' && rows.some((other) => other.id !== row.id && other.materialUuid === row.materialUuid)
+          const options = containers.filter((item) => item.uuid === row.materialUuid || (taggedContainers.includes(item) && !chosen.has(item.uuid)))
           return <article key={row.id} className={`dispense-row${duplicate ? ' dispense-row-invalid' : ''}`}>
             <span className="dispense-row-index">{String(index + 1).padStart(2, '0')}</span>
-            <label className="form-field dispense-container-field"><span>目标容器 *</span><select aria-label={`目标容器 ${index + 1}`} value={row.materialUuid} onChange={(e) => update(row.id, { materialUuid: e.target.value })}><option value="">选择空容器</option>{containers.filter((item) => item.uuid === row.materialUuid || !chosen.has(item.uuid)).map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.barcode}</option>)}</select></label>
+            <label className="form-field dispense-container-field"><span>目标容器 *</span><select aria-label={`目标容器 ${index + 1}`} value={row.materialUuid} onChange={(e) => update(row.id, { materialUuid: e.target.value })}><option value="">{taggedContainers.length ? '选择空容器' : '该类型暂无空容器'}</option>{options.map((item) => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}</select></label>
             <label className="form-field dispense-quantity-field"><span>分装量 *</span><div><input aria-label={`分装量 ${index + 1}`} type="number" min="0" step="any" value={row.quantity} onChange={(e) => update(row.id, { quantity: e.target.value })} /><em>{unit}</em></div></label>
             <button type="button" className="dispense-remove" aria-label={`移除目标 ${index + 1}`} title="移除目标容器" disabled={rows.length <= 1} onClick={() => remove(row.id)}><Trash2 size={16} /></button>
             {duplicate ? <small className="form-error">该容器已被选择，请更换一个空容器。</small> : null}
