@@ -47,9 +47,12 @@ const edgeKindMetadata = {
   repeat_exit: { label: '退出循环', description: '退出条件为 true 时，调度器结束循环并继续后继节点' },
 } satisfies Record<WorkflowEdgeKind, { label: string; description: string }>
 
+/** 将节点类型翻译为实验人员能直接理解的名称。 */
 function nodeTypeLabel(node: WorkflowGraphNode) {
   if (node.kind === 'material_source') return '物料源'
   if (node.kind === 'group') return '分组'
+  if (node.type.toLowerCase() === 'condition') return '条件节点'
+  if (node.type.toLowerCase() === 'repeat_until') return '循环节点'
   return node.deviceId || node.type || '工作流节点'
 }
 

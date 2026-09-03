@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -558,6 +559,27 @@ def compose_local_workflow_template_runtime(
             """
 
             nonlocal published_generation
+            # 发布运行中新增的实验操作后，来源注册会先写入进程内定义目录。
+            # 不能只复用启动时冻结的 ``active_registrations``，否则父工作流
+            # 随后引用新发布的子工作流时，编译目录仍看不到它的模板。
+            initial_registration_by_uuid = {
+                str(registration["workflow_uuid"]): registration
+                for registration in active_registrations
+            }
+            current_registrations = []
+            for registration in publication_store.list_source_registrations():
+                current = dict(registration)
+                initial = initial_registration_by_uuid.get(
+                    str(current["workflow_uuid"])
+                )
+                if initial is not None:
+                    # 启动发现计划中的静态模块/符号/哈希更可信；动态导入
+                    # 来源没有这些字段，build 函数会从已应用源码快照补齐。
+                    for field in ("module", "symbol", "definition_content_hash"):
+                        value = initial.get(field)
+                        if value is not None:
+                            current[field] = value
+                current_registrations.append(current)
             base_node_uuid_by_key = {
                 (str(node["resource_template_uuid"]), str(node["name"])): str(
                     node["uuid"]
@@ -588,7 +610,7 @@ def compose_local_workflow_template_runtime(
             previous_snapshot = publication_template_provider.replace(base_snapshot)
             try:
                 generation = build_published_workflow_generation(
-                    registrations=active_registrations,
+                    registrations=tuple(current_registrations),
                     snapshot_provider=publication_store,
                     base_node_templates=base_nodes,
                 )
@@ -599,9 +621,16 @@ def compose_local_workflow_template_runtime(
                 publication_template_provider.replace(previous_snapshot)
                 raise
             try:
+                overlaid_nodes, overlaid_handles = (
+                    _overlay_published_template_identities(
+                        generation.node_templates,
+                        generation.handle_templates,
+                        publication_store.list_published_template_projections(),
+                    )
+                )
                 named_nodes = tuple(
                     _assign_published_template_identity(node)
-                    for node in generation.node_templates
+                    for node in overlaid_nodes
                 )
             except TemplateIdentityError as error:
                 publication_template_provider.replace(previous_snapshot)
@@ -609,9 +638,9 @@ def compose_local_workflow_template_runtime(
             published_generation = PublishedWorkflowGeneration(
                 source_catalog=generation.source_catalog,
                 node_templates=named_nodes,
-                handle_templates=generation.handle_templates,
+                handle_templates=overlaid_handles,
             )
-            return named_nodes, generation.handle_templates
+            return named_nodes, overlaid_handles
 
         projection = RegistryTemplateProjection.in_memory(
             authority_id="local",
@@ -706,8 +735,121 @@ def _assign_published_template_identity(
         raise TemplateIdentityError("发布工作流模板缺少宿主设备模板名")
     if not isinstance(action_name, str) or not action_name:
         raise TemplateIdentityError("发布工作流模板缺少动作模板名")
+    # 恢复的发布合同已经携带发布时固定的节点模板 UUID。它可能与本次
+    # Registry 代际首次生成的确定性 UUID 不同，但仍是父图和边界映射使用的
+    # 权威身份；保留它才能让跨重启的合同继续命中同一模板。
+    contract_meta = meta_data.get("unilab") if isinstance(meta_data, dict) else None
+    if isinstance(contract_meta, dict):
+        contract = contract_meta.get("workflow_contract")
+        if isinstance(contract, dict) and isinstance(contract.get("contract_uuid"), str):
+            return template
     template["uuid"] = action_template_uuid(device_name, action_name)
     return template
+
+
+def _overlay_published_template_identities(
+    generated_nodes: tuple[dict[str, Any], ...],
+    generated_handles: tuple[dict[str, Any], ...],
+    persisted: list[dict[str, Any]],
+) -> tuple[tuple[dict[str, Any], ...], tuple[dict[str, Any], ...]]:
+    """把恢复合同的节点/Handle 身份覆盖到本次目录生成结果。
+
+    参数：``generated_nodes``/``generated_handles`` 是当前源码目录生成的发布
+    模板；``persisted`` 是定义库中恢复的不可变合同投影。返回：模板语义仍以
+    当前源码目录为准，但 UUID 和 Handle 身份沿用发布合同；没有对应合同的模板
+    保持原样。异常：投影字段不完整时跳过该项，让上层目录校验给出稳定诊断。
+    """
+
+    by_workflow = {
+        str(item.get("workflow_uuid")): item
+        for item in persisted
+        if isinstance(item, dict)
+        and isinstance(item.get("workflow_uuid"), str)
+        and isinstance(item.get("template"), dict)
+    }
+    overlaid_parent_keys: set[tuple[str, str]] = set()
+    output_nodes: list[dict[str, Any]] = []
+    handles_by_parent: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for handle in generated_handles:
+        parent = handle.get("node_business_key")
+        if isinstance(parent, (list, tuple)) and len(parent) == 2:
+            handles_by_parent[(str(parent[0]), str(parent[1]))].append(dict(handle))
+
+    output_handles: list[dict[str, Any]] = []
+    for node in generated_nodes:
+        name = node.get("name")
+        workflow_uuid = (
+            str(name)[len("workflow:") :]
+            if isinstance(name, str) and name.startswith("workflow:")
+            else None
+        )
+        contract = by_workflow.get(workflow_uuid or "")
+        template = contract.get("template") if isinstance(contract, dict) else None
+        persisted_uuid = contract.get("node_template_uuid") if isinstance(contract, dict) else None
+        if not isinstance(template, dict) or not isinstance(persisted_uuid, str):
+            output_nodes.append(dict(node))
+            continue
+        cloned = dict(node)
+        cloned["uuid"] = persisted_uuid
+        metadata = dict(node.get("meta_data") or {})
+        persisted_metadata = template.get("meta_data")
+        if isinstance(persisted_metadata, dict):
+            merged_unilab = dict(metadata.get("unilab") or {})
+            merged_unilab.update(dict(persisted_metadata.get("unilab") or {}))
+            metadata.update(persisted_metadata)
+            metadata["unilab"] = merged_unilab
+            cloned["meta_data"] = metadata
+        output_nodes.append(cloned)
+
+        persisted_handles = contract.get("handles") if isinstance(contract, dict) else None
+        if not isinstance(persisted_handles, list):
+            continue
+        node_business_key = (
+            str(node.get("resource_template_uuid")),
+            str(name),
+        )
+        generated_for_node = sorted(
+            handles_by_parent.get(node_business_key, []),
+            key=lambda item: (str(item.get("handle_key")), str(item.get("io_type")), str(item.get("uuid"))),
+        )
+        persisted_for_node = sorted(
+            (dict(item) for item in persisted_handles if isinstance(item, dict)),
+            key=lambda item: (str(item.get("handle_key")), str(item.get("io_type")), str(item.get("uuid"))),
+        )
+        if len(generated_for_node) != len(persisted_for_node):
+            continue
+        overlaid_parent_keys.add(node_business_key)
+        for generated_handle, persisted_handle in zip(
+            generated_for_node,
+            persisted_for_node,
+            strict=True,
+        ):
+            # RegistryTemplateProjectionStore resolves the parent from
+            # ``node_business_key``. Preserve that generated identity while
+            # carrying over the immutable UUID and persisted handle semantics.
+            output_handles.append(
+                {
+                    **generated_handle,
+                    **persisted_handle,
+                    "node_business_key": generated_handle["node_business_key"],
+                }
+            )
+
+    output_handles.extend(
+        dict(handle)
+        for handle in generated_handles
+        if not (
+            isinstance(handle.get("node_business_key"), (list, tuple))
+            and len(handle["node_business_key"]) == 2
+            and (
+                str(handle["node_business_key"][0]),
+                str(handle["node_business_key"][1]),
+            ) in overlaid_parent_keys
+        )
+    )
+    output_nodes.sort(key=lambda item: str(item.get("uuid")))
+    output_handles.sort(key=lambda item: str(item.get("uuid")))
+    return tuple(output_nodes), tuple(output_handles)
 
 
 def get_workflow_service() -> Optional[WorkflowService]:

@@ -983,6 +983,31 @@ class WorkflowService:
             identity = validate_uuid(workflow_uuid or str(uuid4()))
             tags = normalize_json_array(tags)
             meta_data = normalize_json_object(meta_data)
+            # The managed-local source is authoritative, but the initial public
+            # contract still has to reach the source generator.  Keep only the
+            # two editable contract sections from the request; all other
+            # ``unilab`` metadata is server-owned and must not cross this seam.
+            requested_unilab = meta_data.get("unilab")
+            requested_input_contract = (
+                deepcopy(requested_unilab.get("input_contract"))
+                if isinstance(requested_unilab, Mapping)
+                and isinstance(requested_unilab.get("input_contract"), Mapping)
+                else {"version": 1, "parameters": []}
+            )
+            requested_output_contract = (
+                deepcopy(requested_unilab.get("output_contract"))
+                if isinstance(requested_unilab, Mapping)
+                and isinstance(requested_unilab.get("output_contract"), Mapping)
+                else {"version": 1, "outputs": []}
+            )
+            if "parameters" not in requested_input_contract:
+                requested_input_contract["parameters"] = []
+            if "version" not in requested_input_contract:
+                requested_input_contract["version"] = 1
+            if "outputs" not in requested_output_contract:
+                requested_output_contract["outputs"] = []
+            if "version" not in requested_output_contract:
+                requested_output_contract["version"] = 1
             workflow_type = normalize_workflow_type(workflow_type)
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
@@ -1019,6 +1044,8 @@ class WorkflowService:
                         nodes=[],
                         edges=[],
                         workflow_type=workflow_type,
+                        input_contract=requested_input_contract,
+                        output_contract=requested_output_contract,
                     )
                     return self._public_workflow_with_status(created_graph["workflow"])
                 workflow = self._definition_store.create_workflow(
@@ -1199,6 +1226,7 @@ class WorkflowService:
                     raise ValueError("workflow name must not be blank")
                 tags = normalize_json_array(tags)
                 public_meta_data = dict(normalize_json_object(meta_data))
+                requested_unilab = public_meta_data.get("unilab")
                 normalized_workflow_type = normalize_workflow_type(
                     workflow_type,
                     default=current["workflow_type"],
@@ -1245,7 +1273,22 @@ class WorkflowService:
                         normalized_category_uuid
                     )
                 if "unilab" in current["meta_data"]:
-                    public_meta_data["unilab"] = current["meta_data"]["unilab"]
+                    # Preserve server-owned authoring metadata while accepting
+                    # the explicitly editable workflow I/O contracts from the
+                    # update request.  Previously the whole incoming section
+                    # was discarded, so node input bindings were validated
+                    # against an empty contract after every save.
+                    current_unilab = dict(current["meta_data"]["unilab"] or {})
+                    if isinstance(requested_unilab, Mapping):
+                        for contract_key in (
+                            "input_contract",
+                            "output_contract",
+                            "output_bindings",
+                        ):
+                            contract = requested_unilab.get(contract_key)
+                            if isinstance(contract, Mapping):
+                                current_unilab[contract_key] = deepcopy(contract)
+                    public_meta_data["unilab"] = current_unilab
                 if self._has_active_source(identity):
                     unilab_meta = dict(public_meta_data.get("unilab") or {})
                     root_fields = set(unilab_meta.get("authoring_root_fields") or [])
@@ -1385,6 +1428,11 @@ class WorkflowService:
                     if previous is None or previous["uuid"] != contract["uuid"]:
                         contract_store.discard(contract["uuid"])
                     raise WorkflowError("source_publication_failed") from error
+            # 发布本身新增了一个组合节点模板；立即刷新共享编译目录，让同一进程
+            # 内随后创建父图时即可引用它。跨重启场景由
+            # ``restore_published_workflow_contracts`` 执行同一刷新。
+            if self._compiler_rebuilder is not None:
+                self._rebuild_workspace_activation_catalog()
         public_contract = contract_store.public(contract)
         dependent_refresh = self._refresh_published_contract_dependents(contract)
         if dependent_refresh["updated_workflow_uuids"] or dependent_refresh["pending"]:
@@ -1404,6 +1452,7 @@ class WorkflowService:
         # ``contract_store`` 是本次进程内发布合同投影；领域包 JSON 才负责跨
         # 重启持久化，恢复过程不会触碰运行事实 SQLite。
         contract_store = self._published_contract_store()
+        restored_any = False
         for entry in self._publication_catalog.list_entries():
             # ``workflow_uuid`` 是合同来源定义稳定身份；只有同代 manifest 已授权
             # 且 Python 定义已激活时才允许恢复，防止孤儿合同重新暴露已撤权定义。
@@ -1413,10 +1462,17 @@ class WorkflowService:
             try:
                 self._definition_store.get_workflow(workflow_uuid)
                 contract_store.restore(entry["contract"])
+                restored_any = True
             except StoreNotFound:
                 continue
             except (PublishedContractConflict, PublishedContractInvalid) as error:
                 raise WorkflowError("source_publication_failed") from error
+        # 模板投影在工作流源码激活之前构造，而发布合同在此方法中才从领域包
+        # 恢复。恢复后立即重建一次编译目录，确保已发布组合模板（包括其合同
+        # UUID/Handle UUID）进入后续 graph save 的同一目录代际；否则父图插入
+        # 会被编译器误判为“当前目录之外的模板”。
+        if restored_any and self._compiler_rebuilder is not None:
+            self._rebuild_workspace_activation_catalog()
 
     def list_published_workflow_contracts(
         self,
@@ -2010,7 +2066,33 @@ class WorkflowService:
         )
         candidate = authoring.get("candidate")
         if candidate is None:
-            return self.get_graph(workflow_uuid)
+            # ``get_authoring`` 将编译诊断放在 ``draft.diagnostics``；不能只查
+            # 聚合根，否则组合节点生成失败时会丢掉真正的合同诊断，前端只能看到
+            # 无法定位的通用错误。
+            draft = authoring.get("draft")
+            diagnostics = (
+                draft.get("diagnostics")
+                if isinstance(draft, Mapping)
+                else authoring.get("diagnostics")
+            )
+            diagnostic = next(
+                (
+                    item
+                    for item in diagnostics
+                    if isinstance(item, Mapping)
+                    and str(item.get("severity", "")).lower() == "error"
+                ),
+                None,
+            ) if isinstance(diagnostics, list) else None
+            message = (
+                str(diagnostic.get("message"))
+                if isinstance(diagnostic, Mapping) and diagnostic.get("message")
+                else "工作流图不能转换为规范 Python 源码"
+            )
+            # ``save_draft`` 的候选为空表示编译/合同校验失败。不能把当前旧图
+            # 当成成功返回，否则前端会误以为组合节点已经保存，随后发布或执行
+            # 才暴露更难定位的错误。
+            raise WorkflowError("candidate_invalid", message=message)
         candidate_hash = candidate.get("candidate_hash")
         if not isinstance(candidate_hash, str) or not candidate_hash:
             raise WorkflowError("candidate_invalid")
@@ -2086,6 +2168,35 @@ class WorkflowService:
                     "mode": "fixed",
                     "device_id": str(material_uuid),
                 }
+            # New nodes must append to the author's existing sequence.  If the
+            # field is omitted, the deterministic compiler falls back to UUID
+            # order; that can put a newly added node before the existing one
+            # and emit a reverse ready edge before the UI adds its intended
+            # dependency.
+            existing_orders = [
+                int(
+                    ((candidate.get("meta_data") or {}).get("unilab") or {})[
+                        "authoring_source_order"
+                    ]
+                )
+                for candidate in graph["nodes"]
+                if isinstance((candidate.get("meta_data") or {}).get("unilab"), Mapping)
+                and isinstance(
+                    ((candidate.get("meta_data") or {}).get("unilab") or {}).get(
+                        "authoring_source_order"
+                    ),
+                    int,
+                )
+                and not isinstance(
+                    ((candidate.get("meta_data") or {}).get("unilab") or {}).get(
+                        "authoring_source_order"
+                    ),
+                    bool,
+                )
+            ]
+            editable_unilab["authoring_source_order"] = (
+                max(existing_orders) + 1 if existing_orders else len(graph["nodes"])
+            )
             node_meta_data = {
                 key: value
                 for key, value in node.get("meta_data", {}).items()
@@ -2244,7 +2355,14 @@ class WorkflowService:
         *,
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """通过完整图验证和 CAS 增加一条连线。"""
+        """通过完整图验证和 CAS 增加一条连线。
+
+        参数：``workflow_uuid`` 是工作流稳定身份，``payload`` 包含源/目标节点
+        和句柄 UUID。返回：保存后图中的实际连线投影；托管领域包模式下，源码
+        编译器可能按规范源码重建连线 UUID，因此按节点与句柄的稳定组合回读。
+        异常：工作流、节点或句柄不存在时返回 ``not_found``，图合同或修订冲突
+        沿用统一工作流错误；失败不会留下半条连线。
+        """
 
         identity = self.get_workflow(workflow_uuid)["uuid"]
         with self._authoring_lock(identity):
@@ -2260,7 +2378,26 @@ class WorkflowService:
                 nodes=graph["nodes"],
                 edges=[*graph["edges"], edge_value],
             )
-            return self._graph_entity(updated, "edges", edge_value.uuid)
+            try:
+                return self._graph_entity(updated, "edges", edge_value.uuid)
+            except WorkflowError as error:
+                if error.code != "not_found":
+                    raise
+                # Managed domain sources are reconstructed from canonical Python
+                # after every graph write.  The compiler intentionally owns the
+                # persisted edge UUID, while the endpoint caller only knows the
+                # transient UUID generated by ``create_edge``.  Return the edge
+                # by its semantic endpoints instead of reporting a false 404
+                # after a successful write.
+                for candidate in reversed(updated.get("edges", [])):
+                    if (
+                        candidate.get("source_node_uuid") == edge_value.source_node_uuid
+                        and candidate.get("target_node_uuid") == edge_value.target_node_uuid
+                        and candidate.get("source_handle_uuid") == edge_value.source_handle_uuid
+                        and candidate.get("target_handle_uuid") == edge_value.target_handle_uuid
+                    ):
+                        return candidate
+                raise
 
     def delete_workflow_edge(self, edge_uuid: str) -> None:
         """按稳定身份删除一条工作流连线。"""
@@ -2489,6 +2626,8 @@ class WorkflowService:
         nodes: list[dict[str, Any]],
         edges: list[dict[str, Any]],
         workflow_type: str,
+        input_contract: Mapping[str, Any] | None = None,
+        output_contract: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """在工作流锁内把新定义规范化为首版领域 Python 源码。
 
@@ -2543,6 +2682,14 @@ class WorkflowService:
                         "workflow_type",
                     ],
                 }
+                if isinstance(input_contract, Mapping):
+                    source_meta_data["unilab"]["input_contract"] = deepcopy(
+                        dict(input_contract)
+                    )
+                if isinstance(output_contract, Mapping):
+                    source_meta_data["unilab"]["output_contract"] = deepcopy(
+                        dict(output_contract)
+                    )
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
                 try:
@@ -3251,6 +3398,10 @@ class WorkflowService:
                 except Exception:
                     raise WorkflowError("internal_error") from None
             if isinstance(error, TaskSchedulerBridgeError):
+                logger.exception(
+                    "工作流任务已创建，但提交本地调度器失败 task=%s",
+                    task_uuid,
+                )
                 raise WorkflowError("internal_error") from None
             if isinstance(error, StoreConflict) and backend_task_uuid is not None:
                 raise WorkflowConflict("conflict", message=str(error)) from None
@@ -4941,10 +5092,18 @@ class WorkflowService:
                 self._workspace_activation_batch = previous_batch_state
 
             if not deferred_results:
+                # 发布合同文件是跨重启保留实验操作身份的权威。子工作流刚刚
+                # 应用完成后，必须先把它恢复到内存目录，再尝试下一层父工作流；
+                # 否则父源码会在恢复合同之前被编译为
+                # ``composite_child_not_found``，其嵌套图就无法重新生成。
+                self.restore_published_workflow_contracts()
                 continue
             self._rebuild_workspace_activation_catalog()
             for result in deferred_results:
                 self._require_workspace_activation_apply_complete(result)
+            # 同一层的候选已经提交且模板目录已换代。此时恢复本层刚激活的
+            # 实验操作发布合同，下一层（或固定点补偿轮）才能解析组合节点。
+            self.restore_published_workflow_contracts()
         unresolved_sources = any(
             self.get_authoring(workflow_uuid).get("state") != "applied"
             for workflow_uuid in registrations_by_uuid
@@ -4971,6 +5130,10 @@ class WorkflowService:
 
         blocked: set[str] = set()
         for _pass in range(len(workflow_uuids)):
+            # 上一轮可能刚应用了一个同时作为子工作流的来源。它的发布合同在
+            # 该来源真正存在之前不能恢复；每轮开始重新投影一次，才能让更深层
+            # 的“孙工作流”继续被父工作流解析，而不是停在上一层诊断。
+            self.restore_published_workflow_contracts()
             applied_any = False
             for workflow_uuid in workflow_uuids:
                 if workflow_uuid in blocked:

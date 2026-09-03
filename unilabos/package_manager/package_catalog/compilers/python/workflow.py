@@ -88,6 +88,7 @@ def compile_workflow_definitions(
         identities.add(fqid)
         # ``module`` 与函数符号共同保存源码映射，不承担工作流 UUID 身份。
         module = logical_path.removesuffix(".py").replace("/", ".")
+        output_units = dict(program.declared_output_units)
         definitions.append(
             PackageDefinition(
                 kind="workflow",
@@ -103,7 +104,15 @@ def compile_workflow_definitions(
                     "action_references": _action_references(program.actions),
                     "input_contract": program.input_contract,
                     "output_contract": [
-                        {"name": name, "schema": schema}
+                        {
+                            "name": name,
+                            "schema": schema,
+                            **(
+                                {"unit": output_units[name]}
+                                if name in output_units
+                                else {}
+                            ),
+                        }
                         for name, schema in program.declared_output_schemas
                     ],
                     "source_uri": (f"package://{import_package}/{entry.relative_path}"),

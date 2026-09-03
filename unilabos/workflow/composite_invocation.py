@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
+from uuid import UUID, uuid5
 
 from unilabos.workflow.authoring_identity import (
     authoring_edge_uuid,
@@ -144,6 +145,117 @@ def _invocation_param(
     return result
 
 
+def _published_boundary_handle_uuid(node_template_uuid: str, name: str) -> str:
+    """计算发布合同中某个工作流输入连接点的稳定身份。
+
+    参数：``node_template_uuid`` 是发布合同生成的宿主节点模板身份，``name`` 是
+    输入参数名。返回：与发布投影相同的连接点 UUID。异常：模板 UUID 非法时抛出
+    ``ValueError``，由上层收敛为组合调用输入错误。
+    """
+
+    return str(uuid5(UUID(node_template_uuid), f"published-handle:target:{name}"))
+
+
+def _materialize_published_arguments(
+    *,
+    expanded_nodes: list[dict[str, Any]],
+    source_nodes: list[Mapping[str, Any]],
+    contract: Mapping[str, Any],
+    normalized_param: Mapping[str, Any],
+) -> None:
+    """把发布合同实参下推到展开后的内部节点。
+
+    参数：``expanded_nodes`` 是已重写身份的内部节点，``source_nodes`` 是冻结图
+    原节点，``contract`` 含输入合同、边界映射和连接点快照，``normalized_param``
+    是合并默认值后的实参。返回：原地写入固定值或父参数绑定。异常：合同映射、
+    连接点或节点结构损坏时抛 ``CompositeInvocationInvalid``。静态实参必须清除
+    子图原有的工作流参数绑定，否则父图没有同名参数时会被整体 I/O 校验拒绝。
+    """
+
+    boundary_mapping = contract.get("boundary_mapping")
+    input_contract = contract.get("input_contract")
+    snapshot = contract.get("graph_snapshot")
+    if not isinstance(boundary_mapping, Mapping) or not isinstance(
+        input_contract, Mapping
+    ) or not isinstance(snapshot, Mapping):
+        raise CompositeInvocationInvalid("发布合同缺少输入边界映射")
+    target_mappings = boundary_mapping.get("target_mappings")
+    descriptors = input_contract.get("parameters")
+    # 早期发布合同没有保存内部连接点快照；只要没有目标映射，
+    # 这类合同仍可安全展开（参数保持原合同的节点绑定）。
+    snapshot_handles = snapshot.get("handle_templates")
+    if not isinstance(target_mappings, Mapping) or not isinstance(descriptors, list):
+        raise CompositeInvocationInvalid("发布合同输入边界映射损坏")
+    # 旧版合同可能只有参数描述，没有内部目标映射；这表示展开时继续沿用
+    # 冻结图自身的绑定，不应因为新增的快照校验把历史合同判为损坏。
+    if not target_mappings:
+        return
+    if snapshot_handles is None:
+        snapshot_handles = []
+    if not isinstance(snapshot_handles, list):
+        raise CompositeInvocationInvalid("发布合同缺少内部连接点快照")
+
+    data_key_by_uuid = {
+        str(handle.get("uuid")): str(handle["data_key"])
+        for handle in snapshot_handles
+        if isinstance(handle, Mapping)
+        and isinstance(handle.get("uuid"), str)
+        and handle.get("io_type") == "target"
+        and isinstance(handle.get("data_key"), str)
+    }
+    expanded_by_source_uuid = {
+        str(source.get("uuid")): expanded
+        for source, expanded in zip(source_nodes, expanded_nodes, strict=True)
+        if isinstance(source, Mapping) and isinstance(source.get("uuid"), str)
+    }
+    node_template_uuid = contract.get("node_template_uuid")
+    if not isinstance(node_template_uuid, str):
+        raise CompositeInvocationInvalid("发布合同缺少节点模板身份")
+
+    for descriptor in descriptors:
+        if not isinstance(descriptor, Mapping) or not isinstance(
+            descriptor.get("name"), str
+        ):
+            raise CompositeInvocationInvalid("发布合同输入参数损坏")
+        name = str(descriptor["name"])
+        if name not in normalized_param:
+            # 必填参数的缺失已经由 _invocation_param 的调用方合同校验处理；
+            # 这里跳过仅为兼容损坏合同中未声明的可选参数。
+            continue
+        boundary_uuid = _published_boundary_handle_uuid(node_template_uuid, name)
+        targets = target_mappings.get(boundary_uuid)
+        if not isinstance(targets, list):
+            raise CompositeInvocationInvalid(f"输入参数 {name} 的边界映射损坏")
+        value = normalized_param[name]
+        for target in targets:
+            if not isinstance(target, Mapping):
+                raise CompositeInvocationInvalid(f"输入参数 {name} 的目标映射损坏")
+            source_uuid = str(target.get("workflow_node_uuid") or "")
+            target_uuid = str(target.get("target_handle_uuid") or "")
+            node = expanded_by_source_uuid.get(source_uuid)
+            data_key = data_key_by_uuid.get(target_uuid)
+            if node is None or data_key is None:
+                raise CompositeInvocationInvalid(f"输入参数 {name} 的目标连接点不存在")
+            meta_data = node.setdefault("meta_data", {})
+            unilab = meta_data.setdefault("unilab", {})
+            bindings = unilab.setdefault("input_bindings", {})
+            if not isinstance(bindings, dict):
+                raise CompositeInvocationInvalid("子节点输入绑定结构损坏")
+            if isinstance(value, Mapping) and value.get("kind") == "workflow_input":
+                parameter = value.get("parameter")
+                if not isinstance(parameter, str):
+                    raise CompositeInvocationInvalid(f"输入参数 {name} 的父参数引用损坏")
+                bindings[target_uuid] = {"parameter": parameter}
+                continue
+            # node_output 与固定值都不能继续携带子工作流自身的参数绑定；
+            # 前者由父图边界映射表达，后者直接写入动作参数。
+            bindings.pop(target_uuid, None)
+            params = node.setdefault("param", {})
+            if not isinstance(params, dict):
+                raise CompositeInvocationInvalid("子节点参数结构损坏")
+            params[data_key] = deepcopy(value)
+
+
 def expand_composite_invocation(
     *,
     parent_graph: Mapping[str, Any],
@@ -266,6 +378,13 @@ def expand_composite_invocation(
         if requirement_key is not None:
             copied["material_uuid"] = device_bindings[requirement_key]
         expanded_nodes.append(copied)
+
+    _materialize_published_arguments(
+        expanded_nodes=expanded_nodes[1:],
+        source_nodes=source_nodes,
+        contract=contract,
+        normalized_param=root["param"],
+    )
 
     expanded_edges: list[dict[str, Any]] = []
     existing_edge_uuids = {

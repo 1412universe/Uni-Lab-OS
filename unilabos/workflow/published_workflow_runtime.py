@@ -48,6 +48,25 @@ def build_published_workflow_generation(
         (str, bytes),
     ):
         raise PublishedWorkflowGenerationError("活动工作流来源必须是数组")
+    # 生产组合根把“可被引用”定义为已经发布的工作流合同。定义目录里还可能
+    # 存在尚未发布、甚至正在编辑的实验操作；它们不能进入模板目录，否则一次
+    # 保存父工作流就会提前校验这些未发布草稿，导致无关的父图被阻断。内存测试
+    # 提供者没有该可选端口时，保留旧夹具语义（由快照本身决定资格）。
+    published_projection_reader = getattr(
+        snapshot_provider,
+        "list_published_template_projections",
+        None,
+    )
+    published_workflow_uuids: set[str] | None = None
+    if callable(published_projection_reader):
+        try:
+            published_workflow_uuids = {
+                str(item["workflow_uuid"])
+                for item in published_projection_reader()
+                if isinstance(item, Mapping) and item.get("workflow_uuid") is not None
+            }
+        except (KeyError, TypeError, ValueError) as error:
+            raise PublishedWorkflowGenerationError("发布目录读取失败") from error
     # ``snapshots`` 只保存与活动包目录源码内容一致的同修订应用事实；来源解析
     # 目录仍保留已登记未应用项，以便组合编译返回准确诊断。
     snapshots: dict[str, Mapping[str, Any]] = {}
@@ -62,6 +81,11 @@ def build_published_workflow_generation(
             raise PublishedWorkflowGenerationError(
                 f"活动工作流来源 {index} 字段不完整"
             ) from None
+        if (
+            published_workflow_uuids is not None
+            and workflow_uuid not in published_workflow_uuids
+        ):
+            continue
         # ``catalog_identity`` 来自同次包目录（PackageCatalog）静态编译，不触发
         # 第二次扫描、Python import 或作者源码执行。
         catalog_identity = _catalog_identity(registration)

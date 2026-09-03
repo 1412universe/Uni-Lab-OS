@@ -748,7 +748,11 @@ def _parse_contract_envelope(
 
 
 def parse_input_contract(raw: Any) -> WorkflowInputContract:
-    """校验有序、闭合的工作流输入合同（WorkflowInputContract）。"""
+    """校验有序、闭合的工作流输入合同（WorkflowInputContract）。
+
+    每个参数可带可选的非空 ``unit`` 展示单位；单位只描述合同语义，不做数值
+    换算，缺少该字段的旧合同保持原样。
+    """
 
     _, parameters = _parse_contract_envelope(raw, collection_key="parameters")
     normalized: list[dict[str, Any]] = []
@@ -777,6 +781,7 @@ def parse_input_contract(raw: Any) -> WorkflowInputContract:
                 "default",
                 "title",
                 "description",
+                "unit",
             },
             code="invalid_contract",
             path=path,
@@ -847,6 +852,11 @@ def parse_input_contract(raw: Any) -> WorkflowInputContract:
                 descriptor["description"],
                 path=_pointer(path, "description"),
             )
+        if "unit" in descriptor:
+            item["unit"] = _normalize_presentation(
+                descriptor["unit"],
+                path=_pointer(path, "unit"),
+            )
         if has_default:
             item["default"] = default
         normalized.append(item)
@@ -863,7 +873,11 @@ def parse_input_contract(raw: Any) -> WorkflowInputContract:
 
 
 def parse_output_contract(raw: Any) -> WorkflowOutputContract:
-    """校验有序、闭合的工作流输出合同（WorkflowOutputContract）。"""
+    """校验有序、闭合的工作流输出合同（WorkflowOutputContract）。
+
+    每个输出可带可选的非空 ``unit`` 展示单位；单位只描述合同语义，不做数值
+    换算，缺少该字段的旧合同保持原样。
+    """
 
     _, outputs = _parse_contract_envelope(raw, collection_key="outputs")
     normalized: list[dict[str, Any]] = []
@@ -885,7 +899,7 @@ def parse_output_contract(raw: Any) -> WorkflowOutputContract:
                 )
         _reject_unknown(
             descriptor,
-            {"name", "schema", "title", "description", "implicit"},
+            {"name", "schema", "title", "description", "unit", "implicit"},
             code="invalid_contract",
             path=path,
             message=_INVALID_CONTRACT,
@@ -924,6 +938,11 @@ def parse_output_contract(raw: Any) -> WorkflowOutputContract:
             item["description"] = _normalize_presentation(
                 descriptor["description"],
                 path=_pointer(path, "description"),
+            )
+        if "unit" in descriptor:
+            item["unit"] = _normalize_presentation(
+                descriptor["unit"],
+                path=_pointer(path, "unit"),
             )
         item["implicit"] = implicit
         normalized.append(item)

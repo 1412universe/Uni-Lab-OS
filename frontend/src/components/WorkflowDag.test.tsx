@@ -52,7 +52,7 @@ function control(
   name: string,
   type: 'condition' | 'repeat_until',
   order: number,
-  param: Record<string, unknown>,
+  param: Record<string, unknown> = {},
   parentUuid?: string,
 ): WorkflowGraphNode {
   return {
@@ -205,6 +205,13 @@ describe('WorkflowDag', () => {
     expect(screen.getByRole('button', { name: 'True 分支：判断轮次 → 记录偶数分支' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'False 分支：判断轮次 → 记录奇数分支' })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /继续下一轮：记录.*分支 → 判断轮次/ })).toHaveLength(2)
+  })
+
+  it('用条件节点和循环节点的业务名称展示结构控制节点', () => {
+    render(<WorkflowDag nodes={[control('condition-1', '按结果分支', 'condition', 0), control('repeat-1', '重试循环', 'repeat_until', 1)]} edges={[]} loading={false} error={false} />)
+
+    expect(screen.getByRole('group', { name: '条件控制域：按结果分支' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: '循环控制域：重试循环' })).toBeInTheDocument()
   })
 
   it('labels a parallel control edge and highlights both endpoints when selected', () => {

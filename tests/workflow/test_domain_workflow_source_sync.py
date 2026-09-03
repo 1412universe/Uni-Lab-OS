@@ -16,6 +16,7 @@ from tests.workflow.test_authoring_engine import (
     _template,
 )
 from unilabos.app.workflow_api import create_workflow_app
+from unilabos.workflow import domain_source_target, source_publication
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
 from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
@@ -706,6 +707,60 @@ def test_python_import_identity_conflict_does_not_publish_manifest(
         assert not package_root.joinpath(
             "workflows", "conflicting_workflow.py"
         ).exists()
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("publication_error", "expected_code"),
+    [
+        (source_publication.SourcePublicationError, "source_publication_failed"),
+        (source_publication.SourcePublicationConflict, "source_identity_conflict"),
+    ],
+)
+def test_python_import_manifest_failure_rolls_back_new_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publication_error: type[RuntimeError],
+    expected_code: str,
+) -> None:
+    """manifest 发布失败时必须清理本次新建源码且保留旧 manifest。
+
+    参数：``tmp_path`` 隔离领域包与运行事实；``monkeypatch`` 注入 manifest
+    发布故障；``publication_error`` 是基础设施故障或并发冲突；``expected_code``
+    是导入接口的稳定错误码。返回：无。异常：若失败后留下 Python 源码、修改
+    manifest 或把冲突误报为未定义异常，由断言暴露。
+    """
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+    )
+    original_manifest = selected_root.joinpath("package.yaml").read_bytes()
+
+    def fail_manifest_publish(**_kwargs: object) -> None:
+        """仅拒绝 manifest 的最终替换，模拟源码已写入后的失败窗口。"""
+
+        raise publication_error("injected_manifest_failure")
+
+    monkeypatch.setattr(
+        domain_source_target,
+        "atomic_publish_source",
+        fail_manifest_publish,
+    )
+    source_path = package_root / "workflows" / "failed_manifest.py"
+    try:
+        with pytest.raises(WorkflowError) as failed:
+            service.import_python_workflow(
+                file_name="failed_manifest.py",
+                python_source=_source(),
+            )
+        assert failed.value.code == expected_code
+        assert selected_root.joinpath("package.yaml").read_bytes() == original_manifest
+        assert not source_path.exists()
+        assert definitions.count_rows("workflow") == 0
     finally:
         service.close()
 

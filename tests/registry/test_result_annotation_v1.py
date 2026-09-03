@@ -70,6 +70,7 @@ def _descriptor(
     *,
     title: str | None = None,
     description: str | None = None,
+    unit: str | None = None,
 ) -> dict[str, object]:
     descriptor: dict[str, object] = {
         "name": name,
@@ -80,6 +81,8 @@ def _descriptor(
         descriptor["title"] = title
     if description is not None:
         descriptor["description"] = description
+    if unit is not None:
+        descriptor["unit"] = unit
     return descriptor
 
 
@@ -224,6 +227,39 @@ def test_result_annotation_reuses_field_presentation_and_constraints() -> None:
         title="体积",
         description="转移体积",
     )
+
+
+def test_result_annotation_preserves_unit_metadata() -> None:
+    """结果字段的单位元数据应进入输出合同并可被静态解析。"""
+
+    parsed = _parse(
+        "amount",
+        "Annotated[float, Field(unit=' mL ', ge=0)]",
+        imports=(
+            "from typing import Annotated",
+            "from pydantic import Field",
+        ),
+    )
+
+    assert parsed.to_dict() == _descriptor(
+        "amount",
+        {"type": "number", "minimum": 0},
+        unit="mL",
+    )
+
+
+def test_result_annotation_rejects_blank_unit() -> None:
+    """结果字段的单位不能为空白。"""
+
+    with pytest.raises(_api().AnnotationSchemaError):
+        _parse(
+            "amount",
+            "Annotated[float, Field(unit='  ')]",
+            imports=(
+                "from typing import Annotated",
+                "from pydantic import Field",
+            ),
+        )
 
 
 def test_result_annotation_preserves_static_template_symbol_order() -> None:

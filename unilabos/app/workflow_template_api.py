@@ -21,7 +21,15 @@ _DEFAULT_PAGE = 1
 _DEFAULT_PAGE_SIZE = 20
 _MAX_PAGE_SIZE = 100
 _DEFAULT_VISIBLE_NODE_TYPES = frozenset(
-    {"ILab", "device_action", "py_script", "tool_call", "manual_confirm"}
+    {
+        "ILab",
+        "device_action",
+        "py_script",
+        "tool_call",
+        "manual_confirm",
+        "condition",
+        "repeat_until",
+    }
 )
 
 

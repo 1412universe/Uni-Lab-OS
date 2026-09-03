@@ -1864,7 +1864,22 @@ class TaskSchedulerBridge:
         raw_wait_resources = waiting.get("wait_resources")
         if raw_wait_resources is not None and not isinstance(raw_wait_resources, list):
             raise StoreConflict(f"等待作业资源集合不是数组：{job_uuid}")
-        wait_resources = list(raw_wait_resources or [])
+        # Scheduler 为诊断会附带 local_device_id、device_name、wait_code 等字段；
+        # 持久化的工作流等待合同只保存资源范围和稳定身份，避免内部诊断字段
+        # 直接穿透到严格的 WorkflowTask 投影并把正常等待误判为提交失败。
+        wait_resources: list[Any] = []
+        for resource in raw_wait_resources or []:
+            if not isinstance(resource, Mapping):
+                # 保留非法元素，让持久化投影按既有合同拒绝，而不是静默丢弃。
+                wait_resources.append(resource)
+                continue
+            wait_resources.append(
+                {
+                    key: str(resource[key]).strip()
+                    for key in ("scope", "device_id", "material_uuid", "site_uuid")
+                    if key in resource and resource[key] not in (None, "")
+                }
+            )
         wait_resources.extend(
             {
                 "scope": "material_site",

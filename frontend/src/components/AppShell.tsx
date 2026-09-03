@@ -1,9 +1,11 @@
 import type { PropsWithChildren } from 'react'
 import {
   Bell,
+  BookOpen,
   Boxes,
   ChevronDown,
   Code2,
+  FileJson,
   FlaskConical,
   LayoutDashboard,
   ListChecks,
@@ -65,6 +67,10 @@ const unknownStartupModePresentation = {
   icon: ShieldCheck,
 }
 
+/**
+ * 渲染 UniLabOS 控制台外壳、主导航和现有接口文档入口。
+ * 参数由当前页面、连接状态、活动任务数和页面回调组成；返回完整页面框架。
+ */
 export function AppShell({
   page,
   connection,
@@ -121,6 +127,26 @@ export function AppShell({
               {itemPage === 'tasks' && activeTaskCount > 0 ? <em>{activeTaskCount}</em> : null}
             </button>
           ))}
+          <a
+            className="nav-item"
+            href="/api/docs"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="打开 Swagger 接口文档"
+          >
+            <BookOpen size={19} />
+            <span>Swagger</span>
+          </a>
+          <a
+            className="nav-item"
+            href="/api/openapi.json"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="打开接口 JSON 文档"
+          >
+            <FileJson size={19} />
+            <span>接口 JSON</span>
+          </a>
         </nav>
 
         <div className={`edge-card edge-${connection}`}>

@@ -151,6 +151,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   border: 0;
   border-radius: 10px;
   text-align: left;
+  text-decoration: none;
   transition: color .16s ease, background .16s ease, transform .16s ease;
 }
 

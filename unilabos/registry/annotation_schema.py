@@ -384,12 +384,20 @@ def _parse_field(
     schema: dict[str, Any],
     *,
     path: str,
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, str | None, str | None]:
+    """静态解析 ``Field`` 的展示信息、单位和数值约束。
+
+    参数说明：``call`` 是未执行的 ``Field(...)`` AST 调用；``schema`` 是已解析
+    的值 Schema；``path`` 是错误定位路径。返回标题、说明和规范化单位；关键字、
+    单位或约束不合法时抛出 ``AnnotationSchemaError``，且不执行作者代码。
+    """
+
     if call.args:
         _fail(path)
     allowed = {
         "title",
         "description",
+        "unit",
         "ge",
         "le",
         "min_length",
@@ -406,6 +414,7 @@ def _parse_field(
 
     title = None
     description = None
+    unit = None
     if "title" in values:
         title = _trim_presentation(values["title"], path=f"{path}/title")
     if "description" in values:
@@ -413,6 +422,8 @@ def _parse_field(
             values["description"],
             path=f"{path}/description",
         )
+    if "unit" in values:
+        unit = _trim_presentation(values["unit"], path=f"{path}/unit")
 
     base = _schema_base(schema)
     kind = base.get("type")
@@ -447,7 +458,7 @@ def _parse_field(
         _fail(path)
     if base.get("minItems", 0) > base.get("maxItems", math.inf):
         _fail(path)
-    return title, description
+    return title, description, unit
 
 
 def _parse_resource_templates(
@@ -510,6 +521,7 @@ def _parse_annotation(
     dict[str, Any],
     str | None,
     str | None,
+    str | None,
     tuple[ResourceTemplateSymbol, ...],
     bool,
     ParsedSiteSelector | None,
@@ -518,8 +530,8 @@ def _parse_annotation(
 
     参数说明：``annotation`` 是未执行的注解 AST；``imports`` 证明每个名称的
     静态导入身份；``allow_material_lock`` 同时控制仅动作输入可用的物料锁和
-    库位选择器（SiteSelector）元数据。返回：规范值模式、展示文本、资源模板
-    符号、免锁标记及可选库位关系；非法或重复元数据抛出
+    库位选择器（SiteSelector）元数据。返回：规范值模式、标题、说明、单位、资源
+    模板符号、免锁标记及可选库位关系；非法或重复元数据抛出
     ``AnnotationSchemaError``。
     """
 
@@ -540,6 +552,7 @@ def _parse_annotation(
     )
     title = None
     description = None
+    unit = None
     templates: tuple[ResourceTemplateSymbol, ...] = ()
     field_seen = False
     material_lock_seen = False
@@ -555,7 +568,7 @@ def _parse_annotation(
             if field_seen:
                 _fail(path)
             field_seen = True
-            title, description = _parse_field(item, schema, path=path)
+            title, description, unit = _parse_field(item, schema, path=path)
         elif _is_import(item.func, _RESOURCE_TEMPLATES, imports):
             if templates_seen:
                 _fail(path)
@@ -581,7 +594,7 @@ def _parse_annotation(
                 _fail(error.path, message=error.message)
         else:
             _fail(path)
-    return schema, title, description, templates, material_lock_free, site_selector
+    return schema, title, description, unit, templates, material_lock_free, site_selector
 
 
 def _optional_presentation(value: str | None, *, path: str) -> str | None:
@@ -612,8 +625,8 @@ def parse_parameter_annotation(
     参数说明：``name`` 是参数名；``annotation`` 是不执行的类型注解 AST；
     ``default`` 是默认值 AST 或 ``NO_DEFAULT``；``imports`` 是可信导入绑定；
     ``doc_title``/``doc_description`` 是文档注释展示信息；
-    ``allow_material_lock`` 决定是否允许输入侧物料锁与库位选择元数据。返回：解析器
-    签发的不可变参数合同。
+    ``allow_material_lock`` 决定是否允许输入侧物料锁与库位选择元数据；注解中的
+    ``Field(unit=...)`` 会作为可选单位写入合同。返回：解析器签发的不可变参数合同。
 
     异常说明：注解、默认值、导入、展示文本或规范输入合同非法时抛出
     ``AnnotationSchemaError``，且不执行任何作者代码。
@@ -628,6 +641,7 @@ def parse_parameter_annotation(
         schema,
         field_title,
         field_description,
+        field_unit,
         templates,
         material_lock_free,
         site_selector,
@@ -657,6 +671,8 @@ def parse_parameter_annotation(
         descriptor["title"] = title
     if description is not None:
         descriptor["description"] = description
+    if field_unit is not None:
+        descriptor["unit"] = field_unit
 
     try:
         contract = parse_input_contract({"version": 1, "parameters": [descriptor]})
@@ -681,8 +697,9 @@ def parse_result_annotation(
     """把一个源码结果字段静态解析为规范第 1 版输出合同。
 
     参数说明：``name`` 是输出字段名；``annotation`` 是不执行的类型注解 AST；
-    ``imports`` 是可信导入绑定。返回：解析器签发的不可变输出合同；输出侧不接受
-    物料锁或库位选择（Site Selection）元数据。
+    ``imports`` 是可信导入绑定；注解中的 ``Field(unit=...)`` 会作为可选单位写入
+    合同。返回：解析器签发的不可变输出合同；输出侧不接受物料锁或库位选择
+    （Site Selection）元数据。
 
     异常说明：注解、导入或规范输出合同非法时抛出
     ``AnnotationSchemaError``，且不执行任何作者代码。
@@ -693,7 +710,7 @@ def parse_result_annotation(
     if not isinstance(imports, Mapping):
         _fail("/imports")
 
-    schema, title, description, templates, _material_lock_free, _site_selector = (
+    schema, title, description, unit, templates, _material_lock_free, _site_selector = (
         _parse_annotation(
             annotation,
             imports,
@@ -708,6 +725,8 @@ def parse_result_annotation(
         descriptor["title"] = title
     if description is not None:
         descriptor["description"] = description
+    if unit is not None:
+        descriptor["unit"] = unit
 
     try:
         contract = parse_output_contract({"version": 1, "outputs": [descriptor]})

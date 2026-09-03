@@ -10,6 +10,8 @@ import {
   deleteReagentInfo,
   instantiateMaterial,
   lookupCompoundByCas,
+  loadActionTemplates,
+  loadControlTemplates,
   loadEdgeSnapshot,
   loadReagentHistory,
   loadWorkflowGraph,
@@ -99,6 +101,26 @@ describe('loadWorkflowTaskDetail', () => {
       feedbackData: { actual: 0.8 },
     })
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('工作流控制节点模板', () => {
+  it('将条件和循环节点从设备 Action 目录中分离，并读取参数说明', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/workflow-node-templates?')) return response({ code: 0, data: { items: [
+        { uuid: 'action-1', name: 'transfer', display_name: '输送', type: 'UniLabJsonCommand', node_type: 'device_action', resource_template: { uuid: 'pump', name: 'pump', display_name: '注射泵' } },
+        { uuid: 'condition-1', name: 'condition', display_name: '条件', type: 'condition', node_type: 'condition', resource_template: { uuid: 'host', name: 'host_node', display_name: '工作流控制' } },
+      ], has_more: false } })
+      if (url.endsWith('/workflow-node-templates/condition-1')) return response({ code: 0, data: { template: { meta_data: { unilab: { parameter_schema: { type: 'object', description: '条件参数' } } } }, handles: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(loadActionTemplates()).resolves.toHaveLength(1)
+    await expect(loadControlTemplates()).resolves.toEqual([expect.objectContaining({
+      uuid: 'condition-1', nodeType: 'condition', parameterSchema: { type: 'object', description: '条件参数' },
+    })])
   })
 })
 
@@ -209,11 +231,8 @@ describe('Edge view model adapters', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-1', revision: 1 } })
-      if (url.endsWith('/workflow-node-templates/template-1')) return response({ code: 0, data: { template: { uuid: 'template-1' }, handles: [{ uuid: 'ready-source', handle_key: 'ready', io_type: 'source' }, { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' }] } })
-      if (url.endsWith('/workflows/operation-1/nodes') && init?.method === 'POST') {
-        const nodeCalls = fetchMock.mock.calls.filter(([calledUrl, calledInit]) => String(calledUrl).endsWith('/workflows/operation-1/nodes') && calledInit?.method === 'POST').length
-        return response({ code: 0, data: { uuid: `node-${nodeCalls}`, workflow_node_template_uuid: 'template-1' } })
-      }
+      if (url.endsWith('/workflows/operation-1') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'operation-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-1')) return response({ code: 0, data: { template: { uuid: 'template-1', node_type: 'compute', type: 'UniLabJsonCommand' }, handles: [{ uuid: 'ready-source', handle_key: 'ready', io_type: 'source' }, { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' }] } })
       if (url.endsWith('/workflows/operation-1/edges') && init?.method === 'POST') return response({ code: 0, data: { workflow: { uuid: 'operation-1', revision: 4 }, nodes: [], edges: [{ uuid: 'edge-1' }] } })
       if (url.endsWith('/workflows/operation-1/graph')) return response({ code: 0, data: { workflow: { uuid: 'operation-1', revision: 2 }, nodes: [], edges: [] } })
       throw new Error(`Unexpected URL: ${url}`)
@@ -226,14 +245,42 @@ describe('Edge view model adapters', () => {
 
     expect(saved).toMatchObject({ workflowUuid: 'operation-1', revision: 2, status: 'source' })
     expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith('/workflows/operation-1/publications'))).toBe(false)
+    const graphCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/workflows/operation-1/graph') && init?.method === 'PUT')
+    const graphBody = JSON.parse(String(graphCall?.[1]?.body))
+    expect(graphBody.nodes).toHaveLength(2)
+    expect(graphBody.nodes[0]).toMatchObject({ material_uuid: 'device-1', description: '吸液', meta_data: { unilab: { executor_binding: { mode: 'fixed', device_id: 'device-1' } } } })
     const edgeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/workflows/operation-1/edges'))
-    expect(JSON.parse(String(edgeCall?.[1]?.body))).toMatchObject({ source_node_uuid: 'node-1', target_node_uuid: 'node-2' })
-    const nodeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/workflows/operation-1/nodes'))
-    expect(JSON.parse(String(nodeCall?.[1]?.body))).toMatchObject({
-      material_uuid: 'device-1',
-      description: '吸液',
-      meta_data: { unilab: { executor_binding: { mode: 'fixed', device_id: 's09_station' } } },
+    const edgeBody = JSON.parse(String(edgeCall?.[1]?.body))
+    expect(edgeBody.source_node_uuid).toBe(graphBody.nodes[0].uuid)
+    expect(edgeBody.target_node_uuid).toBe(graphBody.nodes[1].uuid)
+  })
+
+  it('binds an exposed output to the matching action output handle', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-output-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-output')) return response({ code: 0, data: {
+        template: { uuid: 'template-output', node_type: 'ILab', type: 'UniLabJsonCommand', class: 'szlab.devices:Camera' },
+        handles: [
+          { uuid: 'ready-source', handle_key: 'ready', io_type: 'source' },
+          { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' },
+          { uuid: 'success-source', handle_key: 'success', data_key: 'success', io_type: 'source', type: 'boolean' },
+        ],
+      } })
+      if (url.endsWith('/workflows/operation-output-1/graph')) return response({ code: 0, data: { workflow: { uuid: 'operation-output-1', revision: 1 }, nodes: [], edges: [] } })
+      if (url.endsWith('/workflows/operation-output-1') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'operation-output-1', revision: 2 } })
+      throw new Error(`Unexpected URL: ${url}`)
     })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createExperimentOperation({
+      name: '带输出合同的操作', description: '',
+      outputContract: { version: 1, outputs: [{ name: 'success', schema: { type: 'boolean' }, implicit: false }] },
+      actions: [{ templateUuid: 'template-output', materialUuid: 'camera-1', deviceId: 'camera-1', name: '拍照', param: {}, inputBindings: {} }],
+    })
+
+    const metadataCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/workflows/operation-output-1') && init?.method === 'PUT')
+    expect(JSON.parse(String(metadataCall?.[1]?.body))).toMatchObject({ meta_data: { unilab: { output_bindings: { success: { kind: 'node_output', workflow_node_uuid: expect.any(String), source_handle_uuid: 'success-source' } } } } })
   })
 
   it('keeps the previous new node template when editing multiple actions', async () => {
@@ -276,14 +323,38 @@ describe('Edge view model adapters', () => {
     expect(edgeBodies[1]).toMatchObject({ source_node_uuid: 'new-1', source_handle_uuid: 'source-1', target_node_uuid: 'new-2', target_handle_uuid: 'target-2' })
   })
 
+  it('保存已有条件节点的结构参数并保留其控制元数据', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows/wf-control') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'wf-control' } })
+      if (url.endsWith('/workflows/wf-control/graph') && (!init?.method || init.method === 'GET')) return response({ code: 0, data: {
+        workflow: { uuid: 'wf-control', revision: 3 }, nodes: [{ uuid: 'control-1', type: 'condition', name: '条件', workflow_node_template_uuid: 'condition-template', param: { branches: [] }, meta_data: { unilab: { executor_kind: 'condition', source: 'python' } } }], edges: [],
+      } })
+      if (url.endsWith('/workflows/wf-control/graph') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'wf-control', revision: 4 } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateExperimentOperation({
+      workflowUuid: 'wf-control', name: '条件流程', description: '', actions: [],
+      controls: [{ nodeUuid: 'control-1', templateUuid: 'condition-template', name: '按检测结果分支', param: { variables: { qualified: true }, bindings: { qualified: { kind: 'workflow_input' } }, branches: [{ label: '通过', condition: { var: 'qualified' }, node_uuids: ['node-pass'], entry_node_uuids: ['node-pass'], exit_node_uuids: ['node-pass'] }] } }],
+    })
+
+    const graphUpdate = fetchMock.mock.calls.find(([calledUrl, calledInit]) => String(calledUrl).endsWith('/workflows/wf-control/graph') && calledInit?.method === 'PUT')
+    const body = JSON.parse(String(graphUpdate?.[1]?.body))
+    expect(body.nodes[0]).toMatchObject({ name: '按检测结果分支', type: 'condition', param: { variables: { qualified: true } }, meta_data: { unilab: { executor_kind: 'condition', source: 'python' } } })
+  })
+
   it('deletes the just-created operation when a creation step fails', async () => {
     const methods: string[] = []
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (init?.method) methods.push(`${init.method} ${url}`)
       if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'wf-failed', revision: 1 } })
+      if (url.endsWith('/workflows/wf-failed') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'wf-failed', revision: 1 } })
       if (url.endsWith('/workflow-node-templates/template-1')) return response({ code: 0, data: { handles: [] } })
-      if (url.endsWith('/workflows/wf-failed/nodes') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'node-1' } })
+      if (url.endsWith('/workflows/wf-failed/graph') && (!init?.method || init.method === 'GET')) return response({ code: 0, data: { workflow: { uuid: 'wf-failed', revision: 2 }, nodes: [], edges: [] } })
+      if (url.endsWith('/workflows/wf-failed/graph') && init?.method === 'PUT') return response({ code: 0, data: { workflow: { uuid: 'wf-failed', revision: 3 }, nodes: [], edges: [] } })
       if (url.endsWith('/workflows/wf-failed') && init?.method === 'DELETE') return response({ code: 0 })
       throw new Error(`Unexpected URL: ${url}`)
     })
