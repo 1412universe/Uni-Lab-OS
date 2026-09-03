@@ -218,6 +218,87 @@ class WorkflowQuantityInventoryAuthority:
             )
         return row
 
+    def content_for_material_source(
+        self,
+        source_node: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """解析一个确定物料来源容器的唯一数量型内容物。
+
+        参数：``source_node`` 是冻结执行计划中的 material_source 节点，必须以
+        固定实例或固定库位唯一定位容器。返回：该容器唯一活动 reagent 或
+        current_substance 库存投影，并携带 ``inventory_type``。异常：宽泛自动
+        选择器、空库位、容器无内容物、同时存在两种内容物或数据损坏时
+        关闭式失败；正式准入仍会在同一库存事务中复核来源与数量分配一致。
+        """
+
+        raw_requirements = source_node.get("material_requirements")
+        if (
+            not isinstance(raw_requirements, Sequence)
+            or isinstance(raw_requirements, (str, bytes))
+            or len(raw_requirements) != 1
+            or not isinstance(raw_requirements[0], Mapping)
+        ):
+            raise WorkflowQuantityReservationError(
+                "数量需求引用的物料来源必须唯一定位一个容器"
+            )
+        requirement = raw_requirements[0]
+        material_uuid = str(requirement.get("instance_uuid") or "").strip()
+        if not material_uuid:
+            site_uuid = str(requirement.get("site_uuid") or "").strip()
+            if not site_uuid:
+                raise WorkflowQuantityReservationError(
+                    "数量需求暂不支持宽泛自动选择的物料来源"
+                )
+            site = self._store.query_one(
+                "SELECT occupied_material_uuid FROM site "
+                "WHERE uuid=? AND deleted_at IS NULL",
+                (site_uuid,),
+            )
+            if site is None:
+                raise WorkflowQuantityReservationError(
+                    f"数量需求引用的来源库位 {site_uuid} 不存在"
+                )
+            material_uuid = str(site.get("occupied_material_uuid") or "").strip()
+            if not material_uuid:
+                raise WorkflowQuantityReservationError(
+                    f"数量需求引用的来源库位 {site_uuid} 当前为空"
+                )
+        candidates = [
+            (inventory_type, row)
+            for inventory_type, row in (
+                (
+                    "reagent",
+                    self._store.query_one(
+                        "SELECT uuid FROM reagent "
+                        "WHERE material_uuid=? AND deleted_at IS NULL",
+                        (material_uuid,),
+                    ),
+                ),
+                (
+                    "current_substance",
+                    self._store.query_one(
+                        "SELECT uuid FROM current_substance "
+                        "WHERE material_uuid=? AND deleted_at IS NULL",
+                        (material_uuid,),
+                    ),
+                ),
+            )
+            if row is not None
+        ]
+        if not candidates:
+            raise WorkflowQuantityReservationError(
+                f"来源容器 {material_uuid} 没有试剂或当前内容物数量"
+            )
+        if len(candidates) != 1:
+            raise WorkflowQuantityReservationError(
+                f"来源容器 {material_uuid} 存在多个数量型内容物"
+            )
+        inventory_type, candidate = candidates[0]
+        return {
+            **self.content(inventory_type, str(candidate["uuid"])),
+            "inventory_type": inventory_type,
+        }
+
     def reserve_task(
         self,
         task_uuid: str,

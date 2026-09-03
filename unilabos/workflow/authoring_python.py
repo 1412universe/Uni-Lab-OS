@@ -60,10 +60,12 @@ def render_authoring_python(
     workflow = graph.get("workflow")
     nodes = graph.get("nodes")
     edges = graph.get("edges")
+    inventory_requirements = graph.get("inventory_requirements", [])
     if (
         not isinstance(workflow, Mapping)
         or not isinstance(nodes, list)
         or not isinstance(edges, list)
+        or not isinstance(inventory_requirements, list)
     ):
         raise AuthoringGraphError("candidate_invalid", "候选图缺少工作流、节点或边")
     workflow_uuid = validate_uuid(workflow.get("uuid"))
@@ -197,6 +199,8 @@ def render_authoring_python(
             marker_imports += ", parallel"
     if repeat_nodes:
         marker_imports += ", repeat_until, until"
+    if inventory_requirements:
+        marker_imports += ", quantity_requirement"
     if material_sources:
         marker_imports += (
             ", MaterialCustodyPolicy, MaterialFlowRole, material_source, resource_ref"
@@ -428,6 +432,12 @@ def render_authoring_python(
                 device_symbols=device_symbols,
             )
             rendered_node_uuids.add(str(child["uuid"]))
+    _append_quantity_requirement_sources(
+        lines=lines,
+        requirements=inventory_requirements,
+        node_by_uuid=node_by_uuid,
+        material_sources=material_sources,
+    )
     if explicit_output_bindings:
         # 输出绑定字典由编译器按作者声明顺序建立；保留该顺序才能让输出合同
         # 在 Python→图→Python 往返中达到固定点。
@@ -450,6 +460,86 @@ def render_authoring_python(
         python_source="\n".join(lines).rstrip() + "\n",
         source_map=source_map,
     )
+
+
+def _append_quantity_requirement_sources(
+    *,
+    lines: list[str],
+    requirements: list[Any],
+    node_by_uuid: Mapping[str, dict[str, Any]],
+    material_sources: Mapping[str, RenderedMaterialSource],
+) -> None:
+    """在工作流返回前生成不参与 DAG 执行的数量需求标记。"""
+
+    for requirement in requirements:
+        if not isinstance(requirement, Mapping):
+            raise AuthoringGraphError("candidate_invalid", "数量库存需求必须是对象")
+        if (
+            requirement.get("target_type") != "current_substance"
+            or requirement.get("allow_split") is not False
+        ):
+            raise AuthoringGraphError(
+                "candidate_invalid",
+                "Python 创作当前只支持单容器当前内容物数量需求",
+            )
+        metadata = requirement.get("meta_data")
+        unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+        binding = (
+            unilab.get("quantity_binding") if isinstance(unilab, Mapping) else None
+        )
+        source_uuid = str(
+            unilab.get("material_source_node_uuid")
+            if isinstance(unilab, Mapping)
+            else ""
+        )
+        consume_uuid = str(requirement.get("consume_node_uuid") or "")
+        if (
+            not isinstance(binding, Mapping)
+            or source_uuid not in material_sources
+            or consume_uuid not in node_by_uuid
+        ):
+            raise AuthoringGraphError(
+                "candidate_invalid",
+                "数量需求缺少可恢复的物料来源、消费动作或数量绑定",
+            )
+        if binding.get("kind") == "workflow_input":
+            quantity_expression = str(binding.get("parameter") or "")
+            if (
+                not quantity_expression.isidentifier()
+                or keyword.iskeyword(quantity_expression)
+            ):
+                raise AuthoringGraphError(
+                    "candidate_invalid",
+                    "数量需求工作流输入绑定无效",
+                )
+        elif binding.get("kind") == "literal":
+            quantity_expression = repr(binding.get("value"))
+        else:
+            raise AuthoringGraphError("candidate_invalid", "数量需求绑定类型无效")
+        source_name = _node_result_name(node_by_uuid[source_uuid])
+        consume_name = _node_result_name(node_by_uuid[consume_uuid])
+        requirement_key = requirement.get("requirement_key")
+        quantity_unit = requirement.get("quantity_unit")
+        scale = unilab.get("quantity_scale", 1.0)
+        description = requirement.get("description")
+        if not isinstance(requirement_key, str) or not requirement_key:
+            raise AuthoringGraphError("candidate_invalid", "数量需求键无效")
+        if not isinstance(quantity_unit, str) or not quantity_unit:
+            raise AuthoringGraphError("candidate_invalid", "数量需求单位无效")
+        arguments = [
+            f"requirement_key={requirement_key!r}",
+            f"source={source_name}",
+            f"consume={consume_name}",
+            f"quantity={quantity_expression}",
+            f"quantity_unit={quantity_unit!r}",
+        ]
+        if float(scale) != 1.0:
+            arguments.append(f"scale={float(scale)!r}")
+        if description is not None:
+            if not isinstance(description, str) or not description:
+                raise AuthoringGraphError("candidate_invalid", "数量需求说明无效")
+            arguments.append(f"description={description!r}")
+        lines.append(f"    quantity_requirement({', '.join(arguments)})")
 
 
 def _public_workflow_meta_data(workflow: Mapping[str, Any]) -> dict[str, Any]:

@@ -36,20 +36,20 @@ from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.dispatch_permit_saga import (
     freeze_projected_dispatch_permit,
 )
-from unilabos.workflow.execution_restart_recovery import (
-    EXECUTION_PROCESS_RESTARTED,
-    TASK_ABORTED_BY_RUNTIME_RESTART,
-)
 from unilabos.workflow.execution_lock_lease import (
     list_execution_locks,
     wait_resource_from_execution_lock,
     wait_resource_identity,
 )
+from unilabos.workflow.execution_restart_recovery import (
+    EXECUTION_PROCESS_RESTARTED,
+    TASK_ABORTED_BY_RUNTIME_RESTART,
+)
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
+from unilabos.workflow.material_aliquot_settlement import MaterialAliquotSettlement
 from unilabos.workflow.material_transfer_settlement import (
     MaterialTransferSettlement,
 )
-from unilabos.workflow.material_aliquot_settlement import MaterialAliquotSettlement
 from unilabos.workflow.physical_settlement_policy import (
     MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
     MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
@@ -198,7 +198,10 @@ class TaskSchedulerBridge:
 
         active_requirements = [
             requirement
-            for requirement in graph.get("inventory_requirements", [])
+            for requirement in prepared.workflow_snapshot.get(
+                "inventory_requirements",
+                [],
+            )
             if isinstance(requirement, Mapping)
             and str(requirement.get("consume_node_uuid"))
             in prepared.planned_node_uuids
@@ -232,7 +235,10 @@ class TaskSchedulerBridge:
 
         active_requirements = [
             requirement
-            for requirement in graph.get("inventory_requirements", [])
+            for requirement in prepared.workflow_snapshot.get(
+                "inventory_requirements",
+                [],
+            )
             if isinstance(requirement, Mapping)
             and str(requirement.get("consume_node_uuid"))
             in prepared.planned_node_uuids

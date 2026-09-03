@@ -164,6 +164,96 @@ def _compile(source: str):
     )
 
 
+def test_quantity_requirement_compiles_dynamic_container_content_contract() -> None:
+    """数量需求应绑定物料来源、消费动作和运行时工作流输入。"""
+
+    source = f'''from typing import Annotated
+
+from pydantic import Field
+from lab.devices import Reactor
+from lab.resources import plate_96
+from unilabos.workflow.authoring import (
+    MaterialCustodyPolicy,
+    MaterialFlowRole,
+    device,
+    material_source,
+    quantity_requirement,
+    resource_ref,
+    workflow,
+    workflow_output,
+)
+
+
+reactor: Reactor = device()
+
+
+@workflow(workflow_uuid="{WORKFLOW_UUID}", displayname="Quantity assay")
+def quantity_assay(*, volume_ml: Annotated[float, Field(ge=0.1)] = 2.5):
+    # unilab:node_uuid={MATERIAL_SOURCE_NODE_UUID}
+    reagent = material_source(
+        resource_template=plate_96,
+        mode="existing",
+        mount=resource_ref("{MOUNT_MATERIAL_UUID}"),
+        material_uuid="{FIXED_MATERIAL_UUID}",
+        site=None,
+        slot_range=None,
+        flow_role=MaterialFlowRole.REAGENT,
+        custody_policy=MaterialCustodyPolicy.SHARED_SOURCE,
+    )
+    # unilab:node_uuid={PREPARE_NODE_UUID}
+    prepared = reactor.prepare(sample=reagent)
+    quantity_requirement(
+        requirement_key="liquid_reagent",
+        source=reagent,
+        consume=prepared,
+        quantity=volume_ml,
+        quantity_unit="mL",
+    )
+    return workflow_output()
+'''
+
+    compiled = _compile(source)
+
+    assert compiled.valid, compiled.diagnostics
+    assert compiled.graph is not None
+    assert compiled.graph["inventory_requirements"] == [
+        {
+            "uuid": "4e6ebb0b-41b9-537f-83dc-b4c36b1dd148",
+            "consume_node_uuid": PREPARE_NODE_UUID,
+            "requirement_key": "liquid_reagent",
+            "target_type": "current_substance",
+            "reagent_info_uuid": None,
+            "required_quantity": 2.5,
+            "quantity_unit": "mL",
+            "allow_split": False,
+            "description": None,
+            "meta_data": {
+                "unilab": {
+                    "material_source_node_uuid": MATERIAL_SOURCE_NODE_UUID,
+                    "quantity_target": "container_content",
+                    "quantity_binding": {
+                        "kind": "workflow_input",
+                        "parameter": "volume_ml",
+                    },
+                    "quantity_scale": 1.0,
+                }
+            },
+        }
+    ]
+    assert compiled.normalized_python_source is not None
+    assert "quantity_requirement(" in compiled.normalized_python_source
+
+    repeated = _engine().compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=7,
+        python_source=compiled.normalized_python_source,
+        source_uri="package://lab/workflows/quantity_assay.py",
+        applied_graph=compiled.graph,
+    )
+    assert repeated.valid, repeated.diagnostics
+    assert repeated.graph == compiled.graph
+
+
 def test_material_source_compiles_to_backend_shaped_selector_and_edge() -> None:
     """物料来源应生成规范选择器并通过物料占位符连接消费动作。
 

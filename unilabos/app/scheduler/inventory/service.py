@@ -18,6 +18,11 @@ from functools import wraps
 from inspect import signature
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Sequence
 
+from unilabos.app.scheduler.inventory.dispatch_admission import (
+    DispatchAdmissionConflict,
+    assert_inventory_mutation_unclaimed,
+    validate_physical_settlement_credentials,
+)
 from unilabos.app.scheduler.inventory.domain import (
     ACTIVE_INSTANCE_STATES,
     CommandRejected,
@@ -34,21 +39,16 @@ from unilabos.app.scheduler.inventory.domain import (
     check_lot_invariants,
     new_event_id,
 )
-from unilabos.app.scheduler.inventory.dispatch_admission import (
-    DispatchAdmissionConflict,
-    assert_inventory_mutation_unclaimed,
-    validate_physical_settlement_credentials,
-)
-from unilabos.app.scheduler.inventory.store import InventoryStore
-from unilabos.app.scheduler.inventory.workflow_quantity import (
-    WorkflowQuantityInventoryAuthority,
-)
 from unilabos.app.scheduler.inventory.station_resource import (
     MaterialAliquotCommand,
     MaterialTransferCommand,
     SqliteStationResourceInventory,
     StationResourceError,
     StationResourceInventory,
+)
+from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.workflow_quantity import (
+    WorkflowQuantityInventoryAuthority,
 )
 from unilabos.utils.tracing import add_event, inject_trace_context, span
 
@@ -840,6 +840,26 @@ class InventoryService:
         )
         with self._tx() as connection:
             source_result = self.admit_material_sources(workflow_id, requests)
+            source_allocations = source_result.get("allocations", {})
+            if not isinstance(source_allocations, Mapping):
+                raise CommandRejected(
+                    "物料来源准入返回了非法分配结果"
+                )
+            for allocation in quantity_allocations:
+                source_node_uuid = str(
+                    allocation.get("material_source_node_uuid") or ""
+                ).strip()
+                if not source_node_uuid:
+                    continue
+                selected = source_allocations.get(source_node_uuid)
+                if (
+                    not isinstance(selected, list)
+                    or len(selected) != 1
+                    or str(selected[0]) != str(allocation.get("material_uuid") or "")
+                ):
+                    raise InsufficientStock(
+                        "数量库存容器在物料准入前已变化"
+                    )
             authority.reserve_task(
                 workflow_id,
                 quantity_allocations,

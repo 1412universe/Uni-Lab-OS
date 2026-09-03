@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
+from uuid import UUID, uuid5
 
 from unilabos.workflow.applied_authoring_projection import (
     AppliedAuthoringProjectionError,
@@ -518,6 +520,10 @@ def build_candidate_graph(
         "workflow": workflow,
         "nodes": projection.nodes,
         "edges": projection.edges,
+        "inventory_requirements": _quantity_inventory_requirements(
+            program,
+            declarations_by_result=declarations_by_result,
+        ),
         "node_templates": projection.node_templates,
         "handle_templates": projection.handle_templates,
     }
@@ -527,6 +533,92 @@ def build_candidate_graph(
         raise AuthoringGraphError(error.code, error.message) from error
     changeset = candidate_changeset(graph=graph, applied_graph=applied)
     return graph, changeset
+
+
+def _quantity_inventory_requirements(
+    program: WorkflowProgram,
+    *,
+    declarations_by_result: Mapping[
+        str,
+        ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration,
+    ],
+) -> list[dict[str, Any]]:
+    """把来源容器的静态数量声明投影为可持久化库存需求合同。"""
+
+    input_parameters = {
+        str(parameter.get("name")): parameter
+        for parameter in program.input_contract.get("parameters", [])
+        if isinstance(parameter, Mapping)
+    }
+    requirements: list[dict[str, Any]] = []
+    for declaration in program.quantity_requirements:
+        source = declarations_by_result.get(declaration.source_result_name)
+        consume = declarations_by_result.get(declaration.consume_result_name)
+        if not isinstance(source, MaterialSourceDeclaration) or consume is None:
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求引用的物料来源或消费动作不存在",
+            )
+        binding: dict[str, Any]
+        if declaration.quantity.kind == "literal":
+            raw_quantity = declaration.quantity.value
+            binding = {"kind": "literal", "value": raw_quantity}
+        elif declaration.quantity.kind == "workflow_input":
+            parameter_name = str(declaration.quantity.value)
+            parameter = input_parameters.get(parameter_name)
+            if parameter is None or "default" not in parameter:
+                raise AuthoringGraphError(
+                    "invalid_quantity_requirement",
+                    "动态数量需求引用的工作流输入必须声明正数默认值",
+                )
+            raw_quantity = parameter["default"]
+            binding = {"kind": "workflow_input", "parameter": parameter_name}
+        else:
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求只接受字面量或工作流输入",
+            )
+        if isinstance(raw_quantity, bool) or not isinstance(
+            raw_quantity,
+            (int, float),
+        ):
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求默认值必须是有限正数",
+            )
+        required_quantity = float(raw_quantity) * declaration.scale
+        if not math.isfinite(required_quantity) or required_quantity <= 0:
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求默认值必须是有限正数",
+            )
+        requirements.append(
+            {
+                "uuid": str(
+                    uuid5(
+                        UUID(program.workflow_uuid),
+                        f"inventory_requirement:{declaration.requirement_key}",
+                    )
+                ),
+                "consume_node_uuid": consume.node_uuid,
+                "requirement_key": declaration.requirement_key,
+                "target_type": "current_substance",
+                "reagent_info_uuid": None,
+                "required_quantity": required_quantity,
+                "quantity_unit": declaration.quantity_unit,
+                "allow_split": False,
+                "description": declaration.description,
+                "meta_data": {
+                    "unilab": {
+                        "material_source_node_uuid": source.node_uuid,
+                        "quantity_target": "container_content",
+                        "quantity_binding": binding,
+                        "quantity_scale": declaration.scale,
+                    }
+                },
+            }
+        )
+    return requirements
 
 
 def _composite_keyword_arguments(

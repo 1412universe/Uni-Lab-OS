@@ -9,6 +9,10 @@ from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
 from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
+from unilabos.workflow.models import (
+    WorkflowInventoryRequirementWrite,
+    WorkflowNodeWrite,
+)
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.source_discovery import discover_editable_sources
 from unilabos.workflow.store import WorkflowStore
@@ -191,6 +195,26 @@ def test_duplicate_workflow_remaps_parent_identity_and_is_independent(tmp_path) 
         f"/api/v1/workflows/{source_uuid}/nodes",
         json=child_body,
     ).json()["data"]
+    source_graph = store.get_graph(source_uuid)
+    store.save_graph(
+        source_uuid,
+        revision=3,
+        nodes=[WorkflowNodeWrite.model_validate(node) for node in source_graph["nodes"]],
+        edges=[],
+        inventory_requirements=[
+            WorkflowInventoryRequirementWrite(
+                uuid="79000000-0000-4000-8000-000000000001",
+                consume_node_uuid=child["uuid"],
+                requirement_key="copied-liquid",
+                target_type="current_substance",
+                required_quantity=1,
+                quantity_unit="mL",
+                meta_data={
+                    "unilab": {"material_source_node_uuid": parent["uuid"]}
+                },
+            )
+        ],
+    )
 
     copied_response = client.post(
         f"/api/v1/workflows/{source_uuid}/duplicate",
@@ -206,6 +230,13 @@ def test_duplicate_workflow_remaps_parent_identity_and_is_independent(tmp_path) 
     assert copied_parent["uuid"] != parent["uuid"]
     assert copied_child["uuid"] != child["uuid"]
     assert copied_child["parent_uuid"] == copied_parent["uuid"]
+    assert len(copied["inventory_requirements"]) == 1
+    copied_requirement = copied["inventory_requirements"][0]
+    assert copied_requirement["uuid"] != "79000000-0000-4000-8000-000000000001"
+    assert copied_requirement["consume_node_uuid"] == copied_child["uuid"]
+    assert copied_requirement["meta_data"]["unilab"][
+        "material_source_node_uuid"
+    ] == copied_parent["uuid"]
 
     client.patch(
         f"/api/v1/workflow-nodes/{copied_child['uuid']}",

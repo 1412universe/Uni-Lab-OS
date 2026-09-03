@@ -248,6 +248,28 @@ def material_source(
     raise RuntimeError("工作流创作 material_source() 只能由静态编译器解析")
 
 
+def quantity_requirement(
+    *,
+    requirement_key: str,
+    source: Any,
+    consume: Any,
+    quantity: float,
+    quantity_unit: str,
+    scale: float = 1.0,
+    description: str | None = None,
+) -> None:
+    """声明一个来源容器中试剂或当前内容物的任务级数量需求。
+
+    ``source`` 必须直接引用 ``material_source`` 的结果，``consume`` 必须直接
+    引用实际消耗该内容物的动作结果。``quantity`` 可以是有限正数字面量或工作流
+    输入；编译器先乘 ``scale``，再以 ``quantity_unit`` 在 Task 准入时预占。
+    动态输入解析为零时本次任务不产生该需求。该标记仅供 AST 编译，不能执行。
+    """
+
+    del requirement_key, source, consume, quantity, quantity_unit, scale, description
+    raise RuntimeError("工作流创作 quantity_requirement() 只能由静态编译器解析")
+
+
 __all__ = [
     "DeviceSelector",
     "MATERIAL_CUSTODY_POLICY_LABELS_ZH",
@@ -259,6 +281,7 @@ __all__ = [
     "group",
     "material_source",
     "parallel",
+    "quantity_requirement",
     "repeat_until",
     "resource_ref",
     "site_group",

@@ -251,6 +251,60 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     assert jobs == original_jobs
 
 
+def test_dynamic_inventory_quantity_is_frozen_from_resolved_task_input() -> None:
+    """数量需求应使用本次 Task 输入换算，且不修改应用图默认值。"""
+
+    graph = _binding_graph()
+    graph["inventory_requirements"] = [
+        {
+            "uuid": "66000000-0000-4000-8000-000000000001",
+            "consume_node_uuid": NODE_UUID,
+            "requirement_key": "dynamic-liquid",
+            "target_type": "current_substance",
+            "required_quantity": 0.5,
+            "quantity_unit": "mL",
+            "allow_split": False,
+            "meta_data": {
+                "unilab": {
+                    "quantity_binding": {
+                        "kind": "workflow_input",
+                        "parameter": "count",
+                    },
+                    "quantity_scale": 0.5,
+                }
+            },
+        }
+    ]
+    plan, jobs = ExecutionPlanBuilder().build(
+        graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+
+    prepared = prepare_task_input(
+        graph=graph,
+        raw_input={"count": 4},
+        execution_plan=plan,
+        jobs=jobs,
+    )
+
+    assert prepared.workflow_snapshot["inventory_requirements"][0][
+        "required_quantity"
+    ] == 2.0
+    assert graph["inventory_requirements"][0]["required_quantity"] == 0.5
+
+    graph["workflow"]["meta_data"]["unilab"]["input_contract"]["parameters"][
+        0
+    ]["schema"]["minimum"] = 0
+    zero = prepare_task_input(
+        graph=graph,
+        raw_input={"count": 0},
+        execution_plan=plan,
+        jobs=jobs,
+    )
+    assert zero.workflow_snapshot["inventory_requirements"] == []
+
+
 def test_workflow_task_priority_enum_is_accepted_and_persisted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

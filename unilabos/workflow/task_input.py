@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -81,6 +82,10 @@ def prepare_task_input(
             supplied,
             resource_resolver=resource_resolver,
         )
+        _bind_inventory_requirement_quantities(
+            snapshot=snapshot,
+            resolved_input=resolved,
+        )
         _bind_plan_inputs(
             plan=plan,
             jobs=prepared_jobs,
@@ -115,6 +120,67 @@ def prepare_task_input(
         execution_plan=plan,
         jobs=prepared_jobs,
     )
+
+
+def _bind_inventory_requirement_quantities(
+    *,
+    snapshot: dict[str, Any],
+    resolved_input: Mapping[str, Any],
+) -> None:
+    """把创作期数量绑定解析为本次 Task 的冻结库存需求。
+
+    参数：``snapshot`` 是即将持久化的独立图快照；``resolved_input`` 已按工作流
+    输入合同补齐默认值并完成类型校验。返回无并原地替换快照需求。异常：绑定
+    元数据损坏、数量非数值或为负时抛 ``TaskInputError``；动态数量为零表示本次
+    任务不启用该需求，不会伪造零数量预留。
+    """
+
+    if "inventory_requirements" not in snapshot:
+        return
+    raw_requirements = snapshot["inventory_requirements"]
+    if not isinstance(raw_requirements, list):
+        raise TaskInputError("工作流数量库存需求必须是数组")
+    requirements: list[dict[str, Any]] = []
+    for raw in raw_requirements:
+        if not isinstance(raw, Mapping):
+            raise TaskInputError("工作流数量库存需求必须是对象")
+        requirement = clone_json(dict(raw))
+        metadata = requirement.get("meta_data")
+        unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+        binding = (
+            unilab.get("quantity_binding") if isinstance(unilab, Mapping) else None
+        )
+        if binding is None:
+            requirements.append(requirement)
+            continue
+        if not isinstance(binding, Mapping):
+            raise TaskInputError("工作流数量绑定无效")
+        kind = binding.get("kind")
+        if kind == "workflow_input":
+            parameter = binding.get("parameter")
+            if not isinstance(parameter, str) or parameter not in resolved_input:
+                raise TaskInputError("工作流数量绑定引用了不存在的输入")
+            raw_quantity = resolved_input[parameter]
+        elif kind == "literal":
+            raw_quantity = binding.get("value")
+        else:
+            raise TaskInputError("工作流数量绑定类型无效")
+        scale = unilab.get("quantity_scale", 1.0)
+        if (
+            isinstance(raw_quantity, bool)
+            or not isinstance(raw_quantity, (int, float))
+            or isinstance(scale, bool)
+            or not isinstance(scale, (int, float))
+        ):
+            raise TaskInputError("工作流数量必须是有限非负数")
+        quantity = float(raw_quantity) * float(scale)
+        if not math.isfinite(quantity) or quantity < 0 or float(scale) <= 0:
+            raise TaskInputError("工作流数量必须是有限非负数")
+        if quantity == 0:
+            continue
+        requirement["required_quantity"] = quantity
+        requirements.append(requirement)
+    snapshot["inventory_requirements"] = requirements
 
 
 def _add_boundary_jobs(

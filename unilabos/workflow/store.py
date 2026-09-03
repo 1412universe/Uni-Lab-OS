@@ -58,8 +58,8 @@ from unilabos.workflow.store_migrations import (
     ensure_local_cancellation_schema,
     ensure_station_task_submission_schema,
     ensure_task_material_admission_schema,
-    ensure_workflow_task_control_schema,
     ensure_workflow_inventory_schema,
+    ensure_workflow_task_control_schema,
 )
 
 if TYPE_CHECKING:
@@ -770,6 +770,9 @@ class WorkflowStore:
         meta_data: Dict[str, Any],
         nodes: List[WorkflowNodeWrite],
         edges: List[WorkflowEdgeWrite],
+        inventory_requirements: Optional[
+            List[WorkflowInventoryRequirementWrite]
+        ] = None,
         workflow_type: str = "normal",
         node_templates: List[Dict[str, Any]] | None = None,
         handle_templates: List[Dict[str, Any]] | None = None,
@@ -835,6 +838,7 @@ class WorkflowStore:
                     expected_revision=1,
                     nodes=nodes,
                     edges=edges,
+                    inventory_requirements=inventory_requirements,
                     advance_revision=False,
                     protect_reserved_metadata=not trusted_authoring_graph,
                     semantic_workflow_meta_data=(
@@ -3531,6 +3535,16 @@ class WorkflowStore:
                     )
                     for item in graph.get("edges", [])
                 ]
+                inventory_requirements = [
+                    WorkflowInventoryRequirementWrite.model_validate(
+                        {
+                            field: item[field]
+                            for field in WorkflowInventoryRequirementWrite.model_fields
+                            if field in item
+                        }
+                    )
+                    for item in graph.get("inventory_requirements", [])
+                ]
                 self._ensure_authoring_catalog_projection(
                     conn,
                     node_templates=graph.get("node_templates", []),
@@ -3546,6 +3560,7 @@ class WorkflowStore:
                     expected_revision=expected_revision,
                     nodes=nodes,
                     edges=edges,
+                    inventory_requirements=inventory_requirements,
                     advance_revision=True,
                     protect_reserved_metadata=False,
                     semantic_workflow_meta_data=candidate_meta,

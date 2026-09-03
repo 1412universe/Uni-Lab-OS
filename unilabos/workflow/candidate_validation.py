@@ -21,6 +21,7 @@ from unilabos.workflow.models import (
     CandidateChangeset,
     CandidateSourceMapEntry,
     WorkflowEdgeWrite,
+    WorkflowInventoryRequirementWrite,
     WorkflowNodeWrite,
     normalize_json_array,
     normalize_json_object,
@@ -34,7 +35,9 @@ _GRAPH_FIELDS = {
     "edges",
     "node_templates",
     "handle_templates",
+    "inventory_requirements",
 }
+_LEGACY_GRAPH_FIELDS = _GRAPH_FIELDS - {"inventory_requirements"}
 
 
 class CandidateBundleError(ValueError):
@@ -73,11 +76,19 @@ def validate_candidate_bundle(
 
         nodes, node_entities = _nodes(candidate["nodes"], workflow_uuid=identity)
         edges = _edges(candidate["edges"])
+        _inventory_requirements(
+            candidate["inventory_requirements"],
+            node_uuids={node.uuid for node in nodes},
+        )
         templates = _node_templates(candidate["node_templates"])
         handles = _handle_templates(candidate["handle_templates"])
         _base_nodes, base_node_entities = _nodes(
             base["nodes"],
             workflow_uuid=identity,
+        )
+        _inventory_requirements(
+            base["inventory_requirements"],
+            node_uuids={node.uuid for node in _base_nodes},
         )
         _edges(base["edges"])
         base_templates = _node_templates(base["node_templates"])
@@ -139,14 +150,39 @@ def _closed_graph(value: Any) -> dict[str, Any]:
     抛出 ``CandidateBundleError``。
     """
 
-    if not isinstance(value, Mapping) or set(value) != _GRAPH_FIELDS:
-        _fail("候选图必须且只能包含完整五集合")
+    if not isinstance(value, Mapping):
+        _fail("候选图必须且只能包含完整集合")
+    fields = frozenset(value)
+    if fields not in {frozenset(_GRAPH_FIELDS), frozenset(_LEGACY_GRAPH_FIELDS)}:
+        _fail("候选图必须且只能包含完整集合")
     graph = dict(value)
+    graph.setdefault("inventory_requirements", [])
     if not isinstance(graph["workflow"], Mapping) or any(
         not isinstance(graph[field], list) for field in _GRAPH_FIELDS - {"workflow"}
     ):
         _fail("候选图集合类型无效")
     return graph
+
+
+def _inventory_requirements(
+    values: list[Any],
+    *,
+    node_uuids: set[str],
+) -> None:
+    """校验数量库存需求身份、逻辑键及消费节点引用。"""
+
+    identities: set[str] = set()
+    keys: set[str] = set()
+    for raw in values:
+        requirement = WorkflowInventoryRequirementWrite.model_validate(raw)
+        if requirement.uuid is None or not requirement.requirement_key:
+            _fail("数量库存需求必须具有稳定 UUID 和逻辑键")
+        if requirement.uuid in identities or requirement.requirement_key in keys:
+            _fail("数量库存需求 UUID 或逻辑键重复")
+        if requirement.consume_node_uuid not in node_uuids:
+            _fail("数量库存需求引用了候选图外的消费节点")
+        identities.add(requirement.uuid)
+        keys.add(requirement.requirement_key)
 
 
 def _workflow(

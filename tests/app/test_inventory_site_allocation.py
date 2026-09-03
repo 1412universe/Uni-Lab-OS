@@ -753,6 +753,7 @@ def test_task_material_admission_rolls_back_source_when_quantity_is_insufficient
         "inventory_type": "current_substance",
         "inventory_uuid": content_uuid,
         "material_uuid": identities["first"],
+        "material_source_node_uuid": "source-node",
         "reserved_quantity": 2,
         "quantity_unit": "mL",
     }
@@ -773,6 +774,63 @@ def test_task_material_admission_rolls_back_source_when_quantity_is_insufficient
         )
         == []
     )
+
+
+def test_task_material_admission_rechecks_quantity_source_container(
+    inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """来源解析变化时数量分配不得预留到另一个容器。"""
+
+    store, service, identities = inventory
+    content_uuid = "75000000-0000-4000-8000-000000000001"
+    with store.transaction() as connection:
+        connection.execute(
+            """INSERT INTO current_substance(
+                uuid,create_time,update_time,description,meta_data,material_uuid,
+                name,composition,quantity,quantity_unit,physical_state,revision,observed_at
+            ) VALUES(?,?,?,NULL,'{}',?,'测试内容','[]',3,'mL','liquid',1,?)""",
+            (
+                content_uuid,
+                "2026-09-02T00:00:00Z",
+                "2026-09-02T00:00:00Z",
+                identities["first"],
+                "2026-09-02T00:00:00Z",
+            ),
+        )
+    source = MaterialSourceAdmissionRequest(
+        node_id="source-node",
+        resource_template_uuid=identities["template"],
+        custody_policy="shared_source",
+        requirement=MaterialRequirement(
+            template_id=identities["template"],
+            instance_uuid=identities["first"],
+        ),
+    )
+    task_uuid = "76000000-0000-4000-8000-000000000001"
+    allocation = {
+        "uuid": "77000000-0000-4000-8000-000000000001",
+        "workflow_task_uuid": task_uuid,
+        "workflow_node_job_uuid": "78000000-0000-4000-8000-000000000001",
+        "requirement_key": "changed-container",
+        "inventory_type": "current_substance",
+        "inventory_uuid": content_uuid,
+        "material_uuid": identities["second"],
+        "material_source_node_uuid": "source-node",
+        "reserved_quantity": 2,
+        "quantity_unit": "mL",
+    }
+
+    with pytest.raises(InsufficientStock, match="容器.*变化"):
+        service.admit_task_materials(task_uuid, [source], [allocation])
+
+    assert store.query_all(
+        "SELECT * FROM inventory_material_source_binding WHERE workflow_id=?",
+        (task_uuid,),
+    ) == []
+    assert store.query_all(
+        "SELECT * FROM inventory_reservation WHERE workflow_id=?",
+        (task_uuid,),
+    ) == []
 
 
 def test_material_source_binding_replays_after_service_restart_and_rejects_change(

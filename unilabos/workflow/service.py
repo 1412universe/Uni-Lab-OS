@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import re
 import threading
 from collections.abc import Callable, Mapping, Sequence
@@ -17,11 +18,11 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from unilabos.workflow.authoring_ast import parse_authoring_source
 from unilabos.workflow.authoring_candidate_hash import (
     AuthoringCandidateHashError,
     compute_authoring_candidate_hash,
 )
-from unilabos.workflow.authoring_ast import parse_authoring_source
 from unilabos.workflow.authoring_identity import declared_workflow_uuid
 from unilabos.workflow.authoring_python import _safe_identifier
 from unilabos.workflow.candidate_validation import (
@@ -79,6 +80,7 @@ from unilabos.workflow.models import (
     CandidateDiagnostic,
     CandidateSourceMapEntry,
     WorkflowEdgeWrite,
+    WorkflowInventoryRequirementWrite,
     WorkflowNodeWrite,
     WorkflowTaskPriority,
     normalize_json_array,
@@ -91,14 +93,14 @@ from unilabos.workflow.operation_category import (
     default_operation_categories,
     legacy_operation_category_uuid,
 )
+from unilabos.workflow.publication_catalog import (
+    WorkflowPublicationCatalog,
+    WorkflowPublicationCatalogError,
+)
 from unilabos.workflow.published_contract import (
     PublishedContractConflict,
     PublishedContractInvalid,
     PublishedWorkflowContractStore,
-)
-from unilabos.workflow.publication_catalog import (
-    WorkflowPublicationCatalog,
-    WorkflowPublicationCatalogError,
 )
 from unilabos.workflow.python_workflow_import import (
     PythonWorkflowImportError,
@@ -126,7 +128,6 @@ from unilabos.workflow.station_workflow_submission import (
     StationWorkflowSubmissionInvalid,
     prepare_station_workflow_submission,
 )
-from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.store import (
     StoreAuthoringConflict,
     StoreConflict,
@@ -141,6 +142,7 @@ from unilabos.workflow.task_input import (
     TaskInputError,
     prepare_task_input,
 )
+from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridgeError
 from unilabos.workflow.workflow_type import (
     WORKFLOW_TYPE_EXPERIMENT_OPERATION,
@@ -332,6 +334,20 @@ _HANDLE_TEMPLATE_REQUIRED_READ_FIELDS = {
     "display_name",
     "type",
     "required",
+}
+_INVENTORY_REQUIREMENT_REQUIRED_READ_FIELDS = {
+    "uuid",
+    "create_time",
+    "update_time",
+    "meta_data",
+    "workflow_uuid",
+    "consume_node_uuid",
+    "requirement_key",
+    "target_type",
+    "required_quantity",
+    "quantity_unit",
+    "allow_split",
+    "sort_order",
 }
 
 
@@ -1711,7 +1727,10 @@ class WorkflowService:
                 )
                 active_requirements = [
                     requirement
-                    for requirement in graph.get("inventory_requirements", [])
+                    for requirement in prepared.workflow_snapshot.get(
+                        "inventory_requirements",
+                        [],
+                    )
                     if isinstance(requirement, Mapping)
                     and str(requirement.get("consume_node_uuid"))
                     in prepared.planned_node_uuids
@@ -1728,7 +1747,11 @@ class WorkflowService:
                     )
                 quantity_inventory_check = {
                     "status": "passed",
-                    "message": "共享数量库存当前可完成整任务准入",
+                    "message": (
+                        "共享数量库存当前可完成整任务准入"
+                        if allocations
+                        else "工作流本次运行没有活动数量库存需求"
+                    ),
                     "allocation_count": len(allocations),
                 }
             except (StoreConflict, TaskInputError, TypeError, ValueError) as error:
@@ -2320,7 +2343,7 @@ class WorkflowService:
         )
         if not copied_name:
             raise WorkflowError("invalid_input")
-        nodes, edges = duplicate_graph(source)
+        nodes, edges, inventory_requirements = duplicate_graph(source)
         identity = str(uuid4())
         try:
             return self._definition_store.create_workflow_with_graph(
@@ -2331,6 +2354,10 @@ class WorkflowService:
                 meta_data=dict(source["workflow"].get("meta_data", {})),
                 nodes=[WorkflowNodeWrite.model_validate(node) for node in nodes],
                 edges=[WorkflowEdgeWrite.model_validate(edge) for edge in edges],
+                inventory_requirements=[
+                    WorkflowInventoryRequirementWrite.model_validate(item)
+                    for item in inventory_requirements
+                ],
                 workflow_type=str(source["workflow"].get("workflow_type", "normal")),
             )
         except ValidationError:
@@ -2588,6 +2615,13 @@ class WorkflowService:
                             WorkflowEdgeWrite.model_validate(edge)
                             for edge in canonical.graph["edges"]
                         ],
+                        inventory_requirements=[
+                            WorkflowInventoryRequirementWrite.model_validate(item)
+                            for item in canonical.graph.get(
+                                "inventory_requirements",
+                                [],
+                            )
+                        ],
                         node_templates=list(
                             canonical.graph.get("node_templates") or []
                         ),
@@ -2782,6 +2816,10 @@ class WorkflowService:
                                 WorkflowEdgeWrite.model_validate(edge)
                                 for edge in graph["edges"]
                             ],
+                            inventory_requirements=[
+                                WorkflowInventoryRequirementWrite.model_validate(item)
+                                for item in graph.get("inventory_requirements", [])
+                            ],
                             node_templates=list(graph.get("node_templates") or []),
                             handle_templates=list(graph.get("handle_templates") or []),
                             template_catalog_fingerprint=str(
@@ -2838,17 +2876,16 @@ class WorkflowService:
 
     @staticmethod
     def _authoring_graph_projection(graph: Mapping[str, Any]) -> dict[str, Any]:
-        """把公共读图收敛为创作编译器严格要求的五集合。"""
+        """把公共读图收敛为创作编译器要求的完整集合。"""
 
-        fields = (
-            "workflow",
-            "nodes",
-            "edges",
-            "node_templates",
-            "handle_templates",
-        )
+        fields = ("workflow", "nodes", "edges", "node_templates", "handle_templates")
         try:
-            return {field: deepcopy(graph[field]) for field in fields}
+            return {
+                **{field: deepcopy(graph[field]) for field in fields},
+                "inventory_requirements": deepcopy(
+                    graph.get("inventory_requirements", [])
+                ),
+            }
         except (KeyError, TypeError):
             raise WorkflowError("candidate_invalid") from None
 
@@ -3148,7 +3185,10 @@ class WorkflowService:
                 isinstance(requirement, Mapping)
                 and str(requirement.get("consume_node_uuid"))
                 in prepared.planned_node_uuids
-                for requirement in graph.get("inventory_requirements", [])
+                for requirement in prepared.workflow_snapshot.get(
+                    "inventory_requirements",
+                    [],
+                )
             )
             if has_active_requirements or normalized_inventory_bindings:
                 raise StoreConflict("工作流数量型库存未装配本地库存权威")
@@ -6351,6 +6391,10 @@ class WorkflowService:
             "workflow": omit_none(graph.get("workflow") or {}),
             "nodes": [omit_none(item) for item in (graph.get("nodes") or [])],
             "edges": [omit_none(item) for item in (graph.get("edges") or [])],
+            "inventory_requirements": [
+                omit_none(item)
+                for item in (graph.get("inventory_requirements") or [])
+            ],
             "node_templates": [
                 omit_none(item) for item in (graph.get("node_templates") or [])
             ],
@@ -6380,6 +6424,9 @@ class WorkflowService:
         timestamp = applied_workflow["update_time"]
         applied_nodes = {item["uuid"]: item for item in applied["nodes"]}
         applied_edges = {item["uuid"]: item for item in applied["edges"]}
+        applied_requirements = {
+            item["uuid"]: item for item in applied["inventory_requirements"]
+        }
         applied_node_templates = {
             item["uuid"]: item for item in applied["node_templates"]
         }
@@ -6432,6 +6479,31 @@ class WorkflowService:
             _EDGE_REQUIRED_READ_FIELDS,
         )
 
+        requirements = []
+        for sort_order, item in enumerate(projected["inventory_requirements"]):
+            value = WorkflowInventoryRequirementWrite.model_validate(item).model_dump(
+                exclude_none=True,
+            )
+            identity = value.get("uuid")
+            if identity is None:
+                raise WorkflowError("candidate_invalid")
+            persisted = applied_requirements.get(identity, {})
+            requirements.append(
+                {
+                    "uuid": identity,
+                    "create_time": persisted.get("create_time", timestamp),
+                    "update_time": persisted.get("update_time", timestamp),
+                    "meta_data": value.get("meta_data", {}),
+                    "workflow_uuid": workflow_uuid,
+                    "sort_order": sort_order,
+                    **value,
+                }
+            )
+        cls._require_backend_read_fields(
+            requirements,
+            _INVENTORY_REQUIREMENT_REQUIRED_READ_FIELDS,
+        )
+
         projected["workflow"] = {
             key: value
             for key, value in {
@@ -6445,6 +6517,7 @@ class WorkflowService:
         }
         projected["nodes"] = nodes
         projected["edges"] = edges
+        projected["inventory_requirements"] = requirements
         projected["node_templates"] = cls._hydrate_backend_catalog_entities(
             projected["node_templates"],
             persisted=applied_node_templates,
@@ -6495,6 +6568,11 @@ class WorkflowService:
             cls._require_backend_read_fields(
                 applied["edges"],
                 _EDGE_REQUIRED_READ_FIELDS,
+                error_code="internal_error",
+            )
+            cls._require_backend_read_fields(
+                applied["inventory_requirements"],
+                _INVENTORY_REQUIREMENT_REQUIRED_READ_FIELDS,
                 error_code="internal_error",
             )
             cls._require_backend_read_fields(
@@ -6621,6 +6699,44 @@ class WorkflowService:
             normalize_json_object(edge["meta_data"])
             optional(edge, {"description"}, str)
 
+        for requirement in graph["inventory_requirements"]:
+            uuids(
+                requirement,
+                {"uuid", "workflow_uuid", "consume_node_uuid"},
+            )
+            optional_uuids(requirement, {"reagent_info_uuid"})
+            exact(
+                requirement,
+                {
+                    "create_time",
+                    "update_time",
+                    "requirement_key",
+                    "target_type",
+                    "quantity_unit",
+                },
+                str,
+            )
+            exact(requirement, {"meta_data"}, dict)
+            normalize_json_object(requirement["meta_data"])
+            exact(requirement, {"allow_split"}, bool)
+            optional(requirement, {"description"}, str)
+            quantity = requirement["required_quantity"]
+            if (
+                isinstance(quantity, bool)
+                or not isinstance(quantity, (int, float))
+                or not math.isfinite(float(quantity))
+                or float(quantity) <= 0
+            ):
+                raise ValueError
+            if requirement["target_type"] not in {
+                "reagent_info",
+                "current_substance",
+            }:
+                raise ValueError
+            sort_order = requirement["sort_order"]
+            if type(sort_order) is not int or sort_order < 0:
+                raise ValueError
+
         for template in graph["node_templates"]:
             uuids(template, {"uuid", "resource_template_uuid"})
             exact(
@@ -6698,6 +6814,7 @@ class WorkflowService:
         for field in (
             "nodes",
             "edges",
+            "inventory_requirements",
             "node_templates",
             "handle_templates",
         ):
