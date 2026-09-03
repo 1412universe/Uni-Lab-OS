@@ -346,6 +346,28 @@ class AdjustCommand(InventoryCommandBase):
     actor: NonEmptyString
 
 
+class ReagentDispenseTargetPayload(WireModel):
+    """一个分装目标：空容器与分入的数量。"""
+
+    material_uuid: NonEmptyString
+    quantity: PositiveQuantity
+
+
+class ReagentDispensePayload(WireModel):
+    """试剂分装：从一瓶源试剂原子地分出若干瓶同身份试剂。"""
+
+    source_reagent_uuid: NonEmptyString
+    expected_revision: Optional[PositiveInt] = None
+    quantity_unit: NonEmptyString
+    targets: Annotated[List[ReagentDispenseTargetPayload], Field(min_length=1)]
+    reason: str = ""
+
+
+class ReagentDispenseCommand(InventoryCommandBase):
+    type: Literal["reagent.dispense"]
+    payload: ReagentDispensePayload
+
+
 InventoryCommand = Annotated[
     Union[
         TemplateUpsertCommand,
@@ -364,6 +386,7 @@ InventoryCommand = Annotated[
         ConsumeInstanceCommand,
         DiscardInstanceCommand,
         AdjustCommand,
+        ReagentDispenseCommand,
     ],
     Field(discriminator="type"),
 ]

@@ -7,6 +7,7 @@ import {
   createReagent,
   createReagentInfo,
   deleteReagentInfo,
+  dispenseReagent,
   instantiateMaterial,
   lookupCompoundByCas,
   loadEdgeSnapshot,
@@ -29,6 +30,71 @@ describe('unwrapEnvelope', () => {
 
   it('rejects an Edge business error even if HTTP succeeded', () => {
     expect(() => unwrapEnvelope({ code: 1000, error: { msg: 'invalid cursor' } })).toThrow('invalid cursor')
+  })
+})
+
+describe('dispenseReagent', () => {
+  const completed = {
+    command_id: 'cmd-1',
+    status: 'completed',
+    result: {
+      source: { reagent_uuid: 'src', material_uuid: 'm-src', quantity: 50, quantity_unit: 'mL', revision: 2 },
+      targets: [{ material_uuid: 'm-1', reagent_uuid: 'r-1', quantity: 50, quantity_unit: 'mL', revision: 1 }],
+    },
+  }
+
+  it('reads the raw inventory command result instead of the {code,data} envelope', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response(completed))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await dispenseReagent({ commandId: 'cmd-1', sourceReagentUuid: 'src', expectedRevision: 1, quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 50 }] })
+
+    expect(result.source).toMatchObject({ reagentUuid: 'src', quantity: 50, revision: 2 })
+    expect(result.targets).toEqual([{ materialUuid: 'm-1', reagentUuid: 'r-1', quantity: 50, quantityUnit: 'mL', revision: 1 }])
+    expect(result.replayed).toBe(false)
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/inventory/commands')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      command_id: 'cmd-1', type: 'reagent.dispense',
+      payload: { source_reagent_uuid: 'src', expected_revision: 1, quantity_unit: 'mL', targets: [{ material_uuid: 'm-1', quantity: 50 }] },
+    })
+  })
+
+  it('marks an idempotent replay of the same command', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...completed, replayed: true })))
+    const result = await dispenseReagent({ commandId: 'cmd-1', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 50 }] })
+    expect(result.replayed).toBe(true)
+  })
+
+  it('exposes dispense lineage on reagent rows and history events', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/reagent-history')) {
+        return response({ code: 0, data: { items: [
+          { uuid: 'h-1', material_uuid: 'm-1', event_type: 'dispense_target', quantity_delta: 30, quantity_unit: 'mL', revision: 1, causation_id: 'cmd-9', changes: { result: { quantity: 30, quantity_unit: 'mL', revision: 1 } }, extension: { source_reagent_uuid: 'src' } },
+          { uuid: 'h-2', material_uuid: 'm-src', event_type: 'dispense_source', quantity_delta: -30, quantity_unit: 'mL', revision: 2, causation_id: 'cmd-9', changes: { result: { quantity: 70, quantity_unit: 'mL', revision: 2 } }, extension: { target_reagent_uuids: ['r-1'] } },
+        ], total: 2, page: 1, page_size: 100 } })
+      }
+      return response({ code: 0, data: { items: [
+        { uuid: 'r-1', material_uuid: 'm-1', reagent_info_uuid: 'info', name: '乙醇', quantity: 30, quantity_unit: 'mL', revision: 1, meta_data: { source_reagent_uuid: 'src', dispense_command_id: 'cmd-9' } },
+        { uuid: 'src', material_uuid: 'm-src', reagent_info_uuid: 'info', name: '乙醇', quantity: 70, quantity_unit: 'mL', revision: 2, meta_data: {} },
+      ], total: 2, page: 1, page_size: 100 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { loadReagents } = await import('./edgeClient')
+    const rows = await loadReagents()
+    expect(rows.find((row) => row.uuid === 'r-1')).toMatchObject({ sourceReagentUuid: 'src', dispenseCommandId: 'cmd-9' })
+    expect(rows.find((row) => row.uuid === 'src')?.sourceReagentUuid).toBeUndefined()
+
+    const history = await loadReagentHistory('m-1')
+    expect(history[0]).toMatchObject({ eventType: 'dispense_target', causationId: 'cmd-9', sourceReagentUuid: 'src' })
+    expect(history[1]).toMatchObject({ eventType: 'dispense_source', causationId: 'cmd-9', targetReagentUuids: ['r-1'] })
+  })
+
+  it('surfaces a business rejection with the server reason', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ command_id: 'cmd-2', status: 'rejected', error: 'dispense total 999.0 exceeds source quantity 100.0', error_code: '1000' })))
+    await expect(dispenseReagent({ commandId: 'cmd-2', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 999 }] }))
+      .rejects.toThrow('exceeds source quantity')
   })
 })
 

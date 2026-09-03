@@ -203,6 +203,8 @@ export interface ResourceTemplateRecord {
   displayName: string
   description: string
   resourceType: string
+  /** 模板标签；含 "container" 表示可承载试剂 / 样品 / 当前物质。 */
+  tags?: string[]
   availableSites: Array<{ name: string; label: string }>
 }
 
@@ -275,6 +277,9 @@ export interface ReagentRecord {
   densityGPerMl?: number
   containerName?: string
   containerBarcode?: string
+  /** 由分装产生时指向源瓶试剂；手工录入的瓶子为空。 */
+  sourceReagentUuid?: string
+  dispenseCommandId?: string
   revision: number
   updatedAt: string
 }
@@ -295,6 +300,10 @@ export interface ReagentHistoryRecord {
   workflowTaskUuid?: string
   workflowNodeJobUuid?: string
   traceId?: string
+  /** 同一次分装的所有台账共用 causation_id（即分装命令 ID）。 */
+  causationId?: string
+  sourceReagentUuid?: string
+  targetReagentUuids?: string[]
 }
 
 export interface RunPreflightCheck {

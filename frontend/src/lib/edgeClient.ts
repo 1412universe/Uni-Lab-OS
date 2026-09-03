@@ -909,6 +909,8 @@ export async function loadResourceTemplates(signal?: AbortSignal): Promise<Resou
   return page.items.map((raw) => ({
     uuid: String(raw.uuid), name: String(raw.name || raw.uuid), displayName: String(raw.display_name || raw.name || raw.uuid),
     description: String(raw.description || ''), resourceType: String(raw.resource_type || raw.registry_type || 'resource'),
+    // 后端模板列表把标签放在 tags（同步请求里叫 category）；容器判定依赖其中的 "container"。
+    tags: Array.isArray(raw.tags) ? raw.tags.map(String) : Array.isArray(raw.category) ? raw.category.map(String) : [],
     availableSites: Array.isArray(raw.available_sites) ? raw.available_sites.map((site: RawRecord) => ({ name: String(site.name || site.label), label: String(site.label || site.name) })) : [],
   }))
 }
@@ -1014,6 +1016,8 @@ export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[
     densityGPerMl: raw.density_g_per_ml == null ? undefined : Number(raw.density_g_per_ml),
     containerName: raw.container_name ? String(raw.container_name) : undefined,
     containerBarcode: raw.container_barcode ? String(raw.container_barcode) : undefined,
+    sourceReagentUuid: typeof raw.meta_data?.source_reagent_uuid === 'string' ? raw.meta_data.source_reagent_uuid : undefined,
+    dispenseCommandId: typeof raw.meta_data?.dispense_command_id === 'string' ? raw.meta_data.dispense_command_id : undefined,
     revision: Number(raw.revision || 1), updatedAt: timeLabel(raw.update_time),
   }))
 }
@@ -1040,6 +1044,9 @@ export async function loadReagentHistory(materialUuid: string, signal?: AbortSig
       workflowTaskUuid: raw.workflow_task_uuid ? String(raw.workflow_task_uuid) : undefined,
       workflowNodeJobUuid: raw.workflow_node_job_uuid ? String(raw.workflow_node_job_uuid) : undefined,
       traceId: raw.trace_id ? String(raw.trace_id) : undefined,
+      causationId: raw.causation_id ? String(raw.causation_id) : undefined,
+      sourceReagentUuid: typeof extension.source_reagent_uuid === 'string' ? extension.source_reagent_uuid : undefined,
+      targetReagentUuids: Array.isArray(extension.target_reagent_uuids) ? extension.target_reagent_uuids.map(String) : undefined,
     }
   })
 }
@@ -1073,6 +1080,62 @@ export async function createReagent(payload: {
     ...(payload.concentrationValue == null || !payload.concentrationUnit ? {} : { concentration_value: payload.concentrationValue, concentration_unit: payload.concentrationUnit }),
     source: payload.source || 'frontend:os-console', description: payload.description || undefined, meta_data: {},
   })
+}
+
+export interface ReagentDispenseResult {
+  source: { reagentUuid: string; materialUuid: string; quantity: number; quantityUnit: string; revision: number }
+  targets: Array<{ materialUuid: string; reagentUuid: string; quantity: number; quantityUnit: string; revision: number }>
+  replayed: boolean
+}
+
+/**
+ * 把一瓶源试剂原子分装到若干空容器。
+ * 走库存命令入口，`commandId` 由调用方生成并在重试时复用，服务端按它幂等重放。
+ */
+/**
+ * 库存命令入口不走 `{code, data}` 信封：成功与业务拒绝都以 HTTP 200 返回裸的
+ * `{command_id, status, result | error, error_code, replayed?}`。这里原样返回，
+ * 由调用方按 `status` 判断，不能经过 `unwrapEnvelope`。
+ */
+async function postInventoryCommand(command: Record<string, unknown>): Promise<RawRecord> {
+  const response = await fetch(`${EDGE_API_BASE}/inventory/commands`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(command),
+  })
+  const body = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(`${formatApiError(body, response.status)}（POST /inventory/commands）`)
+  if (!body || typeof body !== 'object') throw new Error('库存命令返回了无法解析的响应（POST /inventory/commands）')
+  return body as RawRecord
+}
+
+export async function dispenseReagent(payload: {
+  commandId: string; sourceReagentUuid: string; expectedRevision?: number; quantityUnit: string;
+  targets: Array<{ materialUuid: string; quantity: number }>; reason?: string
+}): Promise<ReagentDispenseResult> {
+  const response = await postInventoryCommand({
+    command_id: payload.commandId,
+    type: 'reagent.dispense',
+    actor: 'frontend:os-console',
+    payload: {
+      source_reagent_uuid: payload.sourceReagentUuid,
+      ...(payload.expectedRevision == null ? {} : { expected_revision: payload.expectedRevision }),
+      quantity_unit: payload.quantityUnit,
+      targets: payload.targets.map((target) => ({ material_uuid: target.materialUuid, quantity: target.quantity })),
+      reason: payload.reason || '分装',
+    },
+  })
+  if (response?.status !== 'completed') {
+    throw new Error(String(response?.error || response?.error_code || '分装被拒绝'))
+  }
+  const result = (response.result || {}) as RawRecord
+  const source = (result.source || {}) as RawRecord
+  const targets = Array.isArray(result.targets) ? (result.targets as RawRecord[]) : []
+  return {
+    source: { reagentUuid: String(source.reagent_uuid || ''), materialUuid: String(source.material_uuid || ''), quantity: Number(source.quantity || 0), quantityUnit: String(source.quantity_unit || ''), revision: Number(source.revision || 0) },
+    targets: targets.map((item) => ({ materialUuid: String(item.material_uuid || ''), reagentUuid: String(item.reagent_uuid || ''), quantity: Number(item.quantity || 0), quantityUnit: String(item.quantity_unit || ''), revision: Number(item.revision || 0) })),
+    replayed: response.replayed === true,
+  }
 }
 
 export async function loadExperimentOperations(signal?: AbortSignal): Promise<WorkflowDefinition[]> {

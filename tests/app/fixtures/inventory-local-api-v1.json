@@ -269,12 +269,20 @@
       "aggregate_type": "template",
       "causation_id": "cmd-success",
       "delta_json": "{\"name\": \"Water\", \"category\": \"reagent\", \"spec\": {\"storage_class\": \"ambient\"}}",
+      "entry_uuid": "",
       "ledger_id": 1,
+      "material_uuid": "",
       "occurred_at": 1784840000000,
       "op_type": "template.created",
+      "quantity_delta": null,
+      "quantity_unit": null,
       "reason": "",
+      "revision": null,
       "span_id": "0123456789abcdef",
-      "trace_id": "0123456789abcdef0123456789abcdef"
+      "subject_type": "",
+      "trace_id": "0123456789abcdef0123456789abcdef",
+      "workflow_node_job_uuid": null,
+      "workflow_task_uuid": null
     },
     "outbox_row": {
       "aggregate_id": "tpl-contract",
@@ -328,6 +336,51 @@
       "request_model": null,
       "responses": {
         "200": "InventoryHealthResponse"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/inventory/ingress-reservations",
+      "request_model": "IngressReserveRequest",
+      "responses": {
+        "201": "IngressReservationResponse",
+        "422": "HTTPValidationError"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/inventory/ingress-reservations/{reservation_uuid}",
+      "request_model": null,
+      "responses": {
+        "200": "IngressReservationResponse",
+        "422": "HTTPValidationError"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/inventory/ingress-reservations/{reservation_uuid}/cancel",
+      "request_model": "IngressCancelRequest",
+      "responses": {
+        "200": "IngressReservationResponse",
+        "422": "HTTPValidationError"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/inventory/ingress-reservations/{reservation_uuid}/in-transit",
+      "request_model": null,
+      "responses": {
+        "200": "IngressReservationResponse",
+        "422": "HTTPValidationError"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/inventory/ingress-reservations/{reservation_uuid}/receive",
+      "request_model": null,
+      "responses": {
+        "200": "IngressReservationResponse",
+        "422": "HTTPValidationError"
       }
     },
     {
@@ -576,7 +629,7 @@
             "payload_json": "{\"template_id\": \"tpl-contract\", \"quantity\": 20, \"unit\": \"mL\", \"batch_no\": \"\", \"expiry\": \"\", \"quantity_total\": 20.0, \"quantity_available\": 20.0}",
             "sequence": 2,
             "span_id": "",
-            "trace_id": "",
+            "trace_id": "8e3d29b69212db12787edfbf8bc41729",
             "traceparent": "",
             "tracestate": ""
           },
@@ -593,7 +646,7 @@
             "payload_json": "{\"template_id\": \"tpl-contract\", \"lot_id\": \"lot-contract\", \"barcode\": \"BC-CONTRACT\", \"legacy_cloud_id\": \"\", \"parent_uuid\": \"rack-contract\", \"slot_id\": \"A1\"}",
             "sequence": 3,
             "span_id": "",
-            "trace_id": "",
+            "trace_id": "9df5681ddeb9630c4937b5b62a0a6b3c",
             "traceparent": "",
             "tracestate": ""
           },
@@ -610,7 +663,7 @@
             "payload_json": "{\"state\": {\"substance\": \"water\", \"volume_ml\": 5}}",
             "sequence": 4,
             "span_id": "",
-            "trace_id": "",
+            "trace_id": "8f9cbf5a19ddac674495a98c8178b81f",
             "traceparent": "",
             "tracestate": ""
           },
@@ -627,7 +680,7 @@
             "payload_json": "{\"workflow_id\": \"wf-contract\", \"node_id\": \"node-contract\", \"quantity\": 3, \"quantity_available\": 17.0, \"quantity_reserved\": 3.0}",
             "sequence": 5,
             "span_id": "",
-            "trace_id": "",
+            "trace_id": "bc3ee30fb8eb4e617e373543c3eec562",
             "traceparent": "",
             "tracestate": ""
           },
@@ -644,7 +697,7 @@
             "payload_json": "{\"workflow_id\": \"wf-contract\", \"node_id\": \"node-contract\", \"attempt\": 1, \"amounts\": {\"lots\": {\"lot-contract\": 3.0}, \"instances\": []}}",
             "sequence": 6,
             "span_id": "",
-            "trace_id": "",
+            "trace_id": "bc3ee30fb8eb4e617e373543c3eec562",
             "traceparent": "",
             "tracestate": ""
           }
