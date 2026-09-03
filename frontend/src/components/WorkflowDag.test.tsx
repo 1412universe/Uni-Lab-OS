@@ -312,6 +312,27 @@ describe('WorkflowDag', () => {
     expect(Number.parseFloat(frame.style.left)).toBe(initial.frameX)
   })
 
+  it('renders adjacent members of one presentation group inside one labelled frame', () => {
+    const nodes = [
+      group('return-group', '主物料返回 S03 起始库位', 0),
+      action('return-beaker', '返回烧杯', 1, 'return-group'),
+      action('return-vial', '返回样品瓶', 2, 'return-group'),
+    ]
+    const { container } = render(
+      <WorkflowDag
+        nodes={nodes}
+        edges={[edge('return-beaker-vial', 'return-beaker', 'return-vial')]}
+        loading={false}
+        error={false}
+      />,
+    )
+
+    expect(container.querySelectorAll('.workflow-dag-group-frame')).toHaveLength(1)
+    expect(container.querySelectorAll('.workflow-dag-group-title')).toHaveLength(1)
+    expect(screen.getByRole('group', { name: '分组：主物料返回 S03 起始库位' })).toHaveTextContent('返回烧杯')
+    expect(screen.getByRole('group', { name: '分组：主物料返回 S03 起始库位' })).toHaveTextContent('返回样品瓶')
+  })
+
   it('moves an empty group frame', () => {
     const { container } = render(
       <WorkflowDag nodes={[group('empty-group', '空分组', 0)]} edges={[]} loading={false} error={false} />,

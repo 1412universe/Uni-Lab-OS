@@ -68,36 +68,80 @@ function isGroup(node: WorkflowGraphNode) {
   return isWorkflowRegionNode(node)
 }
 
+type WorkflowGroupFrame = { x: number; y: number; width: number; height: number }
+
+function frameForNodes(
+  groupNode: WorkflowGraphNode,
+  nodes: PositionedWorkflowNode[],
+): WorkflowGroupFrame {
+  const minX = Math.min(...nodes.map((node) => node.x))
+  const minY = Math.min(...nodes.map((node) => node.y))
+  const maxX = Math.max(...nodes.map((node) => node.x + node.width))
+  const maxY = Math.max(...nodes.map((node) => node.y + node.height))
+  const repeatBottom = workflowControlKind(groupNode) === 'repeat_until' ? 38 : 0
+  return {
+    x: minX - GROUP_FRAME_SIDE,
+    y: minY - GROUP_FRAME_TOP,
+    width: maxX - minX + GROUP_FRAME_SIDE * 2,
+    height: maxY - minY + GROUP_FRAME_TOP + GROUP_FRAME_BOTTOM + repeatBottom,
+  }
+}
+
+function frameContainsNode(frame: WorkflowGroupFrame, node: PositionedWorkflowNode) {
+  const centerX = node.x + node.width / 2
+  const centerY = node.y + node.height / 2
+  return centerX >= frame.x
+    && centerX <= frame.x + frame.width
+    && centerY >= frame.y
+    && centerY <= frame.y + frame.height
+}
+
 function groupFrames(
   groupNode: WorkflowGraphNode,
   children: PositionedWorkflowNode[],
-): Array<{ x: number; y: number; width: number; height: number }> {
-  if (!workflowControlKind(groupNode)) {
-    return children.map((node) => ({
-      x: node.x - GROUP_FRAME_SIDE,
-      y: node.y - GROUP_FRAME_TOP,
-      width: node.width + GROUP_FRAME_SIDE * 2,
-      height: node.height + GROUP_FRAME_TOP + GROUP_FRAME_BOTTOM,
-    }))
-  }
+  positionedNodes: PositionedWorkflowNode[],
+): WorkflowGroupFrame[] {
   const childrenByBand = new Map<number, PositionedWorkflowNode[]>()
   children.forEach((child) => {
     const values = childrenByBand.get(child.band) || []
     values.push(child)
     childrenByBand.set(child.band, values)
   })
-  return [...childrenByBand.entries()].sort(([left], [right]) => left - right).map(([, values]) => {
-    const minX = Math.min(...values.map((node) => node.x))
-    const minY = Math.min(...values.map((node) => node.y))
-    const maxX = Math.max(...values.map((node) => node.x + node.width))
-    const maxY = Math.max(...values.map((node) => node.y + node.height))
-    const repeatBottom = workflowControlKind(groupNode) === 'repeat_until' ? 38 : 0
-    return {
-      x: minX - GROUP_FRAME_SIDE,
-      y: minY - GROUP_FRAME_TOP,
-      width: maxX - minX + GROUP_FRAME_SIDE * 2,
-      height: maxY - minY + GROUP_FRAME_TOP + GROUP_FRAME_BOTTOM + repeatBottom,
-    }
+  const bands = [...childrenByBand.entries()].sort(([left], [right]) => left - right)
+  if (workflowControlKind(groupNode)) {
+    return bands.map(([, values]) => frameForNodes(groupNode, values))
+  }
+
+  const memberUuids = new Set(children.map((child) => child.node.uuid))
+  return bands.flatMap(([, values]) => {
+    const sorted = [...values].sort((left, right) => (
+      left.rank - right.rank
+        || left.y - right.y
+        || left.x - right.x
+        || compareNodes(left.node, right.node)
+    ))
+    const runs: PositionedWorkflowNode[][] = []
+    sorted.forEach((child) => {
+      const current = runs.at(-1)
+      if (!current) {
+        runs.push([child])
+        return
+      }
+      const maxRank = Math.max(...current.map((node) => node.rank))
+      const candidate = [...current, child]
+      const candidateFrame = frameForNodes(groupNode, candidate)
+      const containsUnrelatedNode = positionedNodes.some((node) => (
+        node.band === child.band
+          && !memberUuids.has(node.node.uuid)
+          && frameContainsNode(candidateFrame, node)
+      ))
+      if (child.rank <= maxRank + 1 && !containsUnrelatedNode) {
+        current.push(child)
+      } else {
+        runs.push([child])
+      }
+    })
+    return runs.map((run) => frameForNodes(groupNode, run))
   })
 }
 
@@ -309,7 +353,7 @@ export function layoutWorkflowGraph(
       rank: Math.min(...children.map((node) => node.rank)),
       band: Math.min(...children.map((node) => node.band)),
       children,
-      frames: groupFrames(groupNode, children),
+      frames: groupFrames(groupNode, children, positionedNodes),
     }
   })
 
@@ -369,7 +413,7 @@ export function applyWorkflowNodeOffsets(
       ...group,
       children,
       frames: children.length
-        ? groupFrames(group.node, children)
+        ? groupFrames(group.node, children, nodes)
         : group.frames.map((frame) => emptyGroupOffset
             ? { ...frame, x: frame.x + emptyGroupOffset.x, y: frame.y + emptyGroupOffset.y }
             : frame),

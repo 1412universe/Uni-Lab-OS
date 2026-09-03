@@ -67,4 +67,29 @@ describe('layoutWorkflowGraph', () => {
     })).toBe(true)
     expect(layout.warnings).toEqual([])
   })
+
+  it('merges adjacent members of one presentation group into a single frame', () => {
+    const group: WorkflowGraphNode = {
+      uuid: 'group',
+      name: '主物料返回 S03 起始库位',
+      type: 'group',
+      kind: 'group',
+      authoringOrder: 0,
+      disabled: false,
+    }
+    const first = { ...node('used-beaker-return', 1), parentUuid: group.uuid }
+    const second = { ...node('product-vial-return', 2), parentUuid: group.uuid }
+    const layout = layoutWorkflowGraph(
+      [group, first, second, node('finish', 3)],
+      [edge('used-beaker-return', 'product-vial-return'), edge('product-vial-return', 'finish')],
+    )
+    const positions = new Map(layout.nodes.map((item) => [item.node.uuid, item]))
+    const frame = layout.groups[0].frames[0]
+
+    expect(layout.groups[0].frames).toHaveLength(1)
+    expect(frame.x).toBeLessThan(positions.get('used-beaker-return')!.x)
+    expect(frame.x + frame.width).toBeGreaterThan(
+      positions.get('product-vial-return')!.x + positions.get('product-vial-return')!.width,
+    )
+  })
 })
