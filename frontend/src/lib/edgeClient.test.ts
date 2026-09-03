@@ -801,6 +801,18 @@ describe('Edge view model adapters', () => {
     expect(task.nodes[0].waitReason).toBeUndefined()
   })
 
+  it('keeps terminal task status authoritative over historical paused control state', () => {
+    const task = adaptTask({
+      uuid: 'task-terminal-step',
+      status: 'succeeded',
+      execution_mode: 'step',
+      control_status: 'paused',
+      execution_plan: { nodes: [], edges: [] },
+    })
+
+    expect(task.status).toBe('succeeded')
+  })
+
   it('groups only identical frozen task matrix definitions', () => {
     const snapshot = {
       workflow: { uuid: 'wf-1', name: '冻结流程', revision: 3, create_time: '2026-01-01', update_time: '2026-01-01' },

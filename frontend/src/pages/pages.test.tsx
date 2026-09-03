@@ -645,9 +645,12 @@ describe('TasksPage', () => {
       />,
     )
 
-    const candidates = await screen.findByLabelText('可执行节点')
-    fireEvent.click(within(candidates).getByRole('button', { name: /候选节点 2/ }))
-    fireEvent.click(screen.getByRole('button', { name: '执行下一步' }))
+    const taskRow = (await screen.findAllByText(task.uuid))[0].closest('.matrix-row') as HTMLElement
+    const inlineControls = within(taskRow).getByLabelText('Task 行内单步调度控制')
+    fireEvent.change(await within(inlineControls).findByRole('combobox', { name: '下一步节点' }), {
+      target: { value: 'step-node-2' },
+    })
+    fireEvent.click(within(inlineControls).getByRole('button', { name: '执行下一步' }))
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/workflow-tasks/${task.uuid}/commands`,
@@ -659,6 +662,8 @@ describe('TasksPage', () => {
     expect(onNotify).toHaveBeenCalledWith('单步命令已提交')
     expect(screen.getByRole('button', { name: /候选节点 2，/ }).closest('.matrix-node')).toHaveClass('matrix-node-step-ready')
     expect(screen.getByRole('button', { name: /历史节点 2，/ }).closest('.matrix-node')).not.toHaveClass('matrix-node-step-ready')
+    const selectedTaskPanel = screen.getByText('选中任务').closest('.panel') as HTMLElement
+    expect(within(selectedTaskPanel).queryByRole('button', { name: '执行下一步' })).not.toBeInTheDocument()
   })
 
   it('highlights pending manual confirmation and submits approve by Job UUID', async () => {

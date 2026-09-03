@@ -49,20 +49,19 @@ interface PageData<T> {
 const configuredEndpoint = (import.meta.env.VITE_EDGE_API_URL as string | undefined)?.replace(/\/$/, '')
 export const EDGE_API_BASE = configuredEndpoint ? `${configuredEndpoint}/api/v1` : '/api/v1'
 
+const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
 const taskStatuses = new Set<TaskPresentationStatus>([
   'running',
   'admission_blocked',
-  'succeeded',
-  'failed',
+  ...terminalTaskStatusValues,
   'pending',
   'paused',
   'canceling',
-  'canceled',
-  'timeout',
   'intervention_required',
   'execution_unknown',
   'unknown',
 ])
+const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
 
 export function unwrapEnvelope<T>(body: EdgeEnvelope<T>): T {
   if (!body || body.code !== 0 || body.data === undefined) {
@@ -717,7 +716,7 @@ export function adaptTask(
   ))
   let status: TaskPresentationStatus = normalisedStatus
   if (normalisedStatus === 'pending' && waitMessage) status = 'admission_blocked'
-  if (controlStatus === 'paused' && !hasInFlightJob) status = 'paused'
+  if (!terminalTaskStatuses.has(normalisedStatus) && controlStatus === 'paused' && !hasInFlightJob) status = 'paused'
   if (controlStatus === 'waiting_intervention') status = 'intervention_required'
   if (controlStatus === 'waiting_reconciliation') status = 'execution_unknown'
   if (cleanupStatus === 'requires_attention' || attentionMessage) status = 'intervention_required'
@@ -1573,7 +1572,6 @@ async function taskWithJobs(
   )
 }
 
-const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
 let taskPresentationRowsInFlight: Promise<RawRecord[]> | undefined
 const taskPresentationRequestTimeoutMs = 15_000
 
@@ -1677,7 +1675,6 @@ export function materialsWithTaskReferences(
   materials: MaterialRecord[],
   tasks: WorkflowTask[],
 ): MaterialRecord[] {
-  const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
   const materialReferences = new Map<string, MaterialRecord['taskReferences']>()
   tasks.filter((task) => !terminalTaskStatuses.has(task.status)).forEach((task) => {
     task.materialUuids.forEach((materialUuid) => {

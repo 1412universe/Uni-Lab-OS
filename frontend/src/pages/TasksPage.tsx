@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LucideIcon } from 'lucide-react'
@@ -220,6 +221,7 @@ function TaskMatrix({
   onNotify,
   writable,
   readyNodeUuids = new Set<string>(),
+  selectedTaskControl,
 }: {
   tasks: WorkflowTask[]
   selectedId: string
@@ -230,6 +232,7 @@ function TaskMatrix({
   onNotify: (message: string) => void
   writable: boolean
   readyNodeUuids?: ReadonlySet<string>
+  selectedTaskControl?: ReactNode
 }) {
   const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
   const matrixWidth = TASK_IDENTITY_COLUMN_WIDTH
@@ -250,7 +253,7 @@ function TaskMatrix({
               style={{ gridTemplateColumns: columns }}
               onClick={() => onSelect(task.uuid)}
             >
-              <div className="matrix-task-cell">
+              <div className={`matrix-task-cell ${selectedId === task.uuid && selectedTaskControl ? 'matrix-task-cell-with-control' : ''}`}>
                 <button
                   type="button"
                   className="matrix-task-select"
@@ -294,6 +297,14 @@ function TaskMatrix({
                 ) : (
                   <button type="button" className="matrix-trace-disabled" disabled title="Trace 服务未配置">Trace</button>
                 )}
+                {selectedId === task.uuid && selectedTaskControl ? (
+                  <div
+                    className="matrix-task-inline-control"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {selectedTaskControl}
+                  </div>
+                ) : null}
               </div>
               {nodes.map((node, index) => (
                 <NodeMarker
@@ -714,6 +725,53 @@ export function TasksPage({
     { label: '今日完成', value: counts.succeeded, tone: 'green', icon: Check },
     { label: '需要处理', value: counts.failed, tone: 'red', icon: AlertCircle },
   ]
+  const selectedTaskControl = startupMode === 'develop' && selected && !selectedIsTerminal ? (
+    <div className="task-step-inline" aria-label="Task 行内单步调度控制">
+      <header>
+        <span>
+          <strong>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在切换' : '单步调试'}</strong>
+          <small>{effectiveExecutionMode === 'switching_to_step' ? '等待在途 Job 结束' : '调度模式'}</small>
+        </span>
+        <code>{effectiveExecutionMode}</code>
+      </header>
+      {effectiveExecutionMode === 'step' && stepState?.candidates.length ? (
+        <label className="task-step-inline-candidate">
+          <span>下一步节点</span>
+          <select
+            aria-label="下一步节点"
+            value={selectedStepNodeUuid}
+            disabled={!stepState.requiresSelection}
+            onChange={(event) => setSelectedStepNodeUuid(event.target.value)}
+          >
+            {stepState.requiresSelection && !selectedStepNodeUuid ? <option value="">请选择可执行节点</option> : null}
+            {stepState.candidates.map((candidate) => (
+              <option key={candidate.nodeUuid} value={candidate.nodeUuid}>
+                {candidate.name}{candidate.deviceId ? ` · ${candidate.deviceId}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? (
+        <small className="task-step-inline-note">当前没有可执行节点</small>
+      ) : null}
+      <div className="task-step-inline-actions">
+        {effectiveExecutionMode === 'normal' ? (
+          <Button icon={<Pause size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button>
+        ) : null}
+        {effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={12} />} disabled>等待切换</Button> : null}
+        {effectiveExecutionMode === 'step' ? (
+          <>
+            <Button tone="primary" icon={<StepForward size={12} />} disabled={!connected || controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>
+              {stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}
+            </Button>
+            <Button icon={<Play size={12} />} disabled={!connected || controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button>
+          </>
+        ) : null}
+        <Button tone="danger" icon={<Square size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
+      </div>
+    </div>
+  ) : undefined
 
   return (
     <div className="page tasks-page">
@@ -763,6 +821,7 @@ export function TasksPage({
             onNotify={onNotify}
             writable={connected}
             readyNodeUuids={selected?.uuid ? readyNodeUuids : new Set<string>()}
+            selectedTaskControl={selectedTaskControl}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>
@@ -783,25 +842,6 @@ export function TasksPage({
                 <div><dt>整体进度</dt><dd>{selected.progress}%</dd></div>
                 <div><dt>更新时间</dt><dd>{selected.updatedAt}</dd></div>
               </dl>
-              {startupMode === 'develop' && !selectedIsTerminal ? (
-                <div className="task-step-control" aria-label="单步调度控制">
-                  <header><div><strong>调度模式</strong><small>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在等待在途 Job 结束' : '单步调试'}</small></div><code>{effectiveExecutionMode}</code></header>
-                  {effectiveExecutionMode === 'step' && stepState?.candidates.length ? (
-                    <div className="step-candidate-list" aria-label="可执行节点">
-                      {stepState.candidates.map((candidate) => (
-                        <button type="button" key={candidate.nodeUuid} className={selectedStepNodeUuid === candidate.nodeUuid ? 'active' : ''} disabled={!stepState.requiresSelection} onClick={() => setSelectedStepNodeUuid(candidate.nodeUuid)}><span><strong>{candidate.name}</strong><small>{candidate.kind}{candidate.deviceId ? ` · ${candidate.deviceId}` : ''}</small></span><code>{candidate.nodeUuid}</code></button>
-                      ))}
-                    </div>
-                  ) : null}
-                  {effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? <small className="step-control-note">当前没有可执行节点</small> : null}
-                  <div className="task-step-actions">
-                    {effectiveExecutionMode === 'normal' ? <Button icon={<Pause size={14} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button> : null}
-                    {effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={14} />} disabled>等待切换</Button> : null}
-                    {effectiveExecutionMode === 'step' ? <><Button tone="primary" icon={<StepForward size={14} />} disabled={!connected || controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>{stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}</Button><Button icon={<Play size={14} />} disabled={!connected || controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button></> : null}
-                    <Button tone="danger" icon={<Square size={14} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
-                  </div>
-                </div>
-              ) : null}
               {selected.trace ? (
                 <a
                   className="selected-task-trace-link"
