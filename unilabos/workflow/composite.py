@@ -234,7 +234,8 @@ def _workflow_schema(
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    str(item["name"]): _plain(item["schema"]) for item in outputs
+                    str(item["name"]): _contract_property_schema(item)
+                    for item in outputs
                 },
                 "required": [str(item["name"]) for item in outputs],
             },
@@ -266,6 +267,24 @@ def _input_property_schema(descriptor: Mapping[str, Any]) -> dict[str, Any]:
         raise TypeError("已发布工作流输入 Schema 无效")
     if "default" in descriptor:
         schema["default"] = _plain(descriptor["default"])
+    if "unit" in descriptor:
+        schema["x-unilabos-unit"] = _plain(descriptor["unit"])
+    return schema
+
+
+def _contract_property_schema(descriptor: Mapping[str, Any]) -> dict[str, Any]:
+    """把输入或输出描述转换为带展示单位的独立 JSON Schema。
+
+    参数说明：descriptor 是已经通过工作流合同校验的输入或输出描述。返回：
+    不修改原描述、并在存在单位时附加 x-unilabos-unit 的属性 Schema。异常：描述
+    Schema 不是对象时抛出 TypeError。
+    """
+
+    schema = _plain(descriptor["schema"])
+    if not isinstance(schema, dict):
+        raise TypeError("已发布工作流属性 Schema 无效")
+    if "unit" in descriptor:
+        schema["x-unilabos-unit"] = _plain(descriptor["unit"])
     return schema
 
 
@@ -326,6 +345,16 @@ def _value_handle(
         else None
     )
     implicit = bool(descriptor.get("implicit", False)) if io_type == "source" else False
+    unilab_metadata = {
+        "value_schema": schema,
+        "editor_control": (
+            "material_port" if slot_schema is not None else "variable_selector"
+        ),
+        "allowed_resource_template_uuids": allowlist,
+        "implicit_passthrough": implicit,
+    }
+    if "unit" in descriptor:
+        unilab_metadata["unit"] = _plain(descriptor["unit"])
     return {
         "node_business_key": node_business_key,
         "handle_key": name,
@@ -338,16 +367,7 @@ def _value_handle(
         else False,
         "data_source": "goal" if io_type == "target" else "result",
         "data_key": name,
-        "meta_data": {
-            "unilab": {
-                "value_schema": schema,
-                "editor_control": (
-                    "material_port" if slot_schema is not None else "variable_selector"
-                ),
-                "allowed_resource_template_uuids": allowlist,
-                "implicit_passthrough": implicit,
-            }
-        },
+        "meta_data": {"unilab": unilab_metadata},
     }
 
 

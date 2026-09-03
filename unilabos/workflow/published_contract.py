@@ -42,6 +42,20 @@ def _load(value: str) -> Any:
     return decode_json_bytes(value.encode("utf-8"))
 
 
+def _plain(value: Any) -> Any:
+    """递归复制冻结映射和序列为普通 JSON 容器。
+
+    参数说明：``value`` 是合同中的 JSON 兼容值。返回：与原值等价、但不携带
+    ``mappingproxy`` 等冻结容器的独立值；本函数不抛出业务异常。
+    """
+
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
 def _digest(value: Any) -> str:
     """按 RFC 8785 规范 JSON 计算带算法前缀的 SHA-256。"""
 
@@ -150,6 +164,22 @@ def _handle_uuid(template_uuid: str, io_type: str, key: str) -> str:
     return str(uuid5(UUID(template_uuid), f"published-handle:{io_type}:{key}"))
 
 
+def _contract_property_schema(descriptor: Mapping[str, Any]) -> dict[str, Any]:
+    """把输入或输出描述转换为带展示单位的独立 JSON Schema。
+
+    参数说明：descriptor 是通过工作流输入输出合同校验的描述。返回：不修改原
+    描述、并在存在单位时附加 x-unilabos-unit 的属性 Schema。异常：Schema 不是
+    对象时抛出 TypeError。
+    """
+
+    schema = _plain(descriptor["schema"])
+    if not isinstance(schema, dict):
+        raise TypeError("发布工作流属性 Schema 无效")
+    if "unit" in descriptor:
+        schema["x-unilabos-unit"] = _plain(descriptor["unit"])
+    return schema
+
+
 def _published_template_projection(
     *,
     contract_uuid: str,
@@ -164,8 +194,9 @@ def _published_template_projection(
     """构造发布模板、公开连接点及服务端边界映射。
 
     参数：两个 UUID 固定发布合同与节点模板身份；``graph`` 是冻结工作流图；输入、
-    输出合同和 ``workflow_io`` 提供已校验的参数及连接关系；两个摘要固定来源与合同
-    内容。返回节点模板、连接点列表和边界映射。异常：合同缺少参数、连接点或绑定
+    输出合同和 ``workflow_io`` 提供已校验的参数及连接关系，合同中的可选单位会同时
+    写入连接点元数据与属性 Schema；两个摘要固定来源与合同内容。返回节点模板、
+    连接点列表和边界映射。异常：合同缺少参数、连接点或绑定
     时抛出 ``KeyError``，非法模板 UUID 由 ``UUID`` 构造器抛出 ``ValueError``。
     """
 
@@ -179,6 +210,22 @@ def _published_template_projection(
         slot_schema = resource_slot_schema(schema_value)
         handle_uuid = _handle_uuid(node_template_uuid, "target", name)
         input_handle_by_name[name] = handle_uuid
+        unilab_metadata = {
+            "value_schema": schema_value,
+            "editor_control": (
+                "material_port"
+                if slot_schema is not None
+                else "variable_selector"
+            ),
+            "allowed_resource_template_uuids": (
+                slot_schema.get("allowed_resource_template_uuids")
+                if slot_schema is not None
+                else None
+            ),
+            "implicit_passthrough": False,
+        }
+        if "unit" in descriptor:
+            unilab_metadata["unit"] = _plain(descriptor["unit"])
         handles.append(
             {
                 "uuid": handle_uuid,
@@ -190,22 +237,7 @@ def _published_template_projection(
                 "required": bool(descriptor.get("required", False)),
                 "data_source": "goal",
                 "data_key": name,
-                "meta_data": {
-                    "unilab": {
-                        "value_schema": schema_value,
-                        "editor_control": (
-                            "material_port"
-                            if slot_schema is not None
-                            else "variable_selector"
-                        ),
-                        "allowed_resource_template_uuids": (
-                            slot_schema.get("allowed_resource_template_uuids")
-                            if slot_schema is not None
-                            else None
-                        ),
-                        "implicit_passthrough": False,
-                    }
-                },
+                "meta_data": {"unilab": unilab_metadata},
             }
         )
     for descriptor in output_contract["outputs"]:
@@ -214,6 +246,22 @@ def _published_template_projection(
         slot_schema = resource_slot_schema(schema_value)
         handle_uuid = _handle_uuid(node_template_uuid, "source", name)
         output_handle_by_name[name] = handle_uuid
+        unilab_metadata = {
+            "value_schema": schema_value,
+            "editor_control": (
+                "material_port"
+                if slot_schema is not None
+                else "variable_selector"
+            ),
+            "allowed_resource_template_uuids": (
+                slot_schema.get("allowed_resource_template_uuids")
+                if slot_schema is not None
+                else None
+            ),
+            "implicit_passthrough": bool(descriptor.get("implicit", False)),
+        }
+        if "unit" in descriptor:
+            unilab_metadata["unit"] = _plain(descriptor["unit"])
         handles.append(
             {
                 "uuid": handle_uuid,
@@ -225,22 +273,7 @@ def _published_template_projection(
                 "required": False,
                 "data_source": "result",
                 "data_key": name,
-                "meta_data": {
-                    "unilab": {
-                        "value_schema": schema_value,
-                        "editor_control": (
-                            "material_port"
-                            if slot_schema is not None
-                            else "variable_selector"
-                        ),
-                        "allowed_resource_template_uuids": (
-                            slot_schema.get("allowed_resource_template_uuids")
-                            if slot_schema is not None
-                            else None
-                        ),
-                        "implicit_passthrough": bool(descriptor.get("implicit", False)),
-                    }
-                },
+                "meta_data": {"unilab": unilab_metadata},
             }
         )
     for io_type in ("target", "source"):
@@ -293,7 +326,7 @@ def _published_template_projection(
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    str(item["name"]): item["schema"]
+                    str(item["name"]): _contract_property_schema(item)
                     for item in input_contract["parameters"]
                 },
                 "required": [
@@ -306,7 +339,7 @@ def _published_template_projection(
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    str(item["name"]): item["schema"]
+                    str(item["name"]): _contract_property_schema(item)
                     for item in output_contract["outputs"]
                 },
                 "required": [str(item["name"]) for item in output_contract["outputs"]],

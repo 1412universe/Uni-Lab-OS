@@ -439,6 +439,7 @@ def build_candidate_graph(
                 result_nodes,
                 input_contract=effective_input_contract,
                 declared_output_schemas=resolved_output_schemas,
+                declared_output_units=dict(program.declared_output_units),
                 result_output_schemas=result_output_schemas,
             ),
             "output_bindings": _output_bindings(program, result_nodes),
@@ -1523,13 +1524,16 @@ def _output_contract(
     *,
     input_contract: Mapping[str, Any],
     declared_output_schemas: Mapping[str, Mapping[str, Any]],
+    declared_output_units: Mapping[str, str],
     result_output_schemas: Mapping[tuple[str, str], Mapping[str, Any]],
 ) -> dict[str, Any]:
     """从输出绑定构造版本 1 工作流输出合同。
 
     参数说明：``program`` 含输出声明，``result_nodes`` 提供节点输出连接点
-    （Handle）类型，另两个参数是已按目录代际解析资源模板身份的输入合同和结果
-    Schema。返回：包含版本和规范输出描述列表的工作流输出合同；输出引用缺失或
+    （Handle）类型；``input_contract``、``declared_output_schemas`` 和
+    ``declared_output_units`` 分别提供输入合同、结果字段 Schema 和可选单位；
+    ``result_output_schemas`` 提供按结果字段解析的 Schema。返回：包含版本和规范
+    输出描述列表的工作流输出合同；输出引用缺失或
     歧义、显式结果记录 Schema 与绑定类型不一致、结果记录字段集与返回字典不
     一致时抛出 ``AuthoringGraphError``，不生成部分合同。
     异常：上述输出引用或 Schema 合同不成立时抛出 ``AuthoringGraphError``。
@@ -1557,7 +1561,10 @@ def _output_contract(
                 "invalid_workflow_output",
                 f"结果记录字段 {name} 与绑定类型不一致",
             )
-        outputs.append({"name": name, "schema": schema, "implicit": False})
+        output = {"name": name, "schema": schema, "implicit": False}
+        if name in declared_output_units:
+            output["unit"] = declared_output_units[name]
+        outputs.append(output)
     if declared and set(declared) != {item["name"] for item in outputs}:
         raise AuthoringGraphError(
             "invalid_workflow_output",
@@ -1587,7 +1594,7 @@ def _output_contract(
             "schema": deepcopy(parameter_schema),
             "implicit": True,
         }
-        for presentation_field in ("title", "description"):
+        for presentation_field in ("title", "description", "unit"):
             if presentation_field in parameter:
                 implicit_output[presentation_field] = deepcopy(
                     parameter[presentation_field]

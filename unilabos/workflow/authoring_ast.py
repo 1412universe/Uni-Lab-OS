@@ -195,6 +195,7 @@ class WorkflowProgram:
     input_resource_template_symbols: tuple[tuple[str, tuple[str, ...]], ...]
     result_record_name: str | None
     declared_output_schemas: tuple[tuple[str, dict[str, Any]], ...]
+    declared_output_units: tuple[tuple[str, str], ...]
     output_resource_template_symbols: tuple[tuple[str, tuple[str, ...]], ...]
     actions: tuple[
         ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration,
@@ -309,6 +310,7 @@ def parse_authoring_source(
     (
         result_record_name,
         declared_output_schemas,
+        declared_output_units,
         output_resource_template_symbols,
     ) = _result_record(
         function,
@@ -362,6 +364,7 @@ def parse_authoring_source(
         input_resource_template_symbols=input_resource_template_symbols,
         result_record_name=result_record_name,
         declared_output_schemas=tuple(declared_output_schemas.items()),
+        declared_output_units=tuple(declared_output_units.items()),
         output_resource_template_symbols=output_resource_template_symbols,
         actions=tuple(actions),
         groups=tuple(groups),
@@ -738,13 +741,14 @@ def _result_record(
 ) -> tuple[
     str | None,
     dict[str, dict[str, Any]],
+    dict[str, str],
     tuple[tuple[str, tuple[str, ...]], ...],
 ]:
     """解析可选 ``TypedDict`` 工作流结果记录。
 
     参数说明：``function`` 提供返回注解，``result_records`` 是模块级类声明，
     ``imports`` 用于识别 ``TypedDict`` 和字段注解；返回记录类名、字段 Schema
-    及按字段保存的资源模板源码身份。未声明返回记录时返回空记录，动态或不一致
+    、字段单位及按字段保存的资源模板源码身份。未声明返回记录时返回空记录，动态或不一致
     声明失败关闭。
     异常：返回注解、结果记录数量、字段 Schema 或资源模板身份无效时抛出
     ``AuthoringSyntaxError``。
@@ -757,7 +761,7 @@ def _result_record(
                 "工作流返回注解必须引用 TypedDict 结果记录",
                 function,
             )
-        return None, {}, ()
+        return None, {}, {}, ()
     if len(result_records) != 1:
         _fail("invalid_workflow_output", "只能声明一个工作流结果记录", function)
     record = result_records[0]
@@ -772,6 +776,7 @@ def _result_record(
     if not isinstance(function.returns, ast.Name) or function.returns.id != record.name:
         _fail("invalid_workflow_output", "工作流返回注解必须引用结果记录", function)
     fields: dict[str, dict[str, Any]] = {}
+    units: dict[str, str] = {}
     resource_templates: list[tuple[str, tuple[str, ...]]] = []
     try:
         for statement in record.body:
@@ -792,6 +797,9 @@ def _result_record(
                 imports=imports,
             )
             fields[name] = parsed.to_dict()["schema"]
+            unit = parsed.to_dict().get("unit")
+            if isinstance(unit, str):
+                units[name] = unit
             if parsed.resource_templates:
                 resource_templates.append(
                     (
@@ -804,7 +812,7 @@ def _result_record(
                 )
     except AnnotationSchemaError as error:
         raise AuthoringSyntaxError(error.code, error.message, record) from None
-    return record.name, fields, tuple(resource_templates)
+    return record.name, fields, units, tuple(resource_templates)
 
 
 def _is_none_return_annotation(annotation: ast.expr | None) -> bool:

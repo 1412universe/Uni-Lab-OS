@@ -132,6 +132,7 @@ def _descriptor(
     default: object = _ABSENT,
     title: str | None = None,
     description: str | None = None,
+    unit: str | None = None,
 ) -> dict[str, object]:
     result: dict[str, object] = {
         "name": "value",
@@ -144,6 +145,8 @@ def _descriptor(
         result["title"] = title
     if description is not None:
         result["description"] = description
+    if unit is not None:
+        result["unit"] = unit
     return result
 
 
@@ -535,11 +538,12 @@ _FIELD_IMPORTS = (
 
 
 @pytest.mark.parametrize(
-    ("annotation", "schema", "title", "description", "rendered"),
+    ("annotation", "schema", "title", "description", "unit", "rendered"),
     [
         pytest.param(
             "Annotated[int, Field(ge=1, le=4)]",
             {"type": "integer", "minimum": 1, "maximum": 4},
+            None,
             None,
             None,
             "Annotated[int, Field(ge=1, le=4)]",
@@ -550,12 +554,14 @@ _FIELD_IMPORTS = (
             {"type": "number", "minimum": -0.5, "maximum": 2},
             None,
             None,
+            None,
             "Annotated[float, Field(ge=-0.5, le=2)]",
             id="number-bounds",
         ),
         pytest.param(
             "Annotated[str, Field(min_length=1, max_length=8)]",
             {"type": "string", "minLength": 1, "maxLength": 8},
+            None,
             None,
             None,
             "Annotated[str, Field(min_length=1, max_length=8)]",
@@ -571,6 +577,7 @@ _FIELD_IMPORTS = (
             },
             None,
             None,
+            None,
             "Annotated[list[str], Field(min_length=0, max_length=3)]",
             id="list-length",
         ),
@@ -582,8 +589,18 @@ _FIELD_IMPORTS = (
             {"type": "integer", "minimum": 1, "maximum": 9},
             "次数",
             "数量",
+            None,
             ("Annotated[int, Field(title='次数', description='数量', ge=1, le=9)]"),
             id="presentation-and-keyword-order",
+        ),
+        pytest.param(
+            "Annotated[float, Field(unit=' mL ', ge=0)]",
+            {"type": "number", "minimum": 0},
+            None,
+            None,
+            "mL",
+            "Annotated[float, Field(unit='mL', ge=0)]",
+            id="unit",
         ),
     ],
 )
@@ -592,6 +609,7 @@ def test_field_accepts_closed_constraint_set_and_renders_canonical_order(
     schema: dict[str, object],
     title: str | None,
     description: str | None,
+    unit: str | None,
     rendered: str,
 ) -> None:
     source = _source(annotation, imports=_FIELD_IMPORTS)
@@ -601,6 +619,7 @@ def test_field_accepts_closed_constraint_set_and_renders_canonical_order(
         schema,
         title=title,
         description=description,
+        unit=unit,
     )
     assert _render(parameter) == rendered
     _assert_round_trip(source, parameter)
@@ -618,6 +637,7 @@ def test_field_accepts_closed_constraint_set_and_renders_canonical_order(
             "Annotated[str, Field(description='  ')]",
             id="blank-description",
         ),
+        pytest.param("Annotated[str, Field(unit='  ')]", id="blank-unit"),
         pytest.param("Annotated[int, Field(ge=True)]", id="boolean-bound"),
         pytest.param("Annotated[int, Field(ge=1.5)]", id="fractional-int-bound"),
         pytest.param("Annotated[float, Field(ge=1e309)]", id="non-finite-bound"),

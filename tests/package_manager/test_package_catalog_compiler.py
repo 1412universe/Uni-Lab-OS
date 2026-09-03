@@ -326,3 +326,33 @@ def test_legacy_no_output_workflow_compiles_as_empty_output_contract(
             "symbol": "child",
         },
     )
+
+
+def test_package_catalog_preserves_workflow_output_unit(
+    tmp_path: Path,
+) -> None:
+    """工作流输出单位应随包目录编译结果保留。"""
+
+    from unilabos.package_manager import WorkspaceSource, compile_package_source
+
+    workspace_root = tmp_path / "workspace"
+    _write_package(workspace_root)
+    workflow_source = workspace_root / "catalog_lab/workflows/prepare.py"
+    workflow_source.write_text(
+        "from typing import Annotated, TypedDict\n"
+        "from pydantic import Field\n"
+        "from unilabos.workflow.authoring import workflow\n\n"
+        "class Result(TypedDict):\n"
+        "    volume: Annotated[float, Field(unit='mL')]\n\n"
+        f'@workflow(workflow_uuid="{WORKFLOW_UUID}", displayname="准备实验")\n'
+        "def prepare(*, volume: float) -> Result:\n"
+        "    return {'volume': volume}\n",
+        encoding="utf-8",
+    )
+
+    catalog = compile_package_source(WorkspaceSource(workspace_root))
+
+    assert [
+        dict(item)
+        for item in catalog.definitions.workflows[0].details["output_contract"]
+    ] == [{"name": "volume", "schema": {"type": "number"}, "unit": "mL"}]

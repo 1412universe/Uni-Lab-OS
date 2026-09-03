@@ -135,11 +135,17 @@ def render_authoring_python(
         and isinstance(item.get("name"), str)
         and isinstance(item.get("schema"), Mapping)
     }
+    output_descriptors = {
+        str(item["name"]): item
+        for item in explicit_outputs
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    }
     output_annotations = {
         name: _render_schema(
             dict(output_schemas[name]),
             catalog=catalog,
             include_resource_templates=False,
+            unit=output_descriptors[name].get("unit"),
         )
         for name in explicit_output_bindings
     }
@@ -1459,8 +1465,9 @@ def _render_parameter(
 ) -> tuple[str, str, Any, set[str], set[tuple[str, str]]]:
     """把输入合同参数渲染为函数参数片段。
 
-    参数说明：``descriptor`` 是版本 1 参数描述；返回名称、注解、默认值和所需
-    typing 名称集合及资源模板 import，非法描述抛出 ``AuthoringGraphError``。
+    参数说明：``descriptor`` 是版本 1 参数描述；单位（如有）会保留在生成的
+    ``Field`` 元数据中。返回名称、注解、默认值和所需 typing 名称集合及资源
+    模板 import，非法描述抛出 ``AuthoringGraphError``。
     """
 
     name = descriptor.get("name")
@@ -1470,6 +1477,7 @@ def _render_parameter(
     annotation, imports, resource_imports = _render_schema(
         dict(schema),
         catalog=catalog,
+        unit=descriptor.get("unit"),
     )
     default = descriptor.get("default", _NO_DEFAULT)
     return name, annotation, default, imports, resource_imports
@@ -1480,19 +1488,25 @@ def _render_schema(
     *,
     catalog: AuthoringCatalogSnapshot,
     include_resource_templates: bool = True,
+    unit: str | None = None,
 ) -> tuple[str, set[str], set[tuple[str, str]]]:
     """把规范值 Schema 渲染为静态 Python 注解。
 
     参数说明：``schema`` 是工作流版本 1 值 Schema，``catalog`` 反解本代资源
     模板源码身份；``include_resource_templates=False`` 用于显式结果记录，因为
     其生产者连接点会在回编译时重新给出更精确保证。返回注解文本、所需 typing
-    名称和资源模板 import，当前合同之外的 Schema 失败关闭。
+    名称和资源模板 import，unit（如有）作为 Field 元数据保留。当前合同之外的
+    Schema 失败关闭。
     """
 
     template_uuids = (
         _resource_template_allowlist(schema) if include_resource_templates else None
     )
     annotation, imports = _render_schema_base(schema)
+    if unit is not None:
+        if not isinstance(unit, str) or not unit.strip():
+            raise AuthoringGraphError("candidate_invalid", "工作流单位无效")
+        unit = unit.strip()
     resource_imports: set[tuple[str, str]] = set()
     if template_uuids is not None:
         symbols: list[str] = []
@@ -1507,11 +1521,49 @@ def _render_schema(
             module, symbol = identity.rsplit(":", 1)
             resource_imports.add((module, symbol))
             symbols.append(symbol)
-        annotation = (
-            f"Annotated[{annotation}, AllowedResourceTemplates({', '.join(symbols)})]"
+        annotation = _append_annotation_metadata(
+            annotation,
+            f"AllowedResourceTemplates({', '.join(symbols)})",
         )
         imports.add("Annotated")
+    if unit is not None:
+        annotation = _append_unit_metadata(annotation, unit)
+        imports.update({"Annotated", "Field"})
     return annotation, imports, resource_imports
+
+
+def _append_annotation_metadata(annotation: str, metadata: str) -> str:
+    """向最外层 Annotated 追加一个元数据项。
+
+    参数说明：annotation 是内部生成的静态注解文本，metadata 是已验证的元数据
+    调用文本。返回：保持单层 Annotated 的注解文本；没有外层注解时新建一层。
+    异常：无，调用方负责保证文本来自受信任合同。
+    """
+
+    if annotation.startswith("Annotated[") and annotation.endswith("]"):
+        return f"{annotation[:-1]}, {metadata}]"
+    return f"Annotated[{annotation}, {metadata}]"
+
+
+def _append_unit_metadata(annotation: str, unit: str) -> str:
+    """把单位写入内部生成注解的唯一 ``Field`` 元数据。
+
+    参数说明：``annotation`` 只来自本模块的有限 Schema 渲染器，``unit`` 已由
+    工作流合同规范化。返回：仍可被静态解析器接收的单层注解；若已有约束
+    ``Field``，单位插入其首位，否则追加一个新的 ``Field``。异常：无。
+    """
+
+    field_marker = ", Field("
+    if annotation.startswith("Annotated[") and annotation.endswith("]"):
+        marker_index = annotation.find(field_marker)
+        if marker_index >= 0:
+            value_index = marker_index + len(field_marker)
+            return (
+                annotation[:value_index]
+                + f"unit={unit!r}, "
+                + annotation[value_index:]
+            )
+    return _append_annotation_metadata(annotation, f"Field(unit={unit!r})")
 
 
 def _render_schema_base(schema: dict[str, Any]) -> tuple[str, set[str]]:
