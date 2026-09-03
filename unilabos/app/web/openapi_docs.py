@@ -20,6 +20,24 @@ from unilabos.app.web.openapi_field_descriptions import (
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 NULL_TYPES = {"null", "None", "NoneType"}
+PARAMETER_LOCATION_DESCRIPTIONS = {
+    "path": "接口地址中的对应位置",
+    "query": "接口地址后的查询条件",
+    "header": "请求头",
+    "cookie": "Cookie",
+    "body": "请求内容",
+}
+STRING_FORMAT_DESCRIPTIONS = {
+    "binary": "文件",
+    "date": "日期",
+    "date-time": "日期和时间",
+    "email": "邮箱地址",
+    "hostname": "主机名",
+    "ipv4": "IPv4 地址",
+    "ipv6": "IPv6 地址",
+    "uri": "网址",
+    "uuid": "UUID",
+}
 FORBIDDEN_DESCRIPTION_TERMS = (
     "backend",
     "dto",
@@ -52,14 +70,20 @@ RESPONSE_DESCRIPTIONS = {
 TAG_TRANSLATIONS = {
     "api": ("基础与设备", "服务状态、文件、设备和设备动作接口。"),
     "authoring-transform": ("工作流编辑", "检查工作流编辑内容并生成 Python 源码。"),
-    "backend-resource-contract": ("物料与资源", "物料、试剂、样品、成分和资源模板接口。"),
+    "backend-resource-contract": (
+        "物料与资源",
+        "物料、试剂、样品、成分和资源模板接口。",
+    ),
     "device-telemetry": ("设备状态", "设备属性、关节状态和装配关系的上报与订阅接口。"),
     "edge-scheduler": ("调度", "任务安排、设备任务、运行历史和人工错误处理接口。"),
     "experiment-operation-category": ("实验操作类别", "实验操作类别的查询和维护接口。"),
     "inventory": ("库存", "库存批次、实例、预留、流水和同步接口。"),
     "inventory-material-compat": ("物料查询", "按现有物料查询格式读取库存。"),
     "lab": ("实验室布局", "实验室区域、摆放位置和装配关系接口。"),
-    "local-edge-control": ("设备任务通信", "调度进程与设备运行进程之间的任务通信接口。"),
+    "local-edge-control": (
+        "设备任务通信",
+        "调度进程与设备运行进程之间的任务通信接口。",
+    ),
     "manual-exclusive": ("设备手动使用", "查询、取得和释放设备手动使用权。"),
     "workflow": ("工作流", "工作流定义、任务、节点任务和运行记录接口。"),
     "workflow-template": ("工作流节点模板", "工作流编辑时可用的节点模板接口。"),
@@ -97,7 +121,12 @@ def _schema_type(
     component_schemas: Mapping[str, Any] | None = None,
     seen_references: frozenset[str] = frozenset(),
 ) -> str:
-    """把 OpenAPI 数据类型翻译成 Swagger 中可直接阅读的中文。"""
+    """把 OpenAPI 数据类型翻译成 Swagger 中可直接阅读的中文。
+
+    参数：``schema`` 是当前字段的数据格式；``component_schemas`` 是可供解析的
+    公共数据结构；``seen_references`` 用于避免数据结构互相引用时无限递归。
+    返回：包含数组元素、可为空状态和常见字符串格式的中文数据类型。
+    """
 
     referenced_name = _schema_name(schema)
     if referenced_name is not None:
@@ -127,7 +156,7 @@ def _schema_type(
             if name not in names:
                 names.append(name)
         rendered = "或".join(names) if names else "任意 JSON 值"
-        return f"{rendered}（可为空）" if nullable else rendered
+        return f"{rendered}，可以为空" if nullable else rendered
 
     composed = schema.get("allOf")
     if isinstance(composed, list) and composed:
@@ -142,12 +171,10 @@ def _schema_type(
     if isinstance(schema_type, list):
         nullable = any(item in NULL_TYPES for item in schema_type)
         names = [
-            _primitive_type(item)
-            for item in schema_type
-            if item not in NULL_TYPES
+            _primitive_type(item) for item in schema_type if item not in NULL_TYPES
         ]
         rendered = "或".join(dict.fromkeys(names)) or "任意 JSON 值"
-        return f"{rendered}（可为空）" if nullable else rendered
+        return f"{rendered}，可以为空" if nullable else rendered
     if schema_type == "array":
         items = schema.get("items")
         if isinstance(items, Mapping):
@@ -156,6 +183,11 @@ def _schema_type(
                 f"{_schema_type(items, component_schemas, seen_references)}）"
             )
         return "数组"
+    if schema_type == "string":
+        format_name = STRING_FORMAT_DESCRIPTIONS.get(str(schema.get("format", "")))
+        if format_name:
+            return f"字符串（{format_name}）"
+        return "字符串"
     if schema_type:
         return _primitive_type(str(schema_type))
     if "properties" in schema or "additionalProperties" in schema:
@@ -183,14 +215,117 @@ def _with_parameter_facts(
     required: bool,
     type_name: str,
     presence_label: str = "是否必传",
+    location: str | None = None,
 ) -> str:
-    """在含义后明确写出是否需要出现和数据类型。"""
+    """把参数或字段的用途、填写位置、必传状态和类型整理成易读文字。
+
+    参数：``meaning`` 是已经核对过的用途；``required`` 表示是否必须提供；
+    ``type_name`` 是中文数据类型；``presence_label`` 区分请求字段和返回字段；
+    ``location`` 是 OpenAPI 声明的参数位置。返回：Swagger 中分段展示的说明。
+    """
 
     base = meaning.split("\n\n是否", 1)[0].strip().rstrip("。")
     required_text = "是" if required else "否"
+    paragraphs = [f"用途：{base}。"]
+    if location:
+        location_description = PARAMETER_LOCATION_DESCRIPTIONS.get(location, location)
+        paragraphs.append(f"填写位置：{location_description}。")
+    paragraphs.extend(
+        (
+            f"{presence_label}：{required_text}。",
+            f"数据类型：{type_name}。",
+        )
+    )
+    return "\n\n".join(paragraphs)
+
+
+def _parameter_names(
+    operation: Mapping[str, Any],
+    location: str,
+) -> list[str]:
+    """读取一个接口在指定位置声明的参数名。
+
+    参数：``operation`` 是一个接口的 OpenAPI 内容；``location`` 是路径、查询条件、
+    请求头或 Cookie。返回：按文档原有顺序排列且不重复的参数名。
+    """
+
+    names: list[str] = []
+    for parameter in operation.get("parameters", []):
+        if not isinstance(parameter, Mapping) or parameter.get("in") != location:
+            continue
+        name = str(parameter.get("name", "")).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _detailed_operation_description(
+    summary: str,
+    base_description: str,
+    operation: Mapping[str, Any],
+) -> str:
+    """根据接口已有信息生成完整、但不扩张业务含义的使用说明。
+
+    参数：``summary`` 是中文接口名称；``base_description`` 是人工核对过的用途，
+    没有单独说明时与接口名称相同；``operation`` 提供真实参数位置、请求体和响应
+    状态。返回：依次包含用途、调用说明和返回说明的 Swagger 文本。
+    """
+
+    purpose = base_description.strip().rstrip("。") or summary.strip().rstrip("。")
+    call_parts: list[str] = []
+    for location, label in (
+        ("path", "地址参数"),
+        ("query", "查询参数"),
+        ("header", "请求头参数"),
+        ("cookie", "Cookie 参数"),
+    ):
+        names = _parameter_names(operation, location)
+        if not names:
+            continue
+        if location == "path":
+            call_parts.append(
+                f"{label}要填写到接口地址的对应位置，具体用途和数据类型见下方参数说明"
+            )
+        else:
+            call_parts.append(f"{label}的用途、是否必传和数据类型见下方参数说明")
+
+    request_body = operation.get("requestBody")
+    if isinstance(request_body, Mapping):
+        body_requirement = (
+            "必须提交" if request_body.get("required") else "可以按需提交"
+        )
+        call_parts.append(
+            f"请求内容{body_requirement}，每个字段的用途、是否必传和数据类型见下方说明"
+        )
+
+    if call_parts:
+        call_description = "；".join(call_parts) + "。"
+    else:
+        call_description = "文档中没有声明需要填写的参数或请求内容，可以直接发起请求。"
+
+    responses = operation.get("responses", {})
+    response_statuses = (
+        [str(status) for status in responses if str(status).strip()]
+        if isinstance(responses, Mapping)
+        else []
+    )
+    if response_statuses:
+        status_description = "、".join(response_statuses)
+        response_description = (
+            "请求处理后的内容见下方响应结构；返回字段会标明用途、是否一定返回和"
+            f"数据类型。文档列出的可能状态为 {status_description}，使用这个接口的"
+            "程序需要根据实际返回状态处理结果。"
+        )
+    else:
+        response_description = (
+            "请求处理后的内容见下方响应结构；返回字段会标明用途、是否一定返回和"
+            "数据类型。"
+        )
+
     return (
-        f"{base}。\n\n{presence_label}：{required_text}。"
-        f"数据类型：{type_name}。"
+        f"用途：{purpose}。\n\n"
+        f"调用说明：{call_description}\n\n"
+        f"返回说明：{response_description}"
     )
 
 
@@ -274,9 +409,7 @@ def _component_usage(
         for method, operation in path_item.items():
             if method not in HTTP_METHODS or not isinstance(operation, Mapping):
                 continue
-            request_roots.update(
-                _referenced_schema_names(operation.get("requestBody"))
-            )
+            request_roots.update(_referenced_schema_names(operation.get("requestBody")))
             response_roots.update(_referenced_schema_names(operation.get("responses")))
     return (
         _expand_schema_references(request_roots, component_schemas),
@@ -304,8 +437,7 @@ def _translate_tags(schema: MutableMapping[str, Any]) -> None:
             operation["tags"] = translated
 
     descriptions = {
-        name: description
-        for name, description in TAG_TRANSLATIONS.values()
+        name: description for name, description in TAG_TRANSLATIONS.values()
     }
     schema["tags"] = [
         {"name": name, "description": descriptions.get(name, "相关接口。")}
@@ -319,17 +451,23 @@ def _enrich_operation(
     operation: MutableMapping[str, Any],
     component_schemas: Mapping[str, Any],
 ) -> None:
-    """补齐一个接口的名称、用途、参数、请求体和返回说明。"""
+    """补齐一个接口的名称、详细用途、参数、请求体和返回说明。
+
+    参数：``method`` 和 ``path`` 共同确定接口；``operation`` 是需要原地补充的
+    OpenAPI 内容；``component_schemas`` 用于解析参数和字段类型。返回：无；所有
+    说明直接写回 ``operation``。
+    """
 
     original_summary = str(operation.get("summary", "")).strip()
     summary = SUMMARY_TRANSLATIONS.get(original_summary, original_summary)
     operation["summary"] = summary or f"{method.upper()} {path}"
 
     explicit_description = OPERATION_DESCRIPTIONS.get((method.upper(), path))
-    if explicit_description:
-        operation["description"] = explicit_description
-    else:
-        operation["description"] = f"{operation['summary']}。"
+    operation["description"] = _detailed_operation_description(
+        str(operation["summary"]),
+        explicit_description or str(operation["summary"]),
+        operation,
+    )
 
     for parameter in operation.get("parameters", []):
         if not isinstance(parameter, MutableMapping):
@@ -341,6 +479,7 @@ def _enrich_operation(
             _parameter_meaning(parameter),
             required=bool(parameter.get("required", False)),
             type_name=_schema_type(parameter_schema, component_schemas),
+            location=str(parameter.get("in", "")) or None,
         )
 
     request_body = operation.get("requestBody")
@@ -349,7 +488,9 @@ def _enrich_operation(
         first_schema: Mapping[str, Any] = {}
         if isinstance(content, Mapping):
             for media in content.values():
-                if isinstance(media, Mapping) and isinstance(media.get("schema"), Mapping):
+                if isinstance(media, Mapping) and isinstance(
+                    media.get("schema"), Mapping
+                ):
                     first_schema = media["schema"]
                     break
         model_name = _schema_name(first_schema)
@@ -360,6 +501,7 @@ def _enrich_operation(
             meaning,
             required=bool(request_body.get("required", False)),
             type_name=_schema_type(first_schema, component_schemas),
+            location="body",
         )
 
     responses = operation.get("responses", {})

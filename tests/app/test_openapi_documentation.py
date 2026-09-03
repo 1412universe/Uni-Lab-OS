@@ -88,10 +88,16 @@ def _assert_every_public_item_is_documented(schema: dict[str, object]) -> None:
     assert operations
     for operation in operations:
         assert _has_chinese(operation.get("summary"))
-        assert _has_chinese(operation.get("description"))
+        operation_description = str(operation.get("description", ""))
+        assert _has_chinese(operation_description)
+        assert operation_description.startswith("用途：")
+        assert "调用说明：" in operation_description
+        assert "返回说明：" in operation_description
         for parameter in cast(list[dict[str, object]], operation.get("parameters", [])):
             description = str(parameter.get("description", ""))
             assert _has_chinese(description)
+            assert description.startswith("用途：")
+            assert "填写位置：" in description
             assert "是否必传：" in description
             assert "数据类型：" in description
             assert not description.startswith("名称为 ")
@@ -100,6 +106,8 @@ def _assert_every_public_item_is_documented(schema: dict[str, object]) -> None:
         if request_body is not None:
             description = str(request_body.get("description", ""))
             assert _has_chinese(description)
+            assert description.startswith("用途：")
+            assert "填写位置：请求内容。" in description
             assert "是否必传：" in description
             assert "数据类型：" in description
 
@@ -113,12 +121,11 @@ def _assert_every_public_item_is_documented(schema: dict[str, object]) -> None:
         dict[str, dict[str, object]], components.get("schemas", {})
     )
     for component in component_schemas.values():
-        properties = cast(
-            dict[str, dict[str, object]], component.get("properties", {})
-        )
+        properties = cast(dict[str, dict[str, object]], component.get("properties", {}))
         for field in properties.values():
             description = str(field.get("description", ""))
             assert _has_chinese(description)
+            assert description.startswith("用途：")
             assert any(
                 label in description
                 for label in (
@@ -179,9 +186,7 @@ def test_workflow_and_scheduler_swagger_is_plain_chinese() -> None:
     workflow_read_model = cast(
         dict[str, dict[str, object]], models["WorkflowReadModel"]["properties"]
     )
-    assert "是否一定返回：是" in str(
-        workflow_read_model["uuid"]["description"]
-    )
+    assert "是否一定返回：是" in str(workflow_read_model["uuid"]["description"])
 
 
 def test_inventory_and_material_swagger_is_plain_chinese() -> None:
@@ -214,6 +219,15 @@ def test_inventory_and_material_swagger_is_plain_chinese() -> None:
     )
     assert "是否必传：否" in str(page_parameter["description"])
     assert "数据类型：整数" in str(page_parameter["description"])
+    assert "填写位置：接口地址后的查询条件" in str(page_parameter["description"])
+    template_parameter = next(
+        parameter
+        for parameter in cast(list[dict[str, object]], material_list["parameters"])
+        if parameter["name"] == "resource_template_uuid"
+    )
+    assert "数据类型：字符串（UUID），可以为空" in str(
+        template_parameter["description"]
+    )
 
 
 def test_device_task_communication_swagger_is_plain_chinese(tmp_path: Path) -> None:
@@ -245,8 +259,10 @@ def test_device_task_communication_swagger_is_plain_chinese(tmp_path: Path) -> N
 
 
 def test_main_web_server_has_documented_openapi_installed() -> None:
-    """主 Web 服务创建时必须安装 Swagger 中文说明。"""
+    """主 Web 服务必须安装中文说明，并公开 Swagger 与接口 JSON 地址。"""
 
     from unilabos.app.web import server
 
     assert server.app.state.plain_chinese_openapi_installed is True
+    assert server.app.docs_url == "/api/docs"
+    assert server.app.openapi_url == "/api/openapi.json"

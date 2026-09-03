@@ -4,6 +4,7 @@ import {
   BookOpen,
   Boxes,
   ChevronDown,
+  FileJson,
   FlaskConical,
   LayoutDashboard,
   ListChecks,
@@ -40,6 +41,10 @@ const connectionLabels: Record<ConnectionMode, string> = {
   error: 'Edge 连接异常',
 }
 
+/**
+ * 渲染 UniLabOS 控制台外壳、主导航和现有接口文档入口。
+ * 参数由当前页面、连接状态、活动任务数和页面回调组成；返回完整页面框架。
+ */
 export function AppShell({
   page,
   connection,
@@ -98,6 +103,16 @@ export function AppShell({
           >
             <BookOpen size={19} />
             <span>Swagger</span>
+          </a>
+          <a
+            className="nav-item"
+            href="/api/openapi.json"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="打开接口 JSON 文档"
+          >
+            <FileJson size={19} />
+            <span>接口 JSON</span>
           </a>
         </nav>
 
