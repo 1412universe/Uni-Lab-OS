@@ -1095,17 +1095,69 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .operation-detail { margin: 12px; overflow: hidden; background: #f8fafc; border: 1px solid #dce3ed; border-radius: 10px; }.operation-detail > header { display: flex; align-items: flex-start; justify-content: space-between; padding: 12px; background: #fff; border-bottom: 1px solid #eaecf0; }.operation-detail > header small { color: #667085; font-size: 7px; }.operation-detail > header h3 { margin-top: 3px; font-size: 12px; }.operation-detail > header button { color: #667085; background: transparent; border: 0; font-size: 18px; }.operation-detail dl { display: grid; grid-template-columns: repeat(4,1fr); margin: 0; }.operation-detail dl div { padding: 10px; border-right: 1px solid #eaecf0; }.operation-detail dt { color: #98a2b3; font-size: 7px; }.operation-detail dd { margin: 4px 0 0; overflow: hidden; font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }.operation-detail > p { padding: 10px 12px; color: #667085; font-size: 8px; }.operation-detail > footer { display: flex; justify-content: flex-end; gap: 6px; padding: 10px 12px; background: #fff; border-top: 1px solid #eaecf0; }
 .operation-detail-nodes { display: grid; gap: 6px; padding: 10px 12px; border-top: 1px solid #eaecf0; }.operation-detail-nodes > strong { color: #344054; font-size: 8px; }.operation-detail-nodes > div { display: flex; gap: 8px; padding: 8px; background: #fff; border: 1px solid #e4e7ec; border-radius: 7px; }.operation-detail-nodes > div > span { color: #4b6fff; font: 700 8px/1.5 monospace; }.operation-detail-nodes p { display: grid; min-width: 0; gap: 2px; margin: 0; }.operation-detail-nodes p strong { font-size: 8px; }.operation-detail-nodes p code,.operation-detail-nodes p small { overflow: hidden; color: #667085; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 
-/* 试剂分装弹窗：目标行、汇总与超量提示。 */
-.dispense-form .dispense-source { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line, #eaecf0); border-radius: 8px; background: var(--surface, #f8fafc); margin-bottom: 4px; }
-.dispense-form .dispense-source span { font-size: 10px; letter-spacing: .02em; color: var(--muted, #667085); }
-.dispense-form .dispense-row { display: grid; grid-template-columns: minmax(0, 1fr) 140px 32px; gap: 8px; align-items: end; position: relative; }
-.dispense-form .dispense-row-invalid select { border-color: var(--signal-red, #d92d20); }
-.dispense-form .dispense-remove { height: 34px; border: 1px solid var(--line-strong, #d0d5dd); border-radius: 8px; background: #fff; cursor: pointer; }
-.dispense-form .dispense-remove:disabled { opacity: .4; cursor: not-allowed; }
-.dispense-form .dispense-actions { display: flex; justify-content: flex-start; }
-.dispense-form .dispense-summary { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 10px 12px; border-radius: 8px; background: var(--surface, #f8fafc); font-size: 13px; }
-.dispense-form .dispense-summary-over { background: var(--signal-red-soft, #fef3f2); }
-.dispense-form .form-error { flex-basis: 100%; color: var(--signal-red, #d92d20); font-size: 12px; }
+/* 试剂分装弹窗：按源瓶、目标列表、数量结算形成单向阅读路径。 */
+.reagent-dialog-dispense { width: min(760px,calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+.reagent-dialog-dispense > header { padding: 16px 20px; }
+.reagent-dialog-dispense > header h2 { font-size: 19px; }
+.reagent-dialog-dispense > header button:focus-visible { outline: 3px solid #9db5ff; outline-offset: 2px; }
+.dispense-form { display: grid; gap: 16px; max-height: calc(100vh - 155px); padding: 18px 20px 20px; overflow-y: auto; scroll-padding-bottom: 88px; }
+.dispense-form .dispense-source { display: grid; grid-template-columns: 44px minmax(0,1fr) auto; gap: 12px; align-items: center; padding: 13px 15px; color: #344054; background: linear-gradient(135deg,#f6f8ff,#eef3ff); border: 1px solid #d6dfff; border-radius: 12px; }
+.dispense-source-icon { display: grid; place-items: center; width: 44px; height: 44px; color: #294ebd; background: #fff; border: 1px solid #d6dfff; border-radius: 11px; box-shadow: 0 3px 8px rgba(41,78,189,.08); }
+.dispense-source > div:nth-child(2) { min-width: 0; }
+.dispense-source > div:nth-child(2) small,.dispense-source > div:nth-child(2) strong,.dispense-source > div:nth-child(2) span { display: block; }
+.dispense-source > div:nth-child(2) small { color: #667085; font-size: 10px; font-weight: 700; }
+.dispense-source > div:nth-child(2) strong { margin-top: 2px; overflow: hidden; color: #101828; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.dispense-source > div:nth-child(2) span { margin-top: 3px; overflow: hidden; color: #667085; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.dispense-source-balance { min-width: 118px; padding-left: 16px; border-left: 1px solid #c8d5fb; text-align: right; }
+.dispense-source-balance small,.dispense-source-balance strong { display: block; }
+.dispense-source-balance small { color: #667085; font-size: 10px; }
+.dispense-source-balance strong { margin-top: 2px; color: #172b55; font-size: 20px; line-height: 1.2; }
+.dispense-source-balance em,.dispense-summary-flow em { margin-left: 3px; font-size: .65em; font-style: normal; font-weight: 650; }
+.dispense-targets { display: grid; gap: 10px; }
+.dispense-targets > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.dispense-targets > header strong,.dispense-targets > header small { display: block; }
+.dispense-targets > header strong { color: #101828; font-size: 13px; }
+.dispense-targets > header small { margin-top: 3px; color: #667085; font-size: 10px; }
+.material-write-dialog .dispense-add { width: auto; min-height: 40px; padding-inline: 12px; color: #294ebd; background: #f5f8ff; border-color: #cbd7ff; }
+.dispense-target-list { display: grid; gap: 8px; }
+.dispense-row { position: relative; display: grid; grid-template-columns: 30px minmax(0,1fr) 160px 44px; gap: 10px; align-items: end; padding: 11px; background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 11px; transition: border-color .16s ease,box-shadow .16s ease; }
+.dispense-row:focus-within { border-color: #9bb0f8; box-shadow: 0 0 0 3px #eef3ff; }
+.dispense-row-index { align-self: center; color: #667085; font: 700 10px ui-monospace,SFMono-Regular,Menlo,monospace; text-align: center; }
+.dispense-row .form-field { gap: 5px; margin: 0; }
+.dispense-row .form-field > span { font-size: 10px; }
+.dispense-row .form-field input,.dispense-row .form-field select { min-height: 44px; background: #fff; }
+.dispense-quantity-field > div { position: relative; }
+.dispense-quantity-field input { padding-right: 40px; }
+.dispense-quantity-field em { position: absolute; top: 50%; right: 12px; color: #667085; font-size: 10px; font-style: normal; font-weight: 700; pointer-events: none; transform: translateY(-50%); }
+.dispense-row-invalid { border-color: #fda29b; background: #fff8f7; }
+.dispense-row-invalid select { border-color: #d92d20; }
+.dispense-remove { display: grid; place-items: center; width: 44px; height: 44px; color: #b42318; background: #fff; border: 1px solid #fecdca; border-radius: 9px; cursor: pointer; transition: color .16s ease,background .16s ease,border-color .16s ease; }
+.dispense-remove:hover:not(:disabled) { color: #912018; background: #fff1f0; border-color: #fda29b; }
+.dispense-remove:focus-visible,.dispense-add:focus-visible { outline: 3px solid #9bb0f8; outline-offset: 2px; }
+.dispense-remove:disabled { color: #98a2b3; background: #f2f4f7; border-color: #e4e7ec; cursor: not-allowed; opacity: .65; }
+.dispense-row .form-error { grid-column: 2/-1; margin-top: -2px; color: #b42318; font-size: 10px; }
+.dispense-summary { position: sticky; z-index: 2; bottom: -20px; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px 16px; align-items: center; margin: 2px -20px -20px; padding: 14px 20px 16px; background: #f8fafc; border-top: 1px solid #e4e7ec; box-shadow: 0 -10px 20px rgba(16,24,40,.04); }
+.dispense-summary-flow { display: flex; align-items: center; gap: 14px; color: #667085; }
+.dispense-summary-flow > span small,.dispense-summary-flow > span strong { display: block; }
+.dispense-summary-flow > span small { font-size: 10px; }
+.dispense-summary-flow > span strong { margin-top: 2px; color: #101828; font-size: 16px; }
+.dispense-summary-flow > svg { color: #98a2b3; }
+.material-write-dialog .dispense-summary > .button { width: auto; min-width: 150px; min-height: 44px; }
+.dispense-summary > .form-error { grid-column: 1/-1; grid-row: 2; color: #b42318; font-size: 10px; }
+.dispense-summary-over { background: #fff6f5; border-top-color: #fecdca; }
+
+@media (max-width: 700px) {
+  .dispense-form { padding: 14px; }
+  .dispense-form .dispense-source { grid-template-columns: 40px minmax(0,1fr); }
+  .dispense-source-icon { width: 40px; height: 40px; }
+  .dispense-source-balance { grid-column: 1/-1; display: flex; align-items: center; justify-content: space-between; min-width: 0; padding: 10px 0 0; border-top: 1px solid #c8d5fb; border-left: 0; text-align: left; }
+  .dispense-targets > header { align-items: flex-start; }
+  .dispense-row { grid-template-columns: 28px minmax(0,1fr) 44px; }
+  .dispense-quantity-field { grid-column: 2; }
+  .dispense-remove { grid-column: 3; grid-row: 1/3; align-self: center; }
+  .dispense-summary { bottom: -14px; grid-template-columns: 1fr; margin: 2px -14px -14px; padding: 14px; }
+  .material-write-dialog .dispense-summary > .button { width: 100%; }
+}
 .reagent-inventory-table .reagent-lineage { display: block; margin-top: 2px; color: var(--action-blue, #155eef); font-size: 10px; }
 
 /* 试剂预留：运行页里按库存需求绑定试剂瓶 */
