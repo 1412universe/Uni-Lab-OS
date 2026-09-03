@@ -213,6 +213,11 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .global-search input::placeholder { color: #98a2b3; }
 .global-search kbd { padding: 2px 5px; color: #98a2b3; background: #fff; border: 1px solid #e4e7ec; border-radius: 5px; font-size: 9px; }
 
+.startup-mode-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 10px; border: 1px solid; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.startup-mode-develop { color: #975a0c; background: var(--amber-soft); border-color: #fedf89; }
+.startup-mode-product { color: #067647; background: var(--green-soft); border-color: #abefc6; }
+.startup-mode-unknown { color: #667085; background: #f2f4f7; border-color: #d0d5dd; }
+
 .live-chip { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 10px; color: #067647; background: #ecfdf3; border: 1px solid #abefc6; border-radius: 999px; font-size: 11px; font-weight: 600; }
 .live-chip i { width: 7px; height: 7px; background: #17b26a; border-radius: 50%; box-shadow: 0 0 0 3px #d1fadf; }
 .live-chip-loading, .live-chip-demo { color: #975a0c; background: #fffaeb; border-color: #fedf89; }

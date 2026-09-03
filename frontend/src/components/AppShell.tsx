@@ -3,11 +3,13 @@ import {
   Bell,
   Boxes,
   ChevronDown,
+  Code2,
   FlaskConical,
   LayoutDashboard,
   ListChecks,
   Radio,
   Search,
+  ShieldCheck,
   Workflow,
   FlaskRound,
   TestTubes,
@@ -39,9 +41,33 @@ const connectionLabels: Record<ConnectionMode, string> = {
   error: 'Edge 连接异常',
 }
 
+const startupModePresentation = {
+  develop: {
+    label: '开发模式',
+    title: '允许工作流编辑和单步调试',
+    icon: Code2,
+  },
+  product: {
+    label: '生产模式',
+    title: '仅运行已发布工作流',
+    icon: ShieldCheck,
+  },
+} satisfies Record<'develop' | 'product', {
+  label: string
+  title: string
+  icon: typeof Code2
+}>
+
+const unknownStartupModePresentation = {
+  label: '模式未知',
+  title: '尚未从 Edge 获取启动模式',
+  icon: ShieldCheck,
+}
+
 export function AppShell({
   page,
   connection,
+  startupMode,
   activeTaskCount,
   onNavigate,
   onNotify,
@@ -49,10 +75,16 @@ export function AppShell({
 }: PropsWithChildren<{
   page: PageId
   connection: ConnectionMode
+  startupMode?: 'develop' | 'product'
   activeTaskCount: number
   onNavigate: (page: PageId) => void
   onNotify: (message: string) => void
 }>) {
+  const modePresentation = startupMode
+    ? startupModePresentation[startupMode]
+    : unknownStartupModePresentation
+  const StartupModeIcon = modePresentation.icon
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -114,6 +146,13 @@ export function AppShell({
               <input readOnly aria-label="全局搜索（待接入）" placeholder="全局搜索待接入" onFocus={() => onNotify('请使用物料和工作流页面内的搜索框')} />
               <kbd>⌘ K</kbd>
             </label>
+            <span
+              className={`startup-mode-chip startup-mode-${startupMode || 'unknown'}`}
+              title={modePresentation.title}
+            >
+              <StartupModeIcon size={14} />
+              {modePresentation.label}
+            </span>
             <span className={`live-chip live-chip-${connection}`}>
               <i />
               {connection === 'connected'

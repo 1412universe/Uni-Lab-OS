@@ -45,6 +45,7 @@ export default function App() {
     <AppShell
       page={page}
       connection={connection}
+      startupMode={connection === 'connected' ? snapshot.startupMode : undefined}
       activeTaskCount={snapshot.tasks.filter((task) => task.status === 'running' || task.status === 'canceling').length}
       onNavigate={navigate}
       onNotify={setToast}
