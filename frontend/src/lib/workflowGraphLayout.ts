@@ -16,6 +16,8 @@ interface LayoutOptions {
   ranksPerBand?: number
 }
 
+type WorkflowGroupFrame = { x: number; y: number; width: number; height: number }
+
 export interface PositionedWorkflowNode {
   node: WorkflowGraphNode
   x: number
@@ -33,7 +35,7 @@ export interface PositionedWorkflowGroup {
   rank: number
   band: number
   children: PositionedWorkflowNode[]
-  frames: Array<{ x: number; y: number; width: number; height: number }>
+  frames: WorkflowGroupFrame[]
 }
 
 export interface PositionedWorkflowEdge {
@@ -67,8 +69,6 @@ interface LayoutEntity {
 function isGroup(node: WorkflowGraphNode) {
   return isWorkflowRegionNode(node)
 }
-
-type WorkflowGroupFrame = { x: number; y: number; width: number; height: number }
 
 function frameForNodes(
   groupNode: WorkflowGraphNode,
