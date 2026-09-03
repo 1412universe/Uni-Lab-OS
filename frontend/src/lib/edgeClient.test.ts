@@ -4,6 +4,7 @@ import {
   adaptTask,
   adaptWorkflow,
   createExperimentOperation,
+  createWorkflowTask,
   createReagent,
   createReagentInfo,
   deleteReagentInfo,
@@ -56,6 +57,25 @@ describe('loadWorkflowTaskGraph', () => {
       '/api/v1/workflow-tasks/task-1',
       expect.objectContaining({ headers: { Accept: 'application/json' } }),
     )
+  })
+})
+
+describe('createWorkflowTask', () => {
+  it('sends normal by default and accepts an explicit high priority', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => (
+      response({ code: 0, data: { uuid: 'task-1' } })
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createWorkflowTask({ workflowUuid: 'wf-1', input: {}, description: '' })
+    await createWorkflowTask({ workflowUuid: 'wf-1', input: {}, description: '', priority: 'high' })
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      priority: 'normal',
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toMatchObject({
+      priority: 'high',
+    })
   })
 })
 

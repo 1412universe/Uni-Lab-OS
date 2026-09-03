@@ -15,6 +15,7 @@ import type {
   WorkflowGraphNode,
   WorkflowSource,
   WorkflowTask,
+  WorkflowTaskPriority,
   WorkflowStepState,
   ResourceTemplateRecord,
   ActionTemplateRecord,
@@ -1890,15 +1891,18 @@ export async function createWorkflowTask({
   input,
   description,
   runMode = 'normal',
+  priority = 'normal',
 }: {
   workflowUuid: string
   input: Record<string, unknown>
   description: string
   runMode?: 'normal' | 'step'
+  priority?: WorkflowTaskPriority
 }) {
   return postData<RawRecord>('/workflow-tasks', {
     workflow_uuid: workflowUuid,
     run_mode: runMode,
+    priority,
     input,
     description,
     meta_data: { source: 'unilabos-frontend' },

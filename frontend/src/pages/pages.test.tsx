@@ -379,6 +379,8 @@ describe('WorkflowsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '进入运行准备' }))
     fireEvent.change(screen.getByRole('combobox', { name: '运行方式' }), { target: { value: 'step' } })
+    expect(screen.getByRole('combobox', { name: '任务优先级' })).toHaveValue('normal')
+    fireEvent.change(screen.getByRole('combobox', { name: '任务优先级' }), { target: { value: 'high' } })
     await waitFor(() => expect(screen.getAllByRole('button', { name: '运行 Preflight' })[1]).toBeEnabled())
     fireEvent.click(screen.getAllByRole('button', { name: '运行 Preflight' })[1])
     await screen.findByText('当前可提交，派发时仍会复核')
@@ -388,7 +390,7 @@ describe('WorkflowsPage', () => {
       '/api/v1/workflow-tasks',
       expect.objectContaining({
         method: 'POST',
-        body: expect.stringContaining('"run_mode":"step"'),
+        body: expect.stringContaining('"priority":"high"'),
       }),
     ))
     expect(fetchMock).toHaveBeenCalledWith(

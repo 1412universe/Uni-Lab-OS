@@ -22,7 +22,7 @@ import {
   X,
 } from 'lucide-react'
 import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowSource, loadWorkflowTaskGraph } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget } from '../types'
+import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget, WorkflowTaskPriority } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
 import { WorkflowDag } from '../components/WorkflowDag'
@@ -101,6 +101,7 @@ export function WorkflowsPage({
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
   const [runMode, setRunMode] = useState<'normal' | 'step'>('normal')
+  const [runPriority, setRunPriority] = useState<WorkflowTaskPriority>('normal')
   const [sourceTarget, setSourceTarget] = useState<{
     uuid: string
     name: string
@@ -225,6 +226,7 @@ export function WorkflowsPage({
         description: runDescription,
         input: serialiseTaskInput(detail.inputContract, runInput),
         runMode,
+        priority: runPriority,
       })
     },
     onMutate: () => onNavigate('tasks'),
@@ -452,6 +454,7 @@ export function WorkflowsPage({
                       {startupMode === 'develop' ? (
                         <label className="run-description"><span>运行方式</span><select aria-label="运行方式" value={runMode} onChange={(event) => setRunMode(event.target.value as 'normal' | 'step')}><option value="normal">自动运行</option><option value="step">单步调试</option></select></label>
                       ) : null}
+                      <label className="run-description"><span>任务优先级</span><select aria-label="任务优先级" value={runPriority} onChange={(event) => setRunPriority(event.target.value as WorkflowTaskPriority)}><option value="normal">普通优先级</option><option value="high">高优先级</option></select></label>
                       <label className="run-description"><span>任务描述</span><input value={runDescription} onChange={(event) => setRunDescription(event.target.value)} /></label>
                       <div className="run-fields">
                         {detail.inputContract.map((field) => {

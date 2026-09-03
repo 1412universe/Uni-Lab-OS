@@ -151,6 +151,8 @@ export interface TaskNode {
   job?: TaskNodeJobEvidence
 }
 
+export type WorkflowTaskPriority = 'normal' | 'high'
+
 export interface WorkflowTask {
   uuid: string
   workflowUuid: string
