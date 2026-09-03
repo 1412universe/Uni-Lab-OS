@@ -309,6 +309,9 @@ export interface ReagentRecord {
   containerBarcode?: string
   /** 未结束任务对该瓶的活动预留量，与 quantity 同单位。 */
   activeWorkflowReservedQuantity?: number
+  description?: string
+  /** 后端整体覆盖 meta_data；编辑时必须原样带回，否则血缘会丢。 */
+  metaData?: Record<string, unknown>
   /** 由分装产生时指向源瓶试剂；手工录入的瓶子为空。 */
   sourceReagentUuid?: string
   dispenseCommandId?: string

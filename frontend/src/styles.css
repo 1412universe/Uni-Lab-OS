@@ -1175,7 +1175,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .reagent-binding-panel .binding-hint { display: block; margin-top: 4px; color: var(--muted, #8a93a6); font-size: 12px; }
 
 /* 试剂库存：按化学身份分组，组内按分装血缘缩进 */
-.reagent-inventory-table > header, .reagent-inventory-table .reagent-bottle { display: grid; grid-template-columns: minmax(260px,1.6fr) minmax(130px,.7fr) minmax(90px,.5fr) 150px 70px; gap: 14px; align-items: center; padding: 10px 16px; }
+.reagent-inventory-table > header, .reagent-inventory-table .reagent-bottle { display: grid; grid-template-columns: minmax(260px,1.6fr) minmax(130px,.7fr) minmax(90px,.5fr) 150px 132px; gap: 14px; align-items: center; padding: 10px 16px; }
 .reagent-inventory-table .reagent-bottle { font-size: 12px; border-top: 1px solid var(--line-soft); }
 .reagent-inventory-table .reagent-bottle > span:first-child, .reagent-inventory-table .reagent-bottle > span:nth-child(2) { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .reagent-inventory-table .reagent-bottle > span:first-child strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1194,3 +1194,11 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .reagent-reserved { color: #b54708; }
 .reagent-updated { color: var(--muted); font-size: 11px; }
 .reagent-history-drawer header code.reagent-uuid { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }
+
+.reagent-inventory-table .reagent-row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.reagent-inventory-table .reagent-row-actions button.danger:not(:disabled) { color: #b42318; border-color: #fecdca; }
+.reagent-inventory-table .reagent-row-actions button.danger:not(:disabled):hover { background: #fef3f2; }
+.reagent-edit-form { display: grid; gap: 14px; padding: 18px 20px 20px; }
+.reagent-edit-target { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; border-radius: 10px; background: var(--panel-soft); }
+.reagent-edit-target small { color: var(--muted); }
+.reagent-edit-hint { color: var(--muted); font-size: 11px; }

@@ -1043,8 +1043,29 @@ export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[
     activeWorkflowReservedQuantity: raw.active_workflow_reserved_quantity === undefined || raw.active_workflow_reserved_quantity === null ? undefined : Number(raw.active_workflow_reserved_quantity),
     sourceReagentUuid: typeof raw.meta_data?.source_reagent_uuid === 'string' ? raw.meta_data.source_reagent_uuid : undefined,
     dispenseCommandId: typeof raw.meta_data?.dispense_command_id === 'string' ? raw.meta_data.dispense_command_id : undefined,
+    description: raw.description ? String(raw.description) : undefined,
+    metaData: raw.meta_data && typeof raw.meta_data === 'object' ? (raw.meta_data as Record<string, unknown>) : {},
     revision: Number(raw.revision || 1), updatedAt: timeLabel(raw.update_time),
   }))
+}
+
+export async function updateReagent(payload: {
+  uuid: string; quantity: number; quantityUnit: string; expectedRevision: number;
+  concentrationValue?: number; concentrationUnit?: string; description?: string;
+  /** 原记录的 meta_data；PUT 是整体覆盖，不带回就会抹掉分装血缘。 */
+  metaData?: Record<string, unknown>; source?: string
+}) {
+  return writeData<RawRecord>('PUT', `/reagents/${encodeURIComponent(payload.uuid)}`, {
+    quantity: payload.quantity, quantity_unit: payload.quantityUnit, expected_revision: payload.expectedRevision,
+    ...(payload.concentrationValue == null || !payload.concentrationUnit ? {} : { concentration_value: payload.concentrationValue, concentration_unit: payload.concentrationUnit }),
+    description: payload.description || undefined,
+    source: payload.source || 'frontend:os-console',
+    meta_data: payload.metaData || {},
+  })
+}
+
+export async function deleteReagent(reagentUuid: string) {
+  return writeData<unknown>('DELETE', `/reagents/${encodeURIComponent(reagentUuid)}`)
 }
 
 export async function loadReagentHistory(materialUuid: string, signal?: AbortSignal): Promise<ReagentHistoryRecord[]> {

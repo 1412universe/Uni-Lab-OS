@@ -8,6 +8,7 @@ import {
   createReagentInfo,
   deleteReagentInfo,
   createWorkflowTask,
+  deleteReagent,
   dispenseReagent,
   instantiateMaterial,
   lookupCompoundByCas,
@@ -19,6 +20,7 @@ import {
   loadWorkflowTaskGraph,
   unwrapEnvelope,
   updateExperimentOperation,
+  updateReagent,
 } from './edgeClient'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -1324,5 +1326,27 @@ describe('loadWorkflowGraph', () => {
       reagentInfoUuid: undefined, requiredQuantity: 10, quantityUnit: 'mL', allowSplit: false,
       description: undefined, materialSourceNodeUuid: 'node-2',
     }])
+  })
+})
+
+describe('updateReagent / deleteReagent', () => {
+  it('sends a PUT with the optimistic revision and carries meta_data back untouched', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0, data: { uuid: 'rg-1', revision: 3 } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateReagent({ uuid: 'rg-1', quantity: 45, quantityUnit: 'mL', expectedRevision: 2, description: '盘点', metaData: { source_reagent_uuid: 'rg-0', dispense_command_id: 'cmd-9' } })
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/reagents/rg-1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('PUT')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      quantity: 45, quantity_unit: 'mL', expected_revision: 2, description: '盘点',
+      meta_data: { source_reagent_uuid: 'rg-0', dispense_command_id: 'cmd-9' },
+    })
+  })
+
+  it('issues a DELETE for the reagent record', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await deleteReagent('rg-1')
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/reagents/rg-1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('DELETE')
   })
 })

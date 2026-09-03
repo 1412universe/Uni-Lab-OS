@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, BookOpen, FlaskConical, History, PackagePlus, Plus, Search, Trash2 } from 'lucide-react'
+import { ArrowRight, BookOpen, FlaskConical, History, PackagePlus, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
-import { createReagent, createReagentInfo, deleteReagentInfo, dispenseReagent, loadReagentHistory, loadReagentInfos, loadReagents, loadResourceTemplates, lookupCompoundByCas } from '../lib/edgeClient'
+import { createReagent, createReagentInfo, deleteReagent, deleteReagentInfo, dispenseReagent, updateReagent, loadReagentHistory, loadReagentInfos, loadReagents, loadResourceTemplates, lookupCompoundByCas } from '../lib/edgeClient'
 import type { CompoundLookupResult, MaterialRecord, ReagentHistoryRecord, ReagentInfoRecord, ReagentRecord, ResourceTemplateRecord } from '../types'
 
 const physicalStateLabels: Record<ReagentInfoRecord['physicalState'], string> = {
@@ -15,6 +15,7 @@ type IdentityForm = {
 }
 type CustomParameter = { id: number; name: string; value: string }
 type DispenseRow = { id: number; materialUuid: string; quantity: string }
+type EditForm = { quantity: string; concentrationValue: string; concentrationUnit: string; description: string }
 
 const containerTagLabels: Record<string, string> = {
   liquid_reagent: '液体试剂瓶',
@@ -85,7 +86,9 @@ export function isValidCas(value: string) {
 export function ReagentsPage({ materials, connected, onNotify }: { materials: MaterialRecord[]; connected: boolean; onNotify: (message: string) => void }) {
   const [view, setView] = useState<'inventory' | 'catalog'>('inventory')
   const [query, setQuery] = useState('')
-  const [dialog, setDialog] = useState<'catalog' | 'register' | 'dispense' | null>(null)
+  const [dialog, setDialog] = useState<'catalog' | 'register' | 'dispense' | 'edit' | null>(null)
+  const [editTarget, setEditTarget] = useState<ReagentRecord | null>(null)
+  const [editForm, setEditForm] = useState<EditForm>({ quantity: '', concentrationValue: '', concentrationUnit: '', description: '' })
   const [saving, setSaving] = useState(false)
   const [dispenseSource, setDispenseSource] = useState<ReagentRecord | null>(null)
   const [dispenseRows, setDispenseRows] = useState<DispenseRow[]>([])
@@ -182,6 +185,43 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
     } catch (error) { onNotify(`录入失败：${error instanceof Error ? error.message : '未知错误'}`) } finally { setSaving(false) }
   }
 
+  function openEditDialog(item: ReagentRecord) {
+    setEditTarget(item)
+    setEditForm({ quantity: numberText(item.quantity) || '', concentrationValue: numberText(item.concentrationValue) || '', concentrationUnit: item.concentrationUnit || '', description: item.description || '' })
+    setDialog('edit')
+  }
+
+  async function saveEdit() {
+    if (!editTarget) return
+    const quantity = Number(editForm.quantity)
+    if (!Number.isFinite(quantity) || quantity < 0) return
+    setSaving(true)
+    try {
+      await updateReagent({
+        uuid: editTarget.uuid, quantity, quantityUnit: editTarget.quantityUnit || 'mL', expectedRevision: editTarget.revision,
+        concentrationValue: numberOrUndefined(editForm.concentrationValue), concentrationUnit: textOrUndefined(editForm.concentrationUnit),
+        description: textOrUndefined(editForm.description), metaData: editTarget.metaData,
+      })
+      await reagentsQuery.refetch()
+      setDialog(null); setEditTarget(null)
+      onNotify(`已更新 ${editTarget.containerName || editTarget.name}：${quantity} ${editTarget.quantityUnit || ''}`)
+    } catch (error) {
+      onNotify(`更新失败：${error instanceof Error ? error.message : '未知错误'}`)
+    } finally { setSaving(false) }
+  }
+
+  async function removeReagent(item: ReagentRecord) {
+    if (!window.confirm(`确认删除 ${item.containerName || item.name} 里的 ${item.name} 记录？\n\n容器会变回空容器，操作历史保留一条“移除”。`)) return
+    setSaving(true)
+    try {
+      await deleteReagent(item.uuid)
+      await reagentsQuery.refetch()
+      onNotify(`已移除 ${item.containerName || item.name} 里的 ${item.name}`)
+    } catch (error) {
+      onNotify(`删除失败：${error instanceof Error ? error.message : '未知错误'}`)
+    } finally { setSaving(false) }
+  }
+
   function openDispenseDialog(item: ReagentRecord) {
     setDispenseSource(item)
     setDispenseRows([{ id: 1, materialUuid: '', quantity: '' }])
@@ -231,11 +271,11 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
       <PanelHeader title={view === 'inventory' ? '试剂库存' : '试剂目录'} description={view === 'inventory' ? '容器级数量、浓度与化学身份' : 'CAS、分子式与基础理化信息'} action={<div className="segmented"><button className={view === 'inventory' ? 'active' : ''} onClick={() => setView('inventory')}>库存</button><button className={view === 'catalog' ? 'active' : ''} onClick={() => { setView('catalog'); setHistoryReagent(null) }}>目录</button></div>} />
       <label className="reagent-search"><Search size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={view === 'inventory' ? '搜索试剂、CAS、容器或条码' : '搜索名称、别名、CAS 或分子式'} /></label>
       {loadingError ? <div className="connection-alert" role="alert"><div><strong>试剂数据不可用</strong><span>{loadingError instanceof Error ? loadingError.message : '读取失败'}</span></div></div> : null}
-      {view === 'inventory' ? <InventoryTable items={inventory} materials={materials} hasCatalog={Boolean(infosQuery.data?.length)} onHistory={setHistoryReagent} onDispense={openDispenseDialog} /> :<CatalogTable items={infos} deleting={saving} onDelete={(item) => void removeCatalogItem(item)} />}
+      {view === 'inventory' ? <InventoryTable items={inventory} materials={materials} hasCatalog={Boolean(infosQuery.data?.length)} onHistory={setHistoryReagent} onDispense={openDispenseDialog}  onEdit={openEditDialog} onDelete={removeReagent} busy={saving} /> :<CatalogTable items={infos} deleting={saving} onDelete={(item) => void removeCatalogItem(item)} />}
     </Panel>
     {historyReagent ? <ReagentHistoryDrawer reagent={historyReagent} items={historyQuery.data || []} loading={historyQuery.isLoading || historyQuery.isFetching} error={historyQuery.error} onClose={() => setHistoryReagent(null)} /> : null}
-    {dialog ? <div className="dialog-backdrop" role="presentation"><div className={`material-write-dialog reagent-dialog ${dialog === 'catalog' ? 'reagent-dialog-wide' : ''} ${dialog === 'dispense' ? 'reagent-dialog-dispense' : ''}`} role="dialog" aria-modal="true"><header><div><span>REAGENT COMMAND</span><h2>{dialog === 'catalog' ? '新增试剂目录' : dialog === 'dispense' ? '分装' : '录入试剂'}</h2>{dialog === 'dispense' && dispenseSource ? <p>把源瓶里的试剂分到若干空容器；同一化学身份与浓度，数量守恒，一次提交。</p> : null}{dialog === 'catalog' ? <p>输入 CAS 可自动补全化学信息；无 CAS 的自配物质可直接填写名称。</p> : null}</div><button aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
-      {dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : dialog === 'dispense' && dispenseSource ? <DispenseForm source={dispenseSource} rows={dispenseRows} setRows={setDispenseRows} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} preferredTag={preferredContainerTag} saving={saving} onSave={() => void saveDispense()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} saving={saving} onSave={() => void saveRegistration()} />}
+    {dialog ? <div className="dialog-backdrop" role="presentation"><div className={`material-write-dialog reagent-dialog ${dialog === 'catalog' ? 'reagent-dialog-wide' : ''} ${dialog === 'dispense' ? 'reagent-dialog-dispense' : ''}`} role="dialog" aria-modal="true"><header><div><span>REAGENT COMMAND</span><h2>{dialog === 'catalog' ? '新增试剂目录' : dialog === 'dispense' ? '分装' : dialog === 'edit' ? '编辑试剂' : '录入试剂'}</h2>{dialog === 'dispense' && dispenseSource ? <p>把源瓶里的试剂分到若干空容器；同一化学身份与浓度，数量守恒，一次提交。</p> : null}{dialog === 'catalog' ? <p>输入 CAS 可自动补全化学信息；无 CAS 的自配物质可直接填写名称。</p> : null}</div><button aria-label="关闭" onClick={() => setDialog(null)}>×</button></header>
+      {dialog === 'edit' && editTarget ? <EditReagentForm target={editTarget} form={editForm} setForm={setEditForm} saving={saving} onSave={saveEdit} /> : dialog === 'catalog' ? <CatalogForm form={identityForm} setForm={setIdentityForm} lookup={lookup} error={formError} customParameters={customParameters} setCustomParameters={setCustomParameters} advancedOpen={advancedOpen} setAdvancedOpen={setAdvancedOpen} saving={saving} onSave={() => void saveCatalogItem()} /> : dialog === 'dispense' && dispenseSource ? <DispenseForm source={dispenseSource} rows={dispenseRows} setRows={setDispenseRows} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} preferredTag={preferredContainerTag} saving={saving} onSave={() => void saveDispense()} /> : <RegisterForm form={registerForm} setForm={setRegisterForm} infos={infosQuery.data || []} containers={containers} templates={templatesQuery.data || []} filterTags={containerFilterTags} saving={saving} onSave={() => void saveRegistration()} />}
     </div></div> : null}
   </div>
 }
@@ -288,6 +328,25 @@ export function RegisterForm({ form, setForm, infos, containers, templates, filt
     <label className="form-field"><span>浓度单位</span><select value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })}>{['%', 'mol/L', 'mmol/L', 'mg/mL'].map((unit) => <option key={unit}>{unit}</option>)}</select></label>
     <label className="form-field wide"><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
     <Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || !form.materialUuid || !form.reagentInfoUuid || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button>
+  </div>
+}
+
+export function EditReagentForm({ target, form, setForm, saving, onSave }: { target: ReagentRecord; form: EditForm; setForm: (form: EditForm) => void; saving: boolean; onSave: () => void }) {
+  const reserved = target.activeWorkflowReservedQuantity ?? 0
+  const quantity = Number(form.quantity)
+  const quantityValid = form.quantity.trim() !== '' && Number.isFinite(quantity) && quantity >= 0
+  const belowReserved = quantityValid && quantity < reserved
+  return <div className="reagent-edit-form">
+    <div className="reagent-edit-target"><strong>{target.name}</strong><small>{target.containerName || target.materialUuid} · 当前 {target.quantity ?? '—'} {target.quantityUnit || ''}{reserved > 0 ? ` · 预留中 ${reserved} ${target.quantityUnit || ''}` : ''}</small></div>
+    <div className="form-grid">
+      <label className="form-field"><span>数量（{target.quantityUnit || '单位不变'}）*</span><input aria-label="数量" type="number" min={0} step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label>
+      <label className="form-field"><span>浓度值</span><input aria-label="浓度值" type="number" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label>
+      <label className="form-field"><span>浓度单位</span><input aria-label="浓度单位" value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })} placeholder="如 %、mol/L" /></label>
+      <label className="form-field wide"><span>说明</span><input aria-label="说明" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="为什么改：盘点、称重复核、录错更正…" /></label>
+    </div>
+    {belowReserved ? <small className="form-error">数量不能低于任务预留量 {reserved} {target.quantityUnit || ''}。</small> : null}
+    <small className="reagent-edit-hint">单位不可改；数量增减会记入操作历史（增加记“录入 / 补充”，减少记“调整”）。分装血缘保持不变。</small>
+    <Button tone="primary" icon={<Pencil size={15} />} disabled={saving || !quantityValid || belowReserved} onClick={onSave}>保存修改</Button>
   </div>
 }
 
@@ -404,7 +463,7 @@ export function groupInventory(items: ReagentRecord[], materials: MaterialRecord
   return [...groups.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
 }
 
-function InventoryTable({ items, materials, hasCatalog, onHistory, onDispense }: { items: Awaited<ReturnType<typeof loadReagents>>; materials: MaterialRecord[]; hasCatalog: boolean; onHistory: (item: ReagentRecord) => void; onDispense: (item: ReagentRecord) => void }) {
+function InventoryTable({ items, materials, hasCatalog, onHistory, onDispense, onEdit, onDelete, busy }: { items: Awaited<ReturnType<typeof loadReagents>>; materials: MaterialRecord[]; hasCatalog: boolean; onHistory: (item: ReagentRecord) => void; onDispense: (item: ReagentRecord) => void; onEdit: (item: ReagentRecord) => void; onDelete: (item: ReagentRecord) => void; busy?: boolean }) {
   const groups = groupInventory(items, materials)
   return <div className="reagent-table reagent-inventory-table">
     <header><span>容器 · 来源</span><span>可用量</span><span>浓度</span><span>更新时间</span><span>操作</span></header>
@@ -439,6 +498,8 @@ function InventoryTable({ items, materials, hasCatalog, onHistory, onDispense }:
             <span className="reagent-row-actions history-action">
               <button aria-label={`分装 ${item.name} ${item.uuid}`} title={available > 0 ? '分装到其他容器' : '源瓶已空，无法分装'} disabled={!(available > 0)} onClick={() => onDispense(item)}><PackagePlus size={14} /></button>
               <button aria-label={`查看操作历史 ${item.name} ${item.uuid}`} title="查看操作历史" onClick={() => onHistory(item)}><History size={14} /></button>
+              <button aria-label={`编辑 ${item.name} ${item.uuid}`} title="修正数量、浓度或说明" disabled={busy} onClick={() => onEdit(item)}><Pencil size={14} /></button>
+              <button className="danger" aria-label={`删除 ${item.name} ${item.uuid}`} title={reservedHere > 0 ? `有任务预留 ${formatQuantity(reservedHere)} ${item.quantityUnit || ''}，不能删除` : '移除这条试剂记录，容器变回空容器'} disabled={busy || reservedHere > 0} onClick={() => onDelete(item)}><Trash2 size={14} /></button>
             </span>
           </article>
         })}
