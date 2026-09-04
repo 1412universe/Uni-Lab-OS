@@ -225,7 +225,8 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
     """派发前投影失败后本地运行不得在后续重排中偷偷执行。
 
     参数：``tmp_path`` 隔离工作流数据库。返回无；断言公共任务运行投影失败会
-    阻止设备命令、移除尚未越过派发边界的内存运行，并终止持久 Task/Job。
+    阻止设备命令、取消尚未越过派发边界的 Edge 运行，同时保留持久 Task/Job
+    的 pending 事实供同一身份重试。
     """
 
     store = WorkflowStore(tmp_path / "workflow_history.db")
@@ -292,10 +293,63 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
         assert str(captured_error.value.__cause__) == "workflow database unavailable"
         assert dispatcher.dispatched == []
         assert scheduler.reschedule() == []
-        assert scheduler.workflow_snapshot(TASK_A_UUID) is None
-        assert store.get_task(TASK_A_UUID)["status"] == "canceled"
-        assert store.get_task(TASK_A_UUID)["cleanup_status"] == "settled"
-        assert store.get_job(JOB_A_UUID)["status"] == "canceled"
+        assert scheduler.workflow_snapshot(TASK_A_UUID)["state"] == "canceled"
+        assert store.get_task(TASK_A_UUID)["status"] == "pending"
+        assert store.get_task(TASK_A_UUID)["cleanup_status"] == "none"
+        assert store.get_job(JOB_A_UUID)["status"] == "pending"
+    finally:
+        bridge.close()
+        store.close()
+
+
+def test_bridge_retries_after_preserved_pre_dispatch_failure(
+    tmp_path: Any,
+) -> None:
+    """派发回调失败留下的取消占位只能在下一次同桥提交前被清理。"""
+
+    store = WorkflowStore(tmp_path / "workflow_history.db")
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+
+    class _FailOnceProjection(TaskRuntimeProjection):
+        """首个派发前投影失败，随后允许同一身份重试。"""
+
+        def __init__(self, opened_store: WorkflowStore) -> None:
+            super().__init__(opened_store)
+            self._fail_once = True
+
+        def project_pre_dispatch(self, **kwargs: Any) -> dict[str, Any]:
+            if self._fail_once:
+                self._fail_once = False
+                raise RuntimeError("workflow database unavailable")
+            return super().project_pre_dispatch(**kwargs)
+
+    bridge = TaskSchedulerBridge(
+        store,
+        scheduler=scheduler,
+        projection=_FailOnceProjection(store),
+    )
+    try:
+        task = _insert_run(
+            store,
+            task_uuid=TASK_A_UUID,
+            job_uuid=JOB_A_UUID,
+            node_uuid=NODE_A_UUID,
+            device_material_uuid=DEVICE_A_UUID,
+        )["task"]
+
+        with pytest.raises(TaskSchedulerBridgeError):
+            bridge.submit(task)
+
+        assert scheduler.workflow_snapshot(TASK_A_UUID)["state"] == "canceled"
+        assert store.get_task(TASK_A_UUID)["status"] == "pending"
+        assert store.get_job(JOB_A_UUID)["status"] == "pending"
+
+        retried = bridge.submit(store.get_task(TASK_A_UUID))
+
+        assert retried["task"]["status"] == "running"
+        assert store.get_job(JOB_A_UUID)["status"] == "running"
+        assert [item["job_id"] for item in dispatcher.dispatched] == [JOB_A_UUID]
     finally:
         bridge.close()
         store.close()

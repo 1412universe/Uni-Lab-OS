@@ -87,6 +87,74 @@ def _canonical_graph(graph: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def published_graph_source_hash(graph: Mapping[str, Any]) -> str:
+    """计算发布合同使用的冻结工作流图指纹。
+
+    参数：``graph`` 是包含工作流、节点、连线及模板的完整候选图。返回：与
+    ``PublishedWorkflowContractStore.publish`` 完全相同的图/执行器摘要；该摘要
+    与领域包中的原始源码字节哈希不同，不能替代 ``source_draft_hash``。异常：图
+    缺少发布合同所需字段或执行器要求非法时抛 ``PublishedContractInvalid``。
+
+    该公共接缝供冷启动恢复比较“同一源码是否仍生成同一发布图”，避免仅凭源码
+    字节和工作流修订就把模板目录代际变化误认为不可变合同仍然成立。
+    """
+
+    snapshot = _canonical_graph(graph)
+    executor_requirements, executor_binding_mapping = (
+        _abstract_executor_requirements(snapshot)
+    )
+    return _digest(
+        {
+            "graph": snapshot,
+            "executor_requirements": executor_requirements,
+            "executor_binding_mapping": executor_binding_mapping,
+        }
+        if executor_requirements or executor_binding_mapping
+        else snapshot
+    )
+
+
+def published_graph_semantic_hash(graph: Mapping[str, Any]) -> str:
+    """计算忽略存储时间戳后的发布图语义指纹。
+
+    参数：``graph`` 是发布时或重新编译得到的完整工作流图。返回：忽略工作流、
+    节点和连线上的 ``create_time``/``update_time`` 后的稳定摘要。异常：图结构
+    或执行器要求非法时抛 ``PublishedContractInvalid``。
+
+    时间戳属于当前定义存储的生命周期事实，不是发布合同语义；冷启动编译必然
+    会生成新的时间戳。该摘要仅用于确认冷启动候选仍与历史合同是同一张图，持久
+    合同中的 ``source_hash`` 仍保持原有兼容格式。
+    """
+
+    snapshot = _strip_graph_lifecycle_timestamps(_canonical_graph(graph))
+    executor_requirements, executor_binding_mapping = (
+        _abstract_executor_requirements(snapshot)
+    )
+    return _digest(
+        {
+            "graph": snapshot,
+            "executor_requirements": executor_requirements,
+            "executor_binding_mapping": executor_binding_mapping,
+        }
+        if executor_requirements or executor_binding_mapping
+        else snapshot
+    )
+
+
+def _strip_graph_lifecycle_timestamps(value: Any) -> Any:
+    """递归移除图投影中的存储生命周期时间戳。"""
+
+    if isinstance(value, dict):
+        return {
+            key: _strip_graph_lifecycle_timestamps(item)
+            for key, item in value.items()
+            if key not in {"create_time", "update_time"}
+        }
+    if isinstance(value, list):
+        return [_strip_graph_lifecycle_timestamps(item) for item in value]
+    return value
+
+
 def _abstract_executor_requirements(
     snapshot: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
@@ -1100,4 +1168,6 @@ __all__ = [
     "PublishedContractConflict",
     "PublishedContractInvalid",
     "PublishedWorkflowContractStore",
+    "published_graph_semantic_hash",
+    "published_graph_source_hash",
 ]

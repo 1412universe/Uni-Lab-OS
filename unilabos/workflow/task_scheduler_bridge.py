@@ -67,6 +67,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CANCEL_ACK_TIMEOUT_SECONDS = 10.0
 _DEFAULT_CANCEL_COMPLETE_TIMEOUT_SECONDS = 60.0
 
+# ``submit_workflow`` 会同步执行第一次重排，因此桥必须知道异常发生在调度器
+# 建立运行之前，还是已经进入了持久派发/本地控制回调。后者不能把工作流库中
+# 尚未派发的 Task/Job 伪造为 canceled，否则同一任务既不能安全重试，也会丢失
+# 原始 pending 事实。
+_SUBMISSION_PHASE_SCHEDULER = "scheduler_submit"
+_SUBMISSION_PHASE_PRE_DISPATCH = "pre_dispatch"
+_SUBMISSION_PHASE_LOCAL_CONTROL = "local_control"
+
 
 class TaskSchedulerBridgeError(RuntimeError):
     """工作流任务不能安全进入本地调度器时使用的稳定桥接错误。"""
@@ -152,6 +160,15 @@ class TaskSchedulerBridge:
         self._task_by_job: dict[str, str] = {}
         # ``_submitted_tasks`` 标识仍可进行准入重试（AdmissionRetry）的本地运行。
         self._submitted_tasks: set[str] = set()
+        # ``_submission_phases`` 只覆盖一次同步 submit 的短生命周期；回调可能在
+        # EdgeScheduler 持有其内部锁时发生，使用独立 RLock 避免并发提交/失败收敛
+        # 读取到半更新阶段。
+        self._submission_phase_lock = threading.RLock()
+        self._submission_phases: dict[str, str] = {}
+        # 进入本地控制或派发准入后失败时，Edge 运行要保留 canceled 快照供诊断，
+        # 但持久 Task/Job 仍是 pending。该集合是唯一允许下次 submit 丢弃的
+        # scheduler 占位来源，不能按“同 UUID + canceled”猜测并删除其他运行。
+        self._retryable_scheduler_runs: set[str] = set()
         # ``_admission_pending_tasks`` 从持久准入事实恢复；内存集合仅作本轮调度索引，
         # 进程重启不会丢失仍需重试的任务身份。
         self._admission_pending_tasks: set[str] = set(
@@ -299,12 +316,16 @@ class TaskSchedulerBridge:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         # ``task_uuid`` 是本地调度运行、遗留预留和标准任务共用的稳定身份。
         task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
+        # 上一次在本桥回调中失败时保留了一个 canceled 的 Edge 快照；只有本桥
+        # 自己登记过的占位才允许在重试前丢弃，避免误删同 UUID 的其他调度运行。
+        self._discard_retryable_scheduler_run(task_uuid)
         if task_uuid in self._submitted_tasks:
             return self._aggregate(task_uuid)
         if task_uuid in self._admission_pending_tasks:
             return self._aggregate(task_uuid)
         jobs: list[dict[str, Any]] = []
         admission_attempted = False
+        registered = False
         try:
             persisted_task = self._store.get_task(task_uuid)
             # ``jobs`` 是创建事务已经确定的工作流节点作业（WorkflowNodeJob）集合。
@@ -360,7 +381,12 @@ class TaskSchedulerBridge:
                     continue
                 self._task_by_job[job_uuid] = task_uuid
             self._submitted_tasks.add(task_uuid)
+            registered = True
+            self._begin_submission_phase(task_uuid)
             submission = self._scheduler.submit_workflow(spec)
+            # 调度器返回即表示同步控制/派发回调全部成功；后续 Trace 或首次
+            # 状态投影异常不应被误判为“回调内部失败”。
+            self._finish_submission_phase(task_uuid)
             self._project_scheduler_trace_context(
                 task_uuid,
                 submission.get("trace_context"),
@@ -369,15 +395,25 @@ class TaskSchedulerBridge:
             scheduler_state = self._required_text(
                 submission.get("state"), field="scheduler.state"
             )
-            self._projection.project_submission(task_uuid, scheduler_state)
-            return self._aggregate(task_uuid)
+            aggregate = self._projection.project_submission(task_uuid, scheduler_state)
+            return aggregate
         except Exception as error:
+            submission_phase = self._finish_submission_phase(task_uuid)
             if self._crossed_dispatch_boundary(jobs):
                 raise TaskSchedulerBridgeError(
                     "工作流任务派发结果不确定，已保留在途执行等待明确结果"
                 ) from error
-            if admission_attempted:
-                self._cancel_failed_submission(task_uuid, jobs)
+            if admission_attempted or registered:
+                self._cancel_failed_submission(
+                    task_uuid,
+                    jobs,
+                    retain_pending=registered
+                    and submission_phase
+                    in {
+                        _SUBMISSION_PHASE_PRE_DISPATCH,
+                        _SUBMISSION_PHASE_LOCAL_CONTROL,
+                    },
+                )
             if isinstance(error, TaskSchedulerBridgeError):
                 raise
             raise TaskSchedulerBridgeError(
@@ -1419,6 +1455,9 @@ class TaskSchedulerBridge:
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
             raise StoreConflict(f"派发作业不属于当前持久调度权威：{job_uuid}")
+        # 先登记阶段再校验其余派发摘要；任一校验、库存准入或持久投影异常都
+        # 属于“已进入派发回调”的失败，不能走早期提交的终止/释放语义。
+        self._mark_submission_phase(task_uuid, _SUBMISSION_PHASE_PRE_DISPATCH)
         dispatch_task_uuid = self._required_text(
             dispatching.get("workflow_id"), field="dispatching.workflow_id"
         )
@@ -2232,6 +2271,9 @@ class TaskSchedulerBridge:
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
             return
+        # 条件和循环回调发生在设备动作之前，也可能在投影事务中失败；保留
+        # 该阶段让 submit 的失败收敛与设备派发回调一致。
+        self._mark_submission_phase(task_uuid, _SUBMISSION_PHASE_LOCAL_CONTROL)
         if event.get("control_type") == "repeat_until":
             phase = str(event.get("phase") or "")
             iteration_index = event.get("iteration_index")
@@ -2818,26 +2860,97 @@ class TaskSchedulerBridge:
                 task_uuid,
             )
 
+    def _begin_submission_phase(self, task_uuid: str) -> None:
+        """登记一次即将调用 Edge ``submit_workflow`` 的阶段。"""
+
+        with self._submission_phase_lock:
+            self._submission_phases[task_uuid] = _SUBMISSION_PHASE_SCHEDULER
+
+    def _mark_submission_phase(self, task_uuid: str, phase: str) -> None:
+        """把同步提交标记为已经进入某个调度回调。
+
+        回调也可能来自稍后的公开重排；此时没有活动 submit 阶段，标记操作保持
+        no-op，避免把正常运行期的投影异常误判为提交回滚。
+        """
+
+        if phase not in {
+            _SUBMISSION_PHASE_PRE_DISPATCH,
+            _SUBMISSION_PHASE_LOCAL_CONTROL,
+        }:
+            raise ValueError(f"非法工作流提交阶段：{phase}")
+        with self._submission_phase_lock:
+            if task_uuid in self._submission_phases:
+                self._submission_phases[task_uuid] = phase
+
+    def _finish_submission_phase(self, task_uuid: str) -> str | None:
+        """取出并清除一次提交阶段，返回其最后已知阶段。"""
+
+        with self._submission_phase_lock:
+            return self._submission_phases.pop(task_uuid, None)
+
+    def _discard_retryable_scheduler_run(self, task_uuid: str) -> None:
+        """只丢弃本桥此前保留的 canceled Edge 占位。
+
+        参数：``task_uuid`` 是待重试任务身份。返回无；占位不存在或已被其他
+        清理路径移除时幂等返回。异常：调度器拒绝丢弃（例如意外出现在途作业）
+        时保留本桥标记并向调用方传播，禁止带着可能冲突的 UUID 再次提交。
+        """
+
+        with self._submission_phase_lock:
+            if task_uuid not in self._retryable_scheduler_runs:
+                return
+            try:
+                self._scheduler.discard_workflow(task_uuid)
+            except Exception as error:
+                raise TaskSchedulerBridgeError(
+                    "上一次失败提交的本地调度占位仍无法安全清理"
+                ) from error
+            # ``False`` 表示调度器中已没有该运行（例如外部恢复清理已完成），
+            # 对本桥标记而言同样是安全的幂等结果。
+            self._retryable_scheduler_runs.discard(task_uuid)
+
     def _cancel_failed_submission(
         self,
         task_uuid: str,
         jobs: list[dict[str, Any]],
+        *,
+        retain_pending: bool = False,
     ) -> None:
         """封闭一次未越过执行边界的失败提交。
 
-        参数：``task_uuid`` 是旧调度运行身份；``jobs`` 是本次路由的持久作业集合。
-        返回无；尽力取消遗留内存运行并清除监听路由，原始异常由调用方保留。
+        参数：``task_uuid`` 是旧调度运行身份；``jobs`` 是本次路由的持久作业集合；
+        ``retain_pending`` 表示异常已进入派发准入或本地控制回调，此时只取消
+        Edge 内存运行并保留其 canceled 快照，持久 Task/Job 继续保持 pending，供
+        同一桥重试。返回无；尽力取消遗留内存运行并清除监听路由，原始异常由调用
+        方保留。早期 scheduler submit 失败则继续把任务投影为 canceled、释放来源
+        预留并完成 cleanup。
         """
 
+        canceled = False
         try:
-            self._scheduler.cancel_workflow(task_uuid)
-            self._scheduler.discard_workflow(task_uuid)
+            canceled = bool(self._scheduler.cancel_workflow(task_uuid))
         except Exception:  # 清理失败不能覆盖原始安全错误
-            logger.exception("失败的工作流任务提交无法清理遗留调度运行")
+            logger.exception("失败的工作流任务提交无法取消遗留调度运行")
+
+        # 无论是否保留快照，桥接路由都必须先撤掉，防止失败运行在后续共享重排
+        # 中继续回调到已经失效的持久提交上下文。
         self._submitted_tasks.discard(task_uuid)
         self._admission_pending_tasks.discard(task_uuid)
         for job in jobs:
             self._task_by_job.pop(str(job.get("uuid") or ""), None)
+
+        if retain_pending:
+            # 只有确认 cancel 调用找到了运行，才登记为本桥拥有的可重试占位；若
+            # 调度器在 submit 前就失败且没有创建运行，下一次 submit 无需 discard。
+            if canceled:
+                with self._submission_phase_lock:
+                    self._retryable_scheduler_runs.add(task_uuid)
+            return
+
+        try:
+            self._scheduler.discard_workflow(task_uuid)
+        except Exception:  # 清理失败不能覆盖原始安全错误
+            logger.exception("失败的工作流任务提交无法丢弃遗留调度运行")
         aggregate = self._projection.project_canceled(task_uuid)
         try:
             self._release_canceled_inventory(
