@@ -20,8 +20,15 @@ npm ci
 npm run dev
 ```
 
-Vite 默认监听 <http://127.0.0.1:4174/console/>，并将 `/api` 代理到
-`http://127.0.0.1:8002` 的 Edge HTTP 服务。
+Vite 默认监听 <http://127.0.0.1:4174/console/>。`/api` 代理默认回退到
+`http://127.0.0.1:8002`；使用 Workspace 的动态 Backend 端口时，设置
+`VITE_EDGE_API_URL`，代理会自动跟随该地址：
+
+```bash
+BACKEND_URL=$(unilab workspace status --workspace /path/to/workspace --json \
+  | jq -er '.components.backend.address // empty')
+VITE_EDGE_API_URL="$BACKEND_URL" npm run dev -- --host 127.0.0.1 --port 4173
+```
 
 生产模式首次连接 Edge 失败时不会混入演示数据；已成功读取过数据后发生短暂抖动，页面
 保留最后一次成功快照并进入显式只读重连状态，所有写操作暂停。只有明确设置
