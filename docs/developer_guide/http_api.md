@@ -231,6 +231,18 @@ curl -X GET "http://localhost:8002/api/v1/job/b6acb586-733a-42ab-9f73-55c9a52aa8
 | ------------------- | ---- | ------------ |
 | `/api/v1/resources` | GET  | 获取资源列表 |
 
+### 库存与试剂相关
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/reagents` | 试剂库存列表，含 `active_workflow_reserved_quantity`（未结束任务的活动预留量） |
+| GET | `/api/v1/reagents/{reagent_uuid}` | 单条试剂记录 |
+| POST | `/api/v1/reagents` | 把目录项登记到具体容器 |
+| PUT | `/api/v1/reagents/{reagent_uuid}` | 修正数量、浓度、说明；`meta_data` 整体覆盖，需原样带回 |
+| DELETE | `/api/v1/reagents/{reagent_uuid}` | 软删试剂记录，容器变回空容器 |
+| GET | `/api/v1/materials/{material_uuid}/reagent-history` | 容器上的试剂台账 |
+| POST | `/api/v1/inventory/commands` | 库存命令入口，按 `command_id` 幂等；命令类型见 `type` 字段，其中 `reagent.dispense` 为试剂分装 |
+
 ## 常见动作示例
 
 ### test_latency - 延迟测试
@@ -262,6 +274,32 @@ curl -X POST "http://localhost:8002/api/v1/job/add" \
     }
 }'
 ```
+
+### reagent.dispense - 试剂分装
+
+把一瓶试剂分到若干空容器：同一事务内源瓶扣量、每个目标建一条同身份试剂记录、写成组台账；任一目标不合格整体拒绝；相同 `command_id` 重放返回首次结果并带 `replayed: true`。
+
+```bash
+curl -X POST http://localhost:8300/api/v1/inventory/commands \
+  -H "Content-Type: application/json" \
+  -d '{
+    "command_id": "e1d2c3b4-0000-4000-8000-000000000001",
+    "type": "reagent.dispense",
+    "actor": "operator-1",
+    "payload": {
+      "source_reagent_uuid": "源瓶试剂记录 UUID",
+      "expected_revision": 3,
+      "quantity_unit": "mL",
+      "targets": [
+        {"material_uuid": "空容器 A 的物料 UUID", "quantity": 100},
+        {"material_uuid": "空容器 B 的物料 UUID", "quantity": 100}
+      ],
+      "reason": "分装"
+    }
+  }'
+```
+
+拒绝时返回 `{"status": "rejected", "error": "...", "error_code": "4002"}`；常见原因：目标容器非空或不是容器、单位与源瓶不一致、总量超过"数量减活动预留"、`expected_revision` 过期。
 
 ## 错误处理
 
