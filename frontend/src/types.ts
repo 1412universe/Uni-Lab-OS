@@ -85,6 +85,7 @@ export interface WorkflowGraphNode {
   workflow_node_template_uuid?: string
   material_uuid?: string
   param?: Record<string, any>
+  manual_confirmation?: Record<string, any>
   pose?: Record<string, any>
   meta_data?: Record<string, any>
   parentUuid?: string

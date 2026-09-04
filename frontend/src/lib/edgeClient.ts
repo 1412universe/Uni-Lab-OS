@@ -264,6 +264,9 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
       : undefined,
     material_uuid: raw.material_uuid ? String(raw.material_uuid) : undefined,
     param: raw.param && typeof raw.param === 'object' ? raw.param : undefined,
+    manual_confirmation: raw.manual_confirmation && typeof raw.manual_confirmation === 'object'
+      ? raw.manual_confirmation
+      : undefined,
     pose: raw.pose && typeof raw.pose === 'object' ? raw.pose : undefined,
     meta_data: raw.meta_data && typeof raw.meta_data === 'object' ? raw.meta_data : undefined,
     parentUuid: raw.parent_uuid ? String(raw.parent_uuid) : undefined,
@@ -1426,12 +1429,16 @@ export type OperationActionInput = {
   draftId?: string
   nodeUuid?: string
   templateUuid: string
+  /** 模板原始节点类型（通常为 ILab）；人工确认关闭时恢复此类型。 */
+  nodeType?: string
   materialUuid?: string
   deviceId: string
   name: string
   description?: string
   param?: Record<string, unknown>
   inputBindings?: Record<string, OperationInputBinding>
+  /** 非空时把设备动作包装成 manual_confirm 节点。 */
+  manualConfirmation?: { timeoutSeconds: number }
 }
 
 /**
@@ -1551,8 +1558,14 @@ export async function updateExperimentOperation(payload: {
     return {
       ...node,
       name: edit.name,
+      // manual_confirm 只是对底层设备动作的调度包装；模板 UUID 和设备绑定
+      // 继续沿用原值，关闭开关时恢复模板的 ILab（或其他原始）节点类型。
+      type: edit.manualConfirmation ? 'manual_confirm' : (edit.nodeType || node.type),
       material_uuid: edit.materialUuid,
       param: edit.param,
+      manual_confirmation: edit.manualConfirmation
+        ? { timeout_seconds: edit.manualConfirmation.timeoutSeconds }
+        : {},
       // OS treats the material instance UUID as the authoritative fixed
       // executor identity.  Older UI state used sourceNodeId here, which
       // made an otherwise valid edit fail compilation on the next save.
@@ -1597,8 +1610,12 @@ export async function updateExperimentOperation(payload: {
     const handles = Array.isArray(detail.handles) ? detail.handles : []
     const created = await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(payload.workflowUuid)}/nodes`, {
       workflow_node_template_uuid: action.templateUuid, material_uuid: action.materialUuid || undefined, name: action.name,
+      type: action.manualConfirmation ? 'manual_confirm' : (action.nodeType || undefined),
       description: action.description || action.name,
       pose: { x: 120 + (nodes.length + index) * 220, y: 180 }, param: action.param || {}, execution_policy: {},
+      manual_confirmation: action.manualConfirmation
+        ? { timeout_seconds: action.manualConfirmation.timeoutSeconds }
+        : {},
       meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: workflowInputBindings(action.inputBindings), executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
     })
     if (!created?.uuid) throw new Error(`新增动作“${action.name}”后端未返回节点身份`)
@@ -1835,12 +1852,19 @@ export async function createExperimentOperation(payload: { name: string; descrip
       return {
         uuid: item.uuid, workflow_node_template_uuid: action.templateUuid,
         parent_uuid: parentUuid || null, material_uuid: action.materialUuid || null,
-        name: action.name, type: String(item.template.node_type || item.template.nodeType || item.template.type || 'compute'),
+        // 普通 Action 的模板通常声明为 ILab；人工确认只改变运行时执行种类，
+        // 仍引用同一个设备动作模板，不会把 legacy_action 批量投影进来。
+        name: action.name, type: action.manualConfirmation
+          ? 'manual_confirm'
+          : String(action.nodeType || item.template.node_type || item.template.nodeType || item.template.type || 'compute'),
         icon: item.template.icon || null, pose: { x: 140 + index * 250, y: 170 },
         param: action.param || {}, footer: item.template.footer || null,
         action_name: String(item.template.name || action.name),
         action_type: String(item.template.type || 'UniLabJsonCommand'), execution_policy: {}, disabled: false,
         minimized: false, script: null, description: action.description || action.name,
+        manual_confirmation: action.manualConfirmation
+          ? { timeout_seconds: action.manualConfirmation.timeoutSeconds }
+          : {},
         meta_data: { unilab: { sequence_index: index, authoring_source_order: index, input_bindings: workflowInputBindings(action.inputBindings), executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
       }
     })

@@ -13,6 +13,8 @@ export interface DraftAction {
   id: string
   nodeUuid?: string
   templateUuid: string
+  /** 模板原始节点类型；人工确认关闭时用于恢复底层设备动作类型。 */
+  nodeType?: string
   materialUuid: string
   deviceId: string
   name: string
@@ -21,6 +23,8 @@ export interface DraftAction {
   outputs: ActionOutputRecord[]
   param: Record<string, unknown>
   inputBindings: Record<string, DraftInputBinding>
+  /** 非空表示当前设备动作被调度器包装为人工确认节点。 */
+  manualConfirmation?: { timeoutSeconds: number }
 }
 
 interface UpstreamOutputOption {
@@ -190,6 +194,7 @@ interface ActionParameterEditorProps {
   onBindingChange: (field: ActionParameterRecord, binding: DraftInputBinding | undefined) => void
   onLiteralChange: (field: ActionParameterRecord, value: unknown) => void
   onLiteralDraftChange: (key: string, value: string) => void
+  onManualConfirmationChange: (config: DraftAction['manualConfirmation']) => void
   onNotify: (message: string) => void
 }
 
@@ -206,9 +211,43 @@ interface ActionParameterEditorProps {
  * @param props.onNotify 展示输入错误的回调。
  * @returns 当前设备动作（Action）的参数来源编辑区域。
  */
-export function ActionParameterEditor({ action, actions, paramDrafts, onClose, onBindingChange, onLiteralChange, onLiteralDraftChange, onNotify }: ActionParameterEditorProps): React.JSX.Element {
+export function ActionParameterEditor({ action, actions, paramDrafts, onClose, onBindingChange, onLiteralChange, onLiteralDraftChange, onManualConfirmationChange, onNotify }: ActionParameterEditorProps): React.JSX.Element {
+  const manualConfirmation = action.manualConfirmation
+  const hasFixedDevice = Boolean(action.materialUuid && action.deviceId)
   return <div className="node-parameter-editor">
     <header><div><strong>{action.name} · 节点参数</strong><span>固定值、工作流参数或上游节点输出</span></div><button aria-label="关闭节点参数" onClick={onClose}>×</button></header>
+    <section className="manual-confirmation-editor">
+      <label className="manual-confirmation-toggle">
+        <input
+          type="checkbox"
+          checked={Boolean(manualConfirmation)}
+          disabled={!hasFixedDevice && !manualConfirmation}
+          onChange={(event) => onManualConfirmationChange(
+            event.target.checked
+              ? { timeoutSeconds: manualConfirmation?.timeoutSeconds || 3600 }
+              : undefined,
+          )}
+        />
+        <span><strong>执行前需要人工确认</strong><small>批准后才会下发这个设备动作；拒绝或超时会取消任务。</small></span>
+      </label>
+      {!hasFixedDevice ? <small className="manual-confirmation-notice">请先在节点卡片选择设备实例，才能启用人工确认。</small> : null}
+      {manualConfirmation ? (
+        <label className="manual-confirmation-timeout">
+          <span>确认超时（秒）</span>
+          <input
+            type="number"
+            min={1}
+            max={86400}
+            step={1}
+            value={manualConfirmation.timeoutSeconds}
+            aria-label={`人工确认超时 ${action.name}`}
+            onChange={(event) => onManualConfirmationChange({
+              timeoutSeconds: Number(event.target.value),
+            })}
+          />
+        </label>
+      ) : null}
+    </section>
     {action.fields.length ? action.fields.map((field) => {
       const binding = action.inputBindings[field.handleUuid]
       const source = inputBindingKind(binding)

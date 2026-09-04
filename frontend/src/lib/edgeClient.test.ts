@@ -323,6 +323,36 @@ describe('Edge view model adapters', () => {
     expect(edgeBody.target_node_uuid).toBe(graphBody.nodes[1].uuid)
   })
 
+  it('writes manual confirmation as a wrapper around an ILab action template', async () => {
+    let graphBody: Record<string, any> | undefined
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-manual-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-manual')) return response({ code: 0, data: {
+        template: { uuid: 'template-manual', node_type: 'ILab', name: 'transfer_resource', type: 'UniLabJsonCommand' },
+        handles: [{ uuid: 'ready-source', handle_key: 'ready', io_type: 'source' }, { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' }],
+      } })
+      if (url.endsWith('/workflows/operation-manual-1/graph') && init?.method === 'PUT') {
+        graphBody = JSON.parse(String(init.body)) as Record<string, any>
+        return response({ code: 0, data: { workflow: { uuid: 'operation-manual-1', revision: 2 } } })
+      }
+      if (url.endsWith('/workflows/operation-manual-1/graph')) return response({ code: 0, data: { workflow: { uuid: 'operation-manual-1', revision: 2 }, nodes: graphBody?.nodes || [], edges: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createExperimentOperation({
+      name: '人工确认动作', description: '',
+      actions: [{ templateUuid: 'template-manual', nodeType: 'ILab', materialUuid: 'device-1', deviceId: 'device-1', name: '确认后转移', param: {}, inputBindings: {}, manualConfirmation: { timeoutSeconds: 45 } }],
+    })
+
+    expect(graphBody?.nodes[0]).toMatchObject({
+      type: 'manual_confirm',
+      manual_confirmation: { timeout_seconds: 45 },
+      workflow_node_template_uuid: 'template-manual',
+    })
+  })
+
   it('binds an exposed output to the matching action output handle', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
