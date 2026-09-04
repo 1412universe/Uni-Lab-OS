@@ -101,6 +101,10 @@ export interface WorkflowGraphEdge {
   uuid: string
   sourceNodeUuid: string
   targetNodeUuid: string
+  /** 数据边使用的源/目标句柄；ready 顺序边也保留这两个字段。 */
+  sourceHandleUuid?: string
+  targetHandleUuid?: string
+  metaData?: Record<string, any>
 }
 
 export interface WorkflowGraph {
@@ -254,6 +258,14 @@ export interface ActionParameterRecord {
   key: string
   displayName: string
   required: boolean
+  schema: Record<string, unknown>
+}
+
+/** 设备动作（Action）的数据输出句柄；ready 等流程控制句柄不包含在内。 */
+export interface ActionOutputRecord {
+  handleUuid: string
+  key: string
+  displayName: string
   schema: Record<string, unknown>
 }
 

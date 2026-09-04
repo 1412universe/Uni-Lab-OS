@@ -21,6 +21,7 @@ import type {
   ActionTemplateRecord,
   ControlTemplateRecord,
   ActionParameterRecord,
+  ActionOutputRecord,
   OperationCategoryRecord,
   ReagentInfoRecord,
   ReagentRecord,
@@ -281,6 +282,11 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
   }
 }
 
+/**
+ * 把接口中的工作流边转换为前端读模型，并保留真实源/目标句柄。
+ * @param raw OS 返回的工作流边原始字段。
+ * @returns 供工作流编辑器读取的数据边或 ready 顺序边。
+ */
 function adaptWorkflowGraphEdge(raw: RawRecord): WorkflowGraphEdge {
   const sourceNodeUuid = String(raw.source_node_uuid || raw.sourceNodeUuid || '')
   const targetNodeUuid = String(raw.target_node_uuid || raw.targetNodeUuid || '')
@@ -288,6 +294,9 @@ function adaptWorkflowGraphEdge(raw: RawRecord): WorkflowGraphEdge {
     uuid: String(raw.uuid || `${sourceNodeUuid}->${targetNodeUuid}`),
     sourceNodeUuid,
     targetNodeUuid,
+    sourceHandleUuid: raw.source_handle_uuid || raw.sourceHandleUuid ? String(raw.source_handle_uuid || raw.sourceHandleUuid) : undefined,
+    targetHandleUuid: raw.target_handle_uuid || raw.targetHandleUuid ? String(raw.target_handle_uuid || raw.targetHandleUuid) : undefined,
+    metaData: raw.meta_data && typeof raw.meta_data === 'object' ? { ...raw.meta_data } : undefined,
   }
 }
 
@@ -1030,6 +1039,26 @@ export async function loadActionParameters(templateUuid: string, signal?: AbortS
     }))
 }
 
+/**
+ * 读取设备动作（Action）的数据输出句柄；ready 控制句柄不会作为业务参数返回。
+ * @param templateUuid 设备动作模板的稳定 UUID。
+ * @param signal 可选的请求取消信号。
+ * @returns 可供下游输入选择的真实来源句柄及其值 Schema。
+ */
+export async function loadActionOutputs(templateUuid: string, signal?: AbortSignal): Promise<ActionOutputRecord[]> {
+  const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`, signal)
+  return (Array.isArray(detail.handles) ? detail.handles : [])
+    .filter((handle: RawRecord) => handle.io_type === 'source' && handle.handle_key !== 'ready' && handle.data_key)
+    .map((handle: RawRecord) => ({
+      handleUuid: String(handle.uuid),
+      key: String(handle.data_key),
+      displayName: String(handle.display_name || handle.data_key),
+      schema: handle.meta_data?.unilab?.value_schema && typeof handle.meta_data.unilab.value_schema === 'object'
+        ? { ...handle.meta_data.unilab.value_schema }
+        : { type: String(handle.type || 'string').toLowerCase() },
+    }))
+}
+
 export async function loadOperationCategories(signal?: AbortSignal): Promise<OperationCategoryRecord[]> {
   const data = await requestData<{ items: RawRecord[] }>('/experiment-operation-categories', signal)
   return (data.items || []).map((raw) => ({ uuid: String(raw.uuid), name: String(raw.name), sortOrder: Number(raw.sort_order || 100) }))
@@ -1211,17 +1240,18 @@ export async function patchWorkflowNode(nodeUuid: string, patch: { pose?: Record
 }
 
 /**
- * Ensure the visible top-level nodes form the authoring sequence. Composite
- * invocations are expanded by OS together with their private child graph, so
- * the only nodes that may be connected here are the invocation roots and the
- * parent's ordinary action nodes (parent_uuid is absent).
+ * 为画布上的顶层节点补齐 ready 顺序边；既有数据边不得阻止或替代顺序边。
+ * @param workflowUuid 被编辑工作流的稳定 UUID。
+ * @param orderedNodeUuids 按画布顺序排列的顶层节点 UUID。
+ * @returns 保存后的最新修订号；无需连边时返回 undefined。
  */
 export async function ensureWorkflowSequenceEdges(workflowUuid: string, orderedNodeUuids: string[]) {
   if (orderedNodeUuids.length < 2) return
   let graph = await loadWorkflowGraph(workflowUuid)
   let revision = graph.workflow.revision
   const nodesByUuid = new Map(graph.nodes.map((node) => [String(node.uuid), node]))
-  const existingPairs = new Set(graph.edges.map((edge) => `${edge.sourceNodeUuid}:${edge.targetNodeUuid}`))
+  // 数据边与 ready 顺序边可以连接同一对节点，不能用节点对直接去重。
+  const existingPairs = new Set(graph.edges.filter((edge) => edge.metaData?.unilab?.edge_kind !== 'data').map((edge) => `${edge.sourceNodeUuid}:${edge.targetNodeUuid}`))
   const graphHandles = Array.isArray(graph.handleTemplates) ? graph.handleTemplates : []
   const templateDetails = new Map<string, RawRecord>()
   async function publishedReadyHandle(templateUuid: string, ioType: 'source' | 'target') {
@@ -1301,13 +1331,114 @@ export async function deleteExperimentOperation(workflowUuid: string) {
   return writeData<unknown>('DELETE', `/workflows/${encodeURIComponent(workflowUuid)}`)
 }
 
-/** 保存实验操作元数据和图节点；控制节点仅更新 param，不改其结构与模板身份。 */
+/** 设备动作（Action）输入来源：工作流参数写入节点元数据，上游输出写入 workflow_edge。 */
+export type OperationInputBinding =
+  | { parameter: string }
+  | { kind: 'node_output'; sourceNodeId: string; sourceHandleUuid: string }
+
+export type OperationActionInput = {
+  draftId?: string
+  nodeUuid?: string
+  templateUuid: string
+  materialUuid?: string
+  deviceId: string
+  name: string
+  description?: string
+  param?: Record<string, unknown>
+  inputBindings?: Record<string, OperationInputBinding>
+}
+
+/**
+ * 从设备动作（Action）输入绑定中选出工作流参数绑定，供节点元数据保存。
+ * @param bindings 一个设备动作（Action）的全部输入来源。
+ * @returns 只包含工作流参数的节点元数据映射。
+ */
+function workflowInputBindings(bindings: Record<string, OperationInputBinding> | undefined): RawRecord {
+  return Object.fromEntries(Object.entries(bindings || {}).filter(([, binding]) => binding && 'parameter' in binding))
+}
+
+/**
+ * 将前端草稿引用转换为 OS 可校验的节点输出数据边。
+ * @param actions 当前实验操作中的设备动作（Action）草稿。
+ * @param draftToUuid 草稿节点身份到真实工作流节点 UUID 的映射。
+ * @returns 使用真实节点 UUID 和真实句柄 UUID 的数据边载荷。
+ * @throws 上游绑定不完整或尝试连接节点自身时抛出错误。
+ */
+function operationDataEdgePayloads(actions: OperationActionInput[], draftToUuid: Map<string, string>): RawRecord[] {
+  const actionIndex = new Map<string, number>()
+  actions.forEach((action, index) => {
+    if (action.draftId) actionIndex.set(action.draftId, index)
+    if (action.nodeUuid) actionIndex.set(action.nodeUuid, index)
+  })
+  const resolveNode = (nodeId: string | undefined) => {
+    if (!nodeId) return ''
+    return draftToUuid.get(nodeId) || nodeId
+  }
+  return actions.flatMap((action) => {
+    const targetNodeUuid = resolveNode(action.nodeUuid || action.draftId)
+    return Object.entries(action.inputBindings || {}).flatMap(([targetHandleUuid, binding]) => {
+      if (!binding || !('kind' in binding) || binding.kind !== 'node_output') return []
+      const sourceNodeUuid = resolveNode(binding.sourceNodeId)
+      if (!targetNodeUuid || !sourceNodeUuid || !targetHandleUuid || !binding.sourceHandleUuid) {
+        throw new Error(`动作“${action.name}”的上游输出绑定不完整`)
+      }
+      if (sourceNodeUuid === targetNodeUuid) throw new Error(`动作“${action.name}”不能把自身输出绑定给自身输入`)
+      const sourceIndex = actionIndex.get(binding.sourceNodeId)
+      const targetIndex = actionIndex.get(action.nodeUuid || action.draftId || '')
+      if (sourceIndex !== undefined && targetIndex !== undefined && sourceIndex >= targetIndex) {
+        throw new Error(`动作“${action.name}”只能绑定执行顺序在它之前的节点输出`)
+      }
+      return [{
+        uuid: crypto.randomUUID(), source_node_uuid: sourceNodeUuid, target_node_uuid: targetNodeUuid,
+        source_handle_uuid: binding.sourceHandleUuid, target_handle_uuid: targetHandleUuid,
+        description: '实验操作数据传递', meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } },
+      }]
+    })
+  })
+}
+
+/**
+ * 判断一条边是否为简易实验操作编辑器生成的数据传递边。
+ * @param edge 工作流图中的原始边。
+ * @returns 仅当边由当前编辑器生成且承担数据传递时返回 true。
+ */
+function isOperationBuilderDataEdge(edge: RawRecord): boolean {
+  return edge.meta_data?.unilab?.generated_by === 'operation-builder'
+    && edge.meta_data?.unilab?.edge_kind === 'data'
+}
+
+/**
+ * 补齐编辑后新增节点涉及的数据边；按节点和句柄四元组幂等去重。
+ * @param workflowUuid 被编辑工作流的稳定 UUID。
+ * @param actions 保存后的完整设备动作（Action）草稿。
+ * @param draftToUuid 已创建草稿节点到真实节点 UUID 的映射。
+ * @returns 所有缺失数据边写入完成后结束。
+ */
+async function ensureOperationDataEdges(workflowUuid: string, actions: OperationActionInput[], draftToUuid: Map<string, string>) {
+  const desired = operationDataEdgePayloads(actions, draftToUuid)
+  if (!desired.length) return
+  const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+  const edgeKey = (edge: RawRecord) => [edge.source_node_uuid, edge.source_handle_uuid, edge.target_node_uuid, edge.target_handle_uuid].map(String).join(':')
+  const existing = new Set((Array.isArray(graph.edges) ? graph.edges : []).map(edgeKey))
+  for (const edge of desired) {
+    const key = edgeKey(edge)
+    if (existing.has(key)) continue
+    await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, edge)
+    existing.add(key)
+  }
+}
+
+/**
+ * 保存既有实验操作；替换编辑器管理的数据边并保留 ready 顺序边。
+ * @param payload 工作流身份、合同、设备动作（Action）与控制节点的完整编辑结果。
+ * @returns 工作流 UUID 与恢复为源码态的状态标识。
+ */
 export async function updateExperimentOperation(payload: {
   workflowUuid: string
   name: string
   description: string
   categoryUuid?: string
-  actions: Array<{ draftId?: string; nodeUuid?: string; templateUuid?: string; name: string; description?: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  actions: Array<OperationActionInput>
   controls?: Array<{ draftId?: string; nodeUuid?: string; templateUuid: string; nodeType?: string; name: string; description?: string; param: Record<string, unknown> }>
   inputContract?: Record<string, unknown>
   outputContract?: Record<string, unknown>
@@ -1339,13 +1470,29 @@ export async function updateExperimentOperation(payload: {
       // OS treats the material instance UUID as the authoritative fixed
       // executor identity.  Older UI state used sourceNodeId here, which
       // made an otherwise valid edit fail compilation on the next save.
-      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: edit.inputBindings, executor_binding: { mode: 'fixed', device_id: edit.materialUuid || edit.deviceId } } },
+      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: workflowInputBindings(edit.inputBindings), executor_binding: { mode: 'fixed', device_id: edit.materialUuid || edit.deviceId } } },
     }
+  })
+  const existingDraftUuids = new Map(payload.actions.filter((action) => action.draftId && action.nodeUuid).map((action) => [action.draftId!, action.nodeUuid!]))
+  const existingNodeUuids = new Set(nodes.map((node: RawRecord) => String(node.uuid)))
+  const dataEdges = operationDataEdgePayloads(payload.actions, existingDraftUuids)
+    .filter((edge) => existingNodeUuids.has(String(edge.source_node_uuid)) && existingNodeUuids.has(String(edge.target_node_uuid)))
+  const editedActionNodeUuids = new Set(payload.actions
+    .map((action) => action.nodeUuid)
+    .filter((nodeUuid): nodeUuid is string => Boolean(nodeUuid)))
+  // 已有动作的输入由本次表单完整表达：先移除编辑器此前生成的数据边，
+  // 再按当前绑定重建。ready 边没有 edge_kind=data，因此会原样保留。
+  const graphEdges = (Array.isArray(graph.edges) ? graph.edges : [])
+    .filter((edge: RawRecord) => !(isOperationBuilderDataEdge(edge) && editedActionNodeUuids.has(String(edge.target_node_uuid))))
+  const existingDataKeys = new Set(graphEdges.map((edge: RawRecord) => [edge.source_node_uuid, edge.source_handle_uuid, edge.target_node_uuid, edge.target_handle_uuid].map(String).join(':')))
+  dataEdges.forEach((edge) => {
+    const key = [edge.source_node_uuid, edge.source_handle_uuid, edge.target_node_uuid, edge.target_handle_uuid].map(String).join(':')
+    if (!existingDataKeys.has(key)) { graphEdges.push(edge); existingDataKeys.add(key) }
   })
   await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`, {
     revision: Number(graph.workflow?.revision),
     nodes,
-    edges: Array.isArray(graph.edges) ? graph.edges : [],
+    edges: graphEdges,
   })
   // 图接口返回顺序不是作者顺序；固定执行器边必须按 sequence_index 取最后一个
   // 节点，否则编辑时新增多个节点会把第二条边的源句柄误取成当前新节点模板的
@@ -1356,6 +1503,7 @@ export async function updateExperimentOperation(payload: {
   ))
   const existing = orderedNodes[orderedNodes.length - 1]
   let previousUuid = existing?.uuid ? String(existing.uuid) : ''
+  const draftToUuid = new Map(existingDraftUuids)
   const detailsByNodeUuid = new Map<string, RawRecord>()
   for (const [index, action] of payload.actions.filter((item) => !item.nodeUuid).entries()) {
     if (!action.templateUuid) throw new Error(`新增动作“${action.name}”缺少模板身份`)
@@ -1365,9 +1513,10 @@ export async function updateExperimentOperation(payload: {
       workflow_node_template_uuid: action.templateUuid, material_uuid: action.materialUuid || undefined, name: action.name,
       description: action.description || action.name,
       pose: { x: 120 + (nodes.length + index) * 220, y: 180 }, param: action.param || {}, execution_policy: {},
-      meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+      meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: workflowInputBindings(action.inputBindings), executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
     })
     if (!created?.uuid) throw new Error(`新增动作“${action.name}”后端未返回节点身份`)
+    if (action.draftId) draftToUuid.set(action.draftId, String(created.uuid))
     // 保留新节点自己的模板句柄；下一次循环的边源端必须从上一个新节点取，
     // 不能从尚未更新的 nodes 快照中猜测。
     detailsByNodeUuid.set(String(created.uuid), detail)
@@ -1385,18 +1534,8 @@ export async function updateExperimentOperation(payload: {
     }
     previousUuid = String(created.uuid)
   }
+  await ensureOperationDataEdges(payload.workflowUuid, payload.actions, draftToUuid)
   return { workflowUuid: payload.workflowUuid, status: 'source' as const }
-}
-
-type OperationActionInput = {
-  draftId?: string
-  templateUuid: string
-  materialUuid?: string
-  deviceId: string
-  name: string
-  description?: string
-  param?: Record<string, unknown>
-  inputBindings?: Record<string, { parameter: string }>
 }
 
 type OperationControlInput = {
@@ -1460,10 +1599,17 @@ function controlReadyGroups(param: Record<string, unknown>): string[][] {
   return groups
 }
 
-/** 只在同一控制区域内建立 ready 顺序边；控制节点本身由 Scheduler 生成依赖边。 */
+/**
+ * 只在同一控制区域内建立 ready 顺序边；控制节点由调度器（Scheduler）生成依赖边。
+ * @param workflowUuid 被编辑工作流的稳定 UUID。
+ * @param groups 各控制区域内部按顺序排列的节点 UUID。
+ * @param nodeByUuid 节点 UUID 到完整节点定义的映射。
+ * @returns 所有缺失 ready 边写入完成后结束。
+ */
 async function createOperationReadyEdges(workflowUuid: string, groups: string[][], nodeByUuid: Map<string, RawRecord>) {
   const existingGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
-  const existingPairs = new Set((Array.isArray(existingGraph.edges) ? existingGraph.edges : []).map((edge: RawRecord) => `${edge.source_node_uuid}:${edge.target_node_uuid}`))
+  // 同一对节点允许同时存在 ready 顺序边和业务数据边；只用 ready 边参与去重。
+  const existingPairs = new Set((Array.isArray(existingGraph.edges) ? existingGraph.edges : []).filter((edge: RawRecord) => edge.meta_data?.unilab?.edge_kind !== 'data').map((edge: RawRecord) => `${edge.source_node_uuid}:${edge.target_node_uuid}`))
   const detailCache = new Map<string, RawRecord>()
   const handlesFor = async (nodeUuid: string) => {
     const node = nodeByUuid.get(nodeUuid)
@@ -1544,6 +1690,12 @@ function stagedControlParam(param: Record<string, unknown>, nodeType: string): R
   return { ...param }
 }
 
+/**
+ * 创建实验操作并一次提交节点、数据边和合同，随后补齐 ready 顺序边。
+ * @param payload 新实验操作的名称、合同、设备动作（Action）与控制节点草稿。
+ * @returns 新工作流 UUID、最新修订号和源码态状态。
+ * @throws 任一步失败时删除本次新建工作流并保留原始错误。
+ */
 export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: OperationActionInput[]; controls?: OperationControlInput[] }) {
   let workflowUuid = ''
   try {
@@ -1603,7 +1755,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
         action_name: String(item.template.name || action.name),
         action_type: String(item.template.type || 'UniLabJsonCommand'), execution_policy: {}, disabled: false,
         minimized: false, script: null, description: action.description || action.name,
-        meta_data: { unilab: { sequence_index: index, authoring_source_order: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
+        meta_data: { unilab: { sequence_index: index, authoring_source_order: index, input_bindings: workflowInputBindings(action.inputBindings), executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
       }
     })
     const controlGraphNodes = controlInputs.map((control, index) => {
@@ -1622,6 +1774,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
     })
     let rawGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
     const graphNodes = [...actionGraphNodes, ...controlGraphNodes]
+    const dataEdges = operationDataEdgePayloads(payload.actions, draftToUuid)
     const inputContract = payload.inputContract || { version: 1, parameters: [] }
     const outputContract = payload.outputContract || { version: 1, outputs: [] }
     // 输出合同中的字段名直接对应动作模板的 source handle data_key。这样
@@ -1680,7 +1833,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
       rawGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
     }
     await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}/graph`, {
-      revision: Number(rawGraph.workflow?.revision), nodes: graphNodes, edges: [],
+      revision: Number(rawGraph.workflow?.revision), nodes: graphNodes, edges: dataEdges,
     })
     const nodeByUuid = new Map(graphNodes.map((node: RawRecord) => [String(node.uuid), node]))
     const memberRefs = new Set<string>()
