@@ -219,6 +219,22 @@ class BackendReagentService:
         异常：必填值、CAS、数值或唯一身份冲突时抛出 Backend 合同错误。
         """
 
+        with self.store.transaction() as conn:
+            created = self.create_reagent_info_in_transaction(conn, values)
+        return created
+
+    def create_reagent_info_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        values: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """在调用方事务内登记一条化学品身份。
+
+        参数：``conn`` 是已经开启的库存写事务；``values`` 是单条身份输入。
+        返回：当前事务内已写入的身份投影。异常：字段、CAS、数值或唯一身份
+        冲突时抛出 Backend 合同错误，由调用方决定是否回滚整批。
+        """
+
         name = str(values.get("name") or "").strip()
         if not name:
             raise BackendContractError(INVALID_PARAMETER, "name is required")
@@ -230,30 +246,48 @@ class BackendReagentService:
         identity = str(uuid4())
         now = _now()
         try:
-            with self.store.transaction() as conn:
-                conn.execute(
-                    """INSERT INTO reagent_info(
-                    uuid,create_time,update_time,description,meta_data,cas,name,name_en,
-                    aliases,molecular_formula,smiles,inchi_key,molecular_weight,
-                    density_g_per_ml,physical_state)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (
-                        identity, now, now, _optional_text(values.get("description")),
-                        _dump(values.get("meta_data") or {}), cas, name,
-                        _optional_text(values.get("name_en")),
-                        _dump(values.get("aliases") or []),
-                        _optional_text(values.get("molecular_formula")),
-                        _optional_text(values.get("smiles")),
-                        _optional_text(values.get("inchi_key")), molecular_weight,
-                        density, _physical_state(values.get("physical_state")),
-                    ),
-                )
+            conn.execute(
+                """INSERT INTO reagent_info(
+                uuid,create_time,update_time,description,meta_data,cas,name,name_en,
+                aliases,molecular_formula,smiles,inchi_key,molecular_weight,
+                density_g_per_ml,physical_state)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    identity, now, now, _optional_text(values.get("description")),
+                    _dump(values.get("meta_data") or {}), cas, name,
+                    _optional_text(values.get("name_en")),
+                    _dump(values.get("aliases") or []),
+                    _optional_text(values.get("molecular_formula")),
+                    _optional_text(values.get("smiles")),
+                    _optional_text(values.get("inchi_key")), molecular_weight,
+                    density, _physical_state(values.get("physical_state")),
+                ),
+            )
         except sqlite3.IntegrityError as error:
             raise BackendContractError(
                 RESOURCE_DATA_CONFLICT,
                 "CAS number or InChIKey already belongs to another reagent identity",
             ) from error
-        return self.get_reagent_info(identity)
+        row = conn.execute(
+            "SELECT * FROM reagent_info WHERE uuid=? AND deleted_at IS NULL",
+            (identity,),
+        ).fetchone()
+        if row is None:  # pragma: no cover - 同一事务内插入后的防御性检查。
+            raise BackendContractError(
+                RESOURCE_NOT_FOUND, "reagent identity does not exist"
+            )
+        return _info_row(row)
+
+    def create_reagent_infos(self, values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """在一个事务内批量登记化学品身份。"""
+
+        if not values:
+            raise BackendContractError(INVALID_PARAMETER, "items must not be empty")
+        with self.store.transaction() as conn:
+            return [
+                self.create_reagent_info_in_transaction(conn, item)
+                for item in values
+            ]
 
     def list_reagent_infos(
         self, *, page: int = 1, page_size: int = 20, name: str = "",
@@ -409,6 +443,23 @@ class BackendReagentService:
             created = self.create_reagent_in_transaction(conn, values)
         result = self.get_reagent(created["reagent"]["uuid"])
         result["reagent_info"] = created["reagent_info"]
+        return result
+
+    def create_reagents(self, values: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """在一个事务内批量登记容器级试剂实例。"""
+
+        if not values:
+            raise BackendContractError(INVALID_PARAMETER, "items must not be empty")
+        with self.store.transaction() as conn:
+            created = [
+                self.create_reagent_in_transaction(conn, item)
+                for item in values
+            ]
+        result: List[Dict[str, Any]] = []
+        for snapshot in created:
+            item = self.get_reagent(snapshot["reagent"]["uuid"])
+            item["reagent_info"] = snapshot["reagent_info"]
+            result.append(item)
         return result
 
     def create_reagent_in_transaction(
