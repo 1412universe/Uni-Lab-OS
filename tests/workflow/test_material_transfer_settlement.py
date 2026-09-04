@@ -69,6 +69,9 @@ def _transfer_plan() -> dict[str, Any]:
                     "version": 1,
                     "transfer": {
                         "material_param": "resource",
+                        "source_owner_param": "",
+                        "source_site_uuid_param": "",
+                        "source_site_name_param": "",
                         "target_owner_param": "mount_resource",
                         "target_site_uuid_param": "",
                         "target_site_name_param": "site",
@@ -245,6 +248,9 @@ def test_typed_robot_action_settles_inventory_from_frozen_resource_contract() ->
                     "version": 1,
                     "transfer": {
                         "material_param": "sample",
+                        "source_owner_param": "",
+                        "source_site_uuid_param": "",
+                        "source_site_name_param": "",
                         "target_owner_param": "target_device",
                         "target_site_uuid_param": "target_position",
                         "target_site_name_param": "",

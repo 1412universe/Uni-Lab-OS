@@ -13,7 +13,6 @@ from unilabos.workflow.authoring_ast import (
     diagnostic_source_range,
     parse_authoring_source,
 )
-from unilabos.workflow.authoring_material import ReagentReferenceResolver
 from unilabos.workflow.authoring_graph import (
     AuthoringGraphError,
     build_candidate_graph,
@@ -57,7 +56,6 @@ class WorkflowAuthoringEngine:
         catalog: AuthoringCatalogSnapshot,
         resource_reference_resolver: ResourceReferenceResolver | None = None,
         composite_authoring: CompositeAuthoring | None = None,
-        reagent_reference_resolver: ReagentReferenceResolver | None = None,
     ) -> None:
         """创建带不可变目录和可选只读资源身份端口的创作编译器。
 
@@ -78,7 +76,6 @@ class WorkflowAuthoringEngine:
             raise TypeError("composite_authoring 必须是 CompositeAuthoring")
         self._catalog = catalog
         self._resource_reference_resolver = resource_reference_resolver
-        self._reagent_reference_resolver = reagent_reference_resolver
         self._composite_authoring = composite_authoring
 
     @property
@@ -129,7 +126,6 @@ class WorkflowAuthoringEngine:
                 applied_graph=applied_graph,
                 resource_reference_resolver=self._resource_reference_resolver,
                 composite_authoring=self._composite_authoring,
-                reagent_reference_resolver=self._reagent_reference_resolver,
             )
             if graph["workflow"].get("revision") != revision:
                 raise AuthoringGraphError(

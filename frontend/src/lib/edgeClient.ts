@@ -9,21 +9,25 @@ import type {
   TaskNodeWaitReason,
   TaskPresentationStatus,
   WorkflowDefinition,
+  WorkflowAuthoringState,
   WorkflowGraph,
   WorkflowGraphEdge,
   WorkflowGraphNode,
+  WorkflowSource,
   WorkflowTask,
+  WorkflowTaskPriority,
+  WorkflowStepState,
   ResourceTemplateRecord,
   ActionTemplateRecord,
   ControlTemplateRecord,
   ActionParameterRecord,
+  ActionOutputRecord,
   OperationCategoryRecord,
   ReagentInfoRecord,
   ReagentRecord,
   ReagentHistoryRecord,
   CompoundLookupResult,
   WorkflowInventoryRequirement,
-  WorkflowInventoryBinding,
 } from '../types'
 
 type RawRecord = Record<string, any>
@@ -48,20 +52,19 @@ interface PageData<T> {
 const configuredEndpoint = (import.meta.env.VITE_EDGE_API_URL as string | undefined)?.replace(/\/$/, '')
 export const EDGE_API_BASE = configuredEndpoint ? `${configuredEndpoint}/api/v1` : '/api/v1'
 
+const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
 const taskStatuses = new Set<TaskPresentationStatus>([
   'running',
   'admission_blocked',
-  'succeeded',
-  'failed',
+  ...terminalTaskStatusValues,
   'pending',
   'paused',
   'canceling',
-  'canceled',
-  'timeout',
   'intervention_required',
   'execution_unknown',
   'unknown',
 ])
+const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
 
 export function unwrapEnvelope<T>(body: EdgeEnvelope<T>): T {
   if (!body || body.code !== 0 || body.data === undefined) {
@@ -129,7 +132,7 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-async function postData<T>(path: string, payload: unknown): Promise<T> {
+async function postData<T>(path: string, payload: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${EDGE_API_BASE}${path}`, {
     method: 'POST',
     headers: {
@@ -137,6 +140,7 @@ async function postData<T>(path: string, payload: unknown): Promise<T> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+    signal,
   })
   const body = await response.json().catch(() => null)
   if (!response.ok) throw new Error(formatApiError(body, response.status))
@@ -249,7 +253,11 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
       ? 'group'
       : normalisedType === 'material_source'
         ? 'material_source'
-        : 'action',
+        : normalisedType === 'condition'
+          ? 'condition'
+          : normalisedType === 'repeat_until'
+            ? 'repeat_until'
+            : 'action',
     action_name: raw.action_name ? String(raw.action_name) : undefined,
     workflow_node_template_uuid: raw.workflow_node_template_uuid
       ? String(raw.workflow_node_template_uuid)
@@ -275,6 +283,11 @@ function adaptWorkflowGraphNode(raw: RawRecord): WorkflowGraphNode {
   }
 }
 
+/**
+ * 把接口中的工作流边转换为前端读模型，并保留真实源/目标句柄。
+ * @param raw OS 返回的工作流边原始字段。
+ * @returns 供工作流编辑器读取的数据边或 ready 顺序边。
+ */
 function adaptWorkflowGraphEdge(raw: RawRecord): WorkflowGraphEdge {
   const sourceNodeUuid = String(raw.source_node_uuid || raw.sourceNodeUuid || '')
   const targetNodeUuid = String(raw.target_node_uuid || raw.targetNodeUuid || '')
@@ -282,6 +295,9 @@ function adaptWorkflowGraphEdge(raw: RawRecord): WorkflowGraphEdge {
     uuid: String(raw.uuid || `${sourceNodeUuid}->${targetNodeUuid}`),
     sourceNodeUuid,
     targetNodeUuid,
+    sourceHandleUuid: raw.source_handle_uuid || raw.sourceHandleUuid ? String(raw.source_handle_uuid || raw.sourceHandleUuid) : undefined,
+    targetHandleUuid: raw.target_handle_uuid || raw.targetHandleUuid ? String(raw.target_handle_uuid || raw.targetHandleUuid) : undefined,
+    metaData: raw.meta_data && typeof raw.meta_data === 'object' ? { ...raw.meta_data } : undefined,
   }
 }
 
@@ -306,6 +322,7 @@ function jobNodeStatus(
   node: RawRecord,
 ): NodePresentationStatus {
   if (job) {
+    if (job.manual_confirmation?.status === 'pending') return 'attention'
     const status = String(job.status)
     if (job.uncertainty_reason) return 'attention'
     if (job.wait_reason?.code || job.wait_reason?.message) return 'waiting'
@@ -354,6 +371,12 @@ export interface WaitResourceLabels {
   sites?: Readonly<Record<string, string>>
 }
 
+interface MutableWaitResourceLabels {
+  devices: Record<string, string>
+  materials: Record<string, string>
+  sites: Record<string, string>
+}
+
 function waitResourceScope(value: unknown): WaitResourceScope | undefined {
   const scope = String(value || '')
   return scope === 'device' || scope === 'material' || scope === 'material_site'
@@ -395,17 +418,30 @@ function waitResourceDetails(
     scopes.add(scope)
     if (scope === 'device' && resource.device_id) {
       const identity = String(resource.device_id)
-      append(resourceDetail('设备', identity, resourceLabel(labels.devices, identity)))
+      const label = String(resource.device_name || '').trim()
+        || resourceLabel(labels.devices, identity)
+      append(resourceDetail('设备', identity, label))
       return
     }
     if (scope === 'material_site' && resource.site_uuid) {
       const siteIdentity = String(resource.site_uuid)
-      append(resourceDetail('库位', siteIdentity, resourceLabel(labels.sites, siteIdentity)))
+      const ownerName = String(resource.material_name || '').trim()
+      const siteName = String(resource.site_name || '').trim()
+      const inlineLabel = ownerName && siteName
+        ? `${ownerName} / ${siteName}`
+        : siteName
+      append(resourceDetail(
+        '库位',
+        siteIdentity,
+        inlineLabel || resourceLabel(labels.sites, siteIdentity),
+      ))
       return
     }
     if (scope === 'material' && resource.material_uuid) {
       const identity = String(resource.material_uuid)
-      append(resourceDetail('物料', identity, resourceLabel(labels.materials, identity)))
+      const label = String(resource.material_name || '').trim()
+        || resourceLabel(labels.materials, identity)
+      append(resourceDetail('物料', identity, label))
     }
   })
   return { details, scopes }
@@ -574,6 +610,7 @@ function collectTaskMaterialUuids(
   const add = (value: unknown) => {
     if (typeof value === 'string' && value) materialUuids.add(value)
   }
+  if (Array.isArray(raw.material_uuids)) raw.material_uuids.forEach(add)
   const planNodes = Array.isArray(raw.execution_plan?.nodes) ? raw.execution_plan.nodes : []
   const planNodeByUuid = new Map<string, RawRecord>()
   planNodes.forEach((node: RawRecord) => {
@@ -685,9 +722,12 @@ export function adaptTask(
   const controlStatus = String(raw.control_status || 'active')
   const cleanupStatus = String(raw.cleanup_status || 'none')
   const normalisedStatus = normaliseTaskStatus(raw.status)
+  const hasInFlightJob = jobs.some((job) => (
+    ['dispatched', 'running', 'cancel_requested'].includes(String(job.status || ''))
+  ))
   let status: TaskPresentationStatus = normalisedStatus
   if (normalisedStatus === 'pending' && waitMessage) status = 'admission_blocked'
-  if (controlStatus === 'paused') status = 'paused'
+  if (!terminalTaskStatuses.has(normalisedStatus) && controlStatus === 'paused' && !hasInFlightJob) status = 'paused'
   if (controlStatus === 'waiting_intervention') status = 'intervention_required'
   if (controlStatus === 'waiting_reconciliation') status = 'execution_unknown'
   if (cleanupStatus === 'requires_attention' || attentionMessage) status = 'intervention_required'
@@ -717,6 +757,13 @@ export function adaptTask(
         errorInfo: Array.isArray(job.error_info) ? job.error_info : [],
         startedAt: job.started_at ? String(job.started_at) : undefined,
         finishedAt: job.finished_at ? String(job.finished_at) : undefined,
+        manualConfirmation: job.manual_confirmation ? {
+          status: String(job.manual_confirmation.status) as 'pending' | 'approved' | 'rejected' | 'timed_out' | 'canceled',
+          deadlineAt: String(job.manual_confirmation.deadline_at || ''),
+          actions: Array.isArray(job.manual_confirmation.actions)
+            ? job.manual_confirmation.actions.filter((action: unknown) => action === 'approve' || action === 'reject')
+            : [],
+        } : undefined,
       } : undefined,
     }
   })
@@ -801,6 +848,7 @@ export function adaptTask(
     workflowUuid: String(raw.workflow_uuid || raw.workflow?.uuid || ''),
     workflowName: String(raw.workflow_snapshot?.workflow?.name || workflowName),
     status,
+    priority: taskPriority(raw.priority),
     sample: String(raw.input?.sample_id || raw.input?.sample || raw.meta_data?.sample_id || '未命名样品'),
     description: String(raw.description || workflowName),
     current: String(
@@ -820,9 +868,18 @@ export function adaptTask(
     materialUuids: collectTaskMaterialUuids(raw, jobs, inputContract, knownMaterialUuids),
     workflowRevision: Number(raw.workflow_snapshot?.workflow?.revision || raw.workflow?.revision || 0) || undefined,
     runMode: String(raw.run_mode || raw.execution_plan?.run_mode || 'normal'),
+    executionMode: String(raw.execution_mode || raw.run_mode || 'normal') as WorkflowTask['executionMode'],
+    controlStatus,
     matrixGroupKey: matrixGroupKey(raw),
     trace: taskTraceReference(raw, traceUiUrl),
   }
+}
+
+function taskPriority(value: unknown): WorkflowTask['priority'] {
+  if (value === 'urgent' || value === 'high' || value === 'normal' || value === 'low') return value
+  if (value === undefined || value === null || value === '') return 'normal'
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 'unknown'
 }
 
 function configuredSourceLabel(sourceNodeId: unknown): string {
@@ -979,6 +1036,26 @@ export async function loadActionParameters(templateUuid: string, signal?: AbortS
       key: String(handle.data_key),
       displayName: String(handle.display_name || handle.data_key),
       required: Boolean(handle.required),
+      schema: handle.meta_data?.unilab?.value_schema && typeof handle.meta_data.unilab.value_schema === 'object'
+        ? { ...handle.meta_data.unilab.value_schema }
+        : { type: String(handle.type || 'string').toLowerCase() },
+    }))
+}
+
+/**
+ * 读取设备动作（Action）的数据输出句柄；ready 控制句柄不会作为业务参数返回。
+ * @param templateUuid 设备动作模板的稳定 UUID。
+ * @param signal 可选的请求取消信号。
+ * @returns 可供下游输入选择的真实来源句柄及其值 Schema。
+ */
+export async function loadActionOutputs(templateUuid: string, signal?: AbortSignal): Promise<ActionOutputRecord[]> {
+  const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`, signal)
+  return (Array.isArray(detail.handles) ? detail.handles : [])
+    .filter((handle: RawRecord) => handle.io_type === 'source' && handle.handle_key !== 'ready' && handle.data_key)
+    .map((handle: RawRecord) => ({
+      handleUuid: String(handle.uuid),
+      key: String(handle.data_key),
+      displayName: String(handle.display_name || handle.data_key),
       schema: handle.meta_data?.unilab?.value_schema && typeof handle.meta_data.unilab.value_schema === 'object'
         ? { ...handle.meta_data.unilab.value_schema }
         : { type: String(handle.type || 'string').toLowerCase() },
@@ -1249,17 +1326,18 @@ export async function patchWorkflowNode(nodeUuid: string, patch: { pose?: Record
 }
 
 /**
- * Ensure the visible top-level nodes form the authoring sequence. Composite
- * invocations are expanded by OS together with their private child graph, so
- * the only nodes that may be connected here are the invocation roots and the
- * parent's ordinary action nodes (parent_uuid is absent).
+ * 为画布上的顶层节点补齐 ready 顺序边；既有数据边不得阻止或替代顺序边。
+ * @param workflowUuid 被编辑工作流的稳定 UUID。
+ * @param orderedNodeUuids 按画布顺序排列的顶层节点 UUID。
+ * @returns 保存后的最新修订号；无需连边时返回 undefined。
  */
 export async function ensureWorkflowSequenceEdges(workflowUuid: string, orderedNodeUuids: string[]) {
   if (orderedNodeUuids.length < 2) return
   let graph = await loadWorkflowGraph(workflowUuid)
   let revision = graph.workflow.revision
   const nodesByUuid = new Map(graph.nodes.map((node) => [String(node.uuid), node]))
-  const existingPairs = new Set(graph.edges.map((edge) => `${edge.sourceNodeUuid}:${edge.targetNodeUuid}`))
+  // 数据边与 ready 顺序边可以连接同一对节点，不能用节点对直接去重。
+  const existingPairs = new Set(graph.edges.filter((edge) => edge.metaData?.unilab?.edge_kind !== 'data').map((edge) => `${edge.sourceNodeUuid}:${edge.targetNodeUuid}`))
   const graphHandles = Array.isArray(graph.handleTemplates) ? graph.handleTemplates : []
   const templateDetails = new Map<string, RawRecord>()
   async function publishedReadyHandle(templateUuid: string, ioType: 'source' | 'target') {
@@ -1331,7 +1409,7 @@ export async function ensureWorkflowSequenceEdges(workflowUuid: string, orderedN
   return revision
 }
 
-export async function publishExperimentOperation(workflowUuid: string, revision: number) {
+export async function publishWorkflow(workflowUuid: string, revision: number) {
   return writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/publications`, { revision })
 }
 
@@ -1339,13 +1417,114 @@ export async function deleteExperimentOperation(workflowUuid: string) {
   return writeData<unknown>('DELETE', `/workflows/${encodeURIComponent(workflowUuid)}`)
 }
 
-/** 保存实验操作元数据和图节点；控制节点仅更新 param，不改其结构与模板身份。 */
+/** 设备动作（Action）输入来源：工作流参数写入节点元数据，上游输出写入 workflow_edge。 */
+export type OperationInputBinding =
+  | { parameter: string }
+  | { kind: 'node_output'; sourceNodeId: string; sourceHandleUuid: string }
+
+export type OperationActionInput = {
+  draftId?: string
+  nodeUuid?: string
+  templateUuid: string
+  materialUuid?: string
+  deviceId: string
+  name: string
+  description?: string
+  param?: Record<string, unknown>
+  inputBindings?: Record<string, OperationInputBinding>
+}
+
+/**
+ * 从设备动作（Action）输入绑定中选出工作流参数绑定，供节点元数据保存。
+ * @param bindings 一个设备动作（Action）的全部输入来源。
+ * @returns 只包含工作流参数的节点元数据映射。
+ */
+function workflowInputBindings(bindings: Record<string, OperationInputBinding> | undefined): RawRecord {
+  return Object.fromEntries(Object.entries(bindings || {}).filter(([, binding]) => binding && 'parameter' in binding))
+}
+
+/**
+ * 将前端草稿引用转换为 OS 可校验的节点输出数据边。
+ * @param actions 当前实验操作中的设备动作（Action）草稿。
+ * @param draftToUuid 草稿节点身份到真实工作流节点 UUID 的映射。
+ * @returns 使用真实节点 UUID 和真实句柄 UUID 的数据边载荷。
+ * @throws 上游绑定不完整或尝试连接节点自身时抛出错误。
+ */
+function operationDataEdgePayloads(actions: OperationActionInput[], draftToUuid: Map<string, string>): RawRecord[] {
+  const actionIndex = new Map<string, number>()
+  actions.forEach((action, index) => {
+    if (action.draftId) actionIndex.set(action.draftId, index)
+    if (action.nodeUuid) actionIndex.set(action.nodeUuid, index)
+  })
+  const resolveNode = (nodeId: string | undefined) => {
+    if (!nodeId) return ''
+    return draftToUuid.get(nodeId) || nodeId
+  }
+  return actions.flatMap((action) => {
+    const targetNodeUuid = resolveNode(action.nodeUuid || action.draftId)
+    return Object.entries(action.inputBindings || {}).flatMap(([targetHandleUuid, binding]) => {
+      if (!binding || !('kind' in binding) || binding.kind !== 'node_output') return []
+      const sourceNodeUuid = resolveNode(binding.sourceNodeId)
+      if (!targetNodeUuid || !sourceNodeUuid || !targetHandleUuid || !binding.sourceHandleUuid) {
+        throw new Error(`动作“${action.name}”的上游输出绑定不完整`)
+      }
+      if (sourceNodeUuid === targetNodeUuid) throw new Error(`动作“${action.name}”不能把自身输出绑定给自身输入`)
+      const sourceIndex = actionIndex.get(binding.sourceNodeId)
+      const targetIndex = actionIndex.get(action.nodeUuid || action.draftId || '')
+      if (sourceIndex !== undefined && targetIndex !== undefined && sourceIndex >= targetIndex) {
+        throw new Error(`动作“${action.name}”只能绑定执行顺序在它之前的节点输出`)
+      }
+      return [{
+        uuid: crypto.randomUUID(), source_node_uuid: sourceNodeUuid, target_node_uuid: targetNodeUuid,
+        source_handle_uuid: binding.sourceHandleUuid, target_handle_uuid: targetHandleUuid,
+        description: '实验操作数据传递', meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } },
+      }]
+    })
+  })
+}
+
+/**
+ * 判断一条边是否为简易实验操作编辑器生成的数据传递边。
+ * @param edge 工作流图中的原始边。
+ * @returns 仅当边由当前编辑器生成且承担数据传递时返回 true。
+ */
+function isOperationBuilderDataEdge(edge: RawRecord): boolean {
+  return edge.meta_data?.unilab?.generated_by === 'operation-builder'
+    && edge.meta_data?.unilab?.edge_kind === 'data'
+}
+
+/**
+ * 补齐编辑后新增节点涉及的数据边；按节点和句柄四元组幂等去重。
+ * @param workflowUuid 被编辑工作流的稳定 UUID。
+ * @param actions 保存后的完整设备动作（Action）草稿。
+ * @param draftToUuid 已创建草稿节点到真实节点 UUID 的映射。
+ * @returns 所有缺失数据边写入完成后结束。
+ */
+async function ensureOperationDataEdges(workflowUuid: string, actions: OperationActionInput[], draftToUuid: Map<string, string>) {
+  const desired = operationDataEdgePayloads(actions, draftToUuid)
+  if (!desired.length) return
+  const graph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
+  const edgeKey = (edge: RawRecord) => [edge.source_node_uuid, edge.source_handle_uuid, edge.target_node_uuid, edge.target_handle_uuid].map(String).join(':')
+  const existing = new Set((Array.isArray(graph.edges) ? graph.edges : []).map(edgeKey))
+  for (const edge of desired) {
+    const key = edgeKey(edge)
+    if (existing.has(key)) continue
+    await writeData<RawRecord>('POST', `/workflows/${encodeURIComponent(workflowUuid)}/edges`, edge)
+    existing.add(key)
+  }
+}
+
+/**
+ * 保存既有实验操作；替换编辑器管理的数据边并保留 ready 顺序边。
+ * @param payload 工作流身份、合同、设备动作（Action）与控制节点的完整编辑结果。
+ * @returns 工作流 UUID 与恢复为源码态的状态标识。
+ */
 export async function updateExperimentOperation(payload: {
   workflowUuid: string
   name: string
   description: string
   categoryUuid?: string
-  actions: Array<{ draftId?: string; nodeUuid?: string; templateUuid?: string; name: string; description?: string; materialUuid: string; deviceId: string; param: Record<string, unknown>; inputBindings: Record<string, { parameter: string }> }>
+  actions: Array<OperationActionInput>
   controls?: Array<{ draftId?: string; nodeUuid?: string; templateUuid: string; nodeType?: string; name: string; description?: string; param: Record<string, unknown> }>
   inputContract?: Record<string, unknown>
   outputContract?: Record<string, unknown>
@@ -1377,13 +1556,29 @@ export async function updateExperimentOperation(payload: {
       // OS treats the material instance UUID as the authoritative fixed
       // executor identity.  Older UI state used sourceNodeId here, which
       // made an otherwise valid edit fail compilation on the next save.
-      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: edit.inputBindings, executor_binding: { mode: 'fixed', device_id: edit.materialUuid || edit.deviceId } } },
+      meta_data: { ...(node.meta_data || {}), unilab: { ...(node.meta_data?.unilab || {}), input_bindings: workflowInputBindings(edit.inputBindings), executor_binding: { mode: 'fixed', device_id: edit.materialUuid || edit.deviceId } } },
     }
+  })
+  const existingDraftUuids = new Map(payload.actions.filter((action) => action.draftId && action.nodeUuid).map((action) => [action.draftId!, action.nodeUuid!]))
+  const existingNodeUuids = new Set(nodes.map((node: RawRecord) => String(node.uuid)))
+  const dataEdges = operationDataEdgePayloads(payload.actions, existingDraftUuids)
+    .filter((edge) => existingNodeUuids.has(String(edge.source_node_uuid)) && existingNodeUuids.has(String(edge.target_node_uuid)))
+  const editedActionNodeUuids = new Set(payload.actions
+    .map((action) => action.nodeUuid)
+    .filter((nodeUuid): nodeUuid is string => Boolean(nodeUuid)))
+  // 已有动作的输入由本次表单完整表达：先移除编辑器此前生成的数据边，
+  // 再按当前绑定重建。ready 边没有 edge_kind=data，因此会原样保留。
+  const graphEdges = (Array.isArray(graph.edges) ? graph.edges : [])
+    .filter((edge: RawRecord) => !(isOperationBuilderDataEdge(edge) && editedActionNodeUuids.has(String(edge.target_node_uuid))))
+  const existingDataKeys = new Set(graphEdges.map((edge: RawRecord) => [edge.source_node_uuid, edge.source_handle_uuid, edge.target_node_uuid, edge.target_handle_uuid].map(String).join(':')))
+  dataEdges.forEach((edge) => {
+    const key = [edge.source_node_uuid, edge.source_handle_uuid, edge.target_node_uuid, edge.target_handle_uuid].map(String).join(':')
+    if (!existingDataKeys.has(key)) { graphEdges.push(edge); existingDataKeys.add(key) }
   })
   await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(payload.workflowUuid)}/graph`, {
     revision: Number(graph.workflow?.revision),
     nodes,
-    edges: Array.isArray(graph.edges) ? graph.edges : [],
+    edges: graphEdges,
   })
   // 图接口返回顺序不是作者顺序；固定执行器边必须按 sequence_index 取最后一个
   // 节点，否则编辑时新增多个节点会把第二条边的源句柄误取成当前新节点模板的
@@ -1394,6 +1589,7 @@ export async function updateExperimentOperation(payload: {
   ))
   const existing = orderedNodes[orderedNodes.length - 1]
   let previousUuid = existing?.uuid ? String(existing.uuid) : ''
+  const draftToUuid = new Map(existingDraftUuids)
   const detailsByNodeUuid = new Map<string, RawRecord>()
   for (const [index, action] of payload.actions.filter((item) => !item.nodeUuid).entries()) {
     if (!action.templateUuid) throw new Error(`新增动作“${action.name}”缺少模板身份`)
@@ -1403,9 +1599,10 @@ export async function updateExperimentOperation(payload: {
       workflow_node_template_uuid: action.templateUuid, material_uuid: action.materialUuid || undefined, name: action.name,
       description: action.description || action.name,
       pose: { x: 120 + (nodes.length + index) * 220, y: 180 }, param: action.param || {}, execution_policy: {},
-      meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
+      meta_data: { unilab: { sequence_index: nodes.length + index, input_bindings: workflowInputBindings(action.inputBindings), executor_binding: { mode: 'fixed', device_id: action.deviceId } } },
     })
     if (!created?.uuid) throw new Error(`新增动作“${action.name}”后端未返回节点身份`)
+    if (action.draftId) draftToUuid.set(action.draftId, String(created.uuid))
     // 保留新节点自己的模板句柄；下一次循环的边源端必须从上一个新节点取，
     // 不能从尚未更新的 nodes 快照中猜测。
     detailsByNodeUuid.set(String(created.uuid), detail)
@@ -1423,18 +1620,8 @@ export async function updateExperimentOperation(payload: {
     }
     previousUuid = String(created.uuid)
   }
+  await ensureOperationDataEdges(payload.workflowUuid, payload.actions, draftToUuid)
   return { workflowUuid: payload.workflowUuid, status: 'source' as const }
-}
-
-type OperationActionInput = {
-  draftId?: string
-  templateUuid: string
-  materialUuid?: string
-  deviceId: string
-  name: string
-  description?: string
-  param?: Record<string, unknown>
-  inputBindings?: Record<string, { parameter: string }>
 }
 
 type OperationControlInput = {
@@ -1498,10 +1685,17 @@ function controlReadyGroups(param: Record<string, unknown>): string[][] {
   return groups
 }
 
-/** 只在同一控制区域内建立 ready 顺序边；控制节点本身由 Scheduler 生成依赖边。 */
+/**
+ * 只在同一控制区域内建立 ready 顺序边；控制节点由调度器（Scheduler）生成依赖边。
+ * @param workflowUuid 被编辑工作流的稳定 UUID。
+ * @param groups 各控制区域内部按顺序排列的节点 UUID。
+ * @param nodeByUuid 节点 UUID 到完整节点定义的映射。
+ * @returns 所有缺失 ready 边写入完成后结束。
+ */
 async function createOperationReadyEdges(workflowUuid: string, groups: string[][], nodeByUuid: Map<string, RawRecord>) {
   const existingGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
-  const existingPairs = new Set((Array.isArray(existingGraph.edges) ? existingGraph.edges : []).map((edge: RawRecord) => `${edge.source_node_uuid}:${edge.target_node_uuid}`))
+  // 同一对节点允许同时存在 ready 顺序边和业务数据边；只用 ready 边参与去重。
+  const existingPairs = new Set((Array.isArray(existingGraph.edges) ? existingGraph.edges : []).filter((edge: RawRecord) => edge.meta_data?.unilab?.edge_kind !== 'data').map((edge: RawRecord) => `${edge.source_node_uuid}:${edge.target_node_uuid}`))
   const detailCache = new Map<string, RawRecord>()
   const handlesFor = async (nodeUuid: string) => {
     const node = nodeByUuid.get(nodeUuid)
@@ -1582,6 +1776,12 @@ function stagedControlParam(param: Record<string, unknown>, nodeType: string): R
   return { ...param }
 }
 
+/**
+ * 创建实验操作并一次提交节点、数据边和合同，随后补齐 ready 顺序边。
+ * @param payload 新实验操作的名称、合同、设备动作（Action）与控制节点草稿。
+ * @returns 新工作流 UUID、最新修订号和源码态状态。
+ * @throws 任一步失败时删除本次新建工作流并保留原始错误。
+ */
 export async function createExperimentOperation(payload: { name: string; description: string; categoryUuid?: string; inputContract?: Record<string, unknown>; outputContract?: Record<string, unknown>; actions: OperationActionInput[]; controls?: OperationControlInput[] }) {
   let workflowUuid = ''
   try {
@@ -1641,7 +1841,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
         action_name: String(item.template.name || action.name),
         action_type: String(item.template.type || 'UniLabJsonCommand'), execution_policy: {}, disabled: false,
         minimized: false, script: null, description: action.description || action.name,
-        meta_data: { unilab: { sequence_index: index, authoring_source_order: index, input_bindings: action.inputBindings || {}, executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
+        meta_data: { unilab: { sequence_index: index, authoring_source_order: index, input_bindings: workflowInputBindings(action.inputBindings), executor_binding: { mode: 'fixed', device_id: action.materialUuid || action.deviceId } } },
       }
     })
     const controlGraphNodes = controlInputs.map((control, index) => {
@@ -1660,6 +1860,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
     })
     let rawGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
     const graphNodes = [...actionGraphNodes, ...controlGraphNodes]
+    const dataEdges = operationDataEdgePayloads(payload.actions, draftToUuid)
     const inputContract = payload.inputContract || { version: 1, parameters: [] }
     const outputContract = payload.outputContract || { version: 1, outputs: [] }
     // 输出合同中的字段名直接对应动作模板的 source handle data_key。这样
@@ -1718,7 +1919,7 @@ export async function createExperimentOperation(payload: { name: string; descrip
       rawGraph = await requestData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/graph`)
     }
     await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}/graph`, {
-      revision: Number(rawGraph.workflow?.revision), nodes: graphNodes, edges: [],
+      revision: Number(rawGraph.workflow?.revision), nodes: graphNodes, edges: dataEdges,
     })
     const nodeByUuid = new Map(graphNodes.map((node: RawRecord) => [String(node.uuid), node]))
     const memberRefs = new Set<string>()
@@ -1833,9 +2034,8 @@ function waitResourceLabelsFromCatalog(
   materialGraph: RawRecord,
   deviceRows: RawRecord[],
 ): WaitResourceLabels {
-  const devices: Record<string, string> = Object.create(null)
-  const materials: Record<string, string> = Object.create(null)
-  const sites: Record<string, string> = Object.create(null)
+  const labels = emptyWaitResourceLabels(deviceRows)
+  const { devices, materials, sites } = labels
   const remember = (target: Record<string, string>, identity: unknown, label: unknown) => {
     const normalizedIdentity = String(identity || '').trim()
     const normalizedLabel = String(label || '').trim()
@@ -1864,15 +2064,25 @@ function waitResourceLabelsFromCatalog(
     })
   })
 
+  return labels
+}
+
+function emptyWaitResourceLabels(deviceRows: RawRecord[]): MutableWaitResourceLabels {
+  const labels: MutableWaitResourceLabels = {
+    devices: Object.create(null),
+    materials: Object.create(null),
+    sites: Object.create(null),
+  }
   deviceRows.forEach((device) => {
     const binding = device.binding || {}
     const material = device.material || {}
-    const label = binding.name || material.name || binding.local_id || binding.material_uuid
-    remember(devices, binding.local_id, label)
-    remember(devices, binding.material_uuid, label)
-    remember(devices, material.uuid, label)
+    const label = String(binding.name || material.name || binding.local_id || binding.material_uuid || '').trim()
+    for (const identity of [binding.local_id, binding.material_uuid, material.uuid]) {
+      const normalizedIdentity = String(identity || '').trim()
+      if (normalizedIdentity && label) labels.devices[normalizedIdentity] = label
+    }
   })
-  return { devices, materials, sites }
+  return labels
 }
 
 async function taskWithJobs(
@@ -1881,12 +2091,11 @@ async function taskWithJobs(
   knownMaterialUuids: ReadonlySet<string>,
   traceUiUrl: string,
   waitResourceLabels: WaitResourceLabels,
-  signal?: AbortSignal,
 ) {
-  const jobs = await requestData<RawRecord[]>(
-    `/workflow-tasks/${encodeURIComponent(raw.uuid)}/jobs`,
-    signal,
-  )
+  if (!Array.isArray(raw.jobs)) {
+    throw new Error('Edge 任务展示投影缺少 jobs')
+  }
+  const jobs = raw.jobs as RawRecord[]
   const workflow = workflowsByUuid.get(String(raw.workflow_uuid))
   const frozenInputContract = adaptContractFields(
     raw.workflow_snapshot?.workflow?.meta_data?.unilab?.input_contract?.parameters,
@@ -1903,32 +2112,135 @@ async function taskWithJobs(
   )
 }
 
-const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
+let taskPresentationRowsInFlight: Promise<RawRecord[]> | undefined
+const taskPresentationRequestTimeoutMs = 15_000
 
-function selectRecentTerminalTasks(pages: PageData<RawRecord>[], limit = 20): RawRecord[] {
-  const terminalStatuses = new Set<string>(terminalTaskStatusValues)
-  return pages
-    .flatMap((page) => page.items || [])
-    .filter((task) => terminalStatuses.has(String(task.status)))
-    .sort((left, right) => {
-      const timeOrder = String(right.create_time || '').localeCompare(String(left.create_time || ''))
-      return timeOrder || String(right.uuid || '').localeCompare(String(left.uuid || ''))
+async function loadTaskPresentationRows(_signal?: AbortSignal): Promise<RawRecord[]> {
+  // 矩阵查询由完整快照、定时刷新和 SSE 共同使用。共享内部请求不绑定任一调用
+  // 方的取消信号，但设置硬超时，避免半开连接永久占住后续刷新。
+  if (taskPresentationRowsInFlight) return taskPresentationRowsInFlight
+  const controller = new AbortController()
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    taskPresentationRequestTimeoutMs,
+  )
+  const request = requestData<PageData<RawRecord>>(
+    '/workflow-task-presentations?view=matrix&terminal_limit=20',
+    controller.signal,
+  ).then((page) => page.items || [])
+  taskPresentationRowsInFlight = request
+  try {
+    return await request
+  } finally {
+    window.clearTimeout(timeout)
+    if (taskPresentationRowsInFlight === request) taskPresentationRowsInFlight = undefined
+  }
+}
+
+function waitResourceLabelsFromView(
+  materials: MaterialRecord[],
+  deviceRows: RawRecord[],
+): WaitResourceLabels {
+  const labels = emptyWaitResourceLabels(deviceRows)
+  materials.forEach((material) => {
+    labels.materials[material.uuid] = material.name
+    material.sites.forEach((site) => {
+      labels.sites[site.uuid] = `${material.name} / ${site.name}`
     })
-    .slice(0, limit)
+  })
+  return labels
+}
+
+export async function loadEdgeTasks(
+  workflows: WorkflowDefinition[],
+  materials: MaterialRecord[],
+  signal?: AbortSignal,
+): Promise<WorkflowTask[]> {
+  const [readiness, taskRows, deviceRows] = await Promise.all([
+    requestJson<RawRecord>('/readiness', signal),
+    loadTaskPresentationRows(signal),
+    requestData<RawRecord[]>('/devices', signal).catch(() => []),
+  ])
+  if (readiness.status !== 'ready') throw new Error('Edge 工作流运行时尚未就绪')
+  const traceUiUrl = typeof readiness.observability?.traceUiUrl === 'string'
+    ? readiness.observability.traceUiUrl
+    : ''
+  const workflowsByUuid = new Map(workflows.map((workflow) => [workflow.uuid, workflow]))
+  const knownMaterialUuids = new Set(materials.map((material) => material.uuid))
+  const waitResourceLabels = waitResourceLabelsFromView(materials, deviceRows)
+  return mapWithConcurrency(taskRows, 6, (task) => taskWithJobs(
+    task,
+    workflowsByUuid,
+    knownMaterialUuids,
+    traceUiUrl,
+    waitResourceLabels,
+  ))
+}
+
+export async function loadWorkflowTaskDetail(
+  taskUuid: string,
+  materials: MaterialRecord[],
+  signal?: AbortSignal,
+): Promise<WorkflowTask> {
+  const [task, jobs] = await Promise.all([
+    requestData<RawRecord>(`/workflow-tasks/${encodeURIComponent(taskUuid)}`, signal),
+    requestData<RawRecord[]>(`/workflow-tasks/${encodeURIComponent(taskUuid)}/jobs`, signal),
+  ])
+  const frozenWorkflow = task.workflow_snapshot?.workflow
+  const inputContract = adaptContractFields(
+    frozenWorkflow?.meta_data?.unilab?.input_contract?.parameters,
+    'parameters',
+  )
+  const labels = emptyWaitResourceLabels([])
+  materials.forEach((material) => {
+    labels.materials[material.uuid] = material.name
+    material.sites.forEach((site) => {
+      labels.sites[site.uuid] = `${material.name} / ${site.name}`
+    })
+    if (material.sourceNodeId) labels.devices[material.sourceNodeId] = material.name
+    labels.devices[material.uuid] = material.name
+  })
+  return adaptTask(
+    task,
+    jobs,
+    String(frozenWorkflow?.name || '未命名工作流'),
+    inputContract,
+    new Set(materials.map((material) => material.uuid)),
+    '',
+    labels,
+  )
+}
+
+export function materialsWithTaskReferences(
+  materials: MaterialRecord[],
+  tasks: WorkflowTask[],
+): MaterialRecord[] {
+  const materialReferences = new Map<string, MaterialRecord['taskReferences']>()
+  tasks.filter((task) => !terminalTaskStatuses.has(task.status)).forEach((task) => {
+    task.materialUuids.forEach((materialUuid) => {
+      const references = materialReferences.get(materialUuid) || []
+      if (!references.some((reference) => reference.taskUuid === task.uuid)) {
+        references.push({
+          taskUuid: task.uuid,
+          taskStatus: task.status,
+          workflowName: task.workflowName,
+          sample: task.sample,
+        })
+      }
+      materialReferences.set(materialUuid, references)
+    })
+  })
+  return materials.map((material) => ({
+    ...material,
+    taskReferences: materialReferences.get(material.uuid) || [],
+  }))
 }
 
 export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapshot> {
-  const [readiness, workflowPage, terminalTaskPages, runningTaskPage, pendingTaskPage, cancelingTaskPage, attentionTaskPage, materialPage, materialGraph, deviceRows] = await Promise.all([
+  const [readiness, workflowPage, taskRows, materialPage, materialGraph, deviceRows] = await Promise.all([
     requestJson<RawRecord>('/readiness', signal),
     requestAllPages<RawRecord>('/workflows', signal),
-    Promise.all(terminalTaskStatusValues.map((status) => requestData<PageData<RawRecord>>(
-      `/workflow-tasks?status=${status}&page=1&page_size=20`,
-      signal,
-    ))),
-    requestAllPages<RawRecord>('/workflow-tasks?status=running', signal),
-    requestAllPages<RawRecord>('/workflow-tasks?status=pending', signal),
-    requestAllPages<RawRecord>('/workflow-tasks?status=canceling', signal),
-    requestAllPages<RawRecord>('/workflow-tasks?cleanup_status=requires_attention', signal),
+    loadTaskPresentationRows(signal),
     requestAllPages<RawRecord>('/materials', signal),
     requestData<RawRecord>('/materials/graph', signal),
     requestData<RawRecord[]>('/devices', signal).catch(() => []),
@@ -1948,17 +2260,8 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
     materialGraph,
     deviceRows,
   )
-  const taskRowsByUuid = new Map<string, RawRecord>()
-  const taskRows = [
-    ...selectRecentTerminalTasks(terminalTaskPages),
-    ...(runningTaskPage.items || []),
-    ...(pendingTaskPage.items || []),
-    ...(cancelingTaskPage.items || []),
-    ...(attentionTaskPage.items || []),
-  ]
-  taskRows.forEach((task) => taskRowsByUuid.set(String(task.uuid), task))
   const tasks = await mapWithConcurrency(
-    [...taskRowsByUuid.values()],
+    taskRows,
     6,
     (task) => taskWithJobs(
       task,
@@ -1966,25 +2269,8 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
       knownMaterialUuids,
       traceUiUrl,
       waitResourceLabels,
-      signal,
     ),
   )
-  const terminalTaskStatuses = new Set<TaskPresentationStatus>(terminalTaskStatusValues)
-  const materialReferences = new Map<string, MaterialRecord['taskReferences']>()
-  tasks.filter((task) => !terminalTaskStatuses.has(task.status)).forEach((task) => {
-    task.materialUuids.forEach((materialUuid) => {
-      const references = materialReferences.get(materialUuid) || []
-      if (!references.some((reference) => reference.taskUuid === task.uuid)) {
-        references.push({
-          taskUuid: task.uuid,
-          taskStatus: task.status,
-          workflowName: task.workflowName,
-          sample: task.sample,
-        })
-      }
-      materialReferences.set(materialUuid, references)
-    })
-  })
   const materialLocations = materialLocationsFromGraph(materialGraph)
   const materialSites = materialSitesFromGraph(materialGraph)
   const graphMaterials = new Map<string, RawRecord>()
@@ -2017,14 +2303,16 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
       },
     )
     const enriched = { ...material, sites: materialSites.get(material.uuid) || material.sites }
-    const references = materialReferences.get(material.uuid)
-    return references ? { ...enriched, taskReferences: references } : enriched
+    return enriched
   })
 
+  const materialsWithReferences = materialsWithTaskReferences(materials, tasks)
+
   return {
+    startupMode: readiness.startupMode === 'develop' ? 'develop' : 'product',
     workflows,
     tasks,
-    materials,
+    materials: materialsWithReferences,
     materialTotal: Number(materialPage.total ?? materials.length),
     workflowLoaded: Number(readiness.workflowProgress?.loaded ?? workflows.length),
     workflowTotal: Number(readiness.workflowProgress?.total ?? workflows.length),
@@ -2038,6 +2326,8 @@ export async function loadMaterialDetail(materialUuid: string, signal?: AbortSig
 
 function adaptInventoryRequirement(raw: RawRecord): WorkflowInventoryRequirement {
   const meta = (raw.meta_data && typeof raw.meta_data === 'object' ? raw.meta_data : {}) as Record<string, unknown>
+  // 上游把编译元数据放在 meta_data.unilab 下；兼容直接平铺的旧形状。
+  const unilab = (meta.unilab && typeof meta.unilab === 'object' ? meta.unilab : meta) as Record<string, unknown>
   return {
     uuid: String(raw.uuid || ''),
     requirementKey: String(raw.requirement_key || ''),
@@ -2048,7 +2338,7 @@ function adaptInventoryRequirement(raw: RawRecord): WorkflowInventoryRequirement
     quantityUnit: String(raw.quantity_unit || ''),
     allowSplit: Boolean(raw.allow_split),
     description: raw.description ? String(raw.description) : undefined,
-    materialSourceNodeUuid: meta.material_source_node_uuid ? String(meta.material_source_node_uuid) : undefined,
+    materialSourceNodeUuid: unilab.material_source_node_uuid ? String(unilab.material_source_node_uuid) : undefined,
   }
 }
 
@@ -2064,6 +2354,39 @@ export async function loadWorkflowGraph(workflowUuid: string, signal?: AbortSign
     inventoryRequirements: Array.isArray(graph.inventory_requirements)
       ? graph.inventory_requirements.map(adaptInventoryRequirement)
       : [],
+  }
+}
+
+function adaptWorkflowAuthoringState(value: unknown): WorkflowAuthoringState {
+  const state = String(value || '')
+  switch (state) {
+    case 'applied':
+    case 'applied_source_stale':
+    case 'candidate_stale':
+    case 'draft_invalid':
+    case 'draft_missing':
+    case 'unapplied_graph':
+    case 'unapplied_source_only':
+      return state
+    default:
+      return 'unknown'
+  }
+}
+
+export async function loadWorkflowSource(workflowUuid: string, signal?: AbortSignal): Promise<WorkflowSource> {
+  const authoring = await requestData<RawRecord>(
+    `/workflows/${encodeURIComponent(workflowUuid)}/authoring`,
+    signal,
+  )
+  const draft = authoring.draft
+  if (!draft || typeof draft !== 'object' || typeof draft.python_source !== 'string') {
+    throw new Error('该工作流没有可读取的 Python 源码')
+  }
+  return {
+    workflowRevision: Number(authoring.workflow_revision || 1),
+    state: adaptWorkflowAuthoringState(authoring.state),
+    sourceUri: String(draft.source_uri || ''),
+    pythonSource: draft.python_source,
   }
 }
 
@@ -2115,10 +2438,13 @@ export async function loadWorkflowTaskGraph(taskUuid: string, signal?: AbortSign
 
 export async function loadWorkflowPreflight(
   workflowUuid: string,
+  input: Record<string, unknown>,
   signal?: AbortSignal,
+  runMode: 'normal' | 'step' = 'normal',
 ): Promise<RunPreflightReport> {
-  const report = await requestData<RawRecord>(
-    `/workflows/${encodeURIComponent(workflowUuid)}/run-preflight?run_mode=normal`,
+  const report = await postData<RawRecord>(
+    `/workflows/${encodeURIComponent(workflowUuid)}/run-preflight`,
+    { run_mode: runMode, input },
     signal,
   )
   const summary = report.summary || {}
@@ -2154,26 +2480,78 @@ export async function createWorkflowTask({
   workflowUuid,
   input,
   description,
-  inventoryBindings = [],
+  runMode = 'normal',
+  priority = 'normal',
 }: {
   workflowUuid: string
   input: Record<string, unknown>
   description: string
-  /** 每条库存需求一条绑定；Edge 在同一事务里校验并预留。 */
-  inventoryBindings?: WorkflowInventoryBinding[]
+  runMode?: 'normal' | 'step'
+  priority?: WorkflowTaskPriority
 }) {
   return postData<RawRecord>('/workflow-tasks', {
     workflow_uuid: workflowUuid,
-    run_mode: 'normal',
+    run_mode: runMode,
+    priority,
     input,
     description,
     meta_data: { source: 'unilabos-frontend' },
-    inventory_bindings: inventoryBindings.map((binding) => ({
-      requirement_key: binding.requirementKey,
-      inventory_type: binding.inventoryType,
-      inventory_uuid: binding.inventoryUuid,
-      reserved_quantity: binding.reservedQuantity,
-      quantity_unit: binding.quantityUnit,
-    })),
   })
+}
+
+export async function loadWorkflowTaskStepState(
+  taskUuid: string,
+  signal?: AbortSignal,
+): Promise<WorkflowStepState> {
+  const state = await requestData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/step-state`,
+    signal,
+  )
+  return {
+    workflowTaskUuid: String(state.workflow_task_uuid),
+    executionMode: String(state.execution_mode || 'normal') as WorkflowStepState['executionMode'],
+    controlStatus: String(state.control_status || 'active'),
+    inFlightJobCount: Number(state.in_flight_job_count || 0),
+    requiresSelection: Boolean(state.requires_selection),
+    canStep: Boolean(state.can_step),
+    candidates: Array.isArray(state.candidates) ? state.candidates.map((candidate: RawRecord) => ({
+      nodeUuid: String(candidate.node_uuid),
+      name: String(candidate.name || candidate.node_uuid),
+      kind: String(candidate.kind || 'device_action'),
+      deviceId: candidate.device_id ? String(candidate.device_id) : undefined,
+      actionName: candidate.action_name ? String(candidate.action_name) : undefined,
+    })) : [],
+  }
+}
+
+export async function commandWorkflowTask(
+  taskUuid: string,
+  type: 'step' | 'pause' | 'resume' | 'cancel',
+  targetNodeUuid?: string,
+): Promise<RawRecord> {
+  const generatedKey = globalThis.crypto?.randomUUID?.()
+    || `${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const command = await postData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`,
+    {
+      type,
+      target_node_uuid: targetNodeUuid || null,
+      idempotency_key: generatedKey,
+      meta_data: { source: 'unilabos-frontend' },
+    },
+  )
+  if (command.status === 'rejected') {
+    throw new Error(String(command.result?.reason || '调度器拒绝了任务控制命令'))
+  }
+  return command
+}
+
+export async function decideManualConfirmation(
+  jobUuid: string,
+  action: 'approve' | 'reject',
+): Promise<RawRecord> {
+  return postData<RawRecord>(
+    `/workflow-node-jobs/${encodeURIComponent(jobUuid)}/manual-confirmation`,
+    { action },
+  )
 }

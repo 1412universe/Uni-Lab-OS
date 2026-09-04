@@ -382,6 +382,42 @@ def test_optional_default_is_published_in_schema_and_remains_canonical(
         store.close()
 
 
+def test_unit_is_published_to_schema_and_business_handle_metadata() -> None:
+    """输入输出单位应同时出现在发布 Schema 与业务连接点元数据中。"""
+
+    snapshot = _applied_snapshot()
+    snapshot["workflow"]["meta_data"]["unilab"]["input_contract"]["parameters"][
+        0
+    ]["unit"] = "mL"
+    snapshot["workflow"]["meta_data"]["unilab"]["output_contract"]["outputs"][
+        0
+    ]["unit"] = "mL"
+    catalog = PublishedSourceCatalog.from_records(_source_records())
+    projected = project_published_workflow_contract(
+        source=catalog.resolve(
+            "c1_published_lab.workflows.child", "prepare_sample"
+        ),
+        applied_snapshot=snapshot,
+        host_node_resource_template={
+            "uuid": HOST_RESOURCE_TEMPLATE_UUID,
+            "name": "host_node",
+            "display_name": "Host Node",
+        },
+    )
+
+    assert projected is not None
+    goal_value = projected.template["schema"]["properties"]["goal"]["properties"][
+        "value"
+    ]
+    result_value = projected.template["schema"]["properties"]["result"]["properties"][
+        "result"
+    ]
+    assert goal_value["x-unilabos-unit"] == "mL"
+    assert result_value["x-unilabos-unit"] == "mL"
+    assert projected.handles[0]["meta_data"]["unilab"]["unit"] == "mL"
+    assert projected.handles[1]["meta_data"]["unilab"]["unit"] == "mL"
+
+
 def test_projection_emits_business_handles_then_separate_ready_handles() -> None:
     """工作流边界按输入、输出和两个 ready 结构连接点的顺序发布。
 

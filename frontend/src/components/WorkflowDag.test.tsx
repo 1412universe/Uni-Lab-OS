@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { WorkflowGraphEdge, WorkflowGraphNode } from '../types'
 import { WorkflowDag } from './WorkflowDag'
 
@@ -43,20 +43,175 @@ function material(uuid: string, name: string, order: number): WorkflowGraphNode 
   }
 }
 
-function control(uuid: string, name: string, type: 'condition' | 'repeat_until', order: number): WorkflowGraphNode {
-  return { uuid, name, type, kind: 'action', authoringOrder: order, disabled: false }
-}
-
 function edge(uuid: string, sourceNodeUuid: string, targetNodeUuid: string): WorkflowGraphEdge {
   return { uuid, sourceNodeUuid, targetNodeUuid }
 }
 
+function control(
+  uuid: string,
+  name: string,
+  type: 'condition' | 'repeat_until',
+  order: number,
+  param: Record<string, unknown> = {},
+  parentUuid?: string,
+): WorkflowGraphNode {
+  return {
+    uuid,
+    name,
+    type,
+    // 模拟当前接口适配结果：修复前控制节点会被降级成普通动作。
+    kind: 'action',
+    authoringOrder: order,
+    parentUuid,
+    param,
+    disabled: false,
+  }
+}
+
 describe('WorkflowDag', () => {
+  it('offers an explicit retry when the graph request fails', () => {
+    const onRetry = vi.fn()
+    render(<WorkflowDag nodes={[]} edges={[]} loading={false} error onRetry={onRetry} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '重新读取工作流图' }))
+
+    expect(onRetry).toHaveBeenCalledOnce()
+  })
+
+  it('projects a condition region and labels both scheduler-only branches', () => {
+    const conditionUuid = 'condition'
+    const nodes = [
+      action('observed', '观察布尔条件', 0),
+      control(conditionUuid, '条件', 'condition', 1, {
+        predecessor_node_uuids: ['observed'],
+        bindings: {
+          observed: { kind: 'node_result', node_uuid: 'observed', result_path: ['value'] },
+        },
+        branches: [
+          {
+            label: 'if',
+            condition: { field: { var: 'observed' }, name: 'value' },
+            node_uuids: ['true-branch'],
+            entry_node_uuids: ['true-branch'],
+            exit_node_uuids: ['true-branch'],
+          },
+          {
+            label: 'else',
+            condition: null,
+            node_uuids: ['false-branch'],
+            entry_node_uuids: ['false-branch'],
+            exit_node_uuids: ['false-branch'],
+          },
+        ],
+      }),
+      action('true-branch', '记录真分支', 2, conditionUuid),
+      action('false-branch', '记录假分支', 3, conditionUuid),
+    ]
+
+    const { container } = render(<WorkflowDag nodes={nodes} edges={[]} loading={false} error={false} />)
+
+    expect(screen.getByRole('group', { name: '条件控制域：条件' })).toHaveTextContent('记录真分支')
+    expect(screen.getByRole('group', { name: '条件控制域：条件' })).toHaveTextContent('记录假分支')
+    expect(screen.getByRole('button', { name: 'True 分支：观察布尔条件 → 记录真分支' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'False 分支：观察布尔条件 → 记录假分支' })).toBeInTheDocument()
+    expect(container.querySelector('.workflow-dag-summary')).toHaveTextContent('0 条权威连线')
+    expect(container.querySelector('.workflow-dag-summary')).toHaveTextContent('2 条调度关系')
+  })
+
+  it('projects RepeatUntil as a region with a non-authoritative continue relation', () => {
+    const repeatUuid = 'repeat'
+    const nodes = [
+      control(repeatUuid, '重复直到', 'repeat_until', 0, {
+        predecessor_node_uuids: [],
+        successor_node_uuids: [],
+        max_iterations: 10,
+        initial_carry: { iteration: { kind: 'literal', value: 1 } },
+        next_carry: {
+          iteration: { kind: 'node_result', node_uuid: 'evaluate', result_path: ['next_iteration'] },
+        },
+        until: { field: { var: 'decision' }, name: 'done' },
+        bindings: {
+          decision: { kind: 'node_result', node_uuid: 'evaluate' },
+        },
+        node_uuids: ['prepare', 'execute', 'evaluate'],
+        entry_node_uuids: ['prepare'],
+        exit_node_uuids: ['evaluate'],
+      }),
+      action('prepare', '准备循环轮次', 1, repeatUuid),
+      action('execute', '执行循环轮次', 2, repeatUuid),
+      action('evaluate', '判断循环退出', 3, repeatUuid),
+    ]
+    const edges = [
+      edge('prepare-execute', 'prepare', 'execute'),
+      edge('execute-evaluate', 'execute', 'evaluate'),
+    ]
+
+    const { container } = render(<WorkflowDag nodes={nodes} edges={edges} loading={false} error={false} />)
+
+    const region = screen.getByRole('group', { name: '循环控制域：重复直到' })
+    expect(region).toHaveTextContent('最多 10 轮')
+    expect(region).toHaveTextContent('准备循环轮次')
+    expect(region).toHaveTextContent('执行循环轮次')
+    expect(region).toHaveTextContent('判断循环退出')
+    expect(screen.getByRole('button', {
+      name: '继续下一轮：判断循环退出 → 准备循环轮次',
+    })).toBeInTheDocument()
+    expect(container.querySelector('.workflow-dag-summary')).toHaveTextContent('2 条权威连线')
+    expect(container.querySelector('.workflow-dag-summary')).toHaveTextContent('1 条调度关系')
+  })
+
+  it('keeps a nested condition inside its RepeatUntil control region', () => {
+    const nodes = [
+      control('repeat', '重复直到', 'repeat_until', 0, {
+        predecessor_node_uuids: [],
+        successor_node_uuids: [],
+        max_iterations: 8,
+        initial_carry: { iteration: { kind: 'literal', value: 1 } },
+        next_carry: {
+          iteration: { kind: 'node_result', node_uuid: 'decision', result_path: ['next_iteration'] },
+        },
+        until: { field: { var: 'decision' }, name: 'done' },
+        bindings: { decision: { kind: 'node_result', node_uuid: 'decision' } },
+        node_uuids: ['decision', 'condition', 'even', 'odd'],
+        entry_node_uuids: ['decision'],
+        exit_node_uuids: ['condition'],
+      }),
+      action('decision', '判断轮次', 1, 'repeat'),
+      control('condition', '判断奇偶分支', 'condition', 2, {
+        predecessor_node_uuids: ['decision'],
+        bindings: { is_even: { kind: 'node_result', node_uuid: 'decision', result_path: ['is_even'] } },
+        branches: [
+          {
+            label: 'if', condition: { var: 'is_even' }, node_uuids: ['even'],
+            entry_node_uuids: ['even'], exit_node_uuids: ['even'],
+          },
+          {
+            label: 'else', condition: null, node_uuids: ['odd'],
+            entry_node_uuids: ['odd'], exit_node_uuids: ['odd'],
+          },
+        ],
+      }, 'repeat'),
+      action('even', '记录偶数分支', 3, 'condition'),
+      action('odd', '记录奇数分支', 4, 'condition'),
+    ]
+
+    render(<WorkflowDag nodes={nodes} edges={[]} loading={false} error={false} />)
+
+    const repeatRegion = screen.getByRole('group', { name: '循环控制域：重复直到' })
+    expect(repeatRegion).toHaveTextContent('判断轮次')
+    expect(repeatRegion).toHaveTextContent('记录偶数分支')
+    expect(repeatRegion).toHaveTextContent('记录奇数分支')
+    expect(screen.getByRole('group', { name: '条件控制域：判断奇偶分支' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'True 分支：判断轮次 → 记录偶数分支' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'False 分支：判断轮次 → 记录奇数分支' })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /继续下一轮：记录.*分支 → 判断轮次/ })).toHaveLength(2)
+  })
+
   it('用条件节点和循环节点的业务名称展示结构控制节点', () => {
     render(<WorkflowDag nodes={[control('condition-1', '按结果分支', 'condition', 0), control('repeat-1', '重试循环', 'repeat_until', 1)]} edges={[]} loading={false} error={false} />)
 
-    expect(screen.getByRole('article', { name: /按结果分支.*条件节点/ })).toBeInTheDocument()
-    expect(screen.getByRole('article', { name: /重试循环.*循环节点/ })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: '条件控制域：按结果分支' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: '循环控制域：重试循环' })).toBeInTheDocument()
   })
 
   it('labels a parallel control edge and highlights both endpoints when selected', () => {

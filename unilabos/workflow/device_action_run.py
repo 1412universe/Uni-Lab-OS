@@ -65,6 +65,7 @@ class DeviceActionRunService:
         idempotency_key: str,
         description: str | None,
         meta_data: Mapping[str, Any] | None,
+        reject_if_nonterminal_task_exists: bool = False,
     ) -> dict[str, Any]:
         """校验并原子创建或复用设备单动作运行（DeviceActionRun）。
 
@@ -140,9 +141,10 @@ class DeviceActionRunService:
                 job=job,
                 idempotency_key=normalized_key,
                 request_fingerprint=request_fingerprint,
+                reject_if_nonterminal_task_exists=reject_if_nonterminal_task_exists,
             )
-        except StoreConflict:
-            raise DeviceActionRunConflict("设备单动作幂等身份冲突") from None
+        except StoreConflict as error:
+            raise DeviceActionRunConflict(str(error)) from None
 
     def _resolve_material(self, material_uuid: str) -> Mapping[str, Any]:
         """关闭式解析一个活动物料（Material）身份。

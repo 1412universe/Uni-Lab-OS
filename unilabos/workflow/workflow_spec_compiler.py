@@ -419,7 +419,6 @@ class WorkflowSpecCompiler:
                 if job is not None
                 else ""
             )
-            continues_device_action = bool(node.get("continues_device_action", False))
             device_id = str(node.get("device_id") or "").strip()
             raw_device_selector = node.get("device_selector") or {}
             if not isinstance(raw_device_selector, Mapping):
@@ -428,22 +427,17 @@ class WorkflowSpecCompiler:
                     f"动态设备选择器必须是对象：{node_uuid}",
                 )
             device_selector = deepcopy(dict(raw_device_selector))
-            dispatches_device_action = (
-                kind
-                in {
-                    "device_action",
-                    "material_transfer",
-                }
-                or continues_device_action
-            )
+            dispatches_device_action = kind in {
+                "device_action",
+                "material_transfer",
+                "manual_confirm",
+            }
             if dispatches_device_action:
                 if not device_id and not device_selector:
                     raise WorkflowSpecCompilationError(
                         "invalid_executor_binding",
                         f"设备动作缺少执行器选择：{node_uuid}",
                     )
-            else:
-                device_id = "manual-confirmation"
             action_name = str(node.get("action_name") or "").strip()
             action_type = str(node.get("action_type") or "").strip()
             if dispatches_device_action:
@@ -451,9 +445,6 @@ class WorkflowSpecCompiler:
                     raise WorkflowSpecCompilationError(
                         "invalid_action_contract", f"设备动作合同不完整：{node_uuid}"
                     )
-            else:
-                action_name = "confirm"
-                action_type = "manual_confirm"
             planned_param = node.get("param", {})
             if not isinstance(planned_param, Mapping):
                 raise WorkflowSpecCompilationError(
@@ -516,7 +507,9 @@ class WorkflowSpecCompiler:
                     node_type=(
                         "manual_confirm" if kind == "manual_confirm" else "ILab"
                     ),
-                    manual_continues_device_action=continues_device_action,
+                    manual_confirmation=deepcopy(
+                        dict(node.get("manual_confirmation") or {})
+                    ),
                     disabled=False,
                     always_free=bool(node.get("always_free", False)),
                     material_requirements=requirements,

@@ -60,6 +60,7 @@ from unilabos.workflow.store_migrations import (
     ensure_station_task_submission_schema,
     ensure_task_material_admission_schema,
     ensure_workflow_inventory_schema,
+    ensure_workflow_task_control_schema,
 )
 
 if TYPE_CHECKING:
@@ -83,6 +84,60 @@ def _load(value: Optional[str], fallback: Any) -> Any:
     if value is None or value == "":
         return fallback
     return decode_json_bytes(value.encode("utf-8"))
+
+
+def _collect_resource_slot_uuids(
+    schema: Any,
+    value: Any,
+    output: set[str],
+) -> None:
+    """按冻结输入 Schema 收集物料占位符（ResourceSlot）的稳定身份。"""
+
+    if not isinstance(schema, Mapping) or value is None:
+        return
+    members = schema.get("anyOf")
+    if isinstance(members, list):
+        for member in members:
+            _collect_resource_slot_uuids(member, value, output)
+        return
+    if schema.get("$slot") == "ResourceSlot":
+        if isinstance(value, Mapping):
+            material_uuid = value.get("uuid")
+            if isinstance(material_uuid, str) and material_uuid:
+                output.add(material_uuid)
+        return
+    if schema.get("type") == "array":
+        if isinstance(value, list):
+            for item in value:
+                _collect_resource_slot_uuids(schema.get("items"), item, output)
+        return
+    properties = schema.get("properties")
+    if isinstance(value, Mapping) and isinstance(properties, Mapping):
+        for name, child_schema in properties.items():
+            _collect_resource_slot_uuids(child_schema, value.get(name), output)
+
+
+def _task_input_material_uuids(
+    contract_parameters: Any,
+    task_input: Any,
+) -> List[str]:
+    """从冻结任务输入合同生成紧凑展示所需的物料 UUID 列表。"""
+
+    if not isinstance(contract_parameters, list) or not isinstance(task_input, Mapping):
+        return []
+    result: set[str] = set()
+    for parameter in contract_parameters:
+        if not isinstance(parameter, Mapping):
+            continue
+        name = parameter.get("name")
+        if not isinstance(name, str) or name not in task_input:
+            continue
+        _collect_resource_slot_uuids(
+            parameter.get("schema"),
+            task_input[name],
+            result,
+        )
+    return sorted(result)
 
 
 def _stored_task_priority(value: Any) -> str | float:
@@ -236,6 +291,7 @@ CREATE TABLE IF NOT EXISTS workflow_node (
     icon TEXT,
     pose TEXT NOT NULL,
     param TEXT NOT NULL,
+    manual_confirmation TEXT NOT NULL DEFAULT '{}',
     footer TEXT,
     action_name TEXT,
     action_type TEXT,
@@ -277,6 +333,8 @@ CREATE TABLE IF NOT EXISTS workflow_task (
     workflow_snapshot TEXT NOT NULL,
     execution_plan TEXT NOT NULL,
     run_mode TEXT NOT NULL,
+    execution_mode TEXT NOT NULL DEFAULT 'normal'
+        CHECK (execution_mode IN ('normal', 'switching_to_step', 'step')),
     target_node_uuid TEXT,
     control_status TEXT NOT NULL,
     cleanup_status TEXT NOT NULL,
@@ -561,8 +619,22 @@ class WorkflowStore:
                                     )
                                 """
                             )
+                    workflow_node_columns = {
+                        row["name"]
+                        for row in self._conn.execute(
+                            "PRAGMA table_info(workflow_node)"
+                        ).fetchall()
+                    }
+                    if "manual_confirmation" not in workflow_node_columns:
+                        self._conn.execute(
+                            """
+                            ALTER TABLE workflow_node
+                            ADD COLUMN manual_confirmation TEXT NOT NULL DEFAULT '{}'
+                            """
+                        )
                     ensure_device_action_run_schema(self._conn)
                     ensure_station_task_submission_schema(self._conn)
+                    ensure_workflow_task_control_schema(self._conn)
                     from unilabos.workflow.workflow_boundary import (
                         ensure_workflow_boundary_schema,
                     )
@@ -753,6 +825,9 @@ class WorkflowStore:
         meta_data: Dict[str, Any],
         nodes: List[WorkflowNodeWrite],
         edges: List[WorkflowEdgeWrite],
+        inventory_requirements: Optional[
+            List[WorkflowInventoryRequirementWrite]
+        ] = None,
         workflow_type: str = "normal",
         node_templates: List[Dict[str, Any]] | None = None,
         handle_templates: List[Dict[str, Any]] | None = None,
@@ -818,6 +893,7 @@ class WorkflowStore:
                     expected_revision=1,
                     nodes=nodes,
                     edges=edges,
+                    inventory_requirements=inventory_requirements,
                     advance_revision=False,
                     protect_reserved_metadata=not trusted_authoring_graph,
                     semantic_workflow_meta_data=(
@@ -1311,21 +1387,35 @@ class WorkflowStore:
         """一次冻结工作流图与应用源码发布资格事实。
 
         参数：``workflow_uuid`` 是活动工作流（Workflow）稳定身份。返回：同一
-        SQLite 锁视图中的完整图及 ``applied_source``；尚未应用时该字段为
-        ``None``。异常：工作流缺失或软删除时抛出 ``StoreNotFound``，持久 JSON
-        损坏等读取错误原样传播。
+        SQLite 锁视图中的完整图、已应用源码和原始草稿字节摘要
+        ``source_draft_hash``；尚未应用时 ``applied_source`` 为 ``None``，草稿
+        摘要也可能为空。组合目录应使用原始草稿摘要核对领域包发布目录，不能把
+        ``applied_source.source_hash``（规范化源码摘要）当作同一证据。异常：
+        工作流缺失或软删除时抛出 ``StoreNotFound``，持久 JSON 损坏等读取错误
+        原样传播。
         """
 
         with self._lock:
             graph = self.get_graph(workflow_uuid, conn=self._conn)
             row = self._conn.execute(
-                "SELECT applied_source FROM workflow_authoring WHERE workflow_uuid = ?",
+                """
+                SELECT observed_draft_hash, applied_source
+                FROM workflow_authoring
+                WHERE workflow_uuid = ?
+                """,
                 (workflow_uuid,),
             ).fetchone()
             applied_source = (
                 _load(row["applied_source"], None) if row is not None else None
             )
-            return {**graph, "applied_source": applied_source}
+            source_draft_hash = (
+                row["observed_draft_hash"] if row is not None else None
+            )
+            return {
+                **graph,
+                "applied_source": applied_source,
+                "source_draft_hash": source_draft_hash,
+            }
 
     def list_published_template_projections(self) -> list[dict[str, Any]]:
         """返回当前进程已恢复的发布组合模板及连接点投影。
@@ -1785,6 +1875,7 @@ class WorkflowStore:
             node.icon,
             _json(node.pose),
             _json(effective_param),
+            _json(node.manual_confirmation),
             node.footer,
             node.action_name,
             node.action_type,
@@ -1800,10 +1891,16 @@ class WorkflowStore:
                     uuid, create_time, update_time, deleted_at, description,
                     meta_data, workflow_uuid, workflow_node_template_uuid,
                     parent_uuid, material_uuid, name, status, type, icon, pose,
-                    param, footer, action_name, action_type, execution_policy,
+                    param, manual_confirmation, footer, action_name, action_type,
+                    execution_policy,
                     disabled, minimized, script
-                ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                          ?, ?, ?, ?, ?, ?)
+                ) VALUES (
+                    ?, ?, ?, NULL,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?
+                )
                 """,
                 (node.uuid, now, now, *values),
             )
@@ -1815,8 +1912,8 @@ class WorkflowStore:
                 meta_data = ?, workflow_uuid = ?,
                 workflow_node_template_uuid = ?, parent_uuid = ?,
                 material_uuid = ?, name = ?, status = ?, type = ?, icon = ?,
-                pose = ?, param = ?, footer = ?, action_name = ?,
-                action_type = ?, execution_policy = ?, disabled = ?,
+                pose = ?, param = ?, manual_confirmation = ?, footer = ?,
+                action_name = ?, action_type = ?, execution_policy = ?, disabled = ?,
                 minimized = ?, script = ?
             WHERE uuid = ?
             """,
@@ -2036,6 +2133,7 @@ class WorkflowStore:
         request_fingerprint: str = "",
         revision_fingerprint: str | None = None,
         deadline: str | None = None,
+        reject_if_nonterminal_task_exists: bool = False,
     ) -> Dict[str, Any]:
         """原子创建工作流任务（WorkflowTask）及首次节点作业。
 
@@ -2078,6 +2176,21 @@ class WorkflowStore:
                     result = self._task_row(existing)
                     result["_station_submission_created"] = False
                     return result
+            if reject_if_nonterminal_task_exists:
+                occupied = conn.execute(
+                    """
+                    SELECT uuid, status FROM workflow_task
+                    WHERE deleted_at IS NULL
+                      AND status IN ('pending', 'running', 'canceling')
+                    ORDER BY create_time, uuid
+                    LIMIT 1
+                    """
+                ).fetchone()
+                if occupied is not None:
+                    raise StoreConflict(
+                        "develop_task_conflict:"
+                        f"{occupied['uuid']}:{occupied['status']}"
+                    )
             if applied_graph is None:
                 if not self._persist_workflow_definitions:
                     raise StoreConflict("运行事实库创建任务时缺少工作流图快照")
@@ -2100,11 +2213,12 @@ class WorkflowStore:
                 INSERT INTO workflow_task(
                     uuid, create_time, update_time, deleted_at, description,
                     meta_data, workflow_uuid, status, workflow_snapshot,
-                    execution_plan, run_mode, target_node_uuid, control_status,
+                    execution_plan, run_mode, execution_mode, target_node_uuid,
+                    control_status,
                     cleanup_status, trace_context, input, output, error_info,
                     backend_task_uuid, invocation_key, priority,
                     request_fingerprint, revision_fingerprint, timeout_at
-                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?,
                           'none', '{}', ?, '{}', '[]', ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -2117,6 +2231,7 @@ class WorkflowStore:
                     _json(prepared.workflow_snapshot),
                     _json(plan),
                     effective_run_mode,
+                    "step" if effective_run_mode == "step" else "normal",
                     effective_target,
                     control_status,
                     _json(prepared.resolved_input),
@@ -2429,6 +2544,187 @@ class WorkflowStore:
             "page_size": page_size,
         }
 
+    def list_task_presentations(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        workflow_uuid: Optional[str] = None,
+        execution_kind: str = "",
+        status: str = "",
+        cleanup_status: str = "",
+        view: str = "",
+        terminal_limit: int = 20,
+    ) -> Dict[str, Any]:
+        """分页读取 Edge 控制台需要的紧凑 Task 冻结事实。
+
+        查询在 SQLite JSON 层裁剪大体积工作流快照与执行计划，避免先把完整图、
+        参数 Schema 和执行策略解码成 Python 对象后再丢弃。返回只读展示投影，
+        筛选和分页语义与 ``list_tasks`` 一致；``view=matrix`` 返回活动窗口并仅
+        保留矩阵绘制、等待原因和状态计算所需字段，节点证据由详情接口按需读取。
+        """
+
+        clauses = ["task.deleted_at IS NULL"]
+        values: List[Any] = []
+        for field, value in (
+            ("workflow_uuid", workflow_uuid),
+            ("execution_kind", execution_kind),
+            ("status", status),
+            ("cleanup_status", cleanup_status),
+        ):
+            if value:
+                clauses.append(f"task.{field} = ?")
+                values.append(value)
+        if view == "matrix":
+            recent_clauses = ["recent.deleted_at IS NULL"]
+            recent_values: List[Any] = []
+            for field, value in (
+                ("workflow_uuid", workflow_uuid),
+                ("execution_kind", execution_kind),
+            ):
+                if value:
+                    recent_clauses.append(f"recent.{field} = ?")
+                    recent_values.append(value)
+            clauses.append(
+                """
+                (
+                    task.status IN ('pending', 'running', 'canceling')
+                    OR task.cleanup_status = 'requires_attention'
+                    OR task.uuid IN (
+                        SELECT recent.uuid
+                        FROM workflow_task AS recent
+                        WHERE {}
+                          AND recent.cleanup_status <> 'requires_attention'
+                          AND recent.status IN (
+                              'succeeded', 'failed', 'canceled', 'timeout'
+                          )
+                        ORDER BY COALESCE(
+                            recent.finished_at,
+                            recent.update_time,
+                            recent.create_time
+                        ) DESC, recent.uuid DESC
+                        LIMIT ?
+                    )
+                )
+                """.format(" AND ".join(recent_clauses))
+            )
+            values.extend(recent_values)
+            values.append(terminal_limit)
+        where = " AND ".join(clauses)
+        offset = (page - 1) * page_size
+        with self._lock:
+            total = self._conn.execute(
+                f"SELECT COUNT(*) FROM workflow_task AS task WHERE {where}",
+                values,
+            ).fetchone()[0]
+            pagination = "" if view == "matrix" else "LIMIT ? OFFSET ?"
+            row_values = values if view == "matrix" else [*values, page_size, offset]
+            rows = self._conn.execute(
+                f"""
+                SELECT
+                    task.uuid,
+                    task.create_time,
+                    task.update_time,
+                    task.description,
+                    task.meta_data,
+                    task.workflow_uuid,
+                    task.execution_kind,
+                    task.priority,
+                    task.status,
+                    json_object(
+                        'workflow', json_object(
+                            'uuid', json_extract(
+                                task.workflow_snapshot, '$.workflow.uuid'
+                            ),
+                            'name', json_extract(
+                                task.workflow_snapshot, '$.workflow.name'
+                            ),
+                            'revision', json_extract(
+                                task.workflow_snapshot, '$.workflow.revision'
+                            )
+                        )
+                    ) AS workflow_snapshot,
+                    json_object(
+                        'run_mode', json_extract(
+                            task.execution_plan, '$.run_mode'
+                        ),
+                        'target_node_uuid', json_extract(
+                            task.execution_plan, '$.target_node_uuid'
+                        ),
+                        'nodes', json(COALESCE((
+                            SELECT json_group_array(json_object(
+                                'uuid', json_extract(node.value, '$.uuid'),
+                                'name', json_extract(node.value, '$.name'),
+                                'kind', json_extract(node.value, '$.kind'),
+                                'type', json_extract(node.value, '$.type'),
+                                'action_name', json_extract(
+                                    node.value, '$.action_name'
+                                ),
+                                'action_type', json_extract(
+                                    node.value, '$.action_type'
+                                ),
+                                'device_id', json_extract(
+                                    node.value, '$.device_id'
+                                ),
+                                'material_uuid', json_extract(
+                                    node.value, '$.material_uuid'
+                                ),
+                                'topological_index', json_extract(
+                                    node.value, '$.topological_index'
+                                ),
+                                'disabled', json_extract(
+                                    node.value, '$.disabled'
+                                )
+                            ))
+                            FROM json_each(task.execution_plan, '$.nodes') AS node
+                        ), '[]')),
+                        'edges', json(COALESCE((
+                            SELECT json_group_array(json_object(
+                                'uuid', json_extract(edge.value, '$.uuid'),
+                                'source_node_uuid', json_extract(
+                                    edge.value, '$.source_node_uuid'
+                                ),
+                                'target_node_uuid', json_extract(
+                                    edge.value, '$.target_node_uuid'
+                                )
+                            ))
+                            FROM json_each(task.execution_plan, '$.edges') AS edge
+                        ), '[]'))
+                    ) AS execution_plan,
+                    task.run_mode,
+                    task.execution_mode,
+                    task.target_node_uuid,
+                    task.control_status,
+                    task.cleanup_status,
+                    task.wait_reason,
+                    task.trace_context,
+                    json_extract(
+                        task.workflow_snapshot,
+                        '$.workflow.meta_data.unilab.input_contract.parameters'
+                    ) AS input_contract_parameters,
+                    task.input AS task_input_source,
+                    json_object(
+                        'sample_id', json_extract(task.input, '$.sample_id'),
+                        'sample', json_extract(task.input, '$.sample')
+                    ) AS input,
+                    '[]' AS error_info,
+                    task.attention_reason,
+                    task.started_at,
+                    task.finished_at
+                FROM workflow_task AS task
+                WHERE {where}
+                ORDER BY task.create_time DESC, task.uuid
+                {pagination}
+                """,
+                row_values,
+            ).fetchall()
+        return {
+            "items": [self._task_presentation_row(row) for row in rows],
+            "total": total,
+            "page": page,
+            "page_size": len(rows) if view == "matrix" else page_size,
+        }
+
     def list_recoverable_tasks(
         self,
         *,
@@ -2469,6 +2765,65 @@ class WorkflowStore:
                 (task_uuid,),
             ).fetchall()
         return [self._job_row(row) for row in rows]
+
+    def list_jobs_for_tasks(
+        self,
+        task_uuids: Iterable[str],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """批量读取多个 Task 的 Job，供紧凑运行态投影消除 N+1 查询。
+
+        参数：``task_uuids`` 是已经由任务分页查询验证存在的稳定身份。返回按 Task
+        UUID 分组且保持拓扑顺序的 Job 投影；空集合返回空字典。异常：SQLite 查询
+        或持久 JSON 解码错误原样传播，不把损坏事实伪装成空作业列表。
+        """
+
+        identities = tuple(dict.fromkeys(str(value) for value in task_uuids if value))
+        if not identities:
+            return {}
+        placeholders = ", ".join("?" for _identity in identities)
+        with self._lock:
+            rows = self._conn.execute(
+                f"""
+                SELECT
+                    uuid,
+                    create_time,
+                    update_time,
+                    workflow_task_uuid,
+                    workflow_node_uuid,
+                    topological_index,
+                    executor_kind,
+                    status,
+                    attempt,
+                    json_object(
+                        'actual_executor', json_extract(
+                            control_data, '$.actual_executor'
+                        )
+                    ) AS control_data,
+                    '[]' AS error_info,
+                    wait_reason,
+                    json_object(
+                        'material_uuid', json_extract(
+                            expected_change_set, '$.material_uuid'
+                        )
+                    ) AS expected_change_set,
+                    material_uuid,
+                    uncertainty_reason,
+                    started_at,
+                    finished_at
+                FROM workflow_node_job
+                WHERE workflow_task_uuid IN ({placeholders}) AND deleted_at IS NULL
+                ORDER BY workflow_task_uuid, topological_index, create_time, uuid
+                """,
+                identities,
+            ).fetchall()
+        grouped: Dict[str, List[Dict[str, Any]]] = {
+            identity: [] for identity in identities
+        }
+        for row in rows:
+            grouped[str(row["workflow_task_uuid"])].append(
+                self._job_presentation_row(row)
+            )
+        return grouped
 
     def get_job(self, job_uuid: str) -> Dict[str, Any]:
         with self._lock:
@@ -2513,6 +2868,12 @@ class WorkflowStore:
                 (task_uuid, idempotency_key),
             ).fetchone()
             if existing is not None:
+                if (
+                    str(existing["type"]) != command_type
+                    or (existing["target_node_uuid"] or None)
+                    != (target_node_uuid or None)
+                ):
+                    raise StoreConflict("同一任务控制幂等键对应的命令内容已变化")
                 return self._task_command_row(existing), False
             conn.execute(
                 """
@@ -2569,6 +2930,52 @@ class WorkflowStore:
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
                     (control_status, now, task_uuid),
+                )
+                self._append_event(
+                    conn,
+                    event="workflow.runtime.changed",
+                    data={"workflow_task_uuid": task_uuid},
+                    now=now,
+                )
+            updated = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?", (task_uuid,)
+            ).fetchone()
+            return self._task_row(updated)
+
+    def set_task_execution_mode(
+        self,
+        task_uuid: str,
+        *,
+        execution_mode: str,
+        control_status: str,
+    ) -> Dict[str, Any]:
+        """原子保存当前执行控制模式及其派发闸门状态。"""
+
+        if execution_mode not in {"normal", "switching_to_step", "step"}:
+            raise StoreConflict("任务执行模式非法")
+        if control_status not in {"active", "paused"}:
+            raise StoreConflict("任务控制状态非法")
+        now = utc_now()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
+                (task_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            if row["status"] in {"succeeded", "failed", "canceled", "timeout"}:
+                raise StoreConflict("终态任务不能修改执行模式")
+            if (
+                str(row["execution_mode"]) != execution_mode
+                or str(row["control_status"]) != control_status
+            ):
+                conn.execute(
+                    """
+                    UPDATE workflow_task
+                    SET execution_mode = ?, control_status = ?, update_time = ?
+                    WHERE uuid = ? AND deleted_at IS NULL
+                    """,
+                    (execution_mode, control_status, now, task_uuid),
                 )
                 self._append_event(
                     conn,
@@ -3220,6 +3627,93 @@ class WorkflowStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def bootstrap_workflow_revision(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+    ) -> bool:
+        """为冷启动空工作流骨架预置已发布合同修订。
+
+        参数：``workflow_uuid`` 是来源清单中的稳定工作流身份；``revision`` 是
+        领域包发布合同固定的工作流修订。返回：目标仍是没有任何图事实的空骨架、
+        且已安全采用该修订时为 ``True``；若图已有事实或当前修订更新，不覆盖并
+        返回 ``False``。异常：工作流不存在或修订格式无效抛 ``StoreNotFound``/
+        ``StoreConflict``；事务整体回滚。
+
+        该接缝只移动冷启动骨架的修订基线，图、物料需求和作者源码仍由随后一次
+        普通 Authoring candidate 提交。通过空骨架和“不降级修订”双重闸门，普通
+        graph apply 的版本递增语义不受影响。
+        """
+
+        if (
+            isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+        ):
+            raise StoreConflict("冷启动发布修订格式无效")
+        with self.transaction() as conn:
+            workflow = self.get_workflow(workflow_uuid, conn=conn)
+            # 查询全部历史行（而非只查 deleted_at IS NULL），避免把一个已有过
+            # 编辑的工作流误判成可覆盖的空骨架。
+            for table in (
+                "workflow_node",
+                "workflow_edge",
+                "workflow_inventory_requirement",
+            ):
+                if conn.execute(
+                    f"SELECT 1 FROM {table} WHERE workflow_uuid = ? LIMIT 1",
+                    (workflow_uuid,),
+                ).fetchone() is not None:
+                    return False
+            # 图为空并不足以证明这是刚由来源清单安装出的骨架：作者记录可能已经
+            # 留有候选、已应用源码、草稿观测或未完成写回。若在这些事实上移动
+            # revision，会把一个真实编辑中的工作流伪装成发布合同基线，随后冷启动
+            # 可能覆盖/跳过其版本。只允许 ``_ensure_empty_authoring`` 写出的全空
+            # 创作记录（以及尚未创建记录的兼容存储）通过此闸门。
+            authoring = conn.execute(
+                """
+                SELECT observed_draft_hash, draft_update_time, diagnostics,
+                       candidate_hash, candidate, applied_source,
+                       writeback_status, writeback_source,
+                       writeback_expected_hash, writeback_generation
+                FROM workflow_authoring
+                WHERE workflow_uuid = ?
+                """,
+                (workflow_uuid,),
+            ).fetchone()
+            if authoring is not None:
+                try:
+                    diagnostics = _load(authoring["diagnostics"], [])
+                    candidate = _load(authoring["candidate"], None)
+                    applied_source = _load(authoring["applied_source"], None)
+                except (TypeError, ValueError, UnicodeError, RecursionError):
+                    # 损坏的创作 JSON 交给后续正常恢复报告；这里绝不先改动版本。
+                    return False
+                if (
+                    authoring["observed_draft_hash"] is not None
+                    or authoring["draft_update_time"] is not None
+                    or diagnostics != []
+                    or authoring["candidate_hash"] is not None
+                    or candidate is not None
+                    or applied_source is not None
+                    or authoring["writeback_status"] != "settled"
+                    or authoring["writeback_source"] is not None
+                    or authoring["writeback_expected_hash"] is not None
+                    or authoring["writeback_generation"] is not None
+                ):
+                    return False
+            current_revision = int(workflow["revision"])
+            if current_revision > revision:
+                return False
+            if current_revision < revision:
+                conn.execute(
+                    "UPDATE workflow SET revision = ?, update_time = ? "
+                    "WHERE uuid = ? AND deleted_at IS NULL",
+                    (revision, utc_now(), workflow_uuid),
+                )
+            return True
+
     def get_authoring_record(self, workflow_uuid: str) -> Dict[str, Any]:
         with self._lock:
             row = self._conn.execute(
@@ -3330,6 +3824,7 @@ class WorkflowStore:
         workflow_uuid: str,
         candidate_hash: str,
         authoring_authority_validator: Callable[[str, str], None],
+        advance_revision: bool = True,
     ) -> Tuple[int, str]:
         """在线性化写事务内应用服务端持久候选版本（Candidate）。
 
@@ -3337,11 +3832,14 @@ class WorkflowStore:
         是调用者持有的服务端签发候选哈希（Candidate Hash）；
         ``authoring_authority_validator`` 在同一 ``BEGIN IMMEDIATE`` 内复核存储
         候选推导出的源码权威（Source Authority）草稿哈希与目录指纹（Catalog
-        Fingerprint）。返回：结果工作流修订（Workflow Revision）与提交后写回
-        世代。异常：任何候选、草稿、目录或修订冲突都在图、事件和写回标记写入
-        前失败，并由事务整体回滚。
+        Fingerprint）；``advance_revision`` 仅供冷启动已发布合同恢复接缝，在
+        已确认的空骨架合同修订上应用图时保持修订，否则必须为 ``True``。返回：
+        结果工作流修订（Workflow Revision）与提交后写回世代。异常：任何候选、
+        草稿、目录或修订冲突都在图、事件和写回标记写入前失败，并由事务整体回滚。
         """
 
+        if not isinstance(advance_revision, bool):
+            raise StoreConflict("工作流修订推进标志格式无效")
         now = utc_now()
         with self.transaction() as conn:
             writeback_generation = str(uuid4())
@@ -3436,10 +3934,14 @@ class WorkflowStore:
                     )
                     for item in graph.get("edges", [])
                 ]
-                # ``requirements`` 来自候选图顶层的库存需求；旧候选没有该键时为空列表，
-                # 与 Store 合同一致地显式清空历史需求，避免残留过期数量。
-                requirements = [
-                    WorkflowInventoryRequirementWrite.model_validate(item)
+                inventory_requirements = [
+                    WorkflowInventoryRequirementWrite.model_validate(
+                        {
+                            field: item[field]
+                            for field in WorkflowInventoryRequirementWrite.model_fields
+                            if field in item
+                        }
+                    )
                     for item in graph.get("inventory_requirements", [])
                 ]
                 self._ensure_authoring_catalog_projection(
@@ -3457,8 +3959,8 @@ class WorkflowStore:
                     expected_revision=expected_revision,
                     nodes=nodes,
                     edges=edges,
-                    inventory_requirements=requirements,
-                    advance_revision=True,
+                    inventory_requirements=inventory_requirements,
+                    advance_revision=advance_revision,
                     protect_reserved_metadata=False,
                     semantic_workflow_meta_data=candidate_meta,
                     validate_workflow_io_contract=True,
@@ -4035,6 +4537,9 @@ class WorkflowStore:
             "disabled": bool(row["disabled"]),
             "minimized": bool(row["minimized"]),
         }
+        manual_confirmation = _load(row["manual_confirmation"], {})
+        if manual_confirmation:
+            result["manual_confirmation"] = manual_confirmation
         cls._add_optional(
             result,
             row,
@@ -4131,6 +4636,7 @@ class WorkflowStore:
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),
             "run_mode": row["run_mode"],
+            "execution_mode": row["execution_mode"],
             "control_status": row["control_status"],
             "cleanup_status": row["cleanup_status"],
             "wait_reason": _load(row["wait_reason"], {}),
@@ -4157,6 +4663,45 @@ class WorkflowStore:
             result["global_task_uuid"] = row["backend_task_uuid"]
         if row["timeout_at"] is not None:
             result["deadline"] = row["timeout_at"]
+        return result
+
+    @classmethod
+    def _task_presentation_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """解码已经由 SQLite 裁剪的 Edge Task 展示行。"""
+
+        result = {
+            "uuid": row["uuid"],
+            "create_time": row["create_time"],
+            "update_time": row["update_time"],
+            "meta_data": _load(row["meta_data"], {}),
+            "workflow_uuid": row["workflow_uuid"],
+            "execution_kind": row["execution_kind"],
+            "priority": _stored_task_priority(row["priority"]),
+            "status": row["status"],
+            "workflow_snapshot": _load(row["workflow_snapshot"], {}),
+            "execution_plan": _load(row["execution_plan"], {}),
+            "run_mode": row["run_mode"],
+            "execution_mode": row["execution_mode"],
+            "control_status": row["control_status"],
+            "cleanup_status": row["cleanup_status"],
+            "wait_reason": _load(row["wait_reason"], {}),
+            "trace_context": _load(row["trace_context"], {}),
+            "input": _load(row["input"], {}),
+            "material_uuids": _task_input_material_uuids(
+                _load(row["input_contract_parameters"], []),
+                _load(row["task_input_source"], {}),
+            ),
+            "error_info": _load(row["error_info"], []),
+        }
+        cls._add_optional(
+            result,
+            row,
+            "description",
+            "target_node_uuid",
+            "attention_reason",
+            "started_at",
+            "finished_at",
+        )
         return result
 
     @classmethod
@@ -4209,6 +4754,35 @@ class WorkflowStore:
             "uncertainty_reason",
             "dispatch_effect_uuid",
             "dispatch_parameter_hash",
+            "started_at",
+            "finished_at",
+        )
+        return result
+
+    @classmethod
+    def _job_presentation_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
+        """解码已经由 SQL 排除执行策略与派发凭据的 Job 展示行。"""
+
+        result = {
+            "uuid": row["uuid"],
+            "create_time": row["create_time"],
+            "update_time": row["update_time"],
+            "workflow_task_uuid": row["workflow_task_uuid"],
+            "workflow_node_uuid": row["workflow_node_uuid"],
+            "topological_index": row["topological_index"],
+            "executor_kind": row["executor_kind"],
+            "status": row["status"],
+            "attempt": row["attempt"],
+            "control_data": _load(row["control_data"], {}),
+            "error_info": _load(row["error_info"], []),
+            "wait_reason": _load(row["wait_reason"], {}),
+            "expected_change_set": _load(row["expected_change_set"], {}),
+        }
+        cls._add_optional(
+            result,
+            row,
+            "material_uuid",
+            "uncertainty_reason",
             "started_at",
             "finished_at",
         )

@@ -989,6 +989,68 @@ def test_unknown_resolution_is_committed_locally_before_edge_ack(
     asyncio.run(scenario())
 
 
+def test_unknown_resolution_maps_restart_root_to_unique_device_child(
+    tmp_path: Path,
+) -> None:
+    """重启产生的保守根命令可解析到设备账本唯一 UNKNOWN 子命令。"""
+
+    async def scenario() -> None:
+        path = tmp_path / "root-resolution.db"
+        store = EdgeControlStore(str(path))
+        host_node = FakeHostNode()
+        client = EdgeControlClient(
+            _settings(path), store=store, host_node_provider=lambda: host_node
+        )
+        job_uuid = str(uuid.uuid4())
+        command_uuid = str(uuid.uuid4())
+        child_command_id = (
+            f"workflow-node-job:{job_uuid}:atomic-transfer-pick"
+        )
+        host_node.dispatch_block_reasons["robot-01"] = (
+            "unresolved_unknown_command:" + child_command_id
+        )
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "temporary-secret",
+                **_claim_fields(),
+            },
+            str(uuid.uuid4()),
+        )
+
+        await client._handle_envelope(
+            {
+                "protocol_version": 1,
+                "message_uuid": command_uuid,
+                "sequence": 11,
+                "type": "job.resolve_unknown",
+                "sent_at": "2026-09-02T00:00:00.000000Z",
+                "payload": {
+                    "job_uuid": job_uuid,
+                    "local_device_id": "robot-01",
+                    "device_command_id": f"workflow-node-job:{job_uuid}",
+                    "resolution": "canceled",
+                    "reason": "确认重启前的原子取料未执行",
+                },
+            }
+        )
+
+        assert host_node.unknown_resolutions[0]["device_command_id"] == (
+            child_command_id
+        )
+        resolution_event = next(
+            event
+            for event in store.pending_events(float("inf"))
+            if event.event_type == "job.unknown_resolution_committed"
+        )
+        assert resolution_event.payload["device_command_id"] == child_command_id
+        store.close()
+
+    asyncio.run(scenario())
+
+
 def test_running_job_cancel_without_memory_goal_stays_unsettled(
     tmp_path: Path,
 ) -> None:

@@ -59,7 +59,7 @@ def test_workflow_definition_task_snapshot_and_soft_delete_match_backend(tmp_pat
                 {
                     "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
                     "name": "approval",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {},
                     "param": {},
                     "execution_policy": {},

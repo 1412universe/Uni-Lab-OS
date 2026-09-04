@@ -15,7 +15,7 @@ export default function App() {
   const [searchParams, setSearchParams] = useSearchParams()
   const page = pageFromSearch(`?${searchParams.toString()}`)
   const workflowTarget = workflowTargetFromSearch(`?${searchParams.toString()}`)
-  const { snapshot, connection, error, refetch } = useEdgeData()
+  const { snapshot, connection, error, refetch, lastSuccessfulAt } = useEdgeData()
   const [toast, setToast] = useState('')
 
   useEffect(() => {
@@ -37,7 +37,7 @@ export default function App() {
 
   const refresh = useCallback(() => {
     void refetch().then((result) => {
-      setToast(result.isError ? '刷新失败，已停止展示非权威业务数据' : 'Edge 状态已刷新')
+      setToast(result.isError ? '刷新失败，已保留最后一次成功的只读快照' : 'Edge 状态已刷新')
     })
   }, [refetch])
 
@@ -45,6 +45,7 @@ export default function App() {
     <AppShell
       page={page}
       connection={connection}
+      startupMode={connection === 'connected' ? snapshot.startupMode : undefined}
       activeTaskCount={snapshot.tasks.filter((task) => task.status === 'running' || task.status === 'canceling').length}
       onNavigate={navigate}
       onNotify={setToast}
@@ -53,6 +54,20 @@ export default function App() {
         <div className="connection-alert" role="alert">
           <div><strong>Edge 数据暂不可用</strong><span>{error instanceof Error ? error.message : '请检查 Edge 服务与网络连接。'}</span></div>
           <button type="button" onClick={refresh}>重新连接</button>
+        </div>
+      ) : null}
+      {connection === 'reconnecting' ? (
+        <div className="connection-alert connection-alert-reconnecting" role="status">
+          <div>
+            <strong>Edge 连接短暂中断，当前为只读快照</strong>
+            <span>
+              {lastSuccessfulAt
+                ? `显示 ${new Date(lastSuccessfulAt).toLocaleTimeString('zh-CN', { hour12: false })} 的最后一次成功数据；写操作已暂停。`
+                : '正在恢复连接；写操作已暂停。'}
+              {error instanceof Error ? ` ${error.message}` : ''}
+            </span>
+          </div>
+          <button type="button" onClick={refresh}>立即重试</button>
         </div>
       ) : null}
       {connection === 'demo' ? (
@@ -77,6 +92,7 @@ export default function App() {
           onNotify={setToast}
           onSelectWorkflow={openWorkflow}
           targetWorkflow={workflowTarget}
+          startupMode={snapshot.startupMode}
         />
       ) : (
         <TasksPage
@@ -87,6 +103,7 @@ export default function App() {
           onRefresh={refresh}
           onNotify={setToast}
           onOpenWorkflow={openWorkflow}
+          startupMode={snapshot.startupMode}
         />
       )}
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>

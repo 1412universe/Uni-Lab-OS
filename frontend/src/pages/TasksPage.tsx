@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { LucideIcon } from 'lucide-react'
 import {
   Activity,
@@ -13,12 +14,16 @@ import {
   FlaskConical,
   LoaderCircle,
   Plus,
+  Pause,
+  Play,
   RefreshCw,
   Send,
   ShieldAlert,
+  Square,
+  StepForward,
   X,
 } from 'lucide-react'
-import { createWorkflowTask } from '../lib/edgeClient'
+import { commandWorkflowTask, createWorkflowTask, decideManualConfirmation, loadWorkflowTaskDetail, loadWorkflowTaskStepState } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTarget, WorkflowTask } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
@@ -40,6 +45,19 @@ const nodeStatusLabels: Record<TaskNode['status'], string> = {
   attention: '需要人工确认',
 }
 
+const taskPriorityLabels = {
+  urgent: '紧急优先级',
+  high: '高优先级',
+  normal: '普通优先级',
+  low: '低优先级',
+  unknown: '优先级未知',
+} as const
+
+function presentTaskPriority(priority: WorkflowTask['priority']) {
+  if (typeof priority === 'number') return { label: `权重 ${priority}`, tone: 'custom' }
+  return { label: taskPriorityLabels[priority], tone: priority }
+}
+
 function matchesFilter(task: WorkflowTask, filter: TaskFilter) {
   if (filter === 'all') return true
   if (filter === 'running') return task.status === 'running' || task.status === 'canceling'
@@ -52,12 +70,18 @@ function NodeMarker({
   node,
   index,
   selected,
+  ready,
+  writable,
   onSelect,
+  onNotify,
 }: {
   node?: TaskNode
   index: number
   selected: boolean
+  ready?: boolean
+  writable: boolean
   onSelect: () => void
+  onNotify: (message: string) => void
 }) {
   const status = node?.status || 'pending'
   const waitReason = node?.waitReason
@@ -65,6 +89,26 @@ function NodeMarker({
   const tooltipId = useId()
   const [tooltipVisible, setTooltipVisible] = useState(false)
   const [tooltipPosition, setTooltipPosition] = useState({ left: 0, top: 0, above: false })
+  const [now, setNow] = useState(() => Date.now())
+  const queryClient = useQueryClient()
+  const confirmation = node?.job?.manualConfirmation
+  const awaitingConfirmation = confirmation?.status === 'pending'
+  const decision = useMutation({
+    mutationFn: (action: 'approve' | 'reject') => {
+      if (!writable) throw new Error('Edge 未连接，写操作已暂停')
+      return decideManualConfirmation(node?.job?.uuid || '', action)
+    },
+    onSuccess: (_result, action) => {
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
+      onNotify(action === 'approve' ? '人工确认已批准，设备动作将继续执行。' : '人工确认已拒绝，任务正在取消。')
+    },
+    onError: (error) => onNotify(error instanceof Error ? error.message : '人工确认提交失败'),
+  })
+  useEffect(() => {
+    if (!awaitingConfirmation) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [awaitingConfirmation])
   const showTooltip = useCallback(() => {
     if (!markerRef.current) return
     const rect = markerRef.current.getBoundingClientRect()
@@ -90,37 +134,57 @@ function NodeMarker({
   }, [tooltipVisible])
 
   const label = `${node?.name || `节点 ${index + 1}`}，${nodeStatusLabels[status]}`
+  const remainingSeconds = awaitingConfirmation && confirmation.deadlineAt
+    ? Math.max(0, Math.ceil((new Date(confirmation.deadlineAt).getTime() - now) / 1000))
+    : 0
   return (
-    <button
-      type="button"
-      ref={markerRef}
-      className={`matrix-node matrix-node-${status} ${selected ? 'matrix-node-selected' : ''}`}
-      aria-label={label}
-      aria-pressed={selected}
-      aria-describedby={tooltipVisible ? tooltipId : undefined}
-      onClick={(event) => {
-        event.stopPropagation()
-        onSelect()
-      }}
-      onMouseEnter={showTooltip}
-      onMouseLeave={() => setTooltipVisible(false)}
-      onFocus={showTooltip}
-      onBlur={() => setTooltipVisible(false)}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') setTooltipVisible(false)
-      }}
+    <div
+      className={`matrix-node matrix-node-${status} ${awaitingConfirmation ? 'matrix-node-manual-confirmation' : ''} ${selected ? 'matrix-node-selected' : ''} ${ready ? 'matrix-node-step-ready' : ''}`}
     >
-      <span className="matrix-node-marker">
-        {status === 'succeeded' || status === 'skipped'
-          ? <Check size={13} />
-          : status === 'running' || status === 'canceling'
-            ? <LoaderCircle size={13} />
-            : status === 'failed' || status === 'canceled' || status === 'attention'
-              ? <X size={13} />
-              : index + 1}
-      </span>
-      <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {nodeStatusLabels[status]}</small>
-      <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
+      <button
+        type="button"
+        ref={markerRef}
+        className="matrix-node-select"
+        aria-label={label}
+        aria-pressed={selected}
+        aria-describedby={tooltipVisible ? tooltipId : undefined}
+        onClick={(event) => {
+          event.stopPropagation()
+          onSelect()
+        }}
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltipVisible(false)}
+        onFocus={showTooltip}
+        onBlur={() => setTooltipVisible(false)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setTooltipVisible(false)
+        }}
+      >
+        <span className="matrix-node-marker">
+          {status === 'succeeded' || status === 'skipped'
+            ? <Check size={13} />
+            : status === 'running' || status === 'canceling'
+              ? <LoaderCircle size={13} />
+              : status === 'failed' || status === 'canceled'
+                ? <X size={13} />
+              : status === 'attention' && awaitingConfirmation
+                  ? <ShieldAlert size={13} />
+                  : status === 'attention'
+                    ? <X size={13} />
+                    : index + 1}
+        </span>
+        <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {nodeStatusLabels[status]}</small>
+        <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
+      </button>
+      {awaitingConfirmation ? (
+        <div className="manual-confirmation-actions" onClick={(event) => event.stopPropagation()}>
+          <small>剩余 {remainingSeconds}s</small>
+          <span>
+            <button type="button" disabled={!writable || decision.isPending} onClick={() => decision.mutate('reject')}>拒绝</button>
+            <button type="button" disabled={!writable || decision.isPending} onClick={() => decision.mutate('approve')}>批准</button>
+          </span>
+        </div>
+      ) : null}
       {tooltipVisible && typeof document !== 'undefined' && createPortal(
         <div
           id={tooltipId}
@@ -143,7 +207,7 @@ function NodeMarker({
         </div>,
         document.body,
       )}
-    </button>
+    </div>
   )
 }
 
@@ -154,6 +218,10 @@ function TaskMatrix({
   onSelect,
   onSelectNode,
   onOpenWorkflow,
+  onNotify,
+  writable,
+  readyNodeUuids = new Set<string>(),
+  selectedTaskControl,
 }: {
   tasks: WorkflowTask[]
   selectedId: string
@@ -161,6 +229,10 @@ function TaskMatrix({
   onSelect: (id: string) => void
   onSelectNode: (taskUuid: string, nodeUuid: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
+  onNotify: (message: string) => void
+  writable: boolean
+  readyNodeUuids?: ReadonlySet<string>
+  selectedTaskControl?: ReactNode
 }) {
   const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
   const matrixWidth = TASK_IDENTITY_COLUMN_WIDTH
@@ -173,6 +245,7 @@ function TaskMatrix({
         {tasks.map((task) => {
           const nodes: (TaskNode | undefined)[] = task.nodes.length ? task.nodes : [undefined]
           const columns = `${TASK_IDENTITY_COLUMN_WIDTH}px repeat(${nodes.length}, ${TASK_NODE_COLUMN_WIDTH}px) ${TASK_PROGRESS_COLUMN_WIDTH}px minmax(0, 1fr)`
+          const priority = presentTaskPriority(task.priority)
           return (
             <div
               key={task.uuid}
@@ -180,7 +253,7 @@ function TaskMatrix({
               style={{ gridTemplateColumns: columns }}
               onClick={() => onSelect(task.uuid)}
             >
-              <div className="matrix-task-cell">
+              <div className={`matrix-task-cell ${selectedId === task.uuid && selectedTaskControl ? 'matrix-task-cell-with-control' : ''}`}>
                 <button
                   type="button"
                   className="matrix-task-select"
@@ -200,7 +273,15 @@ function TaskMatrix({
                     <small>{task.uuid}</small>
                     <small>{task.sample} · {task.updatedAt}</small>
                   </span>
-                  <em>{task.workflowRevision ? `r${task.workflowRevision}` : '—'}</em>
+                  <span className="matrix-task-badges">
+                    <span
+                      className={`matrix-task-priority matrix-task-priority-${priority.tone}`}
+                      title={`任务优先级：${priority.label}`}
+                    >
+                      {priority.label}
+                    </span>
+                    <em className="matrix-task-revision">{task.workflowRevision ? `r${task.workflowRevision}` : '—'}</em>
+                  </span>
                 </button>
                 {task.trace ? (
                   <a
@@ -216,6 +297,14 @@ function TaskMatrix({
                 ) : (
                   <button type="button" className="matrix-trace-disabled" disabled title="Trace 服务未配置">Trace</button>
                 )}
+                {selectedId === task.uuid && selectedTaskControl ? (
+                  <div
+                    className="matrix-task-inline-control"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {selectedTaskControl}
+                  </div>
+                ) : null}
               </div>
               {nodes.map((node, index) => (
                 <NodeMarker
@@ -223,9 +312,16 @@ function TaskMatrix({
                   node={node}
                   index={index}
                   selected={Boolean(node && selectedNode?.taskUuid === task.uuid && selectedNode.nodeUuid === node.uuid)}
+                  ready={Boolean(
+                    node
+                    && task.uuid === selectedId
+                    && readyNodeUuids.has(node.uuid)
+                  )}
+                  writable={writable}
                   onSelect={() => {
                     if (node) onSelectNode(task.uuid, node.uuid)
                   }}
+                  onNotify={onNotify}
                 />
               ))}
               <div className="matrix-progress-cell"><strong>{task.progress}%</strong><span><i style={{ width: `${task.progress}%` }} /></span></div>
@@ -428,6 +524,7 @@ function CreateTaskDialog({
 
   const mutation = useMutation({
     mutationFn: () => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       if (!workflow) throw new Error('请选择可运行的工作流')
       return createWorkflowTask({
         workflowUuid: workflow.uuid,
@@ -435,10 +532,10 @@ function CreateTaskDialog({
         input: serialiseTaskInput(workflow.inputContract, input),
       })
     },
-    onSuccess: async (created) => {
+    onMutate: () => onClose(),
+    onSuccess: (created) => {
       onNotify(`任务 ${created.uuid || ''} 已提交到 Edge`)
-      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
-      onClose()
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
@@ -522,6 +619,7 @@ export function TasksPage({
   onRefresh,
   onNotify,
   onOpenWorkflow,
+  startupMode = 'product',
 }: {
   tasks: WorkflowTask[]
   workflows: WorkflowDefinition[]
@@ -530,12 +628,13 @@ export function TasksPage({
   onRefresh: () => void
   onNotify: (message: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
+  startupMode?: 'develop' | 'product'
 }) {
+  const queryClient = useQueryClient()
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [selectedId, setSelectedId] = useState(tasks[0]?.uuid || '')
   const [selectedNodeRef, setSelectedNodeRef] = useState<{ taskUuid: string; nodeUuid: string }>()
-  const [createOpen, setCreateOpen] = useState(false)
-  const closeCreateDialog = useCallback(() => setCreateOpen(false), [])
+  const [selectedStepNodeUuid, setSelectedStepNodeUuid] = useState('')
 
   const selectTask = useCallback((taskUuid: string) => {
     setSelectedId(taskUuid)
@@ -560,12 +659,58 @@ export function TasksPage({
   }, [tasks, selectedNodeRef])
 
   const filtered = useMemo(() => tasks.filter((task) => matchesFilter(task, filter)), [tasks, filter])
-  const selected = filtered.find((task) => task.uuid === selectedId) || filtered[0]
+  const selectedSummary = filtered.find((task) => task.uuid === selectedId) || filtered[0]
+  const selectedDetailQuery = useQuery({
+    queryKey: ['workflow-task-detail', selectedSummary?.uuid],
+    queryFn: ({ signal }) => loadWorkflowTaskDetail(selectedSummary!.uuid, materials, signal),
+    enabled: connected && Boolean(selectedSummary) && selectedNodeRef?.taskUuid === selectedSummary?.uuid,
+    staleTime: 10_000,
+  })
+  const selected = selectedDetailQuery.data && selectedDetailQuery.data.uuid === selectedSummary?.uuid
+    ? { ...selectedDetailQuery.data, trace: selectedSummary.trace }
+    : selectedSummary
   const selectedNodeTask = selectedNodeRef
-    ? tasks.find((task) => task.uuid === selectedNodeRef.taskUuid)
+    ? selected?.uuid === selectedNodeRef.taskUuid
+      ? selected
+      : tasks.find((task) => task.uuid === selectedNodeRef.taskUuid)
     : undefined
   const selectedNode = selectedNodeTask?.nodes.find((node) => node.uuid === selectedNodeRef?.nodeUuid)
   const runningTasks = tasks.filter((task) => task.nodes.some((node) => node.status === 'running' || node.status === 'canceling'))
+  const selectedIsTerminal = Boolean(selected && ['succeeded', 'failed', 'canceled', 'timeout'].includes(selected.status))
+  const stepStateQuery = useQuery({
+    queryKey: ['workflow-task-step-state', selected?.uuid],
+    queryFn: ({ signal }) => loadWorkflowTaskStepState(selected!.uuid, signal),
+    enabled: startupMode === 'develop' && connected && Boolean(selected) && !selectedIsTerminal,
+    refetchInterval: 2_000,
+  })
+  const stepState = stepStateQuery.data
+  const effectiveExecutionMode = stepState?.executionMode || selected?.executionMode || 'normal'
+  const readyNodeUuids = useMemo(
+    () => new Set(stepState?.candidates.map((candidate) => candidate.nodeUuid) || []),
+    [stepState?.candidates],
+  )
+  useEffect(() => {
+    if (!stepState?.requiresSelection) {
+      setSelectedStepNodeUuid(stepState?.candidates[0]?.nodeUuid || '')
+      return
+    }
+    if (!stepState.candidates.some((candidate) => candidate.nodeUuid === selectedStepNodeUuid)) {
+      setSelectedStepNodeUuid('')
+    }
+  }, [stepState, selectedStepNodeUuid])
+  const controlMutation = useMutation({
+    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
+      return commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid)
+    },
+    onSuccess: (_command, variables) => {
+      const labels = { step: '单步命令已提交', pause: '已进入单步切换', resume: '已继续自动运行', cancel: '取消命令已提交' }
+      onNotify(labels[variables.type])
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-step-state', selected?.uuid] })
+    },
+    onError: (error) => onNotify(`任务控制失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
 
   const counts: Record<TaskFilter, number> = {
     all: tasks.length,
@@ -580,6 +725,53 @@ export function TasksPage({
     { label: '今日完成', value: counts.succeeded, tone: 'green', icon: Check },
     { label: '需要处理', value: counts.failed, tone: 'red', icon: AlertCircle },
   ]
+  const selectedTaskControl = startupMode === 'develop' && selected && !selectedIsTerminal ? (
+    <div className="task-step-inline" aria-label="Task 行内单步调度控制">
+      <header>
+        <span>
+          <strong>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在切换' : '单步调试'}</strong>
+          <small>{effectiveExecutionMode === 'switching_to_step' ? '等待在途 Job 结束' : '调度模式'}</small>
+        </span>
+        <code>{effectiveExecutionMode}</code>
+      </header>
+      {effectiveExecutionMode === 'step' && stepState?.candidates.length ? (
+        <label className="task-step-inline-candidate">
+          <span>下一步节点</span>
+          <select
+            aria-label="下一步节点"
+            value={selectedStepNodeUuid}
+            disabled={!stepState.requiresSelection}
+            onChange={(event) => setSelectedStepNodeUuid(event.target.value)}
+          >
+            {stepState.requiresSelection && !selectedStepNodeUuid ? <option value="">请选择可执行节点</option> : null}
+            {stepState.candidates.map((candidate) => (
+              <option key={candidate.nodeUuid} value={candidate.nodeUuid}>
+                {candidate.name}{candidate.deviceId ? ` · ${candidate.deviceId}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? (
+        <small className="task-step-inline-note">当前没有可执行节点</small>
+      ) : null}
+      <div className="task-step-inline-actions">
+        {effectiveExecutionMode === 'normal' ? (
+          <Button icon={<Pause size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button>
+        ) : null}
+        {effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={12} />} disabled>等待切换</Button> : null}
+        {effectiveExecutionMode === 'step' ? (
+          <>
+            <Button tone="primary" icon={<StepForward size={12} />} disabled={!connected || controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>
+              {stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}
+            </Button>
+            <Button icon={<Play size={12} />} disabled={!connected || controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button>
+          </>
+        ) : null}
+        <Button tone="danger" icon={<Square size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
+      </div>
+    </div>
+  ) : undefined
 
   return (
     <div className="page tasks-page">
@@ -590,7 +782,7 @@ export function TasksPage({
         actions={
           <>
             <Button icon={<RefreshCw size={16} />} onClick={onRefresh}>刷新状态</Button>
-            <Button tone="primary" icon={<Plus size={17} />} onClick={() => setCreateOpen(true)}>创建任务</Button>
+            <Button tone="primary" icon={<Plus size={17} />} disabled={!workflows.length} onClick={() => workflows[0] && onOpenWorkflow({ workflowUuid: workflows[0].uuid, revision: workflows[0].revision })}>前往工作流创建</Button>
           </>
         }
       />
@@ -626,6 +818,10 @@ export function TasksPage({
             onSelect={selectTask}
             onSelectNode={selectNode}
             onOpenWorkflow={onOpenWorkflow}
+            onNotify={onNotify}
+            writable={connected}
+            readyNodeUuids={selected?.uuid ? readyNodeUuids : new Set<string>()}
+            selectedTaskControl={selectedTaskControl}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>
@@ -684,7 +880,6 @@ export function TasksPage({
         </Panel>
       </section>
 
-      {createOpen ? <CreateTaskDialog workflows={workflows} materials={materials} connected={connected} onClose={closeCreateDialog} onNotify={onNotify} /> : null}
     </div>
   )
 }

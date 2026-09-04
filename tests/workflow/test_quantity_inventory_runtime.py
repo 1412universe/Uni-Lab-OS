@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,10 @@ from fastapi.testclient import TestClient
 from unilabos.app.scheduler.inventory.backend_contract import (
     RESOURCE_DATA_CONFLICT,
     BackendContractError,
+    BackendResourceService,
+)
+from unilabos.app.scheduler.inventory.content_contract import (
+    BackendContainerContentService,
 )
 from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
 from unilabos.app.scheduler.inventory.service import InventoryService
@@ -158,6 +163,9 @@ def test_quantity_preflight_is_all_or_nothing_and_read_only(tmp_path: Path) -> N
         reagent_info_uuid=info_uuid,
         material_uuid=material_uuid,
     )
+    assert WorkflowService._validated_applied_backend_graph(graph)[
+        "inventory_requirements"
+    ] == graph["inventory_requirements"]
     coordinator = WorkflowQuantityInventory(
         workflow_store,
         InventoryService(inventory_store),
@@ -213,6 +221,205 @@ def test_quantity_preflight_is_all_or_nothing_and_read_only(tmp_path: Path) -> N
                 bindings=bindings,
             )
         assert facts() == insufficient_before
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+@pytest.mark.parametrize("inventory_type", ["reagent", "current_substance"])
+def test_quantity_requirement_auto_binds_material_source_container_content(
+    tmp_path: Path,
+    inventory_type: str,
+) -> None:
+    """物料来源数量需求应自动绑定容器的试剂或当前内容物。"""
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    content = {"uuid": reagent_uuid}
+    if inventory_type == "current_substance":
+        BackendReagentService(inventory_store).delete_reagent(reagent_uuid)
+        content = BackendContainerContentService(
+            inventory_store
+        ).create_current_substance(
+            {
+                "material_uuid": material_uuid,
+                "name": "泵用溶剂",
+                "quantity": 3,
+                "quantity_unit": "mL",
+                "physical_state": "liquid",
+            }
+        )
+    template_uuid = inventory_store.query_one(
+        "SELECT resource_template_uuid FROM material WHERE uuid=?",
+        (material_uuid,),
+    )["resource_template_uuid"]
+    station = BackendResourceService(inventory_store).create_material(
+        {
+            "resource_template_uuid": template_uuid,
+            "name": "液体试剂架",
+        }
+    )
+    site_uuid = "23000000-0000-4000-8000-000000000001"
+    with inventory_store.transaction() as connection:
+        connection.execute(
+            "INSERT INTO site(uuid,create_time,update_time,material_uuid,name,"
+            "occupied_material_uuid) VALUES(?,?,?,?,?,?)",
+            (
+                site_uuid,
+                "2026-01-01T00:00:00.000Z",
+                "2026-01-01T00:00:00.000Z",
+                station["uuid"],
+                "R1C1",
+                material_uuid,
+            ),
+        )
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    source_uuid = "21000000-0000-4000-8000-000000000001"
+    requirement = {
+        **graph["inventory_requirements"][0],
+        "target_type": "current_substance",
+        "reagent_info_uuid": None,
+        "required_quantity": 2,
+        "meta_data": {
+            "unilab": {"material_source_node_uuid": source_uuid}
+        },
+    }
+    graph["inventory_requirements"] = [requirement]
+    source_node = {
+        "uuid": source_uuid,
+        "kind": "material_source",
+        "material_requirements": [
+            {
+                "template_id": "22000000-0000-4000-8000-000000000001",
+                "site_uuid": site_uuid,
+            }
+        ],
+    }
+    auto_prepared = replace(
+        prepared,
+        workflow_snapshot=graph,
+        execution_plan={
+            **prepared.execution_plan,
+            "nodes": [source_node, *prepared.execution_plan["nodes"]],
+        },
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    try:
+        allocations = coordinator.preflight_task_allocations(
+            graph=graph,
+            prepared=auto_prepared,
+            bindings=[],
+        )
+        assert allocations == [
+            {
+                "uuid": allocations[0]["uuid"],
+                "workflow_task_uuid": "00000000-0000-4000-8000-000000000001",
+                "workflow_node_job_uuid": JOB_UUID,
+                "requirement_key": "ethanol",
+                "inventory_type": inventory_type,
+                "inventory_uuid": content["uuid"],
+                "material_uuid": material_uuid,
+                "reserved_quantity": 2,
+                "quantity_unit": "mL",
+            }
+        ]
+
+        workflow_store.create_task_with_jobs(
+            workflow_uuid=WORKFLOW_UUID,
+            task_uuid=TASK_UUID,
+            run_mode="normal",
+            target_node_uuid=None,
+            description=None,
+            meta_data={},
+            plan_builder=lambda _graph: auto_prepared,
+            inventory_allocation_builder=lambda connection, _graph, frozen: (
+                coordinator.prepare_task_allocations(
+                    connection,
+                    graph=graph,
+                    prepared=frozen,
+                    task_uuid=TASK_UUID,
+                    bindings=[],
+                )
+            ),
+        )
+        assert coordinator.task_allocations(TASK_UUID)[0][
+            "material_source_node_uuid"
+        ] == source_uuid
+        coordinator.consume_successful_job(
+            task_uuid=TASK_UUID,
+            job_uuid=JOB_UUID,
+            consumptions=[],
+        )
+        assert inventory_store.query_one(
+            f"SELECT quantity FROM {inventory_type} WHERE uuid=?",
+            (content["uuid"],),
+        ) == {"quantity": 8.0 if inventory_type == "reagent" else 1.0}
+
+        with inventory_store.transaction() as connection:
+            connection.execute(
+                f"UPDATE {inventory_type} SET quantity=1 WHERE uuid=?",
+                (content["uuid"],),
+            )
+        with pytest.raises(StoreConflict, match="可用数量不足"):
+            coordinator.preflight_task_allocations(
+                graph=graph,
+                prepared=auto_prepared,
+                bindings=[],
+            )
+        if inventory_type == "reagent":
+            BackendReagentService(inventory_store).delete_reagent(content["uuid"])
+        else:
+            BackendContainerContentService(
+                inventory_store
+            ).delete_current_substance(content["uuid"])
+        with pytest.raises(StoreConflict, match="没有试剂或当前内容物数量"):
+            coordinator.preflight_task_allocations(
+                graph=graph,
+                prepared=auto_prepared,
+                bindings=[],
+            )
+    finally:
+        workflow_store.close()
+        inventory_store.close()
+
+
+def test_quantity_preflight_rejects_lazy_job_requirements(tmp_path: Path) -> None:
+    """惰性节点不得绕过数量库存准入，未支持逐轮分配前须失败关闭。"""
+
+    inventory_store, material_uuid, info_uuid, reagent_uuid = _inventory(tmp_path)
+    workflow_store, graph, prepared = _workflow(
+        tmp_path / "workflow.db",
+        reagent_info_uuid=info_uuid,
+        material_uuid=material_uuid,
+    )
+    coordinator = WorkflowQuantityInventory(
+        workflow_store,
+        InventoryService(inventory_store),
+    )
+    lazy_prepared = replace(prepared, jobs=[])
+    bindings = [
+        {
+            "requirement_key": "ethanol",
+            "inventory_type": "reagent",
+            "inventory_uuid": reagent_uuid,
+            "reserved_quantity": 2,
+            "quantity_unit": "mL",
+        }
+    ]
+
+    try:
+        with pytest.raises(StoreConflict, match="尚未支持逐轮分配"):
+            coordinator.preflight_task_allocations(
+                graph=graph,
+                prepared=lazy_prepared,
+                bindings=bindings,
+            )
     finally:
         workflow_store.close()
         inventory_store.close()

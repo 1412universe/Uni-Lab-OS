@@ -74,6 +74,20 @@ class _ToggleInventory:
             "allocation_sites": {},
         }
 
+    def describe_wait_resources(
+        self,
+        resources: list[dict[str, str]],
+    ) -> tuple[dict[str, str], ...]:
+        """模拟库存权威把稳定物料身份解析为前端可读名称。"""
+
+        return tuple(
+            {
+                **resource,
+                "material_name": "测试固定物料",
+            }
+            for resource in resources
+        )
+
     def consume_reservation(self, workflow_uuid: str, node_uuid: str) -> None:
         """保留既有调度器调用面；参数是任务和节点身份，返回无。"""
 
@@ -338,7 +352,11 @@ def test_blocked_admission_retry_reuses_task_and_job_identities(
     ]
     assert [job["status"] for job in blocked["jobs"]] == ["pending", "pending"]
     assert blocked["task"]["wait_reason"]["resources"] == [
-        {"scope": "material", "material_uuid": MATERIAL_UUID},
+        {
+            "scope": "material",
+            "material_uuid": MATERIAL_UUID,
+            "material_name": "测试固定物料",
+        },
     ]
     assert [call[0] for call in inventory.admission_calls] == [TASK_UUID, TASK_UUID]
     assert admitted["jobs"][0]["uuid"] == SOURCE_JOB_UUID
@@ -442,6 +460,249 @@ def test_pre_dispatch_submission_failure_releases_source_reservations(
     assert inventory.release_calls == [
         (TASK_UUID, "workflow_submission_failed")
     ]
+
+
+def test_post_admission_compile_failure_releases_source_reservations(
+    store: WorkflowStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """物料准入后、调度注册前失败也必须终止 Task 并释放来源预留。"""
+
+    task = _seed_task(store, with_action=True, automatic=True)
+    inventory = _ToggleInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    original_compile = bridge._compiler.compile
+    compile_calls = 0
+
+    def fail_second_compile(
+        persisted_task: dict[str, Any],
+        jobs: list[dict[str, Any]],
+    ) -> WorkflowSpec:
+        """首次编译成功，模拟准入结果写回后的二次编译失败。"""
+
+        nonlocal compile_calls
+        compile_calls += 1
+        if compile_calls == 2:
+            raise RuntimeError("准入后二次编译失败")
+        return original_compile(persisted_task, jobs)
+
+    monkeypatch.setattr(bridge._compiler, "compile", fail_second_compile)
+    try:
+        with pytest.raises(TaskSchedulerBridgeError):
+            bridge.submit(task)
+    finally:
+        bridge.close()
+
+    assert compile_calls == 2
+    assert store.get_task(TASK_UUID)["status"] == "canceled"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert inventory.release_calls == [
+        (TASK_UUID, "workflow_submission_failed")
+    ]
+
+
+def test_malformed_admission_result_releases_committed_reservations(
+    store: WorkflowStore,
+) -> None:
+    """库存提交后返回结构校验失败也必须补偿已经形成的来源预留。"""
+
+    class _MalformedResultInventory(_ToggleInventory):
+        """先记录成功准入，再返回缺失 allocations 的非法结果。"""
+
+        def admit_task_materials(
+            self,
+            workflow_uuid: str,
+            requests: list[Any],
+            quantity_allocations: list[Any] | tuple[Any, ...],
+        ) -> dict[str, Any]:
+            super().admit_task_materials(
+                workflow_uuid,
+                requests,
+                quantity_allocations,
+            )
+            return {"allocation_sites": {}}
+
+    task = _seed_task(store, with_action=True, automatic=True)
+    inventory = _MalformedResultInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        with pytest.raises(TaskSchedulerBridgeError):
+            bridge.submit(task)
+    finally:
+        bridge.close()
+
+    assert store.get_task(TASK_UUID)["status"] == "canceled"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert inventory.release_calls == [
+        (TASK_UUID, "workflow_submission_failed")
+    ]
+
+
+def _pause_task_before_dispatch(store: WorkflowStore) -> None:
+    """把已播种任务改为尚未派发的单步暂停状态。"""
+
+    with store.transaction() as connection:
+        row = connection.execute(
+            "SELECT execution_plan FROM workflow_task WHERE uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()
+        plan = json.loads(str(row["execution_plan"]))
+        plan["run_mode"] = "step"
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan = ?, run_mode = 'step', "
+            "control_status = 'paused' WHERE uuid = ?",
+            (json.dumps(plan), TASK_UUID),
+        )
+
+
+def test_cancel_before_dispatch_releases_source_reservations(
+    store: WorkflowStore,
+) -> None:
+    """尚未派发的 Task 取消时必须先释放来源预留，再声明清理完成。"""
+
+    _seed_task(store, with_action=True, automatic=True)
+    _pause_task_before_dispatch(store)
+
+    class _ObservingInventory(_ToggleInventory):
+        """在取消释放边界观察 cleanup 尚未提前完成。"""
+
+        def release_workflow(self, workflow_uuid: str, *, reason: str) -> None:
+            release_cleanup_states.append(
+                store.get_task(TASK_UUID)["cleanup_status"]
+            )
+            super().release_workflow(workflow_uuid, reason=reason)
+
+    class _ObservingQuantityInventory:
+        """记录数量预留同样遵循 required → release → settled。"""
+
+        def release_task(self, task_uuid: str, *, reason: str) -> None:
+            quantity_release_calls.append((task_uuid, reason))
+            quantity_cleanup_states.append(
+                store.get_task(TASK_UUID)["cleanup_status"]
+            )
+
+    release_cleanup_states: list[str] = []
+    quantity_release_calls: list[tuple[str, str]] = []
+    quantity_cleanup_states: list[str] = []
+    inventory = _ObservingInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    bridge._quantity_inventory = _ObservingQuantityInventory()
+    try:
+        submitted = bridge.submit(store.get_task(TASK_UUID))
+        assert submitted["task"]["control_status"] == "paused"
+        canceled = bridge.cancel(
+            TASK_UUID,
+            command_uuid="82000000-0000-4000-8000-000000000001",
+        )
+        replayed = bridge.cancel(
+            TASK_UUID,
+            command_uuid="82000000-0000-4000-8000-000000000001",
+        )
+    finally:
+        bridge.close()
+
+    assert canceled["task"]["status"] == "canceled"
+    assert canceled["task"]["cleanup_status"] == "settled"
+    assert replayed["task"]["cleanup_status"] == "settled"
+    assert inventory.release_calls == [
+        (TASK_UUID, "workflow_canceled"),
+        (TASK_UUID, "workflow_canceled"),
+    ]
+    assert release_cleanup_states == ["required", "settled"]
+    assert quantity_release_calls == [
+        (TASK_UUID, "workflow_canceled"),
+        (TASK_UUID, "workflow_canceled"),
+    ]
+    assert quantity_cleanup_states == ["required", "settled"]
+
+
+def test_cancel_replay_preserves_reservations_requiring_attention(
+    store: WorkflowStore,
+) -> None:
+    """人工对账中的取消重放不得把状态未知的来源预留释放为可用。"""
+
+    _seed_task(store, with_action=True, automatic=True)
+    _pause_task_before_dispatch(store)
+
+    inventory = _ToggleInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE workflow_task SET status = 'canceled', "
+                "cleanup_status = 'requires_attention', "
+                "control_status = 'waiting_reconciliation' WHERE uuid = ?",
+                (TASK_UUID,),
+            )
+            connection.execute(
+                "UPDATE workflow_node_job SET status = 'canceled' "
+                "WHERE workflow_task_uuid = ?",
+                (TASK_UUID,),
+            )
+
+        replayed = bridge.cancel(
+            TASK_UUID,
+            command_uuid="82000000-0000-4000-8000-000000000002",
+        )
+    finally:
+        bridge.close()
+
+    assert replayed["task"]["status"] == "canceled"
+    assert replayed["task"]["cleanup_status"] == "requires_attention"
+    assert inventory.release_calls == []
+
+
+def test_cancel_release_failure_keeps_cleanup_required(
+    store: WorkflowStore,
+) -> None:
+    """释放来源失败时不得把取消任务提前标记为已经清理。"""
+
+    _seed_task(store, with_action=True, automatic=True)
+    _pause_task_before_dispatch(store)
+
+    class _FailingReleaseInventory(_ToggleInventory):
+        """模拟库存释放事务失败。"""
+
+        def release_workflow(self, workflow_uuid: str, *, reason: str) -> None:
+            super().release_workflow(workflow_uuid, reason=reason)
+            raise RuntimeError("库存释放失败")
+
+    inventory = _FailingReleaseInventory(available=True)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+    )
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        with pytest.raises(RuntimeError, match="库存释放失败"):
+            bridge.cancel(
+                TASK_UUID,
+                command_uuid="82000000-0000-4000-8000-000000000003",
+            )
+    finally:
+        bridge.close()
+
+    assert store.get_task(TASK_UUID)["status"] == "canceled"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "required"
+    assert inventory.release_calls == [(TASK_UUID, "workflow_canceled")]
 
 
 def test_automatic_source_projects_selected_material_before_dispatch(

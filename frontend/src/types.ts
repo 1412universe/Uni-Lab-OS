@@ -1,6 +1,6 @@
 export type PageId = 'overview' | 'materials' | 'reagents' | 'operations' | 'workflows' | 'tasks'
 
-export type ConnectionMode = 'loading' | 'connected' | 'demo' | 'error'
+export type ConnectionMode = 'loading' | 'connected' | 'reconnecting' | 'demo' | 'error'
 
 /** 只用于界面展示；不会作为 Shared Interface 的 Workflow Task 状态回写。 */
 export type TaskPresentationStatus =
@@ -59,11 +59,28 @@ export interface WorkflowTarget {
   taskUuid?: string
 }
 
+export type WorkflowAuthoringState =
+  | 'applied'
+  | 'applied_source_stale'
+  | 'candidate_stale'
+  | 'draft_invalid'
+  | 'draft_missing'
+  | 'unapplied_graph'
+  | 'unapplied_source_only'
+  | 'unknown'
+
+export interface WorkflowSource {
+  workflowRevision: number
+  state: WorkflowAuthoringState
+  sourceUri: string
+  pythonSource: string
+}
+
 export interface WorkflowGraphNode {
   uuid: string
   name: string
   type: string
-  kind: 'group' | 'material_source' | 'action'
+  kind: 'group' | 'material_source' | 'condition' | 'repeat_until' | 'action'
   action_name?: string
   workflow_node_template_uuid?: string
   material_uuid?: string
@@ -84,6 +101,10 @@ export interface WorkflowGraphEdge {
   uuid: string
   sourceNodeUuid: string
   targetNodeUuid: string
+  /** 数据边使用的源/目标句柄；ready 顺序边也保留这两个字段。 */
+  sourceHandleUuid?: string
+  targetHandleUuid?: string
+  metaData?: Record<string, any>
 }
 
 /** 工作流定义里不绑定具体库存实例的逻辑数量需求；建任务时必须逐条绑定并预留。 */
@@ -98,15 +119,6 @@ export interface WorkflowInventoryRequirement {
   allowSplit: boolean
   description?: string
   materialSourceNodeUuid?: string
-}
-
-/** 建任务时把一条数量需求绑定到一个库存实例（试剂瓶）的预留声明。 */
-export interface WorkflowInventoryBinding {
-  requirementKey: string
-  inventoryType: 'reagent' | 'current_substance'
-  inventoryUuid: string
-  reservedQuantity: number
-  quantityUnit: string
 }
 
 export interface WorkflowGraph {
@@ -140,6 +152,11 @@ export interface TaskNodeJobEvidence {
   errorInfo: unknown[]
   startedAt?: string
   finishedAt?: string
+  manualConfirmation?: {
+    status: 'pending' | 'approved' | 'rejected' | 'timed_out' | 'canceled'
+    deadlineAt: string
+    actions: Array<'approve' | 'reject'>
+  }
 }
 
 export interface TaskNode {
@@ -154,11 +171,15 @@ export interface TaskNode {
   job?: TaskNodeJobEvidence
 }
 
+export type WorkflowTaskPriority = 'normal' | 'high'
+export type WorkflowTaskPresentationPriority = WorkflowTaskPriority | 'urgent' | 'low' | 'unknown' | number
+
 export interface WorkflowTask {
   uuid: string
   workflowUuid: string
   workflowName: string
   status: TaskPresentationStatus
+  priority: WorkflowTaskPresentationPriority
   sample: string
   description: string
   current: string
@@ -168,6 +189,8 @@ export interface WorkflowTask {
   materialUuids: string[]
   workflowRevision?: number
   runMode: string
+  executionMode: 'normal' | 'switching_to_step' | 'step'
+  controlStatus: string
   matrixGroupKey: string
   trace?: {
     traceId?: string
@@ -253,6 +276,14 @@ export interface ActionParameterRecord {
   key: string
   displayName: string
   required: boolean
+  schema: Record<string, unknown>
+}
+
+/** 设备动作（Action）的数据输出句柄；ready 等流程控制句柄不包含在内。 */
+export interface ActionOutputRecord {
+  handleUuid: string
+  key: string
+  displayName: string
   schema: Record<string, unknown>
 }
 
@@ -368,7 +399,26 @@ export interface RunPreflightReport {
   checks: RunPreflightCheck[]
 }
 
+export interface WorkflowStepCandidate {
+  nodeUuid: string
+  name: string
+  kind: string
+  deviceId?: string
+  actionName?: string
+}
+
+export interface WorkflowStepState {
+  workflowTaskUuid: string
+  executionMode: 'normal' | 'switching_to_step' | 'step'
+  controlStatus: string
+  inFlightJobCount: number
+  requiresSelection: boolean
+  canStep: boolean
+  candidates: WorkflowStepCandidate[]
+}
+
 export interface EdgeSnapshot {
+  startupMode: 'develop' | 'product'
   workflows: WorkflowDefinition[]
   tasks: WorkflowTask[]
   materials: MaterialRecord[]

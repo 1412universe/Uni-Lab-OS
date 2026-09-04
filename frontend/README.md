@@ -23,7 +23,8 @@ npm run dev
 Vite 默认监听 <http://127.0.0.1:4174/console/>，并将 `/api` 代理到
 `http://127.0.0.1:8002` 的 Edge HTTP 服务。
 
-生产模式不会在 Edge 失败时混入演示数据，而是清空业务投影并显示错误。只有明确设置
+生产模式首次连接 Edge 失败时不会混入演示数据；已成功读取过数据后发生短暂抖动，页面
+保留最后一次成功快照并进入显式只读重连状态，所有写操作暂停。只有明确设置
 `VITE_ENABLE_DEMO_DATA=true` 时才会启用演示回退，页面会同时显示醒目的演示模式提示。
 
 ## 检查与构建
@@ -50,8 +51,12 @@ Workspace Backend 的根地址会保留查询参数并跳转到 `/console/`，�
 节点，按 Job 的 `workflow_node_uuid` 精确点亮。同一工作流的不同修订或单节点调试任务
 不会串列。页面读取全部 active Task，并保留最近 20 条终态任务，避免轮询全部历史 Jobs。
 
-页面读取 `/api/v1/readiness`、`/workflows`、`/workflow-tasks`、任务 Jobs、
-`/materials` 和工作流 Graph。创建任务由用户明确提交后调用 Edge
+任务矩阵使用一次 `/api/v1/workflow-task-presentations?view=matrix` 读取全部活动 Task、
+需关注项和最近 20 条终态项；重参数、实时反馈和运行结果只在用户点击节点后通过
+`/workflow-tasks/{uuid}` 与 `/workflow-tasks/{uuid}/jobs` 按需读取。定时刷新和 SSE
+事件经过同一个单飞合并器，同一时刻只执行一个矩阵请求并最多保留一次尾随刷新。
+
+页面还读取 `/api/v1/readiness`、`/workflows`、`/materials` 和工作流 Graph。创建任务由用户明确提交后调用 Edge
 `POST /api/v1/workflow-tasks`；物料点击会继续读取 `/materials/{uuid}` 的权威
 `current_site`。其余未接入动作会显示明确提示，不会静默无响应。
 

@@ -118,8 +118,8 @@ class WorkflowNode:
     # manual_confirm / Transfer（Edge 目前只执行 ILab；Transfer 仅规范化/透传，
     # 比较请用 is_ilab()，容忍大小写差异）
     node_type: str = "ILab"
-    # 人工确认可单独作为流程闸门，也可包装设备动作；只在后者批准后下发设备。
-    manual_continues_device_action: bool = False
+    # 人工确认是设备动作的人工批准阶段；配置与真实动作参数严格分离。
+    manual_confirmation: Dict[str, Any] = field(default_factory=dict)
     disabled: bool = False
     # 注册表动作声明的免设备排队语义；仍受物料/库位执行资源键约束。
     always_free: bool = False
@@ -251,8 +251,9 @@ class DispatchedJob:
     resolved_args: Dict[str, Any] = field(default_factory=dict)
     # 派发意图越过 Gate 8 时冻结的七类凭据；人工确认继续真实动作时必须原样复用。
     dispatch_credentials: Dict[str, Any] = field(default_factory=dict)
-    # 重启恢复人工确认时按原 Claim 重建同一组资源占用，不重新仲裁或换 Fence。
+    # 人工等待与批准后的设备动作始终复用同一组 Claim/Fence 与资源占用。
     resource_lock_keys: set[str] = field(default_factory=set)
+    manual_confirmation_approved: bool = False
     manual_action_dispatched: bool = False
     # 下发时刻的预估执行时长（泳道图预估终点）与来源（declared/historical/default）
     estimated_s: float = 0.0
@@ -317,9 +318,7 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
         execution_policy=dict(raw_execution_policy),
         action_resource_contract=dict(raw_resource_contract),
         node_type=normalize_node_type(data.get("node_type") or data.get("type")),
-        manual_continues_device_action=bool(
-            data.get("manual_continues_device_action", False)
-        ),
+        manual_confirmation=dict(data.get("manual_confirmation") or {}),
         disabled=bool(data.get("disabled", False)),
         always_free=bool(data.get("always_free", False)),
         material_requirements=[

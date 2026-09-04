@@ -153,11 +153,13 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
   }, [dialog, identityForm.cas])
 
   function openCatalogDialog() {
+    if (!connected) return
     setIdentityForm(emptyIdentity); setCustomParameters([]); setAdvancedOpen(false); setFormError(''); previousCandidate.current = undefined
     setLookup({ phase: 'idle', message: '有效 CAS 会自动查询化学信息；自配物质可留空。', blocks: false }); setDialog('catalog')
   }
 
   async function saveCatalogItem() {
+    if (!connected) return
     const error = validateIdentity(identityForm, customParameters)
     if (error) { setFormError(error); return }
     if (lookup.blocks || lookup.phase === 'loading') { setFormError(lookup.message); return }
@@ -176,6 +178,7 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
   }
 
   async function saveRegistration() {
+    if (!connected) return
     const quantity = Number(registerForm.quantity)
     if (!registerForm.materialUuid || !registerForm.reagentInfoUuid || !Number.isFinite(quantity) || quantity <= 0 || !registerForm.quantityUnit) return
     setSaving(true)
@@ -252,6 +255,7 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
   }
 
   async function removeCatalogItem(item: ReagentInfoRecord) {
+    if (!connected) return
     if (!window.confirm(`确认删除试剂目录“${item.name}”？\n\n已被试剂库存引用的目录项会由后端拒绝删除。`)) return
     setSaving(true)
     try {
@@ -265,7 +269,7 @@ export function ReagentsPage({ materials, connected, onNotify }: { materials: Ma
 
   const loadingError = infosQuery.error || reagentsQuery.error
   return <div className="page reagents-page">
-    <PageHeader eyebrow="REAGENT AUTHORITY" title="试剂" description="试剂目录定义化学品身份；试剂库存记录具体容器、数量与浓度。" actions={<><Button icon={<BookOpen size={15} />} onClick={openCatalogDialog}>新增试剂目录</Button><Button tone="primary" icon={<PackagePlus size={15} />} disabled={!infosQuery.data?.length || !containers.length} onClick={() => setDialog('register')}>录入试剂</Button></>} />
+    <PageHeader eyebrow="REAGENT AUTHORITY" title="试剂" description="试剂目录定义化学品身份；试剂库存记录具体容器、数量与浓度。" actions={<><Button icon={<BookOpen size={15} />} disabled={!connected} onClick={openCatalogDialog}>新增试剂目录</Button><Button tone="primary" icon={<PackagePlus size={15} />} disabled={!connected || !infosQuery.data?.length || !containers.length} onClick={() => setDialog('register')}>录入试剂</Button></>} />
     <div className="reagent-summary"><div><FlaskConical size={19} /><span>试剂库存<strong>{reagentsQuery.data?.length || 0}</strong></span></div><div><BookOpen size={19} /><span>试剂目录<strong>{infosQuery.data?.length || 0}</strong></span></div><div><PackagePlus size={19} /><span>可录入容器<strong>{containers.length}</strong></span></div></div>
     <Panel className="reagent-workspace">
       <PanelHeader title={view === 'inventory' ? '试剂库存' : '试剂目录'} description={view === 'inventory' ? '容器级数量、浓度与化学身份' : 'CAS、分子式与基础理化信息'} action={<div className="segmented"><button className={view === 'inventory' ? 'active' : ''} onClick={() => setView('inventory')}>库存</button><button className={view === 'catalog' ? 'active' : ''} onClick={() => { setView('catalog'); setHistoryReagent(null) }}>目录</button></div>} />

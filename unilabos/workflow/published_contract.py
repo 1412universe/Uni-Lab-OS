@@ -42,6 +42,20 @@ def _load(value: str) -> Any:
     return decode_json_bytes(value.encode("utf-8"))
 
 
+def _plain(value: Any) -> Any:
+    """递归复制冻结映射和序列为普通 JSON 容器。
+
+    参数说明：``value`` 是合同中的 JSON 兼容值。返回：与原值等价、但不携带
+    ``mappingproxy`` 等冻结容器的独立值；本函数不抛出业务异常。
+    """
+
+    if isinstance(value, Mapping):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
 def _digest(value: Any) -> str:
     """按 RFC 8785 规范 JSON 计算带算法前缀的 SHA-256。"""
 
@@ -71,6 +85,74 @@ def _canonical_graph(graph: Mapping[str, Any]) -> dict[str, Any]:
             key=lambda item: str(item["uuid"]),
         ),
     }
+
+
+def published_graph_source_hash(graph: Mapping[str, Any]) -> str:
+    """计算发布合同使用的冻结工作流图指纹。
+
+    参数：``graph`` 是包含工作流、节点、连线及模板的完整候选图。返回：与
+    ``PublishedWorkflowContractStore.publish`` 完全相同的图/执行器摘要；该摘要
+    与领域包中的原始源码字节哈希不同，不能替代 ``source_draft_hash``。异常：图
+    缺少发布合同所需字段或执行器要求非法时抛 ``PublishedContractInvalid``。
+
+    该公共接缝供冷启动恢复比较“同一源码是否仍生成同一发布图”，避免仅凭源码
+    字节和工作流修订就把模板目录代际变化误认为不可变合同仍然成立。
+    """
+
+    snapshot = _canonical_graph(graph)
+    executor_requirements, executor_binding_mapping = (
+        _abstract_executor_requirements(snapshot)
+    )
+    return _digest(
+        {
+            "graph": snapshot,
+            "executor_requirements": executor_requirements,
+            "executor_binding_mapping": executor_binding_mapping,
+        }
+        if executor_requirements or executor_binding_mapping
+        else snapshot
+    )
+
+
+def published_graph_semantic_hash(graph: Mapping[str, Any]) -> str:
+    """计算忽略存储时间戳后的发布图语义指纹。
+
+    参数：``graph`` 是发布时或重新编译得到的完整工作流图。返回：忽略工作流、
+    节点和连线上的 ``create_time``/``update_time`` 后的稳定摘要。异常：图结构
+    或执行器要求非法时抛 ``PublishedContractInvalid``。
+
+    时间戳属于当前定义存储的生命周期事实，不是发布合同语义；冷启动编译必然
+    会生成新的时间戳。该摘要仅用于确认冷启动候选仍与历史合同是同一张图，持久
+    合同中的 ``source_hash`` 仍保持原有兼容格式。
+    """
+
+    snapshot = _strip_graph_lifecycle_timestamps(_canonical_graph(graph))
+    executor_requirements, executor_binding_mapping = (
+        _abstract_executor_requirements(snapshot)
+    )
+    return _digest(
+        {
+            "graph": snapshot,
+            "executor_requirements": executor_requirements,
+            "executor_binding_mapping": executor_binding_mapping,
+        }
+        if executor_requirements or executor_binding_mapping
+        else snapshot
+    )
+
+
+def _strip_graph_lifecycle_timestamps(value: Any) -> Any:
+    """递归移除图投影中的存储生命周期时间戳。"""
+
+    if isinstance(value, dict):
+        return {
+            key: _strip_graph_lifecycle_timestamps(item)
+            for key, item in value.items()
+            if key not in {"create_time", "update_time"}
+        }
+    if isinstance(value, list):
+        return [_strip_graph_lifecycle_timestamps(item) for item in value]
+    return value
 
 
 def _abstract_executor_requirements(
@@ -150,6 +232,22 @@ def _handle_uuid(template_uuid: str, io_type: str, key: str) -> str:
     return str(uuid5(UUID(template_uuid), f"published-handle:{io_type}:{key}"))
 
 
+def _contract_property_schema(descriptor: Mapping[str, Any]) -> dict[str, Any]:
+    """把输入或输出描述转换为带展示单位的独立 JSON Schema。
+
+    参数说明：descriptor 是通过工作流输入输出合同校验的描述。返回：不修改原
+    描述、并在存在单位时附加 x-unilabos-unit 的属性 Schema。异常：Schema 不是
+    对象时抛出 TypeError。
+    """
+
+    schema = _plain(descriptor["schema"])
+    if not isinstance(schema, dict):
+        raise TypeError("发布工作流属性 Schema 无效")
+    if "unit" in descriptor:
+        schema["x-unilabos-unit"] = _plain(descriptor["unit"])
+    return schema
+
+
 def _published_template_projection(
     *,
     contract_uuid: str,
@@ -164,8 +262,9 @@ def _published_template_projection(
     """构造发布模板、公开连接点及服务端边界映射。
 
     参数：两个 UUID 固定发布合同与节点模板身份；``graph`` 是冻结工作流图；输入、
-    输出合同和 ``workflow_io`` 提供已校验的参数及连接关系；两个摘要固定来源与合同
-    内容。返回节点模板、连接点列表和边界映射。异常：合同缺少参数、连接点或绑定
+    输出合同和 ``workflow_io`` 提供已校验的参数及连接关系，合同中的可选单位会同时
+    写入连接点元数据与属性 Schema；两个摘要固定来源与合同内容。返回节点模板、
+    连接点列表和边界映射。异常：合同缺少参数、连接点或绑定
     时抛出 ``KeyError``，非法模板 UUID 由 ``UUID`` 构造器抛出 ``ValueError``。
     """
 
@@ -179,6 +278,22 @@ def _published_template_projection(
         slot_schema = resource_slot_schema(schema_value)
         handle_uuid = _handle_uuid(node_template_uuid, "target", name)
         input_handle_by_name[name] = handle_uuid
+        unilab_metadata = {
+            "value_schema": schema_value,
+            "editor_control": (
+                "material_port"
+                if slot_schema is not None
+                else "variable_selector"
+            ),
+            "allowed_resource_template_uuids": (
+                slot_schema.get("allowed_resource_template_uuids")
+                if slot_schema is not None
+                else None
+            ),
+            "implicit_passthrough": False,
+        }
+        if "unit" in descriptor:
+            unilab_metadata["unit"] = _plain(descriptor["unit"])
         handles.append(
             {
                 "uuid": handle_uuid,
@@ -190,22 +305,7 @@ def _published_template_projection(
                 "required": bool(descriptor.get("required", False)),
                 "data_source": "goal",
                 "data_key": name,
-                "meta_data": {
-                    "unilab": {
-                        "value_schema": schema_value,
-                        "editor_control": (
-                            "material_port"
-                            if slot_schema is not None
-                            else "variable_selector"
-                        ),
-                        "allowed_resource_template_uuids": (
-                            slot_schema.get("allowed_resource_template_uuids")
-                            if slot_schema is not None
-                            else None
-                        ),
-                        "implicit_passthrough": False,
-                    }
-                },
+                "meta_data": {"unilab": unilab_metadata},
             }
         )
     for descriptor in output_contract["outputs"]:
@@ -214,6 +314,22 @@ def _published_template_projection(
         slot_schema = resource_slot_schema(schema_value)
         handle_uuid = _handle_uuid(node_template_uuid, "source", name)
         output_handle_by_name[name] = handle_uuid
+        unilab_metadata = {
+            "value_schema": schema_value,
+            "editor_control": (
+                "material_port"
+                if slot_schema is not None
+                else "variable_selector"
+            ),
+            "allowed_resource_template_uuids": (
+                slot_schema.get("allowed_resource_template_uuids")
+                if slot_schema is not None
+                else None
+            ),
+            "implicit_passthrough": bool(descriptor.get("implicit", False)),
+        }
+        if "unit" in descriptor:
+            unilab_metadata["unit"] = _plain(descriptor["unit"])
         handles.append(
             {
                 "uuid": handle_uuid,
@@ -225,22 +341,7 @@ def _published_template_projection(
                 "required": False,
                 "data_source": "result",
                 "data_key": name,
-                "meta_data": {
-                    "unilab": {
-                        "value_schema": schema_value,
-                        "editor_control": (
-                            "material_port"
-                            if slot_schema is not None
-                            else "variable_selector"
-                        ),
-                        "allowed_resource_template_uuids": (
-                            slot_schema.get("allowed_resource_template_uuids")
-                            if slot_schema is not None
-                            else None
-                        ),
-                        "implicit_passthrough": bool(descriptor.get("implicit", False)),
-                    }
-                },
+                "meta_data": {"unilab": unilab_metadata},
             }
         )
     for io_type in ("target", "source"):
@@ -293,7 +394,7 @@ def _published_template_projection(
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    str(item["name"]): item["schema"]
+                    str(item["name"]): _contract_property_schema(item)
                     for item in input_contract["parameters"]
                 },
                 "required": [
@@ -306,7 +407,7 @@ def _published_template_projection(
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    str(item["name"]): item["schema"]
+                    str(item["name"]): _contract_property_schema(item)
                     for item in output_contract["outputs"]
                 },
                 "required": [str(item["name"]) for item in output_contract["outputs"]],
@@ -1067,4 +1168,6 @@ __all__ = [
     "PublishedContractConflict",
     "PublishedContractInvalid",
     "PublishedWorkflowContractStore",
+    "published_graph_semantic_hash",
+    "published_graph_source_hash",
 ]

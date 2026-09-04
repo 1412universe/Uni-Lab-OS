@@ -64,6 +64,68 @@ def _make() -> "tuple[EdgeScheduler, RecordingDispatcher]":
     return scheduler, dispatcher
 
 
+def test_submit_only_wakes_reconcile_worker() -> None:
+    """首次提交不得在 API/调用线程直接执行重排和物理派发。"""
+
+    scheduler, _dispatcher = _make()
+    submit_thread = threading.current_thread().ident
+    reconcile_threads: list[int | None] = []
+    original = scheduler._reschedule_locked
+
+    def _recording_reschedule() -> list[dict[str, object]]:
+        reconcile_threads.append(threading.current_thread().ident)
+        return original()
+
+    scheduler._reschedule_locked = _recording_reschedule  # type: ignore[method-assign]
+    submitted = scheduler.submit_workflow(_chain_spec("wf-submit-wakeup"))
+
+    assert [item["node_id"] for item in submitted["dispatched"]] == ["A"]
+    assert reconcile_threads
+    assert all(thread_id != submit_thread for thread_id in reconcile_threads)
+
+
+def test_persistent_drain_scan_does_not_hold_the_scheduler_lock() -> None:
+    """慢持久扫描不得阻塞设备状态等 Scheduler 内存读接口。"""
+
+    scheduler, _dispatcher = _make()
+    provider_started = threading.Event()
+    release_provider = threading.Event()
+    drain_finished = threading.Event()
+
+    def blocking_provider() -> set[str]:
+        provider_started.set()
+        assert release_provider.wait(timeout=2)
+        return {"persisted-job"}
+
+    scheduler.set_drain_blocker_provider(blocking_provider)
+
+    def read_drain() -> None:
+        scheduler.drain_status()
+        drain_finished.set()
+
+    drain_thread = threading.Thread(target=read_drain)
+    drain_thread.start()
+    assert provider_started.wait(timeout=1)
+
+    device_read_finished = threading.Event()
+
+    def read_devices() -> None:
+        scheduler.device_status()
+        device_read_finished.set()
+
+    device_thread = threading.Thread(target=read_devices)
+    device_thread.start()
+    try:
+        assert device_read_finished.wait(timeout=0.5)
+        assert not drain_finished.is_set()
+    finally:
+        release_provider.set()
+        drain_thread.join(timeout=2)
+        device_thread.join(timeout=2)
+
+    assert drain_finished.is_set()
+
+
 def test_transfer_node_type_is_canonical_but_not_executable_as_ilab():
     assert "Transfer" in NODE_TYPES
     node = WorkflowNode(id="transfer", node_type=normalize_node_type("transfer"))
@@ -124,7 +186,10 @@ def test_dispatch_admission_authority_is_single_assignment() -> None:
     """
 
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
-    first = lambda _dispatching: True
+
+    def first(_dispatching: object) -> bool:
+        return True
+
     scheduler.bind_dispatch_admission_authority(first)
 
     with pytest.raises(ExecutionPolicyError, match="已经绑定"):
@@ -382,6 +447,81 @@ class TestStepControl:
 
         second = scheduler.step_workflow("wf-step")
         assert [item["node_id"] for item in second["dispatched"]] == ["B"]
+
+    def test_rejects_another_step_while_previous_job_is_in_flight(self):
+        """单步闸门必须等当前 Job 终态，不能并发放行普通 DAG 分叉。"""
+
+        scheduler, dispatcher = _make()
+        scheduler.submit_workflow(
+            WorkflowSpec(
+                workflow_id="wf-step-fork",
+                nodes=[_node("A", "d1"), _node("B", "d2")],
+                run_mode="step",
+            )
+        )
+
+        with pytest.raises(ValueError, match="multiple step targets"):
+            scheduler.step_workflow("wf-step-fork")
+
+        scheduler.step_workflow("wf-step-fork", target_node_id="A")
+        with pytest.raises(ValueError, match="step is still in progress"):
+            scheduler.step_workflow("wf-step-fork", target_node_id="B")
+
+        first_job = dispatcher.dispatched[0]["job_id"]
+        scheduler.on_job_finished(first_job, success=True, ret_value={})
+        second = scheduler.step_workflow("wf-step-fork", target_node_id="B")
+        assert [item["node_id"] for item in second["dispatched"]] == ["B"]
+
+    def test_backend_reports_authoritative_step_candidates(self):
+        """候选集合由调度器 DAG 事实计算，普通分叉保持全部可选。"""
+
+        scheduler, _dispatcher = _make()
+        scheduler.submit_workflow(
+            WorkflowSpec(
+                workflow_id="wf-step-candidates",
+                nodes=[_node("A", "d1"), _node("B", "d2")],
+                run_mode="step",
+            )
+        )
+
+        state = scheduler.step_state("wf-step-candidates")
+
+        assert state["execution_mode"] == "step"
+        assert state["requires_selection"] is True
+        assert [item["node_id"] for item in state["candidates"]] == ["A", "B"]
+
+    def test_normal_to_step_drains_in_flight_job_before_pausing(self):
+        """自动转单步先关闭新派发，待在途 Job 结束后才进入稳定暂停态。"""
+
+        scheduler, dispatcher = _make()
+        submitted = scheduler.submit_workflow(_chain_spec("wf-switch-to-step"))
+
+        switching = scheduler.switch_to_step("wf-switch-to-step")
+        assert switching["execution_mode"] == "switching_to_step"
+        assert switching["in_flight_job_count"] == 1
+
+        scheduler.on_job_finished(
+            submitted["dispatched"][0]["job_id"], success=True, ret_value={}
+        )
+        state = scheduler.step_state("wf-switch-to-step")
+        assert state["execution_mode"] == "step"
+        assert [item["node_id"] for item in state["candidates"]] == ["B"]
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
+
+    def test_step_to_normal_continues_same_workflow(self):
+        """稳定暂停的单步任务可以沿用已完成事实恢复自动调度。"""
+
+        scheduler, dispatcher = _make()
+        scheduler.submit_workflow(_step_chain_spec("wf-continue-auto"))
+        first = scheduler.step_workflow("wf-continue-auto")
+        scheduler.on_job_finished(
+            first["dispatched"][0]["job_id"], success=True, ret_value={}
+        )
+
+        resumed = scheduler.continue_automatic("wf-continue-auto")
+
+        assert resumed["execution_mode"] == "normal"
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A", "B"]
 
 
 class TestPauseResumeControl:
@@ -746,7 +886,7 @@ class TestCancel:
 
 
 class TestManualConfirmNodes:
-    """manual_confirm 特殊节点：不进执行器、不占设备锁，靠 finish_job 人工放行。"""
+    """manual_confirm 先占资源，批准后才以同一 Job 派发真实设备动作。"""
 
     def _manual_spec(self, workflow_id: str) -> WorkflowSpec:
         manual = WorkflowNode(
@@ -754,8 +894,9 @@ class TestManualConfirmNodes:
             device_id="operator",
             action_name="confirm",
             action_type="goal",
-            param={"prompt": "确认无误后继续"},
+            param={"target_volume": 10},
             node_type="manual_confirm",
+            manual_confirmation={"timeout_seconds": 3600},
         )
         return WorkflowSpec(
             workflow_id=workflow_id,
@@ -763,40 +904,43 @@ class TestManualConfirmNodes:
             edges=[_edge("A", "M"), _edge("M", "B")],
         )
 
-    def test_manual_confirm_parks_without_dispatch(self):
+    def test_manual_confirm_parks_without_dispatch(self) -> None:
         scheduler, dispatcher = _make()
         scheduler.submit_workflow(self._manual_spec("wf-manual"))
         job_a = dispatcher.dispatched[0]["job_id"]
         scheduler.on_job_finished(job_a, True, {}, "normal")
-        # M 已进入 dispatched 停驻，但执行器只收到过 A
+        # M 已占用执行槽并等待人工批准，但执行器只收到过 A。
         assert len(dispatcher.dispatched) == 1
         snap = scheduler.workflow_snapshot("wf-manual")
         assert snap["nodes"]["M"]["state"] == "dispatched"
-        # 快照必须带 job_id，前端凭它调 /jobs/{id}/finish
         manual_job = snap["nodes"]["M"].get("job_id")
         assert manual_job
 
-    def test_manual_confirm_finish_releases_downstream(self):
+    def test_approve_dispatches_same_job_then_device_result_releases_downstream(
+        self,
+    ) -> None:
         scheduler, dispatcher = _make()
         scheduler.submit_workflow(self._manual_spec("wf-manual2"))
         scheduler.on_job_finished(dispatcher.dispatched[0]["job_id"], True, {}, "normal")
         manual_job = scheduler.workflow_snapshot("wf-manual2")["nodes"]["M"]["job_id"]
+        decision = scheduler.resolve_manual_confirmation(manual_job, approved=True)
+        assert decision["dispatched"][0]["job_id"] == manual_job
+        assert dispatcher.dispatched[-1]["job_id"] == manual_job
+        assert dispatcher.dispatched[-1]["action"] == "confirm"
+        assert dispatcher.dispatched[-1]["action_args"] == {"target_volume": 10}
         scheduler.on_job_finished(manual_job, True, {"confirmed": True}, "normal")
-        # 人工放行后 B 正常下发，链路走完工作流成功
         assert dispatcher.dispatched[-1]["action"] == "run"
         scheduler.on_job_finished(dispatcher.dispatched[-1]["job_id"], True, {}, "normal")
         assert scheduler.workflow_snapshot("wf-manual2")["state"] == "success"
 
-    def test_manual_confirm_ignores_device_busy(self):
+    def test_manual_confirmation_waits_for_busy_device(self) -> None:
         scheduler, dispatcher = _make()
-        # 同 key 的设备 job 占着锁
         scheduler.submit_workflow(
             WorkflowSpec(
                 workflow_id="wf-busy",
                 nodes=[_node("A", device="operator", action="confirm")],
             )
         )
-        # manual_confirm 与其同 key，但 always-free：照样立即停驻下发
         manual_only = WorkflowSpec(
             workflow_id="wf-manual3",
             nodes=[
@@ -805,20 +949,19 @@ class TestManualConfirmNodes:
                     device_id="operator",
                     action_name="confirm",
                     node_type="manual_confirm",
+                    manual_confirmation={"timeout_seconds": 3600},
                 )
             ],
         )
         scheduler.submit_workflow(manual_only)
         snap = scheduler.workflow_snapshot("wf-manual3")
-        assert snap["nodes"]["M"]["state"] == "dispatched"
+        assert snap["nodes"]["M"]["state"] == "ready"
+        scheduler.on_job_finished(dispatcher.dispatched[0]["job_id"], True, {}, "normal")
+        assert scheduler.workflow_snapshot("wf-manual3")["nodes"]["M"]["state"] == "dispatched"
 
-    def test_manual_confirm_does_not_occupy_device_for_an_action(self):
-        """证明人工确认节点停驻期间不建立设备级或动作级内存互斥。
+    def test_manual_confirmation_occupies_device_until_action_finishes(self) -> None:
+        """人工节点即使包装 always_free 动作，也必须独占设备直到动作终态。"""
 
-        参数：无；测试先停驻人工确认节点，再提交同设备同动作的普通节点。
-        返回：无；断言普通动作仍可越过执行器（Executor）派发边界。
-        异常：若人工确认被错误计入设备忙碌集合，断言失败。
-        """
         scheduler, dispatcher = _make()
         manual_only = WorkflowSpec(
             workflow_id="wf-manual-free",
@@ -828,19 +971,20 @@ class TestManualConfirmNodes:
                     device_id="operator",
                     action_name="confirm",
                     node_type="manual_confirm",
+                    manual_confirmation={"timeout_seconds": 3600},
+                    always_free=True,
                 )
             ],
         )
-        scheduler.submit_workflow(manual_only)
-        # 普通动作与人工确认复用相同设备和动作身份，仍应立即实际派发。
+        manual_result = scheduler.submit_workflow(manual_only)
+        manual_job = manual_result["dispatched"][0]["job_id"]
         ordinary_result = scheduler.submit_workflow(
             WorkflowSpec(
                 workflow_id="wf-ordinary-after-manual",
                 nodes=[_node("ordinary-node", device="operator", action="confirm")],
             )
         )
-
-        assert len(ordinary_result["dispatched"]) == 1
-        assert [
-            (item["device_id"], item["action"]) for item in dispatcher.dispatched
-        ] == [("operator", "confirm")]
+        assert ordinary_result["dispatched"] == []
+        scheduler.resolve_manual_confirmation(manual_job, approved=True)
+        scheduler.on_job_finished(manual_job, True, {}, "normal")
+        assert dispatcher.dispatched[-1]["node_id"] == "ordinary-node"

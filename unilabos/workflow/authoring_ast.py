@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import math
 import re
 import tokenize
 from collections.abc import Mapping
@@ -49,6 +50,7 @@ _AUTHORING_MARKERS = {
     "device": "unilabos.workflow.authoring:device",
     "group": "unilabos.workflow.authoring:group",
     "parallel": "unilabos.workflow.authoring:parallel",
+    "quantity_requirement": "unilabos.workflow.authoring:quantity_requirement",
     "repeat_until": "unilabos.workflow.authoring:repeat_until",
     "site_group": "unilabos.workflow.authoring:site_group",
     "until": "unilabos.workflow.authoring:until",
@@ -178,6 +180,20 @@ class RepeatUntilDeclaration:
 
 
 @dataclass(frozen=True, slots=True)
+class QuantityRequirementDeclaration:
+    """来源容器在指定动作成功时消费的任务级数量需求。"""
+
+    requirement_key: str
+    source_result_name: str
+    consume_result_name: str
+    quantity: ValueBinding
+    quantity_unit: str
+    scale: float
+    description: str | None
+    source_node: ast.Expr
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowProgram:
     """作者源码静态子集解析后的不可变中间表示。"""
 
@@ -195,6 +211,7 @@ class WorkflowProgram:
     input_resource_template_symbols: tuple[tuple[str, tuple[str, ...]], ...]
     result_record_name: str | None
     declared_output_schemas: tuple[tuple[str, dict[str, Any]], ...]
+    declared_output_units: tuple[tuple[str, str], ...]
     output_resource_template_symbols: tuple[tuple[str, tuple[str, ...]], ...]
     actions: tuple[
         ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration,
@@ -203,6 +220,7 @@ class WorkflowProgram:
     groups: tuple[GroupDeclaration, ...]
     conditions: tuple[ConditionDeclaration, ...]
     repeats: tuple[RepeatUntilDeclaration, ...]
+    quantity_requirements: tuple[QuantityRequirementDeclaration, ...]
     parent_by_node: tuple[tuple[str, str], ...]
     order_dependencies: tuple[tuple[str, str], ...]
     source_order: tuple[str, ...]
@@ -232,6 +250,7 @@ class _BodyState:
     groups: list[GroupDeclaration]
     conditions: list[ConditionDeclaration]
     repeats: list[RepeatUntilDeclaration]
+    quantity_requirements: list[QuantityRequirementDeclaration]
     parent_by_node: dict[str, str]
     order_dependencies: list[tuple[str, str]]
     source_order: list[str]
@@ -309,6 +328,7 @@ def parse_authoring_source(
     (
         result_record_name,
         declared_output_schemas,
+        declared_output_units,
         output_resource_template_symbols,
     ) = _result_record(
         function,
@@ -329,6 +349,7 @@ def parse_authoring_source(
         groups,
         conditions,
         repeats,
+        quantity_requirements,
         parent_by_node,
         order_dependencies,
         authoring_source_order,
@@ -362,11 +383,13 @@ def parse_authoring_source(
         input_resource_template_symbols=input_resource_template_symbols,
         result_record_name=result_record_name,
         declared_output_schemas=tuple(declared_output_schemas.items()),
+        declared_output_units=tuple(declared_output_units.items()),
         output_resource_template_symbols=output_resource_template_symbols,
         actions=tuple(actions),
         groups=tuple(groups),
         conditions=tuple(conditions),
         repeats=tuple(repeats),
+        quantity_requirements=tuple(quantity_requirements),
         parent_by_node=tuple(sorted(parent_by_node.items())),
         order_dependencies=tuple(order_dependencies),
         source_order=tuple(authoring_source_order),
@@ -738,13 +761,14 @@ def _result_record(
 ) -> tuple[
     str | None,
     dict[str, dict[str, Any]],
+    dict[str, str],
     tuple[tuple[str, tuple[str, ...]], ...],
 ]:
     """解析可选 ``TypedDict`` 工作流结果记录。
 
     参数说明：``function`` 提供返回注解，``result_records`` 是模块级类声明，
     ``imports`` 用于识别 ``TypedDict`` 和字段注解；返回记录类名、字段 Schema
-    及按字段保存的资源模板源码身份。未声明返回记录时返回空记录，动态或不一致
+    、字段单位及按字段保存的资源模板源码身份。未声明返回记录时返回空记录，动态或不一致
     声明失败关闭。
     异常：返回注解、结果记录数量、字段 Schema 或资源模板身份无效时抛出
     ``AuthoringSyntaxError``。
@@ -757,7 +781,7 @@ def _result_record(
                 "工作流返回注解必须引用 TypedDict 结果记录",
                 function,
             )
-        return None, {}, ()
+        return None, {}, {}, ()
     if len(result_records) != 1:
         _fail("invalid_workflow_output", "只能声明一个工作流结果记录", function)
     record = result_records[0]
@@ -772,6 +796,7 @@ def _result_record(
     if not isinstance(function.returns, ast.Name) or function.returns.id != record.name:
         _fail("invalid_workflow_output", "工作流返回注解必须引用结果记录", function)
     fields: dict[str, dict[str, Any]] = {}
+    units: dict[str, str] = {}
     resource_templates: list[tuple[str, tuple[str, ...]]] = []
     try:
         for statement in record.body:
@@ -792,6 +817,9 @@ def _result_record(
                 imports=imports,
             )
             fields[name] = parsed.to_dict()["schema"]
+            unit = parsed.to_dict().get("unit")
+            if isinstance(unit, str):
+                units[name] = unit
             if parsed.resource_templates:
                 resource_templates.append(
                     (
@@ -804,7 +832,7 @@ def _result_record(
                 )
     except AnnotationSchemaError as error:
         raise AuthoringSyntaxError(error.code, error.message, record) from None
-    return record.name, fields, tuple(resource_templates)
+    return record.name, fields, units, tuple(resource_templates)
 
 
 def _is_none_return_annotation(annotation: ast.expr | None) -> bool:
@@ -928,6 +956,7 @@ def _workflow_body(
     list[GroupDeclaration],
     list[ConditionDeclaration],
     list[RepeatUntilDeclaration],
+    list[QuantityRequirementDeclaration],
     dict[str, str],
     list[tuple[str, str]],
     list[str],
@@ -966,6 +995,7 @@ def _workflow_body(
         groups=[],
         conditions=[],
         repeats=[],
+        quantity_requirements=[],
         parent_by_node={},
         order_dependencies=[],
         source_order=[],
@@ -993,6 +1023,7 @@ def _workflow_body(
         state.groups,
         state.conditions,
         state.repeats,
+        state.quantity_requirements,
         state.parent_by_node,
         state.order_dependencies,
         state.source_order,
@@ -1092,6 +1123,24 @@ def _parse_statement(
             )
         _fail("unsupported_authoring_syntax", "工作流不支持该 with 语句", statement)
 
+    quantity_requirement = _quantity_requirement_declaration(
+        statement,
+        state=state,
+        available_results=available_results,
+    )
+    if quantity_requirement is not None:
+        if any(
+            item.requirement_key == quantity_requirement.requirement_key
+            for item in state.quantity_requirements
+        ):
+            _fail(
+                "invalid_quantity_requirement",
+                "数量库存需求键不能重复",
+                statement,
+            )
+        state.quantity_requirements.append(quantity_requirement)
+        return _Flow((), (), frozenset())
+
     action = _action_declaration(
         statement,
         imports=state.imports,
@@ -1118,6 +1167,171 @@ def _parse_statement(
         (action.node_uuid,),
         (action.node_uuid,),
         frozenset({action.result_name}),
+    )
+
+
+def _quantity_requirement_declaration(
+    statement: ast.stmt,
+    *,
+    state: _BodyState,
+    available_results: set[str],
+) -> QuantityRequirementDeclaration | None:
+    """解析不产生执行节点的 ``quantity_requirement`` 静态标记。"""
+
+    if not (
+        isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and _is_marker(
+            statement.value.func,
+            state.imports,
+            "quantity_requirement",
+        )
+    ):
+        return None
+    call = statement.value
+    if state.control_depth:
+        _fail(
+            "invalid_quantity_requirement",
+            "数量需求暂不允许声明在条件或循环区域内",
+            statement,
+        )
+    if call.args or any(keyword.arg is None for keyword in call.keywords):
+        _fail(
+            "invalid_quantity_requirement",
+            "quantity_requirement 只接受命名参数",
+            call,
+        )
+    keywords = {str(keyword.arg): keyword.value for keyword in call.keywords}
+    if len(keywords) != len(call.keywords):
+        _fail("invalid_quantity_requirement", "数量需求参数不能重复", call)
+    required = {
+        "requirement_key",
+        "source",
+        "consume",
+        "quantity",
+        "quantity_unit",
+    }
+    if not required <= set(keywords) or set(keywords) - {
+        *required,
+        "scale",
+        "description",
+    }:
+        _fail(
+            "invalid_quantity_requirement",
+            "quantity_requirement 参数不完整或包含未知字段",
+            call,
+        )
+    try:
+        requirement_key = ast.literal_eval(keywords["requirement_key"])
+        quantity_unit = ast.literal_eval(keywords["quantity_unit"])
+        scale = (
+            ast.literal_eval(keywords["scale"])
+            if "scale" in keywords
+            else 1.0
+        )
+        description = (
+            ast.literal_eval(keywords["description"])
+            if "description" in keywords
+            else None
+        )
+    except (TypeError, ValueError):
+        _fail(
+            "invalid_quantity_requirement",
+            "数量需求键、单位、倍率和说明必须是静态字面量",
+            call,
+        )
+    if (
+        not isinstance(requirement_key, str)
+        or not requirement_key.strip()
+        or requirement_key != requirement_key.strip()
+    ):
+        _fail("invalid_quantity_requirement", "数量需求键不能为空", call)
+    if (
+        not isinstance(quantity_unit, str)
+        or not quantity_unit.strip()
+        or quantity_unit != quantity_unit.strip()
+    ):
+        _fail("invalid_quantity_requirement", "数量需求单位不能为空", call)
+    if isinstance(scale, bool) or not isinstance(scale, (int, float)):
+        _fail("invalid_quantity_requirement", "数量换算倍率必须是有限正数", call)
+    scale = float(scale)
+    if not math.isfinite(scale) or scale <= 0:
+        _fail("invalid_quantity_requirement", "数量换算倍率必须是有限正数", call)
+    if description is not None and (
+        not isinstance(description, str) or not description.strip()
+    ):
+        _fail("invalid_quantity_requirement", "数量需求说明必须是非空字符串", call)
+    source = keywords["source"]
+    consume = keywords["consume"]
+    if not isinstance(source, ast.Name) or source.id not in available_results:
+        _fail(
+            "invalid_quantity_requirement",
+            "source 必须直接引用此前的 material_source 结果",
+            source,
+        )
+    if source.id not in state.material_results:
+        _fail(
+            "invalid_quantity_requirement",
+            "source 必须直接引用 material_source 结果",
+            source,
+        )
+    if not isinstance(consume, ast.Name) or consume.id not in available_results:
+        _fail(
+            "invalid_quantity_requirement",
+            "consume 必须直接引用此前的动作结果",
+            consume,
+        )
+    consume_declaration = next(
+        (
+            item
+            for item in state.actions
+            if item.result_name == consume.id
+        ),
+        None,
+    )
+    if consume_declaration is None or isinstance(
+        consume_declaration,
+        MaterialSourceDeclaration,
+    ):
+        _fail(
+            "invalid_quantity_requirement",
+            "consume 必须直接引用普通动作或组合动作结果",
+            consume,
+        )
+    quantity = _value_binding(
+        keywords["quantity"],
+        input_names=state.input_names,
+        known_results=available_results,
+        material_results=state.material_results & available_results,
+    )
+    if quantity.kind not in {"literal", "workflow_input"}:
+        _fail(
+            "invalid_quantity_requirement",
+            "quantity 只能是正数字面量或工作流输入",
+            keywords["quantity"],
+        )
+    if quantity.kind == "literal":
+        value = quantity.value
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+        ):
+            _fail(
+                "invalid_quantity_requirement",
+                "quantity 字面量必须是有限正数",
+                keywords["quantity"],
+            )
+    return QuantityRequirementDeclaration(
+        requirement_key=requirement_key,
+        source_result_name=source.id,
+        consume_result_name=consume.id,
+        quantity=quantity,
+        quantity_unit=quantity_unit,
+        scale=scale,
+        description=description.strip() if isinstance(description, str) else None,
+        source_node=statement,
     )
 
 
@@ -2259,6 +2473,7 @@ __all__ = [
     "CompositeDeclaration",
     "DeviceDeclaration",
     "GroupDeclaration",
+    "QuantityRequirementDeclaration",
     "RepeatUntilDeclaration",
     "ValueBinding",
     "WorkflowProgram",

@@ -17,14 +17,15 @@ from unilabos.app.workflow_api import (
     workflow_error_response,
     workflow_success_response,
 )
+from unilabos.workflow.authoring_graph_semantics import semantic_graph_equal
 from unilabos.workflow.candidate_validation import validate_candidate_bundle
-from unilabos.workflow.json_codec import strict_json_equal
 from unilabos.workflow.models import (
     CandidateChangeset,
     CandidateCompilation,
     CandidateDiagnostic,
     CandidateSourceMapEntry,
     WorkflowEdgeWrite,
+    WorkflowInventoryRequirementWrite,
     WorkflowNodeWrite,
     validate_json_value,
     validate_uuid,
@@ -52,6 +53,12 @@ _NODE_FIELDS = set(WorkflowNodeWrite.model_fields) | {
     "update_time",
 }
 _EDGE_FIELDS = set(WorkflowEdgeWrite.model_fields) | {"create_time", "update_time"}
+_INVENTORY_REQUIREMENT_FIELDS = set(WorkflowInventoryRequirementWrite.model_fields) | {
+    "workflow_uuid",
+    "sort_order",
+    "create_time",
+    "update_time",
+}
 _NODE_TEMPLATE_FIELDS = {
     "uuid",
     "create_time",
@@ -231,6 +238,11 @@ def _assert_closed_graph(graph: dict[str, Any]) -> None:
         allowed=_HANDLE_TEMPLATE_FIELDS,
         collection_name="handle_templates",
     )
+    _assert_entity_fields(
+        graph.get("inventory_requirements"),
+        allowed=_INVENTORY_REQUIREMENT_FIELDS,
+        collection_name="inventory_requirements",
+    )
 
 
 def _closed_transform_data(
@@ -303,7 +315,9 @@ def _closed_transform_data(
             require_unchanged_graph=require_unchanged_graph,
         )
         _assert_closed_graph(graph)
-        if require_unchanged_graph and not strict_json_equal(graph, base_graph):
+        # 旧客户端发送五集合图时没有 ``inventory_requirements``；候选校验会把它
+        # 规范成空数组。两种 wire 形状代表同一创作语义，不能被误判成图变更。
+        if require_unchanged_graph and not semantic_graph_equal(graph, base_graph):
             raise ValueError("纯源码转换改变了输入图")
 
     compiler_version = compilation.compiler_version

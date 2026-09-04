@@ -27,6 +27,7 @@ _PATCHABLE_NODE_FIELDS = {
     "name",
     "pose",
     "param",
+    "manual_confirmation",
     "execution_policy",
     "disabled",
     "minimized",
@@ -135,6 +136,9 @@ def create_node(
         "material_uuid": _optional_uuid(payload.get("material_uuid"), "material_uuid"),
         **derived,
         "pose": normalize_json_object(payload.get("pose")),
+        "manual_confirmation": normalize_json_object(
+            payload.get("manual_confirmation")
+        ),
         "execution_policy": normalize_json_object(payload.get("execution_policy")),
         "disabled": bool(payload.get("disabled", False)),
         "minimized": bool(payload.get("minimized", False)),
@@ -155,7 +159,13 @@ def patch_node(node: Mapping[str, Any], patch: Mapping[str, Any]) -> dict[str, A
             result[field] = _optional_uuid(value, field)
         elif field == "name":
             result[field] = _required_text(value, field)
-        elif field in {"pose", "param", "execution_policy", "meta_data"}:
+        elif field in {
+            "pose",
+            "param",
+            "manual_confirmation",
+            "execution_policy",
+            "meta_data",
+        }:
             result[field] = normalize_json_object(value)
         elif field in {"disabled", "minimized"}:
             if not isinstance(value, bool):
@@ -194,8 +204,10 @@ def create_edge(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def duplicate_graph(graph: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """复制完整图并确定性重建节点、父子和连线身份引用。"""
+def duplicate_graph(
+    graph: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """复制完整图并重建节点、父子、连线和数量需求身份引用。"""
 
     node_identity = {str(node["uuid"]): str(uuid4()) for node in graph["nodes"]}
     nodes: list[dict[str, Any]] = []
@@ -216,7 +228,34 @@ def duplicate_graph(graph: Mapping[str, Any]) -> tuple[list[dict[str, Any]], lis
         for field in ("create_time", "update_time", "deleted_at"):
             edge.pop(field, None)
         edges.append(edge)
-    return nodes, edges
+    requirements: list[dict[str, Any]] = []
+    for source in graph.get("inventory_requirements", []):
+        requirement = deepcopy(dict(source))
+        requirement["uuid"] = str(uuid4())
+        requirement["consume_node_uuid"] = node_identity[
+            str(source["consume_node_uuid"])
+        ]
+        metadata = requirement.get("meta_data")
+        unilab = metadata.get("unilab") if isinstance(metadata, dict) else None
+        source_node_uuid = (
+            unilab.get("material_source_node_uuid")
+            if isinstance(unilab, dict)
+            else None
+        )
+        if source_node_uuid is not None:
+            unilab["material_source_node_uuid"] = node_identity[
+                str(source_node_uuid)
+            ]
+        for field in (
+            "create_time",
+            "update_time",
+            "deleted_at",
+            "workflow_uuid",
+            "sort_order",
+        ):
+            requirement.pop(field, None)
+        requirements.append(requirement)
+    return nodes, edges, requirements
 
 
 __all__ = [

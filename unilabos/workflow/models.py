@@ -114,6 +114,7 @@ class WorkflowNodeWrite(BaseModel):
     icon: Optional[str] = None
     pose: JsonObject = Field(default_factory=dict)
     param: Optional[JsonObject] = None
+    manual_confirmation: JsonObject = Field(default_factory=dict)
     footer: Optional[str] = None
     action_name: Optional[str] = None
     action_type: Optional[str] = None
@@ -126,6 +127,7 @@ class WorkflowNodeWrite(BaseModel):
 
     @field_validator(
         "pose",
+        "manual_confirmation",
         "execution_policy",
         "meta_data",
         mode="before",

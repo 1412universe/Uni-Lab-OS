@@ -62,8 +62,8 @@ class WorkflowReadModel(_PublicResponseModel):
     )
     status: Literal["source", "published"] = Field(
         description=(
-            "source 表示当前定义尚未提供给其他工作流复用；published 表示"
-            "当前定义可以被其他工作流选择使用"
+            "source 表示当前修订尚未发布；published 表示当前修订已经发布。"
+            "只有已发布的实验操作可以被其他工作流引用"
         )
     )
     revision: int = Field(description="当前工作流修订号", examples=[1])
@@ -95,18 +95,18 @@ class WorkflowListSuccessResponse(_PublicResponseModel):
 
 
 class WorkflowPublishSuccessResponse(_PublicResponseModel):
-    """发布实验操作成功响应。
+    """发布工作流成功响应。
 
     发布接口的历史返回还包含供旧客户端使用的内部投影字段，因此这里只把
-    ``data`` 作为可扩展对象公开；前端判断是否可复用应读取工作流列表/详情中的
-    ``status=published``，不依赖发布记录或版本字段。
+    ``data`` 作为可扩展对象公开；前端判断当前修订是否已发布，应读取工作流
+    列表/详情中的 ``status=published``，不依赖发布记录或版本字段。
     """
 
     code: Literal[0] = Field(description="0 表示业务处理成功", examples=[0])
     data: dict[str, Any] = Field(
         description=(
-            "发布后的实验操作结果；发布完成后对应工作流状态为 published，"
-            "可被其他工作流选择使用"
+            "发布后的工作流结果；发布完成后对应工作流状态为 published。"
+            "已发布的实验操作还可以被其他工作流引用"
         )
     )
 

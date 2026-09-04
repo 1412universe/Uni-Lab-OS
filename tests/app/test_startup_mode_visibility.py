@@ -65,7 +65,7 @@ def _create_and_publish(
                 {
                     "uuid": str(uuid4()),
                     "name": f"节点-{name}",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {"x": 0, "y": 0},
                     "param": {},
                     "execution_policy": {},
@@ -140,6 +140,56 @@ def test_local_startup_does_not_enable_cloud_websocket() -> None:
         )
 
 
+def test_develop_mode_rejects_a_second_nonterminal_task(tmp_path: Path) -> None:
+    """develop 全局只允许一个非终态 Task，并返回占用者身份与状态。"""
+
+    client, service, store = _client(tmp_path)
+    occupied_uuid = str(uuid4())
+    try:
+        first_workflow = client.post(
+            "/api/v1/workflows",
+            json={"name": "占用调试槽", "tags": [], "meta_data": {}},
+        ).json()["data"]["uuid"]
+        second_workflow = client.post(
+            "/api/v1/workflows",
+            json={"name": "第二个任务", "tags": [], "meta_data": {}},
+        ).json()["data"]["uuid"]
+        with store.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO workflow_task(
+                    uuid, create_time, update_time, meta_data, workflow_uuid,
+                    status, workflow_snapshot, execution_plan, run_mode,
+                    execution_mode, control_status, cleanup_status,
+                    trace_context, input, output, error_info
+                ) VALUES (?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                          '{}', ?, 'pending', '{}',
+                          '{"version":1,"nodes":[],"edges":[],"handles":[]}',
+                          'normal', 'normal', 'active', 'none', '{}', '{}', '{}', '[]')
+                """,
+                (occupied_uuid, first_workflow),
+            )
+
+        response = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": second_workflow,
+                "run_mode": "normal",
+                "input": {},
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["code"] == 3003
+        assert response.json()["error"]["code"] == "develop_task_conflict"
+        assert occupied_uuid in response.json()["error"]["msg"]
+        assert "pending" in response.json()["error"]["msg"]
+    finally:
+        reset_startup_mode()
+        service.close()
+        store.close()
+
+
 def test_product_only_lists_published_normal_workflows(tmp_path: Path) -> None:
     """生产模式只公开已发布普通工作流，调试模式公开全部定义。
 
@@ -172,7 +222,7 @@ def test_product_only_lists_published_normal_workflows(tmp_path: Path) -> None:
                     {
                         "uuid": hidden_node_uuid,
                         "name": "隐藏节点",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {"x": 0, "y": 0},
                         "param": {},
                         "execution_policy": {},
@@ -311,6 +361,30 @@ def test_product_mode_blocks_definition_writes_but_allows_visible_task_creation(
         assert preflight.status_code == 200
         assert preflight.json()["code"] == 0
 
+        step_preflight = client.post(
+            f"/api/v1/workflows/{published_normal}/run-preflight",
+            json={"run_mode": "step", "input": {}},
+        )
+        assert step_preflight.json()["error"]["code"] == "develop_mode_required"
+        step_task = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": published_normal,
+                "run_mode": "step",
+                "input": {},
+            },
+        )
+        assert step_task.json()["error"]["code"] == "develop_mode_required"
+        pause_task = client.post(
+            f"/api/v1/workflow-tasks/{created_task.json()['data']['uuid']}/commands",
+            json={"type": "pause", "idempotency_key": "product-pause"},
+        )
+        assert pause_task.json()["error"]["code"] == "develop_mode_required"
+        step_state = client.get(
+            f"/api/v1/workflow-tasks/{created_task.json()['data']['uuid']}/step-state"
+        )
+        assert step_state.json()["error"]["code"] == "develop_mode_required"
+
         hidden_source_task = client.post(
             "/api/v1/workflow-tasks",
             json={"workflow_uuid": source_normal, "input": {}},
@@ -321,6 +395,30 @@ def test_product_mode_blocks_definition_writes_but_allows_visible_task_creation(
             json={"workflow_uuid": published_operation, "input": {}},
         )
         assert hidden_operation_task.json()["code"] != 0
+    finally:
+        reset_startup_mode()
+        service.close()
+        store.close()
+
+
+def test_legacy_debug_workflow_task_api_is_gone(tmp_path: Path) -> None:
+    """旧 Debug 路由统一返回 410，并指向标准 WorkflowTask Step API。"""
+
+    client, service, store = _client(tmp_path)
+    try:
+        create = client.post("/api/v1/debug/workflow-tasks", json={})
+        detail = client.get(f"/api/v1/debug/workflow-tasks/{uuid4()}")
+        command = client.post(
+            f"/api/v1/debug/workflow-tasks/{uuid4()}/commands",
+            json={},
+        )
+
+        assert [create.status_code, detail.status_code, command.status_code] == [
+            410,
+            410,
+            410,
+        ]
+        assert create.json()["error"]["code"] == "debug_api_retired"
     finally:
         reset_startup_mode()
         service.close()

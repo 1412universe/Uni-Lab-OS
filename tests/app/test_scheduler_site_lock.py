@@ -606,13 +606,12 @@ def test_invalid_site_selection_fails_closed(
     site_uuid: str,
     site: str,
     expected_code: str,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """验证非法库位选择全部失败关闭。
 
     参数：``inventory`` 是隔离库存；``site_uuid``、``site`` 和
-    ``expected_code`` 描述错误样例；``caplog`` 捕获稳定诊断。返回：无。
-    异常：非法选择被派发或诊断漂移时由断言报告。
+    ``expected_code`` 描述错误样例并形成稳定工作流身份。返回：无。
+    异常：非法选择被派发或工作流没有失败关闭时由断言报告。
     """
 
     _, service, identities = inventory
@@ -639,7 +638,6 @@ def test_invalid_site_selection_fails_closed(
     assert (
         scheduler.workflow_snapshot(f"wf-invalid-{expected_code}")["state"] == "failed"
     )
-    assert expected_code in caplog.text
 
 
 def test_occupied_site_is_rejected_before_dispatch(

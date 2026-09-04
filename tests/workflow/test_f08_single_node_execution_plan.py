@@ -37,7 +37,7 @@ def _http_runtime(database: Path) -> tuple[TestClient, WorkflowStore]:
 
 
 def _http_node(identity: str, *, disabled: bool = False) -> dict[str, Any]:
-    """构造无端口依赖的可执行手工确认节点。
+    """构造无端口依赖的计算节点。
 
     参数：``identity`` 是稳定节点 UUID，``disabled`` 控制是否排除执行。返回：
     公共图写接口接受的节点对象。异常：无，非法身份由真实接口失败关闭。
@@ -46,7 +46,7 @@ def _http_node(identity: str, *, disabled: bool = False) -> dict[str, Any]:
     return {
         "uuid": identity,
         "name": f"manual-{identity[-1]}",
-        "type": "manual_confirm",
+        "type": "compute",
         "pose": {},
         "param": {},
         "execution_policy": {},

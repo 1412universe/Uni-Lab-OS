@@ -146,6 +146,34 @@ def ensure_station_task_submission_schema(connection: sqlite3.Connection) -> Non
     )
 
 
+def ensure_workflow_task_control_schema(connection: sqlite3.Connection) -> None:
+    """补齐 WorkflowTask 可变执行控制模式。
+
+    ``run_mode`` 继续保存创建时冻结模式；``execution_mode`` 只表示当前调度
+    闸门。旧库中的 step 任务按原创建事实初始化，其余任务保持 normal。
+    """
+
+    task_columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(workflow_task)").fetchall()
+    }
+    if "execution_mode" not in task_columns:
+        connection.execute(
+            """
+            ALTER TABLE workflow_task
+            ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'normal'
+                CHECK (execution_mode IN ('normal', 'switching_to_step', 'step'))
+            """
+        )
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET execution_mode = 'step'
+            WHERE run_mode = 'step'
+            """
+        )
+
+
 def ensure_ephemeral_workflow_reference_schema(
     connection: sqlite3.Connection,
 ) -> None:
@@ -717,5 +745,6 @@ __all__ = [
     "ensure_execution_lock_schema",
     "ensure_local_cancellation_schema",
     "ensure_task_material_admission_schema",
+    "ensure_workflow_task_control_schema",
     "ensure_workflow_inventory_schema",
 ]

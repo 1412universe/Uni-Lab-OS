@@ -5,6 +5,7 @@ import {
   Check,
   CircleDot,
   Code2,
+  Copy,
   FileInput,
   FileJson,
   FlaskConical,
@@ -18,9 +19,10 @@ import {
   ShieldCheck,
   Send,
   Workflow as WorkflowIcon,
+  X,
 } from 'lucide-react'
-import { createWorkflowTask, loadReagents, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowTaskGraph } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget, WorkflowInventoryBinding} from '../types'
+import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowSource, loadWorkflowTaskGraph, publishWorkflow } from '../lib/edgeClient'
+import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget, WorkflowTaskPriority } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { serialiseTaskInput } from './TasksPage'
 import { WorkflowDag } from '../components/WorkflowDag'
@@ -51,6 +53,13 @@ function initialRunInput(workflow?: WorkflowDefinition): Record<string, string> 
   }))
 }
 
+function serialisePreflightInput(fields: ContractField[], values: Record<string, string>) {
+  return serialiseTaskInput(
+    fields.map((field) => field.required ? { ...field, required: false } : field),
+    values,
+  )
+}
+
 function ReadinessIcon({ tone }: { tone: ReadinessTone }) {
   if (tone === 'loading') return <LoaderCircle className="spin" size={12} />
   if (tone === 'ready') return <Check size={12} />
@@ -66,6 +75,7 @@ export function WorkflowsPage({
   onNotify,
   onSelectWorkflow,
   targetWorkflow,
+  startupMode = 'product',
 }: {
   workflows: WorkflowDefinition[]
   materials: MaterialRecord[]
@@ -74,6 +84,7 @@ export function WorkflowsPage({
   onNotify: (message: string) => void
   onSelectWorkflow?: (target: WorkflowTarget) => void
   targetWorkflow?: WorkflowTarget
+  startupMode?: 'develop' | 'product'
 }) {
   const [query, setQuery] = useState('')
   const availableWorkflows = useMemo(
@@ -88,9 +99,14 @@ export function WorkflowsPage({
   const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
   const [childPickerOpen, setChildPickerOpen] = useState(false)
   const [runInput, setRunInput] = useState<Record<string, string>>({})
-  /** requirementKey → 试剂 UUID；每条库存需求都绑定后才允许建任务。 */
-  const [reagentBindings, setReagentBindings] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
+  const [runMode, setRunMode] = useState<'normal' | 'step'>('normal')
+  const [runPriority, setRunPriority] = useState<WorkflowTaskPriority>('normal')
+  const [sourceTarget, setSourceTarget] = useState<{
+    uuid: string
+    name: string
+    path: string
+  } | null>(null)
   const pythonImportRef = useRef<HTMLInputElement>(null)
   const jsonImportRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
@@ -122,7 +138,7 @@ export function WorkflowsPage({
   }, [query, availableWorkflows])
 
   const selected = visibleWorkflows.find((workflow) => workflow.uuid === selectedId) || visibleWorkflows[0]
-  const selectedTaskSnapshotUuid = selected?.uuid === targetWorkflow?.workflowUuid
+  const selectedTaskSnapshotUuid = targetWorkflow && selected?.uuid === targetWorkflow.workflowUuid
     ? targetWorkflow.taskUuid
     : undefined
   const graphQuery = useQuery({
@@ -131,15 +147,37 @@ export function WorkflowsPage({
       ? loadWorkflowTaskGraph(selectedTaskSnapshotUuid, signal)
       : loadWorkflowGraph(selected!.uuid, signal),
     enabled: Boolean(selected),
-    retry: false,
+    retry: 2,
+    retryDelay: (attempt) => Math.min(300 * 2 ** attempt, 1_200),
   })
   const preflightQuery = useQuery({
-    queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision],
-    queryFn: ({ signal }) => loadWorkflowPreflight(selected!.uuid, signal),
+    queryKey: ['workflow-run-preflight', selected?.uuid, selected?.revision, runInput, runMode],
+    queryFn: ({ signal }) => loadWorkflowPreflight(
+      selected!.uuid,
+      serialisePreflightInput(selected!.inputContract, runInput),
+      signal,
+      runMode,
+    ),
     enabled: false,
     retry: false,
     staleTime: 0,
   })
+  const sourceQuery = useQuery({
+    queryKey: ['workflow-source', sourceTarget?.uuid],
+    queryFn: ({ signal }) => loadWorkflowSource(sourceTarget!.uuid, signal),
+    enabled: Boolean(sourceTarget && connected),
+    retry: false,
+    staleTime: 0,
+  })
+
+  useEffect(() => {
+    if (!sourceTarget) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSourceTarget(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [sourceTarget])
 
   useEffect(() => {
     if (!selected || !graphQuery.data) return
@@ -169,26 +207,12 @@ export function WorkflowsPage({
     }
   })
   const preflight = preflightQuery.data
+  /** 编译自 quantity_requirement 的数量需求；Edge 建任务时按来源容器自动绑定并预留，界面只读展示。 */
   const inventoryRequirements = graphQuery.data?.inventoryRequirements || []
-  const reagentsQuery = useQuery({
-    queryKey: ['reagents-for-binding'],
-    queryFn: ({ signal }) => loadReagents(signal),
-    enabled: inventoryRequirements.length > 0,
-  })
-  const reagents = reagentsQuery.data || []
-  useEffect(() => setReagentBindings({}), [detail?.uuid, detail?.revision])
-  const inventoryBindings: WorkflowInventoryBinding[] = inventoryRequirements.flatMap((requirement) => {
-    const reagent = reagents.find((item) => item.uuid === reagentBindings[requirement.requirementKey])
-    return reagent ? [{
-      requirementKey: requirement.requirementKey,
-      inventoryType: 'reagent' as const,
-      inventoryUuid: reagent.uuid,
-      reservedQuantity: requirement.requiredQuantity,
-      quantityUnit: requirement.quantityUnit,
-    }] : []
-  })
-  const bindingsReady = inventoryBindings.length === inventoryRequirements.length
   useEffect(() => setRunInput(initialRunInput(detail)), [detail?.uuid, detail?.revision])
+  useEffect(() => {
+    if (startupMode !== 'develop') setRunMode('normal')
+  }, [startupMode])
   const requiredInputReady = Boolean(detail) && detail.inputContract.every((field) => (
     !field.required || field.defaultValue !== undefined || Boolean(runInput[field.name]?.trim())
   ))
@@ -198,24 +222,39 @@ export function WorkflowsPage({
   }) || []
   const taskMutation = useMutation({
     mutationFn: async () => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       if (!detail) throw new Error('请选择工作流')
-      if (!bindingsReady) throw new Error('还有试剂需求未绑定')
       return createWorkflowTask({
         workflowUuid: detail.uuid,
         description: runDescription,
         input: serialiseTaskInput(detail.inputContract, runInput),
-        inventoryBindings,
+        runMode,
+        priority: runPriority,
       })
     },
-    onSuccess: async (task) => {
+    onMutate: () => onNavigate('tasks'),
+    onSuccess: (task) => {
       onNotify(`任务 ${task.uuid || ''} 已提交到 Edge`)
-      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
-      onNavigate('tasks')
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
     },
     onError: (error) => onNotify(`任务提交失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
+  const publishMutation = useMutation({
+    mutationFn: ({ workflowUuid, revision }: { workflowUuid: string; revision: number; name: string }) => (
+      publishWorkflow(workflowUuid, revision)
+    ),
+    onSuccess: async (_contract, workflow) => {
+      onNotify(`工作流“${workflow.name}”已发布`)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['workflow-graph', workflow.workflowUuid] }),
+        queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] }),
+      ])
+    },
+    onError: (error) => onNotify(`发布失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
 
   async function importFile(file: File, kind: 'python' | 'json') {
+    if (!connected) return
     try {
       const imported = kind === 'python' ? await importWorkflowPython(file) : await importWorkflowJson(file, 'normal')
       onNotify(`已导入工作流“${imported.name}”（${imported.uuid}）`)
@@ -225,6 +264,7 @@ export function WorkflowsPage({
     }
   }
   async function referenceChildWorkflow(contract: Record<string, any>) {
+    if (!connected) return
     if (!detail) return
     const contractUuid = String(contract.uuid || '')
     if (!contractUuid) { onNotify('引用失败：发布合同缺少 UUID'); return }
@@ -256,6 +296,16 @@ export function WorkflowsPage({
   async function refreshPreflight() {
     const result = await preflightQuery.refetch()
     onNotify(result.isError ? 'Preflight 读取失败' : 'Preflight 报告已更新')
+  }
+
+  async function copySource() {
+    if (!sourceQuery.data) return
+    try {
+      await navigator.clipboard.writeText(sourceQuery.data.pythonSource)
+      onNotify('工作流源码已复制')
+    } catch {
+      onNotify('复制失败，请在源码区域手动选择复制')
+    }
   }
 
   const preflightTone: ReadinessTone = preflightQuery.isFetching
@@ -339,7 +389,25 @@ export function WorkflowsPage({
                 <span className="definition-icon"><WorkflowIcon size={22} /></span>
                 <div><span className="definition-tag">{tagForWorkflow(detail)}</span><h2>{detail.name}</h2><p>{detail.description}</p></div>
                 <div className="definition-actions">
-                  <Button tone="ghost" icon={<Code2 size={15} />} onClick={() => onNotify(detail.sourcePath ? `源文件：${detail.sourcePath}` : '该定义没有可编辑源文件')}>查看源码</Button>
+                  <Button
+                    tone="ghost"
+                    icon={<Code2 size={15} />}
+                    disabled={!connected}
+                    onClick={() => {
+                      if (!detail.sourcePath) {
+                        onNotify('该定义没有可读取的 Python 源文件')
+                        return
+                      }
+                      setSourceTarget({ uuid: detail.uuid, name: detail.name, path: detail.sourcePath })
+                    }}
+                  >查看源码</Button>
+                  {!selectedTaskSnapshotUuid && detail.status !== 'published' ? (
+                    <Button
+                      icon={publishMutation.isPending ? <LoaderCircle className="spin" size={15} /> : <Send size={15} />}
+                      disabled={!connected || publishMutation.isPending}
+                      onClick={() => publishMutation.mutate({ workflowUuid: detail.uuid, revision: detail.revision, name: detail.name })}
+                    >{publishMutation.isPending ? '发布中…' : '发布'}</Button>
+                  ) : null}
                   <Button
                     icon={preflightQuery.isFetching ? <LoaderCircle className="spin" size={15} /> : <ShieldCheck size={15} />}
                     disabled={!connected || preflightQuery.isFetching}
@@ -376,6 +444,7 @@ export function WorkflowsPage({
                   edges={graphEdges}
                   loading={graphQuery.isFetching}
                   error={graphQuery.isError}
+                  onRetry={() => void graphQuery.refetch()}
                 />
               </div> : null}
               {workspaceView === 'contract' ? (
@@ -407,6 +476,10 @@ export function WorkflowsPage({
                   <div className="run-preparation-grid">
                     <section className="run-input-panel">
                       <div className="run-section-title"><span>01</span><div><strong>运行输入与物料绑定</strong><small>{detail.inputContract.length} 个公开输入 · {detail.inputContract.filter(resourceSlotSchema).length} 个手动物料槽位 · {materialDependencies.length} 个自动物料源</small></div></div>
+                      {startupMode === 'develop' ? (
+                        <label className="run-description"><span>运行方式</span><select aria-label="运行方式" value={runMode} onChange={(event) => setRunMode(event.target.value as 'normal' | 'step')}><option value="normal">自动运行</option><option value="step">单步调试</option></select></label>
+                      ) : null}
+                      <label className="run-description"><span>任务优先级</span><select aria-label="任务优先级" value={runPriority} onChange={(event) => setRunPriority(event.target.value as WorkflowTaskPriority)}><option value="normal">普通优先级</option><option value="high">高优先级</option></select></label>
                       <label className="run-description"><span>任务描述</span><input value={runDescription} onChange={(event) => setRunDescription(event.target.value)} /></label>
                       <div className="run-fields">
                         {detail.inputContract.map((field) => {
@@ -420,25 +493,11 @@ export function WorkflowsPage({
                     </section>
                     {inventoryRequirements.length ? (
                       <section className="run-input-panel reagent-binding-panel">
-                        <div className="run-section-title"><span>01b</span><div><strong>试剂预留</strong><small>{inventoryRequirements.length} 条数量需求 · 建任务时按所选瓶预留，成功后按用量扣减</small></div></div>
-                        <div className="run-fields">
-                          {inventoryRequirements.map((requirement) => {
-                            const options = reagents.filter((reagent) => (
-                              reagent.quantityUnit === requirement.quantityUnit
-                              && ((reagent.quantity ?? 0) - (reagent.activeWorkflowReservedQuantity ?? 0)) >= requirement.requiredQuantity
-                              && (!requirement.reagentInfoUuid || reagent.reagentInfoUuid === requirement.reagentInfoUuid)
-                            ))
-                            return (
-                              <label className="run-field resource-binding-field" key={requirement.uuid}>
-                                <span><code>{requirement.requirementKey}</code><em>需 {requirement.requiredQuantity} {requirement.quantityUnit}</em></span>
-                                <select value={reagentBindings[requirement.requirementKey] || ''} onChange={(event) => setReagentBindings((current) => ({ ...current, [requirement.requirementKey]: event.target.value }))}>
-                                  <option value="">选择试剂瓶</option>
-                                  {options.map((reagent) => <option key={reagent.uuid} value={reagent.uuid}>{reagent.name} · {reagent.containerName || reagent.materialUuid.slice(0, 8)} · 余 {reagent.quantity} {reagent.quantityUnit}{reagent.activeWorkflowReservedQuantity ? ` · 预留中 ${reagent.activeWorkflowReservedQuantity}` : ''}</option>)}
-                                </select>
-                                {!options.length ? <small className="binding-hint">没有单位为 {requirement.quantityUnit} 且余量 ≥ {requirement.requiredQuantity} 的试剂瓶，请先录入或分装</small> : null}
-                              </label>
-                            )
-                          })}
+                        <div className="run-section-title"><span>01b</span><div><strong>试剂用量需求</strong><small>{inventoryRequirements.length} 条 · 建任务时按来源容器自动预留，成功后按此量扣减</small></div></div>
+                        <div className="bound-material-list">
+                          {inventoryRequirements.map((requirement) => (
+                            <article key={requirement.uuid}><header><span><FlaskConical size={15} /></span><div><strong>{requirement.requirementKey}</strong><code>需 {requirement.requiredQuantity} {requirement.quantityUnit}</code></div></header>{requirement.description ? <p>{requirement.description}</p> : null}</article>
+                          ))}
                         </div>
                       </section>
                     ) : null}
@@ -478,6 +537,53 @@ export function WorkflowsPage({
         ) : <Panel><EmptyState title="没有工作流定义" description="确认 Edge 已加载工作流运行时。" /></Panel>}
 
       </div>
+      {sourceTarget ? (
+        <div
+          className="dialog-backdrop workflow-source-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSourceTarget(null)
+          }}
+        >
+          <section
+            className="workflow-source-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workflow-source-title"
+          >
+            <header>
+              <div>
+                <span>PYTHON WORKFLOW SOURCE</span>
+                <h2 id="workflow-source-title">{sourceTarget.name} 源码</h2>
+                <p>只读展示 Edge 当前授权工作区中的源码文件。</p>
+              </div>
+              <button type="button" aria-label="关闭源码查看器" onClick={() => setSourceTarget(null)}><X size={17} /></button>
+            </header>
+            <div className="workflow-source-toolbar">
+              <div><Code2 size={15} /><code>{sourceTarget.path}</code></div>
+              <Button icon={<Copy size={14} />} disabled={!sourceQuery.data} onClick={() => void copySource()}>复制源码</Button>
+            </div>
+            <div className="workflow-source-content">
+              {sourceQuery.isFetching ? <EmptyState title="正在读取源码" description="正在从 Edge 授权工作区读取 Python 文件。" /> : null}
+              {sourceQuery.isError ? (
+                <div className="workflow-source-error" role="alert">
+                  <AlertCircle size={18} />
+                  <div><strong>源码读取失败</strong><p>{sourceQuery.error instanceof Error ? sourceQuery.error.message : '未知错误'}</p></div>
+                  <Button icon={<RefreshCw size={14} />} onClick={() => void sourceQuery.refetch()}>重试</Button>
+                </div>
+              ) : null}
+              {sourceQuery.data ? <pre aria-label="Python 源码"><code>{sourceQuery.data.pythonSource}</code></pre> : null}
+            </div>
+            {sourceQuery.data ? (
+              <footer>
+                <span>当前源码状态：{sourceQuery.data.state}</span>
+                <span>工作流修订：r{sourceQuery.data.workflowRevision}</span>
+                <code title={sourceQuery.data.sourceUri}>{sourceQuery.data.sourceUri}</code>
+              </footer>
+            ) : null}
+          </section>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -508,6 +508,77 @@ def test_failed_task_releases_claim_only_after_cleanup_settlement(
     assert claim["released_at"] is not None
 
 
+def test_reconciled_attention_task_can_finish_cleanup_settlement(
+    store: WorkflowStore,
+) -> None:
+    """物理对账清除不确定性后允许从 requires_attention 收敛为 settled。"""
+
+    _seed_material_source_task(store, with_action=True)
+    projection = _projection(store)
+    projection.project_material_source_admission(
+        TASK_UUID,
+        {
+            NODE_UUIDS[0]: {
+                "uuid": "50000000-0000-4000-8000-000000000001",
+                "resource_template_uuid": (
+                    "60000000-0000-4000-8000-000000000001"
+                ),
+                "custody_policy": "task_exclusive",
+            }
+        },
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status = 'failed', "
+            "cleanup_status = 'requires_attention' WHERE uuid = ?",
+            (TASK_UUID,),
+        )
+
+    aggregate = projection.project_cleanup_settled(TASK_UUID)
+
+    assert aggregate["task"]["cleanup_status"] == "settled"
+    with store.transaction() as connection:
+        claim_status = connection.execute(
+            "SELECT status FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        ).fetchone()[0]
+    assert claim_status == "released"
+
+
+def test_cleanup_settlement_rejects_jobs_that_still_need_reconciliation(
+    store: WorkflowStore,
+) -> None:
+    """只要任一 Job 仍有不确定事实，任务级清理就不得释放执行锁。"""
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status='failed', "
+            "cleanup_status='requires_attention' WHERE uuid=?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET status='failed', "
+            "uncertainty_reason='edge_result_unknown' WHERE uuid=?",
+            (job_uuid,),
+        )
+
+    with pytest.raises(StoreConflict, match="仍有作业等待物理对账"):
+        projection.project_cleanup_settled(TASK_UUID)
+
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+    assert projection.list_execution_locks(job_uuid)[0]["state"] == "reserved"
+
+
 def test_paused_submission_accepts_succeeded_material_sources(
     store: WorkflowStore,
 ) -> None:
@@ -944,6 +1015,97 @@ def test_capacity_gate_wait_persists_reason_without_fake_resource_waiter(
     assert count == 0
 
 
+def test_device_capacity_wait_preserves_candidate_diagnostics(
+    store: WorkflowStore,
+) -> None:
+    """设备忙等待必须接受解析器给出的具体设备展示与诊断字段。
+
+    参数：``store`` 是隔离工作流权威。返回无；断言固定设备选择器产生的
+    Material UUID、本地 ID、名称和候选原因都进入同一个可展示等待事实，而不把
+    正常的设备竞争升级为任务提交失败。未知字段仍由生产规范器拒绝。
+    """
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    device = {
+        "scope": "device",
+        "device_id": "92000000-0000-4000-8000-000000000002",
+        "local_device_id": "reactor-b",
+        "device_name": "S04 磁力搅拌器",
+        "wait_code": "device_busy",
+        "wait_message": "目标设备当前正被另一个作业使用",
+    }
+
+    projection.project_execution_lock_wait(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        execution_locks=[],
+        wait_code="device_busy",
+        wait_message="固定设备当前忙碌，等待下一轮调度",
+        wait_resources=[device],
+    )
+
+    aggregate = _aggregate(store)
+    assert aggregate["task"]["status"] == "running"
+    assert aggregate["jobs"][0]["status"] == "pending"
+    wait_reason = aggregate["jobs"][0]["wait_reason"]
+    assert wait_reason["code"] == "device_busy"
+    assert wait_reason["message"] == "固定设备当前忙碌，等待下一轮调度"
+    assert wait_reason["resources"] == [device]
+    assert wait_reason["waiting_since"]
+
+
+def test_material_and_site_wait_preserve_human_readable_names(
+    store: WorkflowStore,
+) -> None:
+    """物料与库位等待事实必须同时保存稳定身份和用户可读名称。"""
+
+    (job_uuid,) = _seed_task(store, job_count=1)
+    projection = _projection(store)
+    resources = [
+        {
+            "scope": "material",
+            "material_uuid": "50000000-0000-4000-8000-000000000011",
+            "material_name": "样品瓶 A",
+        },
+        {
+            "scope": "material_site",
+            "material_uuid": "50000000-0000-4000-8000-000000000012",
+            "material_name": "S08 开盖机",
+            "site_uuid": "60000000-0000-4000-8000-000000000011",
+            "site_name": "INPUT-1",
+        },
+    ]
+
+    projection.project_execution_lock_wait(
+        task_uuid=TASK_UUID,
+        job_uuid=job_uuid,
+        execution_locks=[
+            {
+                "lock_key": (
+                    "material/50000000-0000-4000-8000-000000000011/exclusive"
+                ),
+                "scope": "material",
+                "material_uuid": "50000000-0000-4000-8000-000000000011",
+            },
+            {
+                "lock_key": (
+                    "material/50000000-0000-4000-8000-000000000012/site/"
+                    "60000000-0000-4000-8000-000000000011/exclusive"
+                ),
+                "scope": "material_site",
+                "material_uuid": "50000000-0000-4000-8000-000000000012",
+                "site_uuid": "60000000-0000-4000-8000-000000000011",
+            },
+        ],
+        wait_code="site_occupied",
+        wait_message="目标库位当前不可用",
+        wait_resources=resources,
+    )
+
+    assert store.get_job(job_uuid)["wait_reason"]["resources"] == resources
+
+
 def test_runtime_journal_and_sse_invalidation_capture_dispatch_and_result(
     store: WorkflowStore,
 ) -> None:
@@ -1193,13 +1355,13 @@ def test_projection_never_writes_legacy_history_or_execution_unknown(
     )
 
 
-def test_execution_process_restart_fails_inflight_and_skips_pending_nodes(
+def test_execution_process_restart_fails_inflight_and_cancels_pending_nodes(
     store: WorkflowStore,
 ) -> None:
     """执行进程重启必须在一个事务中终止整张活动 DAG。
 
     参数：``store`` 是隔离工作流写模型。返回无；断言在途 Job 明确失败、未派发
-    Job 跳过、父 Task 失败且清理状态独立需要人工处理。异常：事务状态不一致会使
+    Job 取消、父 Task 失败且旧执行占用释放。异常：事务状态不一致会使
     测试失败。
     """
 
@@ -1222,21 +1384,21 @@ def test_execution_process_restart_fails_inflight_and_skips_pending_nodes(
     assert jobs[first_job_uuid]["error_info"][0]["code"] == (
         "execution_process_restarted"
     )
-    assert jobs[second_job_uuid]["status"] == "skipped"
+    assert jobs[second_job_uuid]["status"] == "canceled"
     assert jobs[second_job_uuid]["error_info"][0]["code"] == (
-        "upstream_execution_process_restarted"
+        "task_aborted_by_runtime_restart"
     )
     assert aggregate["task"]["status"] == "failed"
-    assert aggregate["task"]["cleanup_status"] == "requires_attention"
-    assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "uncertain"
+    assert aggregate["task"]["cleanup_status"] == "settled"
+    assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "released"
     events = StationEventOutboxStore(store).list_pending()
     assert [event["event_type"] for event in events] == [
         "task.running",
         "job.dispatched",
         "job.running",
         "job.outcome_committed",
-        "job.skipped",
+        "job.canceled",
         "task.failed",
     ]
     assert events[3]["payload"]["outcome"] == "failed"
-    assert events[5]["payload"]["cleanup_status"] == "requires_attention"
+    assert events[5]["payload"]["cleanup_status"] == "settled"

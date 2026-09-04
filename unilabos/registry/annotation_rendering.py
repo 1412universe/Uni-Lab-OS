@@ -152,7 +152,7 @@ def _field_keywords(descriptor: Mapping[str, Any]) -> list[ast.keyword]:
     """从参数合同投影 Pydantic ``Field`` 关键字。
 
     参数说明：``descriptor`` 是已校验参数描述。返回：按规范顺序排列的展示、
-    数值和长度约束 AST 关键字；没有约束时返回空列表。
+    单位、数值和长度约束 AST 关键字；没有约束时返回空列表。
     """
 
     keywords: list[ast.keyword] = []
@@ -165,6 +165,8 @@ def _field_keywords(descriptor: Mapping[str, Any]) -> list[ast.keyword]:
                 value=_constant(descriptor["description"]),
             )
         )
+    if "unit" in descriptor:
+        keywords.append(ast.keyword(arg="unit", value=_constant(descriptor["unit"])))
     schema = descriptor["schema"]
     base = schema["anyOf"][0] if "anyOf" in schema else schema
     for schema_key, field_key in (

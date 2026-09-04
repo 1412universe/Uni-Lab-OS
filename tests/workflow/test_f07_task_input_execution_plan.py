@@ -79,7 +79,7 @@ def _binding_graph() -> dict[str, Any]:
                 "uuid": NODE_UUID,
                 "workflow_node_template_uuid": TEMPLATE_UUID,
                 "name": "approval",
-                "type": "manual_confirm",
+                "type": "compute",
                 "pose": {},
                 "param": {},
                 "execution_policy": {},
@@ -96,8 +96,8 @@ def _binding_graph() -> dict[str, Any]:
         "node_templates": [
             {
                 "uuid": TEMPLATE_UUID,
-                "node_type": "manual_confirm",
-                "type": "manual_confirm",
+                "node_type": "compute",
+                "type": "compute",
             }
         ],
         "handle_templates": [
@@ -180,7 +180,7 @@ def _create_workflow(client: TestClient, store: WorkflowStore) -> str:
                 {
                     "uuid": NODE_UUID,
                     "name": "approval",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {},
                     "param": {},
                     "execution_policy": {},
@@ -238,10 +238,10 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     action_node = next(
         node
         for node in prepared.execution_plan["nodes"]
-        if node["kind"] == "manual_confirm"
+        if node["kind"] == "compute"
     )
     action_job = next(
-        job for job in prepared.jobs if job["executor_kind"] == "manual_confirm"
+        job for job in prepared.jobs if job["executor_kind"] == "compute"
     )
     assert action_node["param"] == {"count": 3}
     assert action_job["param"] == {"count": 3}
@@ -251,8 +251,63 @@ def test_scalar_input_and_default_are_frozen_into_plan_and_jobs() -> None:
     assert jobs == original_jobs
 
 
+def test_dynamic_inventory_quantity_is_frozen_from_resolved_task_input() -> None:
+    """数量需求应使用本次 Task 输入换算，且不修改应用图默认值。"""
+
+    graph = _binding_graph()
+    graph["inventory_requirements"] = [
+        {
+            "uuid": "66000000-0000-4000-8000-000000000001",
+            "consume_node_uuid": NODE_UUID,
+            "requirement_key": "dynamic-liquid",
+            "target_type": "current_substance",
+            "required_quantity": 0.5,
+            "quantity_unit": "mL",
+            "allow_split": False,
+            "meta_data": {
+                "unilab": {
+                    "quantity_binding": {
+                        "kind": "workflow_input",
+                        "parameter": "count",
+                    },
+                    "quantity_scale": 0.5,
+                }
+            },
+        }
+    ]
+    plan, jobs = ExecutionPlanBuilder().build(
+        graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+
+    prepared = prepare_task_input(
+        graph=graph,
+        raw_input={"count": 4},
+        execution_plan=plan,
+        jobs=jobs,
+    )
+
+    assert prepared.workflow_snapshot["inventory_requirements"][0][
+        "required_quantity"
+    ] == 2.0
+    assert graph["inventory_requirements"][0]["required_quantity"] == 0.5
+
+    graph["workflow"]["meta_data"]["unilab"]["input_contract"]["parameters"][
+        0
+    ]["schema"]["minimum"] = 0
+    zero = prepare_task_input(
+        graph=graph,
+        raw_input={"count": 0},
+        execution_plan=plan,
+        jobs=jobs,
+    )
+    assert zero.workflow_snapshot["inventory_requirements"] == []
+
+
 def test_workflow_task_priority_enum_is_accepted_and_persisted(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """工作流任务接口接受 normal/high，并把默认值和显式值分别写入 SQLite。
 
@@ -260,6 +315,11 @@ def test_workflow_task_priority_enum_is_accepted_and_persisted(
     持久化合同不满足时由断言报告；本测试不触碰调度器排序实现。
     """
 
+    monkeypatch.setattr(
+        WorkflowService,
+        "_develop_execution_mode",
+        staticmethod(lambda: False),
+    )
     client, store = _client(tmp_path / "task-priority.db")
     try:
         workflow_uuid = _create_workflow(client, store)
@@ -320,6 +380,11 @@ def test_station_invocation_is_idempotent_and_allows_same_workflow_twice(
 
     client, store = _client(tmp_path / "station-invocation.db")
     try:
+        monkeypatch.setattr(
+            WorkflowService,
+            "_develop_execution_mode",
+            staticmethod(lambda: False),
+        )
         _create_workflow(client, store)
         monkeypatch.setattr(EdgeControlConfig, "api_key", "station-secret")
         backend_task_uuid = "71000000-0000-4000-8000-000000000001"
@@ -446,7 +511,7 @@ def test_station_invocation_replay_keeps_first_revision_after_definition_changes
                     {
                         "uuid": NODE_UUID,
                         "name": "approval revision 2",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -508,7 +573,7 @@ def test_station_invocation_pins_published_revision_and_deadline(
                     {
                         "uuid": NODE_UUID,
                         "name": "approval after publication",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -750,7 +815,7 @@ def test_workflow_output_success_does_not_finish_unrelated_branch(
                     {
                         "uuid": NODE_UUID,
                         "name": "unrelated approval",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -780,7 +845,7 @@ def test_workflow_output_success_does_not_finish_unrelated_branch(
 
         assert by_kind["workflow_output"]["status"] == "succeeded"
         assert by_kind["workflow_output"]["return_info"] == {"echo": 9}
-        assert by_kind["manual_confirm"]["status"] == "pending"
+        assert by_kind["compute"]["status"] == "pending"
         assert task["status"] == "pending"
         assert task["output"] == {"echo": 9}
     finally:
@@ -832,7 +897,7 @@ def test_node_output_binding_creates_result_after_source_job_succeeds(
                     "uuid": NODE_UUID,
                     "workflow_node_template_uuid": TEMPLATE_UUID,
                     "name": "measure",
-                    "type": "manual_confirm",
+                    "type": "compute",
                     "pose": {},
                     "param": {},
                     "execution_policy": {},
@@ -845,8 +910,8 @@ def test_node_output_binding_creates_result_after_source_job_succeeds(
             "node_templates": [
                 {
                     "uuid": TEMPLATE_UUID,
-                    "node_type": "manual_confirm",
-                    "type": "manual_confirm",
+                    "node_type": "compute",
+                    "type": "compute",
                 }
             ],
             "handle_templates": [
@@ -897,7 +962,7 @@ def test_node_output_binding_creates_result_after_source_job_succeeds(
         source_job = next(
             job
             for job in store.list_jobs(task_uuid)
-            if job["executor_kind"] == "manual_confirm"
+            if job["executor_kind"] == "compute"
         )
         store._conn.execute(
             "UPDATE workflow_task SET status = 'running' WHERE uuid = ?",
@@ -999,7 +1064,7 @@ def test_http_task_input_and_snapshot_remain_frozen_after_workflow_evolves(
                     {
                         "uuid": NODE_UUID,
                         "name": "renamed approval",
-                        "type": "manual_confirm",
+                        "type": "compute",
                         "pose": {},
                         "param": {},
                         "execution_policy": {},
@@ -1020,6 +1085,201 @@ def test_http_task_input_and_snapshot_remain_frozen_after_workflow_evolves(
         assert fetched["input"] == {"count": 7, "label": "automatic"}
         assert fetched["workflow_snapshot"] == frozen_snapshot
         assert fetched["execution_plan"] == frozen_plan
+    finally:
+        store.close()
+
+
+def test_http_task_presentation_batches_compact_plan_and_jobs(
+    tmp_path: Path,
+) -> None:
+    """控制台任务投影应一次返回紧凑冻结拓扑和 Job 状态。
+
+    参数：``tmp_path`` 隔离数据库。返回无。异常：列表重新携带完整工作流快照、
+    丢失矩阵字段或退化成逐 Task Job 请求时由断言暴露。
+    """
+
+    client, store = _client(tmp_path / "task-presentation.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        created = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "run_mode": "normal",
+                "input": {"count": 7},
+                "meta_data": {},
+            },
+        ).json()["data"]
+
+        response = client.get(
+            "/api/v1/workflow-task-presentations",
+            params={
+                "status": "pending",
+                "page": 1,
+                "page_size": 20,
+            },
+        )
+
+        assert response.status_code == 200
+        page = response.json()["data"]
+        assert page["total"] == 1
+        task = page["items"][0]
+        assert task["uuid"] == created["uuid"]
+        assert set(task["workflow_snapshot"]) == {"workflow"}
+        assert task["workflow_snapshot"]["workflow"]["name"] == "task input"
+        assert NODE_UUID in {node["uuid"] for node in task["execution_plan"]["nodes"]}
+        assert task["execution_plan"]["edges"] == []
+        assert NODE_UUID in {job["workflow_node_uuid"] for job in task["jobs"]}
+        assert all("execution_policy" not in job for job in task["jobs"])
+        assert all("param" not in job for job in task["jobs"])
+        assert all("feedback_data" not in job for job in task["jobs"])
+        assert all("return_info" not in job for job in task["jobs"])
+        assert set(task["input"]) == {"sample", "sample_id"}
+        assert "nodes" in created["workflow_snapshot"]
+    finally:
+        store.close()
+
+
+def test_http_task_presentation_keeps_resource_slot_material_identities(
+    tmp_path: Path,
+) -> None:
+    """紧凑展示投影须保留冻结输入合同解析出的物料稳定身份。"""
+
+    client, store = _client(tmp_path / "task-presentation-materials.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        created = client.post(
+            "/api/v1/workflow-tasks",
+            json={
+                "workflow_uuid": workflow_uuid,
+                "run_mode": "normal",
+                "input": {"count": 7},
+                "meta_data": {},
+            },
+        ).json()["data"]
+        frozen_snapshot = deepcopy(created["workflow_snapshot"])
+        frozen_snapshot["workflow"]["meta_data"]["unilab"]["input_contract"][
+            "parameters"
+        ].append(
+            {
+                "name": "vessel",
+                "schema": {"$slot": "ResourceSlot"},
+                "required": True,
+            }
+        )
+        store._conn.execute(
+            "UPDATE workflow_task SET workflow_snapshot = ?, input = ? WHERE uuid = ?",
+            (
+                encode_json(frozen_snapshot, sort_keys=True).decode("utf-8"),
+                encode_json(
+                    {
+                        "count": 7,
+                        "label": "automatic",
+                        "vessel": {"uuid": MATERIAL_UUID},
+                    },
+                    sort_keys=True,
+                ).decode("utf-8"),
+                created["uuid"],
+            ),
+        )
+        store._conn.commit()
+
+        response = client.get(
+            "/api/v1/workflow-task-presentations",
+            params={"view": "matrix", "terminal_limit": 20},
+        )
+
+        assert response.status_code == 200
+        task = response.json()["data"]["items"][0]
+        assert task["material_uuids"] == [MATERIAL_UUID]
+        assert set(task["input"]) == {"sample", "sample_id"}
+        assert "input_contract" not in task["workflow_snapshot"]["workflow"]
+    finally:
+        store.close()
+
+
+def test_http_task_presentation_matrix_returns_active_attention_and_recent_terminal_tasks(
+    tmp_path: Path,
+) -> None:
+    """矩阵视图应以一次请求返回全部活动项、关注项和有限近期终态项。"""
+
+    client, store = _client(tmp_path / "task-presentation-matrix.db")
+    try:
+        workflow_uuid = _create_workflow(client, store)
+        tasks: list[dict[str, Any]] = []
+        for index in range(6):
+            response = client.post(
+                "/api/v1/workflow-tasks",
+                json={
+                    "workflow_uuid": workflow_uuid,
+                    "run_mode": "normal",
+                    "input": {"count": index + 1},
+                    "meta_data": {"sample_id": f"sample-{index}"},
+                },
+            )
+            assert response.status_code == 201, response.text
+            tasks.append(response.json()["data"])
+            # 开发模式只允许一个非终态 Task；这里只为构造矩阵读取夹具临时关闭
+            # 当前 Task，全部创建完成后再安装测试所需的并行状态集合。
+            store._conn.execute(
+                "UPDATE workflow_task SET status = 'succeeded' WHERE uuid = ?",
+                (tasks[-1]["uuid"],),
+            )
+            store._conn.commit()
+
+        fixtures = (
+            (tasks[0]["uuid"], "pending", "none", "2026-01-01T00:00:00Z", None),
+            (tasks[1]["uuid"], "running", "none", "2026-01-01T00:00:01Z", None),
+            # 该任务创建最早、完成最晚，必须按终态发生时间而不是创建时间入选。
+            (tasks[2]["uuid"], "succeeded", "none", "2025-01-01T00:00:00Z", "2026-01-02T00:00:06Z"),
+            (tasks[3]["uuid"], "failed", "none", "2026-01-01T00:00:03Z", "2026-01-01T00:00:03Z"),
+            (tasks[4]["uuid"], "timeout", "none", "2026-01-01T00:00:04Z", "2026-01-01T00:00:04Z"),
+            (
+                tasks[5]["uuid"],
+                "canceled",
+                "requires_attention",
+                "2026-01-01T00:00:05Z",
+                "2026-01-01T00:00:05Z",
+            ),
+        )
+        store._conn.executemany(
+            """
+            UPDATE workflow_task
+            SET status = ?, cleanup_status = ?, create_time = ?, update_time = ?,
+                finished_at = ?
+            WHERE uuid = ?
+            """,
+            [
+                (
+                    status,
+                    cleanup_status,
+                    created_at,
+                    finished_at or created_at,
+                    finished_at,
+                    task_uuid,
+                )
+                for task_uuid, status, cleanup_status, created_at, finished_at in fixtures
+            ],
+        )
+        store._conn.commit()
+
+        response = client.get(
+            "/api/v1/workflow-task-presentations",
+            params={"view": "matrix", "terminal_limit": 2},
+        )
+
+        assert response.status_code == 200
+        page = response.json()["data"]
+        returned = {item["uuid"] for item in page["items"]}
+        assert returned == {
+            tasks[0]["uuid"],
+            tasks[1]["uuid"],
+            tasks[4]["uuid"],
+            tasks[2]["uuid"],
+            tasks[5]["uuid"],
+        }
+        assert page["total"] == 5
+        assert all("jobs" in item for item in page["items"])
     finally:
         store.close()
 

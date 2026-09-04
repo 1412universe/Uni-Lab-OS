@@ -419,8 +419,9 @@ def record_execution_lock_wait(
     requests: Sequence[Mapping[str, Any]] | None,
     blocking_task_uuid: str | None = None,
     blocking_job_uuid: str | None = None,
+    wait_resources: Sequence[Mapping[str, str]] = (),
 ) -> ExecutionLockDecision:
-    """在物理执行尚被内存占用阻止时持久化同一组锁的等待顺序。"""
+    """在物理执行尚被内存占用阻止时持久化同一组锁的等待顺序与名称。"""
 
     normalized = normalize_execution_lock_requests(requests)
     if not normalized:
@@ -440,6 +441,7 @@ def record_execution_lock_wait(
         blocking_task_uuid=blocking_task_uuid,
         blocking_job_uuid=blocking_job_uuid,
         waiting_since=waiting_since,
+        wait_resources=wait_resources,
     )
 
 
@@ -777,12 +779,34 @@ def _record_wait(
     blocking_task_uuid: str | None,
     blocking_job_uuid: str | None,
     waiting_since: str,
+    wait_resources: Sequence[Mapping[str, str]] = (),
 ) -> ExecutionLockDecision:
+    resources = [_wait_resource(request) for request in requests]
+    descriptions = {
+        key: dict(resource)
+        for resource in wait_resources
+        if (key := wait_resource_identity(resource)) is not None
+    }
+    for resource in resources:
+        description = descriptions.get(wait_resource_identity(resource))
+        if description is None:
+            continue
+        for field in (
+            "local_device_id",
+            "device_name",
+            "material_name",
+            "site_name",
+            "wait_code",
+            "wait_message",
+        ):
+            value = str(description.get(field) or "").strip()
+            if value:
+                resource[field] = value
     reason = {
         "code": "operation_lease",
         "message": "执行资源正在被其他作业使用",
         "scopes": sorted({request.scope for request in requests}),
-        "resources": [_wait_resource(request) for request in requests],
+        "resources": resources,
         "waiting_since": waiting_since,
     }
     if blocking_task_uuid is not None:
@@ -811,15 +835,44 @@ def _wait_resource(request: ExecutionLockRequest) -> dict[str, str]:
 
     resource = {"scope": request.scope}
     if request.scope == "device":
-        device_prefix = "/devices/"
-        if request.lock_key.startswith(device_prefix):
-            resource["device_id"] = request.lock_key.removeprefix(device_prefix)
+        if request.material_uuid is not None:
+            resource["device_id"] = request.material_uuid
+        elif request.lock_key.startswith("/devices/"):
+            resource["device_id"] = request.lock_key.removeprefix(
+                "/devices/"
+            ).split("/", 1)[0]
         return resource
     if request.material_uuid is not None:
         resource["material_uuid"] = request.material_uuid
     if request.scope == "material_site" and request.site_uuid is not None:
         resource["site_uuid"] = request.site_uuid
     return resource
+
+
+def wait_resource_identity(
+    resource: Mapping[str, Any],
+) -> tuple[str, str] | None:
+    """返回等待资源用于合并名称的稳定作用域与身份。"""
+
+    scope = str(resource.get("scope") or "").strip()
+    identity_field = {
+        "device": "device_id",
+        "material": "material_uuid",
+        "material_site": "site_uuid",
+    }.get(scope)
+    if identity_field is None:
+        return None
+    identity = str(resource.get(identity_field) or "").strip()
+    return (scope, identity) if identity else None
+
+
+def wait_resource_from_execution_lock(
+    lock: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """把单个内部执行锁合同转换为公开等待资源身份。"""
+
+    requests = normalize_execution_lock_requests([lock])
+    return _wait_resource(requests[0]) if requests else None
 
 
 def _lease_metadata(row: sqlite3.Row) -> dict[str, Any]:
@@ -899,4 +952,6 @@ __all__ = [
     "release_task_execution_locks",
     "try_acquire_execution_locks",
     "mirror_execution_locks_from_permit",
+    "wait_resource_from_execution_lock",
+    "wait_resource_identity",
 ]

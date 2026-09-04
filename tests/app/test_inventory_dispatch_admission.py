@@ -507,6 +507,50 @@ def test_changed_target_fact_rolls_back_whole_claim(
     assert len(store.query_all("SELECT * FROM station_execution_claim")) == 1
 
 
+def test_wait_resource_descriptions_include_material_and_site_names(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """调度等待资源必须由库存权威补齐物料名和库位名。"""
+
+    _store, service, identities = station_inventory
+
+    assert service.station_resources.describe_wait_resources(
+        (
+            {
+                "scope": "device",
+                "device_id": identities["robot"],
+            },
+            {
+                "scope": "material",
+                "material_uuid": identities["vessel"],
+            },
+            {
+                "scope": "material_site",
+                "material_uuid": identities["target_device"],
+                "site_uuid": TARGET_SITE,
+            },
+        )
+    ) == (
+        {
+            "scope": "device",
+            "device_id": identities["robot"],
+            "device_name": "ROBOT",
+        },
+        {
+            "scope": "material",
+            "material_uuid": identities["vessel"],
+            "material_name": "待搬容器",
+        },
+        {
+            "scope": "material_site",
+            "material_uuid": identities["target_device"],
+            "material_name": "TARGET-DEVICE",
+            "site_uuid": TARGET_SITE,
+            "site_name": "IN",
+        },
+    )
+
+
 def test_missing_transfer_source_reports_the_blocked_material(
     station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:
@@ -726,6 +770,99 @@ def test_physical_settlement_is_the_only_claim_authorized_inventory_writer(
         )
         == settled
     )
+
+
+def test_failed_transfer_can_settle_at_claimed_source_without_moving_material(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """未执行的失败转运可按同一 Claim 证明物料仍在来源库位。"""
+
+    store, service, identities = station_inventory
+    request = _request(identities)
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.permit is not None
+    permit = decision.permit
+    for state in ("reserved", "running", "uncertain"):
+        service.station_resources.transition_dispatch_permit(
+            permit.claim_uuid,
+            target_state=state,
+        )
+
+    settled = service.station_resources.settle_material_transfer(
+        MaterialTransferCommand(
+            material_uuid=identities["vessel"],
+            target_owner_material_uuid=identities["source_device"],
+            target_site_uuid=SOURCE_SITE,
+            target_site_name="OUT",
+            actor="physical_settlement",
+            causation_id=request.job_uuid,
+            effect_uuid=permit.effect_uuid,
+            claim_uuid=permit.claim_uuid,
+            job_uuid=request.job_uuid,
+            attempt=request.attempt,
+            parameter_hash=request.parameter_hash,
+            expected_change_set=request.expected_change_set,
+            fences=permit.fences,
+        )
+    )
+
+    assert settled["edge_uuid"] == identities["vessel"]
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (SOURCE_SITE,),
+    ) == {"occupied_material_uuid": identities["vessel"]}
+    assert store.query_one(
+        "SELECT occupied_material_uuid FROM site WHERE uuid=?",
+        (TARGET_SITE,),
+    ) == {"occupied_material_uuid": None}
+
+
+def test_failed_transfer_cannot_settle_at_unclaimed_site(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """失败转运对账不能把物料写入原 Claim 未覆盖的库位。"""
+
+    store, service, identities = station_inventory
+    unclaimed_site = "10000000-0000-4000-8000-000000000105"
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO site(
+                uuid,create_time,update_time,meta_data,material_uuid,name,
+                sort_order,allowed_resource_template_uuids,
+                occupied_material_uuid,position_x,position_y,position_z,
+                depth,length,width
+            ) VALUES (?,?,?,'{}',?,?,2,'[]',NULL,0,0,0,0,0,0)
+            """,
+            (
+                unclaimed_site,
+                "2026-08-31T00:00:00Z",
+                "2026-08-31T00:00:00Z",
+                identities["target_device"],
+                "UNCLAIMED",
+            ),
+        )
+    request = _request(identities)
+    decision = service.station_resources.acquire_dispatch_permit(request)
+    assert decision.permit is not None
+    permit = decision.permit
+
+    with pytest.raises(StationResourceError, match="实际库位"):
+        service.station_resources.settle_material_transfer(
+            MaterialTransferCommand(
+                material_uuid=identities["vessel"],
+                target_owner_material_uuid=identities["target_device"],
+                target_site_uuid=unclaimed_site,
+                target_site_name="UNCLAIMED",
+                effect_uuid=permit.effect_uuid,
+                claim_uuid=permit.claim_uuid,
+                job_uuid=request.job_uuid,
+                attempt=request.attempt,
+                parameter_hash=request.parameter_hash,
+                expected_change_set=request.expected_change_set,
+                fences=permit.fences,
+            )
+        )
 
 
 def test_released_claim_without_settlement_evidence_cannot_first_write(

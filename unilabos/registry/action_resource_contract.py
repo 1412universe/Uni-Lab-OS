@@ -6,6 +6,18 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
+TRANSFER_CONTRACT_FIELDS: tuple[str, ...] = (
+    "material_param",
+    "source_owner_param",
+    "source_site_uuid_param",
+    "source_site_name_param",
+    "target_owner_param",
+    "target_site_uuid_param",
+    "target_site_name_param",
+    "gripper_site_role",
+)
+
+
 class ActionResourceContractError(ValueError):
     """动作资源合同无法由 AST 安全编译。
 
@@ -294,16 +306,7 @@ def _transfer(value: Any) -> dict[str, str]:
 
     if not isinstance(value, Mapping):
         _fail("invalid_transfer_contract", "/transfer", "transfer 必须是对象")
-    allowed = {
-        "material_param",
-        "source_owner_param",
-        "source_site_uuid_param",
-        "source_site_name_param",
-        "target_owner_param",
-        "target_site_uuid_param",
-        "target_site_name_param",
-        "gripper_site_role",
-    }
+    allowed = set(TRANSFER_CONTRACT_FIELDS)
     if set(value) - allowed:
         _fail(
             "unknown_transfer_field",

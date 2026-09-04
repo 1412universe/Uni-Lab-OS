@@ -317,6 +317,7 @@ class WorkflowNodeCreateRequest(_StrictModel):
     type: str = ""
     pose: Dict[str, Any] = Field(default_factory=dict)
     param: Optional[Dict[str, Any]] = None
+    manual_confirmation: Dict[str, Any] = Field(default_factory=dict)
     execution_policy: Dict[str, Any] = Field(default_factory=dict)
     disabled: bool = False
     minimized: bool = False
@@ -324,7 +325,13 @@ class WorkflowNodeCreateRequest(_StrictModel):
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("pose", "execution_policy", "meta_data", mode="before")
+    @field_validator(
+        "pose",
+        "manual_confirmation",
+        "execution_policy",
+        "meta_data",
+        mode="before",
+    )
     @classmethod
     def _json_object(cls, value: Any) -> Dict[str, Any]:
         return normalize_json_object(value)
@@ -338,6 +345,7 @@ class WorkflowNodePatchRequest(_StrictModel):
     name: Optional[str] = None
     pose: Optional[Dict[str, Any]] = None
     param: Optional[Dict[str, Any]] = None
+    manual_confirmation: Optional[Dict[str, Any]] = None
     execution_policy: Optional[Dict[str, Any]] = None
     disabled: Optional[bool] = None
     minimized: Optional[bool] = None
@@ -391,7 +399,7 @@ class LegacyWorkflowImportRequest(_BackendModel):
 
 
 class PublishWorkflowContractRequest(_StrictModel):
-    """把指定修订的实验操作切换为可复用状态的发布命令。"""
+    """把指定修订的工作流切换为已发布状态的命令。"""
 
     revision: int = Field(
         ge=1,
@@ -660,11 +668,7 @@ class DeviceActionRunCreateRequest(_StrictModel):
 class ManualConfirmationDecisionRequest(_StrictModel):
     """人工确认批准或拒绝的公共 DTO。"""
 
-    action: str
-    confirmed_by: str
-    comment: Optional[str] = None
-    idempotency_key: str
-    param: Optional[Dict[str, Any]] = None
+    action: Literal["approve", "reject"]
 
 
 class WorkflowInterventionDecisionRequest(_StrictModel):
@@ -752,6 +756,8 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         "source_function_conflict",
         "invalid_composite_child_type",
         "invalid_composite_child_status",
+        "develop_task_conflict",
+        "preflight_failed",
     }
     if error.code in {"invalid_input", "invalid_composite_child_type"}:
         business_code = 1000
@@ -759,14 +765,19 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         business_code = 3002
     elif error.code in conflict_codes:
         business_code = 3003
-    elif error.code == "read_only_mode":
+    elif error.code in {"read_only_mode", "develop_mode_required"}:
         business_code = 1001
     elif error.code == "template_catalog_unavailable":
         business_code = 5001
     else:
         business_code = 1
     error_content = {"msg": error.message}
-    if error.code == "workflow_identity_mismatch":
+    if error.code in {
+        "workflow_identity_mismatch",
+        "develop_mode_required",
+        "develop_task_conflict",
+        "preflight_failed",
+    }:
         # product Backend 包络保持 HTTP 200；该窄符号码让前端区分身份拒绝与
         # 需要重读远端版本的普通 3003 CAS 冲突。
         error_content["code"] = error.code
@@ -846,6 +857,12 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         if not is_workflow_visible(workflow):
             raise WorkflowError("not_found")
         return workflow
+
+    def _require_develop_execution() -> None:
+        """拒绝生产模式中的单步、调试和模式切换写操作。"""
+
+        if get_startup_mode().value != "develop":
+            raise WorkflowError("develop_mode_required")
 
     def _ensure_station_workflow_visible(
         workflow_uuid: str | None,
@@ -987,8 +1004,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         status: Optional[Literal["source", "published"]] = Query(
             default=None,
             description=(
-                "按当前源码/已发布状态筛选；published 表示可被其他工作流引用；"
-                "不传时返回全部状态"
+                "按当前源码/已发布状态筛选；published 表示当前版本已经发布；"
+                "只有已发布的实验操作可以被其他工作流引用；不传时返回全部状态"
             ),
         ),
         operation_category_uuid: Optional[str] = Query(
@@ -1287,7 +1304,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.post(
         "/workflows/{workflow_uuid}/publications",
-        summary="发布实验操作",
+        summary="发布工作流",
         status_code=201,
         response_model=WorkflowPublishSuccessResponse,
         responses={
@@ -1301,13 +1318,14 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         workflow_uuid: WorkflowUUIDPath,
         body: PublishWorkflowContractRequest,
     ) -> JSONResponse:
-        """把当前实验操作修订发布为可复用状态。
+        """把当前工作流修订切换为已发布状态。
 
         参数：``workflow_uuid`` 是待发布工作流的稳定 UUID，``body.revision`` 是
         调用方确认的当前修订。返回：发布结果；发布成功后，工作流列表和详情会
-        返回 ``status=published``，其他工作流即可选择它作为子工作流。异常：服务层
-        错误按既有 Backend 包络返回。该接口不是“新增发布记录”操作，返回中的历史
-        扩展字段仅为旧客户端兼容保留，前端不应据此实现版本管理。
+        返回 ``status=published``。其中，已发布的普通工作流可在生产模式运行；
+        已发布的实验操作还可被其他工作流引用。异常：服务层错误按既有 Backend
+        包络返回。该接口不是“新增发布记录”操作，返回中的历史扩展字段仅为旧客户端
+        兼容保留，前端不应据此实现版本管理。
         """
 
         return _success(
@@ -1348,6 +1366,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """返回不创建任务、不占用资源的候选运行检查报告。"""
 
         _visible_workflow(workflow_uuid)
+        if run_mode != "normal":
+            _require_develop_execution()
         response = _success(
             service.get_workflow_run_preflight(
                 workflow_uuid,
@@ -1366,6 +1386,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """按候选入口参数与共享数量绑定执行零写入预检。"""
 
         _visible_workflow(workflow_uuid)
+        if body.run_mode != "normal":
+            _require_develop_execution()
         response = _success(
             service.get_workflow_run_preflight(
                 workflow_uuid,
@@ -1439,6 +1461,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """
 
         _visible_workflow(body.workflow_uuid)
+        if body.run_mode != "normal":
+            _require_develop_execution()
         return _success(
             service.create_workflow_task(
                 workflow_uuid=body.workflow_uuid,
@@ -1516,48 +1540,48 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
 
     @router.post("/debug/workflow-tasks")
     def create_debug_workflow_task(
-        body: DebugWorkflowTaskCreateRequest,
+        body: Any = Body(default=None),
     ) -> JSONResponse:
-        """以不可变起始点、断点和任务优先级创建标准工作流任务。
+        """旧 Debug Task 已由标准 WorkflowTask Step 控制取代。"""
 
-        参数：``body`` 携带可见工作流身份、起始节点、断点和任务输入。返回：
-        调试运行任务投影。异常：生产模式下工作流不可见时按 ``not_found`` 拒绝，
-        其他输入或调度错误由统一工作流错误适配器处理。状态不变量：任务创建
-        只能基于当前启动模式允许读取的工作流。
-        """
-
-        _visible_workflow(body.workflow_uuid)
-        return _success(
-            service.create_debug_workflow_task(
-                workflow_uuid=body.workflow_uuid,
-                start_node_uuids=body.start_node_uuids,
-                breakpoint_node_uuids=body.breakpoint_node_uuids,
-                priority=body.priority.value,
-                input_value=body.input,
-                description=body.description,
-                meta_data=body.meta_data,
-            ),
-            status=201,
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": 4100,
+                "error": {
+                    "code": "debug_api_retired",
+                    "msg": "请使用 /api/v1/workflow-tasks 的 step 模式",
+                },
+            },
         )
 
     @router.get("/debug/workflow-tasks/{task_uuid}")
     def get_debug_workflow_task(task_uuid: str) -> JSONResponse:
-        return _success(service.get_debug_workflow_task(task_uuid))
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": 4100,
+                "error": {
+                    "code": "debug_api_retired",
+                    "msg": "请使用标准 WorkflowTask 详情接口",
+                },
+            },
+        )
 
     @router.post("/debug/workflow-tasks/{task_uuid}/commands")
     def command_debug_workflow_task(
         task_uuid: str,
-        body: DebugWorkflowTaskCommandRequest,
+        body: Any = Body(default=None),
     ) -> JSONResponse:
-        return _success(
-            service.command_debug_workflow_task(
-                task_uuid,
-                command_type=body.type,
-                scope_type=body.scope.type,
-                hold_uuid=body.scope.hold_uuid,
-                idempotency_key=body.idempotency_key,
-            ),
-            status=201,
+        return JSONResponse(
+            status_code=410,
+            content={
+                "code": 4100,
+                "error": {
+                    "code": "debug_api_retired",
+                    "msg": "请使用标准 WorkflowTask commands 接口",
+                },
+            },
         )
 
     @router.post("/device-action-runs")
@@ -1599,9 +1623,48 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             )
         )
 
+    @router.get("/workflow-task-presentations")
+    def list_workflow_task_presentations(
+        page: int = Query(default=1),
+        page_size: int = Query(default=20),
+        workflow_uuid: Optional[str] = Query(default=None),
+        execution_kind: str = Query(default=""),
+        status: str = Query(default=""),
+        cleanup_status: str = Query(default=""),
+        view: str = Query(default=""),
+        terminal_limit: int = Query(default=20),
+    ) -> JSONResponse:
+        """返回 Edge 控制台任务矩阵所需的紧凑只读投影。
+
+        这是明确的 Edge-only 展示接口，不改变共享 ``/workflow-tasks`` 合同；
+        每个 Task 已批量嵌入紧凑 Job 状态，调用方不应再逐任务查询 Job。
+        ``view=matrix`` 一次返回全部活动/需关注 Task 与最多 ``terminal_limit``
+        个近期终态 Task，消除按状态拆分的轮询请求风暴。
+        """
+
+        return _success(
+            service.list_workflow_task_presentations(
+                page=page,
+                page_size=page_size,
+                workflow_uuid=workflow_uuid,
+                execution_kind=execution_kind,
+                status=status,
+                cleanup_status=cleanup_status,
+                view=view,
+                terminal_limit=terminal_limit,
+            )
+        )
+
     @router.get("/workflow-tasks/{task_uuid}")
     def get_workflow_task(task_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_task(task_uuid))
+
+    @router.get("/workflow-tasks/{task_uuid}/step-state")
+    def get_workflow_task_step_state(task_uuid: str) -> JSONResponse:
+        """返回 Task 详情页使用的权威 Step 候选。"""
+
+        _require_develop_execution()
+        return _success(service.get_workflow_task_step_state(task_uuid))
 
     @router.post("/workflow-tasks/{task_uuid}/commands")
     def command_workflow_task(
@@ -1610,6 +1673,8 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """幂等提交一次工作流任务控制命令。"""
 
+        if body.type in {"step", "pause", "resume"}:
+            _require_develop_execution()
         return _success(
             service.command_workflow_task(
                 task_uuid,
@@ -1625,10 +1690,6 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     @router.get("/workflow-tasks/{task_uuid}/jobs")
     def list_workflow_node_jobs(task_uuid: str) -> JSONResponse:
         return _success(service.list_workflow_node_jobs(task_uuid))
-
-    @router.get("/workflow-tasks/{task_uuid}/manual-confirmations")
-    def list_task_manual_confirmations(task_uuid: str) -> JSONResponse:
-        return _success(service.list_task_manual_confirmations(task_uuid))
 
     @router.get("/workflow-tasks/{task_uuid}/events")
     def list_workflow_task_runtime_events(
@@ -1714,25 +1775,28 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             )
         )
 
-    @router.get("/workflow-manual-confirmations/{confirmation_uuid}")
-    def get_manual_confirmation(confirmation_uuid: str) -> JSONResponse:
-        return _success(service.get_manual_confirmation(confirmation_uuid))
-
-    @router.post("/workflow-manual-confirmations/{confirmation_uuid}/decision")
+    @router.post("/workflow-node-jobs/{job_uuid}/manual-confirmation")
     def decide_manual_confirmation(
-        confirmation_uuid: str,
+        job_uuid: str,
         body: ManualConfirmationDecisionRequest,
     ) -> JSONResponse:
-        return _success(
-            service.decide_manual_confirmation(
-                confirmation_uuid,
-                action=body.action,
-                confirmed_by=body.confirmed_by,
-                comment=body.comment,
-                idempotency_key=body.idempotency_key,
-                param=body.param,
+        try:
+            return _success(
+                service.decide_manual_confirmation(
+                    job_uuid,
+                    action=body.action,
+                )
             )
-        )
+        except WorkflowError as error:
+            status = (
+                400
+                if error.code == "invalid_input"
+                else (404 if error.code == "not_found" else 409)
+            )
+            return _BackendJSONResponse(
+                status_code=status,
+                content={"code": status, "error": {"msg": error.message}},
+            )
 
     @router.get("/workflow-interventions")
     def list_workflow_interventions(
@@ -1922,6 +1986,11 @@ def install_workflow_api(
             "/api/v1/events",
             "/api/v1/authoring",
         )
+        if request.url.path.endswith("/manual-confirmation"):
+            return _BackendJSONResponse(
+                status_code=400,
+                content={"code": 400, "error": {"msg": "请求参数错误"}},
+            )
         if any(
             request.url.path == prefix or request.url.path.startswith(f"{prefix}/")
             for prefix in workflow_prefixes

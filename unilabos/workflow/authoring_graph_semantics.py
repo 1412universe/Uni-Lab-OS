@@ -32,7 +32,7 @@ def candidate_changeset(
 ) -> dict[str, Any]:
     """计算候选图相对已应用图的精确变更集。
 
-    参数说明：两个图均为后端五集合形状；返回经过 ``CandidateChangeset`` 校验
+    参数说明：两个图均为后端完整集合形状；返回经过 ``CandidateChangeset`` 校验
     的规范字典，数组按 UUID 排序，目录投影变化不独立计入生命周期集合。
     """
 
@@ -42,6 +42,14 @@ def candidate_changeset(
     applied_nodes = _semantic_entities(applied["nodes"])
     candidate_edges = _semantic_entities(candidate["edges"])
     applied_edges = _semantic_entities(applied["edges"])
+    candidate_requirements = _semantic_entities(
+        candidate["inventory_requirements"],
+        collection_name="inventory_requirements",
+    )
+    applied_requirements = _semantic_entities(
+        applied["inventory_requirements"],
+        collection_name="inventory_requirements",
+    )
     expected = {
         "created_node_uuids": sorted(set(candidate_nodes) - set(applied_nodes)),
         "updated_node_uuids": sorted(
@@ -65,7 +73,8 @@ def candidate_changeset(
     reserved_changed = canonical_json(candidate_workflow) != canonical_json(
         applied_workflow
     )
-    graph_changed = reserved_changed or any(expected.values())
+    requirements_changed = candidate_requirements != applied_requirements
+    graph_changed = reserved_changed or requirements_changed or any(expected.values())
     return CandidateChangeset.model_validate(
         {
             "kind": "graph" if graph_changed else "source_only",
@@ -101,19 +110,24 @@ def semantic_graph_equal(left: Any, right: Any) -> bool:
 
 
 def graph_containers(graph: Mapping[str, Any]) -> dict[str, Any]:
-    """复制并验证工作流图五个顶层集合。
+    """复制并验证工作流图顶层集合。
 
     参数说明：``graph`` 必须是映射并含 workflow/nodes/edges/node_templates/
     handle_templates；返回深拷贝，结构非法抛出 ``AuthoringGraphError``。
     """
 
     required = {"workflow", "nodes", "edges", "node_templates", "handle_templates"}
-    # ``inventory_requirements`` 是可选的第六集合（试剂数量需求），不参与五集合合同。
-    if not isinstance(graph, Mapping) or set(graph) - {"inventory_requirements"} != required:
-        raise AuthoringGraphError("candidate_invalid", "工作流图必须包含完整五集合")
+    allowed = required | {"inventory_requirements"}
+    if (
+        not isinstance(graph, Mapping)
+        or not required <= set(graph)
+        or set(graph) - allowed
+    ):
+        raise AuthoringGraphError("candidate_invalid", "工作流图必须包含完整集合")
     copied = deepcopy(dict(graph))
+    copied.setdefault("inventory_requirements", [])
     if not isinstance(copied["workflow"], dict) or any(
-        not isinstance(copied[field], list) for field in required - {"workflow"}
+        not isinstance(copied[field], list) for field in allowed - {"workflow"}
     ):
         raise AuthoringGraphError("candidate_invalid", "工作流图集合类型无效")
     return copied
@@ -149,13 +163,16 @@ def _semantic_entities(
     result: dict[str, str] = {}
     for value in values:
         identity = str(value["uuid"])
+        excluded = {"create_time", "update_time", "workflow_uuid", "status"}
+        if collection_name == "inventory_requirements":
+            excluded.add("sort_order")
         semantic = deepcopy(
             {
                 key: child
                 for key, child in value.items()
                 # ``status`` 仅是旧本地 Store 的内部兼容列；Backend 公共节点 DTO
                 # 已不再读写它，作者源码也不能表达它，因此不能形成图变更。
-                if key not in {"create_time", "update_time", "workflow_uuid", "status"}
+                if key not in excluded
             }
         )
         if collection_name == "handle_templates":
@@ -185,6 +202,9 @@ def _semantic_entities(
             )
             if isinstance(source, dict):
                 source.pop("package_catalog_digest", None)
+        elif collection_name == "inventory_requirements":
+            semantic.setdefault("description", None)
+            semantic.setdefault("reagent_info_uuid", None)
         result[identity] = canonical_json(semantic)
     return result
 
@@ -209,6 +229,12 @@ def _semantic_graph(graph: Mapping[str, Any]) -> str:
         "workflow": workflow,
         "nodes": sorted(_semantic_entities(value["nodes"]).values()),
         "edges": sorted(_semantic_entities(value["edges"]).values()),
+        "inventory_requirements": sorted(
+            _semantic_entities(
+                value["inventory_requirements"],
+                collection_name="inventory_requirements",
+            ).values()
+        ),
         "node_templates": sorted(
             _semantic_entities(
                 value["node_templates"],

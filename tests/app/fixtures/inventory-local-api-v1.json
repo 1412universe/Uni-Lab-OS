@@ -629,7 +629,7 @@
             "payload_json": "{\"template_id\": \"tpl-contract\", \"quantity\": 20, \"unit\": \"mL\", \"batch_no\": \"\", \"expiry\": \"\", \"quantity_total\": 20.0, \"quantity_available\": 20.0}",
             "sequence": 2,
             "span_id": "",
-            "trace_id": "8e3d29b69212db12787edfbf8bc41729",
+            "trace_id": "55114548600db6d8ee4a4d937eb056e9",
             "traceparent": "",
             "tracestate": ""
           },
@@ -646,7 +646,7 @@
             "payload_json": "{\"template_id\": \"tpl-contract\", \"lot_id\": \"lot-contract\", \"barcode\": \"BC-CONTRACT\", \"legacy_cloud_id\": \"\", \"parent_uuid\": \"rack-contract\", \"slot_id\": \"A1\"}",
             "sequence": 3,
             "span_id": "",
-            "trace_id": "9df5681ddeb9630c4937b5b62a0a6b3c",
+            "trace_id": "036d88c60ce3afcd6c51eae877b680f5",
             "traceparent": "",
             "tracestate": ""
           },
@@ -663,7 +663,7 @@
             "payload_json": "{\"state\": {\"substance\": \"water\", \"volume_ml\": 5}}",
             "sequence": 4,
             "span_id": "",
-            "trace_id": "8f9cbf5a19ddac674495a98c8178b81f",
+            "trace_id": "bc3b3e4df551f0549558be3ad46855a7",
             "traceparent": "",
             "tracestate": ""
           },
@@ -680,7 +680,7 @@
             "payload_json": "{\"workflow_id\": \"wf-contract\", \"node_id\": \"node-contract\", \"quantity\": 3, \"quantity_available\": 17.0, \"quantity_reserved\": 3.0}",
             "sequence": 5,
             "span_id": "",
-            "trace_id": "bc3ee30fb8eb4e617e373543c3eec562",
+            "trace_id": "1fcdfe5dcd921b7bd56412a3bce5aafe",
             "traceparent": "",
             "tracestate": ""
           },
@@ -697,7 +697,7 @@
             "payload_json": "{\"workflow_id\": \"wf-contract\", \"node_id\": \"node-contract\", \"attempt\": 1, \"amounts\": {\"lots\": {\"lot-contract\": 3.0}, \"instances\": []}}",
             "sequence": 6,
             "span_id": "",
-            "trace_id": "bc3ee30fb8eb4e617e373543c3eec562",
+            "trace_id": "1fcdfe5dcd921b7bd56412a3bce5aafe",
             "traceparent": "",
             "tracestate": ""
           }

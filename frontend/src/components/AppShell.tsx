@@ -4,11 +4,14 @@ import {
   BookOpen,
   Boxes,
   ChevronDown,
+  Code2,
+  FileJson,
   FlaskConical,
   LayoutDashboard,
   ListChecks,
   Radio,
   Search,
+  ShieldCheck,
   Workflow,
   FlaskRound,
   TestTubes,
@@ -36,13 +39,42 @@ const pageLabels: Record<PageId, string> = {
 const connectionLabels: Record<ConnectionMode, string> = {
   loading: '正在连接 Edge',
   connected: 'Edge 已连接',
+  reconnecting: 'Edge 正在重连',
   demo: '演示数据',
   error: 'Edge 连接异常',
 }
 
+const startupModePresentation = {
+  develop: {
+    label: '开发模式',
+    title: '允许工作流编辑和单步调试',
+    icon: Code2,
+  },
+  product: {
+    label: '生产模式',
+    title: '仅运行已发布工作流',
+    icon: ShieldCheck,
+  },
+} satisfies Record<'develop' | 'product', {
+  label: string
+  title: string
+  icon: typeof Code2
+}>
+
+const unknownStartupModePresentation = {
+  label: '模式未知',
+  title: '尚未从 Edge 获取启动模式',
+  icon: ShieldCheck,
+}
+
+/**
+ * 渲染 UniLabOS 控制台外壳、主导航和现有接口文档入口。
+ * 参数由当前页面、连接状态、活动任务数和页面回调组成；返回完整页面框架。
+ */
 export function AppShell({
   page,
   connection,
+  startupMode,
   activeTaskCount,
   onNavigate,
   onNotify,
@@ -50,10 +82,16 @@ export function AppShell({
 }: PropsWithChildren<{
   page: PageId
   connection: ConnectionMode
+  startupMode?: 'develop' | 'product'
   activeTaskCount: number
   onNavigate: (page: PageId) => void
   onNotify: (message: string) => void
 }>) {
+  const modePresentation = startupMode
+    ? startupModePresentation[startupMode]
+    : unknownStartupModePresentation
+  const StartupModeIcon = modePresentation.icon
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -99,6 +137,16 @@ export function AppShell({
             <BookOpen size={19} />
             <span>Swagger</span>
           </a>
+          <a
+            className="nav-item"
+            href="/api/openapi.json"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="打开接口 JSON 文档"
+          >
+            <FileJson size={19} />
+            <span>接口 JSON</span>
+          </a>
         </nav>
 
         <div className={`edge-card edge-${connection}`}>
@@ -125,12 +173,21 @@ export function AppShell({
               <input readOnly aria-label="全局搜索（待接入）" placeholder="全局搜索待接入" onFocus={() => onNotify('请使用物料和工作流页面内的搜索框')} />
               <kbd>⌘ K</kbd>
             </label>
+            <span
+              className={`startup-mode-chip startup-mode-${startupMode || 'unknown'}`}
+              title={modePresentation.title}
+            >
+              <StartupModeIcon size={14} />
+              {modePresentation.label}
+            </span>
             <span className={`live-chip live-chip-${connection}`}>
               <i />
               {connection === 'connected'
                 ? '实验室在线'
                 : connection === 'loading'
                   ? '正在连接'
+                  : connection === 'reconnecting'
+                    ? '只读快照'
                   : connection === 'demo'
                     ? '演示模式'
                     : '状态未知'}

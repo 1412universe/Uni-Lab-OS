@@ -39,7 +39,7 @@ from unilabos.workflow.authoring import device, workflow
 
 class SamplePreparationResult(TypedDict):
     sample: ResourceSlot
-    report: str
+    report: Annotated[str, Field(unit="text")]
 
 
 reactor: Reactor = device()
@@ -53,7 +53,7 @@ reactor: Reactor = device()
 def prepare_sample(
     *,
     sample: ResourceSlot,
-    cycles: Annotated[int, Field(ge=1, le=10)] = 3,
+    cycles: Annotated[int, Field(unit="cycle", ge=1, le=10)] = 3,
     mode: Literal["fast", "safe"] = "safe",
 ) -> SamplePreparationResult:
     # unilab:node_uuid={PREPARE_NODE_UUID}
@@ -106,6 +106,14 @@ def test_typed_result_record_is_the_canonical_round_trip_form(
         if isinstance(statement, ast.ClassDef)
     ]
     assert [record.name for record in result_records] == ["SamplePreparationResult"]
+    output_contract = compiled.graph["workflow"]["meta_data"]["unilab"][
+        "output_contract"
+    ]
+    assert output_contract["outputs"][1]["unit"] == "text"
+    input_contract = compiled.graph["workflow"]["meta_data"]["unilab"][
+        "input_contract"
+    ]
+    assert input_contract["parameters"][1]["unit"] == "cycle"
     workflow_function = next(
         statement
         for statement in module.body

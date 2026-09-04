@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-import uuid
-
+import math
 from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
+from uuid import UUID, uuid5
 
 from unilabos.workflow.applied_authoring_projection import (
     AppliedAuthoringProjectionError,
@@ -39,7 +38,6 @@ from unilabos.workflow.authoring_kernel import (
 from unilabos.workflow.authoring_material import (
     MaterialAuthoringError,
     MaterialSourceDeclaration,
-    ReagentReferenceResolver,
     build_material_source_node,
 )
 from unilabos.workflow.composite import CompositeAuthoring, CompositeExpansion
@@ -71,7 +69,6 @@ def build_candidate_graph(
     applied_graph: Mapping[str, Any],
     resource_reference_resolver: ResourceReferenceResolver | None = None,
     composite_authoring: CompositeAuthoring | None = None,
-    reagent_reference_resolver: ReagentReferenceResolver | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """把静态作者程序构造为完整候选图和变更集（Changeset）。
 
@@ -98,8 +95,6 @@ def build_candidate_graph(
     result_output_schemas: dict[tuple[str, str], dict[str, Any]] = {}
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
-    # ``material_declarations`` 保留声明了数量的物料来源，编译为库存需求。
-    material_declarations: list[MaterialSourceDeclaration] = []
     parent_by_node = dict(program.parent_by_node)
     source_order = {
         node_uuid: index for index, node_uuid in enumerate(program.source_order)
@@ -279,13 +274,11 @@ def build_candidate_graph(
                     declaration,
                     catalog=catalog,
                     resource_reference_resolver=resource_reference_resolver,
-                    reagent_reference_resolver=reagent_reference_resolver,
                 )
             except MaterialAuthoringError as error:
                 raise AuthoringGraphError(error.code, error.message) from error
             action_catalog[declaration.node_uuid] = catalog_action
             result_nodes[declaration.result_name] = (declaration, catalog_action)
-            material_declarations.append(declaration)
             nodes.append(
                 _apply_authoring_structure(
                     node,
@@ -355,14 +348,6 @@ def build_candidate_graph(
                 )
             )
 
-    # ``inventory_requirements`` 由声明数量的试剂来源与其首个消费动作推导。
-    inventory_requirements = _material_quantity_requirements(
-        workflow_uuid=program.workflow_uuid,
-        declarations=material_declarations,
-        nodes=nodes,
-        edges=edges,
-        source_order=source_order,
-    )
     # ``order_dependencies`` 只在相邻执行片段没有真实数据边时补 ready 控制边。
     data_pairs = {
         (edge["source_node_uuid"], edge["target_node_uuid"]) for edge in edges
@@ -456,6 +441,7 @@ def build_candidate_graph(
                 result_nodes,
                 input_contract=effective_input_contract,
                 declared_output_schemas=resolved_output_schemas,
+                declared_output_units=dict(program.declared_output_units),
                 result_output_schemas=result_output_schemas,
             ),
             "output_bindings": _output_bindings(program, result_nodes),
@@ -535,9 +521,12 @@ def build_candidate_graph(
         "workflow": workflow,
         "nodes": projection.nodes,
         "edges": projection.edges,
+        "inventory_requirements": _quantity_inventory_requirements(
+            program,
+            declarations_by_result=declarations_by_result,
+        ),
         "node_templates": projection.node_templates,
         "handle_templates": projection.handle_templates,
-        "inventory_requirements": inventory_requirements,
     }
     try:
         validate_material_graph_projection(graph)
@@ -547,63 +536,86 @@ def build_candidate_graph(
     return graph, changeset
 
 
-def _material_quantity_requirements(
+def _quantity_inventory_requirements(
+    program: WorkflowProgram,
     *,
-    workflow_uuid: str,
-    declarations: list[MaterialSourceDeclaration],
-    nodes: list[dict[str, Any]],
-    edges: list[dict[str, Any]],
-    source_order: Mapping[str, int],
+    declarations_by_result: Mapping[
+        str,
+        ActionDeclaration | CompositeDeclaration | MaterialSourceDeclaration,
+    ],
 ) -> list[dict[str, Any]]:
-    """把声明了数量的试剂来源编译为工作流库存需求。
+    """把来源容器的静态数量声明投影为可持久化库存需求合同。"""
 
-    参数：``declarations`` 是本次编译的全部物料来源；``edges`` 是候选数据边，
-    用于确定首个消费动作；``source_order`` 是节点源码顺序。返回：与
-    ``WorkflowInventoryRequirementWrite`` 同形状的需求列表，身份由工作流与
-    来源节点确定性派生，重复编译不产生新 UUID。异常：声明数量却没有任何动作
-    消费时抛出 ``AuthoringGraphError``。
-    """
+    input_parameters = {
+        str(parameter.get("name")): parameter
+        for parameter in program.input_contract.get("parameters", [])
+        if isinstance(parameter, Mapping)
+    }
     requirements: list[dict[str, Any]] = []
-    node_by_uuid = {str(node["uuid"]): node for node in nodes}
-    for declaration in declarations:
-        if declaration.quantity is None or declaration.quantity_unit is None:
-            continue
-        # ``resolved`` 是节点构造期已把 CAS 解析成的试剂身份；缺失即编译器缺陷。
-        resolved = node_by_uuid[declaration.node_uuid]["meta_data"]["unilab"][
-            "quantity_requirement"
-        ]
-        consumers = sorted(
-            (
-                str(edge["target_node_uuid"])
-                for edge in edges
-                if str(edge.get("source_node_uuid")) == declaration.node_uuid
-            ),
-            key=lambda node_uuid: (source_order.get(node_uuid, sys.maxsize), node_uuid),
-        )
-        if not consumers:
+    for declaration in program.quantity_requirements:
+        source = declarations_by_result.get(declaration.source_result_name)
+        consume = declarations_by_result.get(declaration.consume_result_name)
+        if not isinstance(source, MaterialSourceDeclaration) or consume is None:
             raise AuthoringGraphError(
-                "invalid_material_source",
-                f"声明数量的物料来源 {declaration.result_name} 必须被至少一个动作消费",
+                "invalid_quantity_requirement",
+                "数量需求引用的物料来源或消费动作不存在",
+            )
+        binding: dict[str, Any]
+        if declaration.quantity.kind == "literal":
+            raw_quantity = declaration.quantity.value
+            binding = {"kind": "literal", "value": raw_quantity}
+        elif declaration.quantity.kind == "workflow_input":
+            parameter_name = str(declaration.quantity.value)
+            parameter = input_parameters.get(parameter_name)
+            if parameter is None or "default" not in parameter:
+                raise AuthoringGraphError(
+                    "invalid_quantity_requirement",
+                    "动态数量需求引用的工作流输入必须声明正数默认值",
+                )
+            raw_quantity = parameter["default"]
+            binding = {"kind": "workflow_input", "parameter": parameter_name}
+        else:
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求只接受字面量或工作流输入",
+            )
+        if isinstance(raw_quantity, bool) or not isinstance(
+            raw_quantity,
+            (int, float),
+        ):
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求默认值必须是有限正数",
+            )
+        required_quantity = float(raw_quantity) * declaration.scale
+        if not math.isfinite(required_quantity) or required_quantity <= 0:
+            raise AuthoringGraphError(
+                "invalid_quantity_requirement",
+                "数量需求默认值必须是有限正数",
             )
         requirements.append(
             {
                 "uuid": str(
-                    uuid.uuid5(
-                        uuid.NAMESPACE_URL,
-                        f"unilab:inventory-requirement:{workflow_uuid}:{declaration.node_uuid}",
+                    uuid5(
+                        UUID(program.workflow_uuid),
+                        f"inventory_requirement:{declaration.requirement_key}",
                     )
                 ),
-                "consume_node_uuid": consumers[0],
-                "requirement_key": declaration.result_name,
-                "target_type": "reagent_info",
-                "reagent_info_uuid": str(resolved["reagent_info_uuid"]),
-                "required_quantity": declaration.quantity,
+                "consume_node_uuid": consume.node_uuid,
+                "requirement_key": declaration.requirement_key,
+                "target_type": "current_substance",
+                "reagent_info_uuid": None,
+                "required_quantity": required_quantity,
                 "quantity_unit": declaration.quantity_unit,
                 "allow_split": False,
-                "description": declaration.title,
+                "description": declaration.description,
                 "meta_data": {
-                    "material_source_node_uuid": declaration.node_uuid,
-                    "reagent_cas": declaration.reagent_cas,
+                    "unilab": {
+                        "material_source_node_uuid": source.node_uuid,
+                        "quantity_target": "container_content",
+                        "quantity_binding": binding,
+                        "quantity_scale": declaration.scale,
+                    }
                 },
             }
         )
@@ -1604,13 +1616,16 @@ def _output_contract(
     *,
     input_contract: Mapping[str, Any],
     declared_output_schemas: Mapping[str, Mapping[str, Any]],
+    declared_output_units: Mapping[str, str],
     result_output_schemas: Mapping[tuple[str, str], Mapping[str, Any]],
 ) -> dict[str, Any]:
     """从输出绑定构造版本 1 工作流输出合同。
 
     参数说明：``program`` 含输出声明，``result_nodes`` 提供节点输出连接点
-    （Handle）类型，另两个参数是已按目录代际解析资源模板身份的输入合同和结果
-    Schema。返回：包含版本和规范输出描述列表的工作流输出合同；输出引用缺失或
+    （Handle）类型；``input_contract``、``declared_output_schemas`` 和
+    ``declared_output_units`` 分别提供输入合同、结果字段 Schema 和可选单位；
+    ``result_output_schemas`` 提供按结果字段解析的 Schema。返回：包含版本和规范
+    输出描述列表的工作流输出合同；输出引用缺失或
     歧义、显式结果记录 Schema 与绑定类型不一致、结果记录字段集与返回字典不
     一致时抛出 ``AuthoringGraphError``，不生成部分合同。
     异常：上述输出引用或 Schema 合同不成立时抛出 ``AuthoringGraphError``。
@@ -1638,7 +1653,10 @@ def _output_contract(
                 "invalid_workflow_output",
                 f"结果记录字段 {name} 与绑定类型不一致",
             )
-        outputs.append({"name": name, "schema": schema, "implicit": False})
+        output = {"name": name, "schema": schema, "implicit": False}
+        if name in declared_output_units:
+            output["unit"] = declared_output_units[name]
+        outputs.append(output)
     if declared and set(declared) != {item["name"] for item in outputs}:
         raise AuthoringGraphError(
             "invalid_workflow_output",
@@ -1668,7 +1686,7 @@ def _output_contract(
             "schema": deepcopy(parameter_schema),
             "implicit": True,
         }
-        for presentation_field in ("title", "description"):
+        for presentation_field in ("title", "description", "unit"):
             if presentation_field in parameter:
                 implicit_output[presentation_field] = deepcopy(
                     parameter[presentation_field]

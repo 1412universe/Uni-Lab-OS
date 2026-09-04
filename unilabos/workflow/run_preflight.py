@@ -215,10 +215,7 @@ def build_run_preflight_report(
                     node_name=node_name,
                 )
             )
-        if kind in {"device_action", "material_transfer"} or (
-            kind == "manual_confirm"
-            and planned.get("continues_device_action") is True
-        ):
+        if kind in {"device_action", "material_transfer", "manual_confirm"}:
             if device_preflight is not None:
                 try:
                     current_device = device_preflight(planned)

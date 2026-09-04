@@ -149,8 +149,27 @@ class WorkflowQuantityInventory:
     def task_allocations(self, task_uuid: str) -> list[dict[str, Any]]:
         """返回工作流事务已冻结、尚待库存统一准入的任务数量分配。"""
 
+        task = self._workflow_store.get_task(task_uuid)
+        snapshot = task.get("workflow_snapshot")
+        requirements = (
+            snapshot.get("inventory_requirements", [])
+            if isinstance(snapshot, Mapping)
+            else []
+        )
+        source_by_key = {
+            str(requirement.get("requirement_key") or ""): str(
+                unilab.get("material_source_node_uuid") or ""
+            )
+            for requirement in requirements
+            if isinstance(requirement, Mapping)
+            and isinstance(requirement.get("meta_data"), Mapping)
+            and isinstance(
+                unilab := requirement["meta_data"].get("unilab"),
+                Mapping,
+            )
+        }
         with self._workflow_store.transaction() as connection:
-            return [
+            allocations = [
                 dict(row)
                 for row in connection.execute(
                     "SELECT * FROM workflow_inventory_allocation "
@@ -158,6 +177,11 @@ class WorkflowQuantityInventory:
                     (task_uuid,),
                 ).fetchall()
             ]
+        for allocation in allocations:
+            source_uuid = source_by_key.get(str(allocation["requirement_key"]), "")
+            if source_uuid:
+                allocation["material_source_node_uuid"] = source_uuid
+        return allocations
 
     def preflight_task_allocations(
         self,
@@ -202,10 +226,19 @@ class WorkflowQuantityInventory:
         }
         requirements = [
             dict(requirement)
-            for requirement in graph.get("inventory_requirements", [])
+            for requirement in prepared.workflow_snapshot.get(
+                "inventory_requirements",
+                [],
+            )
             if isinstance(requirement, Mapping)
-            and str(requirement.get("consume_node_uuid")) in job_by_node
+            and str(requirement.get("consume_node_uuid"))
+            in prepared.planned_node_uuids
         ]
+        if any(
+            str(requirement.get("consume_node_uuid")) not in job_by_node
+            for requirement in requirements
+        ):
+            raise StoreConflict("动态执行节点的数量型库存需求尚未支持逐轮分配")
         requirement_by_key = {
             str(requirement.get("requirement_key") or "").strip(): requirement
             for requirement in requirements
@@ -213,10 +246,60 @@ class WorkflowQuantityInventory:
         if "" in requirement_by_key or len(requirement_by_key) != len(requirements):
             raise StoreConflict("工作流库存需求键缺失或重复")
 
+        plan_nodes = {
+            str(node.get("uuid")): node
+            for node in prepared.execution_plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        }
+        explicit_keys = {
+            str(binding.get("requirement_key") or "").strip()
+            for binding in bindings
+            if isinstance(binding, Mapping)
+        }
+        effective_bindings: list[Any] = [
+            dict(binding) if isinstance(binding, Mapping) else binding
+            for binding in bindings
+        ]
+        for requirement in requirements:
+            metadata = requirement.get("meta_data")
+            unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+            source_uuid = str(
+                unilab.get("material_source_node_uuid")
+                if isinstance(unilab, Mapping)
+                else ""
+            ).strip()
+            if not source_uuid:
+                continue
+            requirement_key = str(requirement["requirement_key"])
+            if requirement_key in explicit_keys:
+                raise StoreConflict(
+                    f"库存需求 {requirement_key} 由物料来源自动绑定，不能手工覆盖"
+                )
+            source_node = plan_nodes.get(source_uuid)
+            if source_node is None or source_node.get("kind") != "material_source":
+                raise StoreConflict(
+                    f"库存需求 {requirement_key} 引用的物料来源不在本次执行计划中"
+                )
+            try:
+                content = self._authority.content_for_material_source(
+                    source_node
+                )
+            except WorkflowQuantityReservationError as error:
+                raise StoreConflict(str(error)) from error
+            effective_bindings.append(
+                {
+                    "requirement_key": requirement_key,
+                    "inventory_type": content["inventory_type"],
+                    "inventory_uuid": content["uuid"],
+                    "reserved_quantity": requirement["required_quantity"],
+                    "quantity_unit": requirement["quantity_unit"],
+                }
+            )
+
         normalized_bindings: dict[str, list[dict[str, Any]]] = {}
         seen: set[tuple[str, str, str]] = set()
         seen_node_inventory: set[tuple[str, str, str]] = set()
-        for index, raw in enumerate(bindings):
+        for index, raw in enumerate(effective_bindings):
             if not isinstance(raw, Mapping):
                 raise StoreConflict(f"inventory_bindings[{index}] 必须是对象")
             requirement_key = str(raw.get("requirement_key") or "").strip()
@@ -226,12 +309,26 @@ class WorkflowQuantityInventory:
                     f"inventory_bindings[{index}] 未对应本次执行的逻辑需求"
                 )
             inventory_type = str(raw.get("inventory_type") or "").strip().lower()
-            expected_type = (
-                "reagent"
-                if requirement.get("target_type") == "reagent_info"
-                else "current_substance"
+            requirement_metadata = requirement.get("meta_data")
+            requirement_unilab = (
+                requirement_metadata.get("unilab")
+                if isinstance(requirement_metadata, Mapping)
+                else None
             )
-            if inventory_type != expected_type:
+            source_bound = bool(
+                isinstance(requirement_unilab, Mapping)
+                and requirement_unilab.get("material_source_node_uuid")
+            )
+            expected_types = (
+                {"reagent", "current_substance"}
+                if source_bound
+                else {
+                    "reagent"
+                    if requirement.get("target_type") == "reagent_info"
+                    else "current_substance"
+                }
+            )
+            if inventory_type not in expected_types:
                 raise StoreConflict(f"库存绑定 {requirement_key} 的类型与需求不匹配")
             inventory_uuid = _uuid(
                 raw.get("inventory_uuid"),

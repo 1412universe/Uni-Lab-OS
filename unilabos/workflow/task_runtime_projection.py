@@ -92,6 +92,28 @@ _FINISHED_STATE_MAP = {
     "canceled": "canceled",
     "timeout": "timeout",
 }
+_WAIT_REASON_IDENTITY_FIELD_BY_SCOPE = {
+    "device": "device_id",
+    "material": "material_uuid",
+    "material_site": "site_uuid",
+}
+_WAIT_REASON_RESOURCE_FIELDS = (
+    "device_id",
+    "material_uuid",
+    "site_uuid",
+    "local_device_id",
+    "device_name",
+    "material_name",
+    "site_name",
+    "wait_code",
+    "wait_message",
+)
+_WAIT_REASON_ALLOWED_FIELDS = frozenset(
+    ("scope", *_WAIT_REASON_RESOURCE_FIELDS)
+)
+CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL = frozenset(
+    {"none", "pending", "required", "requires_attention", "canceling"}
+)
 
 
 def _encode_json_field(value: Any, *, field_name: str) -> str:
@@ -124,30 +146,30 @@ def _decode_json_field(value: str | None, *, fallback: Any) -> Any:
 def _normalize_wait_reason_resources(
     values: Sequence[Mapping[str, Any]] | None,
 ) -> list[dict[str, str]]:
-    """规范仅用于解释门禁等待的设备、物料或库位身份。"""
+    """规范仅用于解释门禁等待的设备、物料或库位身份。
+
+    设备选择器除了库存中的设备 Material UUID，还会携带本地设备 ID、展示名
+    以及候选设备各自的不可用原因。这些字段属于公开等待诊断合同；保留它们既
+    能让前端直接展示具体设备，也避免设备忙碌这一正常调度状态被误判为提交
+    失败。未知字段仍然关闭式拒绝，防止任意注册快照数据泄漏进任务投影。
+    """
 
     normalized: list[dict[str, str]] = []
     seen: set[tuple[tuple[str, str], ...]] = set()
-    required_identity = {
-        "device": "device_id",
-        "material": "material_uuid",
-        "material_site": "site_uuid",
-    }
-    allowed = {"scope", "device_id", "material_uuid", "site_uuid"}
     for value in values or ():
         if not isinstance(value, Mapping):
             raise StoreConflict("等待资源必须是对象")
-        if set(value) - allowed:
+        if set(value) - _WAIT_REASON_ALLOWED_FIELDS:
             raise StoreConflict("等待资源包含未知字段")
         scope = str(value.get("scope") or "").strip()
-        identity_field = required_identity.get(scope)
+        identity_field = _WAIT_REASON_IDENTITY_FIELD_BY_SCOPE.get(scope)
         if identity_field is None:
             raise StoreConflict("等待资源 scope 不合法")
         identity = value.get(identity_field)
         if not isinstance(identity, str) or not identity.strip():
             raise StoreConflict(f"等待资源缺少 {identity_field}")
         resource = {"scope": scope, identity_field: identity.strip()}
-        for field in ("device_id", "material_uuid", "site_uuid"):
+        for field in _WAIT_REASON_RESOURCE_FIELDS:
             extra = value.get(field)
             if field == identity_field or extra in (None, ""):
                 continue
@@ -417,20 +439,17 @@ class TaskRuntimeProjection:
         异常任务恢复为 ``required``，由桥接层完成任务级资源清理后再转 ``settled``。
         """
 
-        unsettled = connection.execute(
-            """
-            SELECT 1 FROM workflow_node_job
-            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
-              AND uncertainty_reason IS NOT NULL
-              AND TRIM(uncertainty_reason) != ''
-            LIMIT 1
-            """,
-            (task_uuid,),
-        ).fetchone()
-        if unsettled is not None:
+        if cls._has_unsettled_job_reconciliation(connection, task_uuid=task_uuid):
             return False
         task = cls._task_row(connection, task_uuid)
-        if task["control_status"] != "waiting_reconciliation":
+        # 进程重启会先把任务置为 ``failed/active`` 并保留
+        # ``cleanup_status=requires_attention``。当 Edge 随后提交了明确的停止
+        # 证明时，不确定作业已经清零，但控制状态不会自动回到
+        # ``waiting_reconciliation``；此时仍应进入统一的清理收尾，而不能因为
+        # control_status 不是 waiting_reconciliation 而遗留 requires_attention。
+        if task["control_status"] != "waiting_reconciliation" and task[
+            "cleanup_status"
+        ] != "requires_attention":
             return False
         cleanup_status = (
             "required"
@@ -451,6 +470,28 @@ class TaskRuntimeProjection:
             (cleanup_status, now, task_uuid),
         )
         return True
+
+    @staticmethod
+    def _has_unsettled_job_reconciliation(
+        connection: sqlite3.Connection,
+        *,
+        task_uuid: str,
+    ) -> bool:
+        """判断父任务是否仍有需要物理对账的作业。"""
+
+        return (
+            connection.execute(
+                """
+                SELECT 1 FROM workflow_node_job
+                WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+                  AND uncertainty_reason IS NOT NULL
+                  AND TRIM(uncertainty_reason) != ''
+                LIMIT 1
+                """,
+                (task_uuid,),
+            ).fetchone()
+            is not None
+        )
 
     @classmethod
     def _aggregate(
@@ -549,6 +590,205 @@ class TaskRuntimeProjection:
                 )
             return self._aggregate(connection, task_uuid)
 
+    def project_manual_confirmation_decision(
+        self,
+        job_uuid: str,
+        *,
+        action: str,
+        decided_at: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """以 WorkflowStore 单事务 CAS 决定人工确认并推进同一 Job。"""
+
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"approve", "reject"}:
+            raise StoreConflict("人工确认 action 必须是 approve 或 reject")
+        target = "approved" if normalized_action == "approve" else "rejected"
+        reason = (
+            "manual_confirmation_approved"
+            if normalized_action == "approve"
+            else "manual_confirmation_rejected"
+        )
+        with self._store.transaction() as connection:
+            job = self._job_row(connection, job_uuid)
+            task_uuid = str(job["workflow_task_uuid"])
+            confirmation = connection.execute(
+                "SELECT * FROM workflow_manual_confirmation "
+                "WHERE workflow_node_job_uuid = ?",
+                (job_uuid,),
+            ).fetchone()
+            if confirmation is None:
+                raise StoreConflict("作业不是正在等待的人工确认节点")
+            current = str(confirmation["status"])
+            if current == target:
+                return self._aggregate(connection, task_uuid), False
+            if current != "pending":
+                raise StoreConflict("人工确认已经由另一项决定关闭")
+            if str(confirmation["deadline_at"]) <= decided_at:
+                raise StoreConflict("人工确认已经超时")
+            if str(job["executor_kind"]) != "manual_confirm" or str(
+                job["status"]
+            ) != "running":
+                raise StoreConflict("作业不处于人工确认等待阶段")
+            changed = connection.execute(
+                """
+                UPDATE workflow_manual_confirmation
+                SET status = ?, decided_at = ?, resolution_reason = ?
+                WHERE workflow_node_job_uuid = ? AND status = 'pending'
+                """,
+                (target, decided_at, reason, job_uuid),
+            ).rowcount
+            if changed != 1:
+                raise StoreConflict("人工确认决定发生并发冲突")
+            if normalized_action == "approve":
+                changed = connection.execute(
+                    """
+                    UPDATE workflow_node_job
+                    SET status = 'pending', executor_kind = 'device_action',
+                        update_time = ?
+                    WHERE uuid = ? AND status = 'running'
+                      AND executor_kind = 'manual_confirm'
+                      AND deleted_at IS NULL
+                    """,
+                    (decided_at, job_uuid),
+                ).rowcount
+                if changed != 1:
+                    raise StoreConflict("人工确认继续设备动作发生并发冲突")
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=job_uuid,
+                    kind="job_transition",
+                    from_status="running",
+                    to_status="pending",
+                    data={"executor_kind": "device_action"},
+                    now=decided_at,
+                )
+            append_frontend_event(
+                connection,
+                event="manual_confirmation.resolved",
+                data={"task_uuid": task_uuid, "job_uuid": job_uuid},
+                now=decided_at,
+            )
+            return self._aggregate(connection, task_uuid), True
+
+    def project_manual_confirmation_timeout(
+        self,
+        job_uuid: str,
+        *,
+        decided_at: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """以同一 CAS 赢得人工确认超时；Task Cancel 由桥在提交后执行。"""
+
+        with self._store.transaction() as connection:
+            job = self._job_row(connection, job_uuid)
+            task_uuid = str(job["workflow_task_uuid"])
+            confirmation = connection.execute(
+                "SELECT * FROM workflow_manual_confirmation "
+                "WHERE workflow_node_job_uuid = ?",
+                (job_uuid,),
+            ).fetchone()
+            if confirmation is None:
+                raise StoreConflict("作业不是人工确认节点")
+            current = str(confirmation["status"])
+            if current == "timed_out":
+                return self._aggregate(connection, task_uuid), False
+            if current != "pending":
+                raise StoreConflict("人工确认已经由另一项决定关闭")
+            if str(confirmation["deadline_at"]) > decided_at:
+                raise StoreConflict("人工确认尚未到期")
+            changed = close_pending_manual_confirmation(
+                connection,
+                job_uuid=job_uuid,
+                status="timed_out",
+                decided_at=decided_at,
+                resolution_reason="manual_confirmation_timeout",
+            )
+            if not changed:
+                raise StoreConflict("人工确认超时发生并发冲突")
+            return self._aggregate(connection, task_uuid), True
+
+    def project_manual_continuation_dispatching(
+        self,
+        job_uuid: str,
+        *,
+        dispatched_at: str,
+    ) -> dict[str, Any]:
+        """把已批准的同一 Job 从 pending 推进到物理派发意图。"""
+
+        with self._store.transaction() as connection:
+            job = self._job_row(connection, job_uuid)
+            task_uuid = str(job["workflow_task_uuid"])
+            confirmation = connection.execute(
+                "SELECT status FROM workflow_manual_confirmation "
+                "WHERE workflow_node_job_uuid = ?",
+                (job_uuid,),
+            ).fetchone()
+            if confirmation is None or str(confirmation["status"]) != "approved":
+                raise StoreConflict("人工确认尚未批准")
+            if str(job["executor_kind"]) != "device_action":
+                raise StoreConflict("人工确认继续作业执行类型非法")
+            if str(job["status"]) in {"dispatched", "running"}:
+                return self._aggregate(connection, task_uuid)
+            if str(job["status"]) != "pending":
+                raise StoreConflict("人工确认继续作业不能派发")
+            changed = connection.execute(
+                "UPDATE workflow_node_job SET status='dispatched', update_time=? "
+                "WHERE uuid=? AND status='pending' AND executor_kind='device_action'",
+                (dispatched_at, job_uuid),
+            ).rowcount
+            if changed != 1:
+                raise StoreConflict("人工确认继续作业派发发生并发冲突")
+            claim = get_execution_claim(connection, job_uuid=job_uuid)
+            if claim is None:
+                raise StoreConflict("人工确认继续作业缺少 Claim")
+            control_data = _decode_json_field(job["control_data"], fallback={})
+            append_station_event(
+                connection,
+                event_type="job.dispatched",
+                aggregate_type="workflow_node_job",
+                aggregate_uuid=job_uuid,
+                source_kind="job_dispatch",
+                source_uuid=job_uuid,
+                idempotency_key=f"station:{job_uuid}:dispatch:{int(job['attempt'])}",
+                payload={
+                    "task_uuid": task_uuid,
+                    "job_uuid": job_uuid,
+                    "workflow_node_uuid": str(job["workflow_node_uuid"]),
+                    "attempt": int(job["attempt"]),
+                    "command_uuid": str(job["edge_command_uuid"]),
+                    "claim_uuid": claim["claim_uuid"],
+                    "fences": claim["fences"],
+                    "effect_uuid": job["dispatch_effect_uuid"],
+                    "parameter_hash": job["dispatch_parameter_hash"],
+                    "expected_change_set": _decode_json_field(
+                        job["expected_change_set"], fallback={}
+                    ),
+                    "actual_param": _decode_json_field(job["param"], fallback={}),
+                    "actual_executor": dict(control_data or {}).get(
+                        "actual_executor", {}
+                    ),
+                    "execution_locks": dict(control_data or {}).get(
+                        "execution_locks", []
+                    ),
+                    "dispatched_at": dispatched_at,
+                },
+            )
+            append_runtime_event(
+                connection,
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                kind="job_transition",
+                from_status="pending",
+                to_status="dispatched",
+                now=dispatched_at,
+            )
+            self._append_invalidation(
+                connection,
+                task_uuid=task_uuid,
+                now=dispatched_at,
+            )
+            return self._aggregate(connection, task_uuid)
+
     def project_canceled(self, task_uuid: str) -> dict[str, Any]:
         """取消可证明尚未派发的任务；在途任务必须走持久取消状态机。"""
 
@@ -629,6 +869,7 @@ class TaskRuntimeProjection:
         command_uuid: str,
         ack_deadline_at: str,
         complete_deadline_at: str,
+        reason: str = "task_canceled",
     ) -> dict[str, Any]:
         """原子记录 Local 模式取消请求并区分未发送与在途作业。
 
@@ -643,6 +884,13 @@ class TaskRuntimeProjection:
         normalized_command_uuid = str(command_uuid or "").strip()
         if not normalized_command_uuid:
             raise StoreConflict("取消命令 UUID 不能为空")
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise StoreConflict("取消原因不能为空")
+        canceled_error = _encode_json_field(
+            [{"code": normalized_reason}],
+            field_name="error_info",
+        )
         requested_at = utc_now()
         with self._store.transaction() as connection:
             task_row = self._task_row(connection, task_uuid)
@@ -664,10 +912,12 @@ class TaskRuntimeProjection:
                         """
                         UPDATE workflow_node_job
                         SET status = 'canceled', wait_reason = '{}',
-                            cancel_command_uuid = ?, finished_at = ?, update_time = ?
+                            error_info = ?, cancel_command_uuid = ?,
+                            finished_at = ?, update_time = ?
                         WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
                         """,
                         (
+                            canceled_error,
                             normalized_command_uuid,
                             requested_at,
                             requested_at,
@@ -686,11 +936,66 @@ class TaskRuntimeProjection:
                         kind="job_transition",
                         from_status="pending",
                         to_status="canceled",
-                        data={"reason": "cancel_no_send"},
+                        data={"reason": normalized_reason},
                         now=requested_at,
                     )
                     continue
                 if status in {"dispatched", "running"}:
+                    confirmation = connection.execute(
+                        "SELECT status FROM workflow_manual_confirmation "
+                        "WHERE workflow_node_job_uuid = ?",
+                        (job_uuid,),
+                    ).fetchone()
+                    manual_not_sent = (
+                        str(row["executor_kind"]) == "manual_confirm"
+                        and confirmation is not None
+                        and str(confirmation["status"]) != "approved"
+                    )
+                    if manual_not_sent:
+                        changed = connection.execute(
+                            """
+                            UPDATE workflow_node_job
+                            SET status='canceled', wait_reason='{}', error_info=?,
+                                cancel_command_uuid=?, finished_at=?, update_time=?
+                            WHERE uuid=? AND status IN ('dispatched', 'running')
+                              AND executor_kind='manual_confirm'
+                              AND deleted_at IS NULL
+                            """,
+                            (
+                                canceled_error,
+                                normalized_command_uuid,
+                                requested_at,
+                                requested_at,
+                                job_uuid,
+                            ),
+                        ).rowcount
+                        if changed != 1:
+                            raise StoreConflict(
+                                f"人工确认作业取消状态发生并发变化：{job_uuid}"
+                            )
+                        release_execution_locks(
+                            connection,
+                            job_uuid=job_uuid,
+                            now=requested_at,
+                        )
+                        close_pending_manual_confirmation(
+                            connection,
+                            job_uuid=job_uuid,
+                            status="canceled",
+                            decided_at=requested_at,
+                            resolution_reason=normalized_reason,
+                        )
+                        append_runtime_event(
+                            connection,
+                            task_uuid=task_uuid,
+                            job_uuid=job_uuid,
+                            kind="job_transition",
+                            from_status=status,
+                            to_status="canceled",
+                            data={"reason": normalized_reason},
+                            now=requested_at,
+                        )
+                        continue
                     existing_uncertainty = str(row["uncertainty_reason"] or "").strip()
                     has_execution_attention = has_execution_attention or bool(
                         existing_uncertainty
@@ -744,7 +1049,7 @@ class TaskRuntimeProjection:
             cleanup_status = (
                 "requires_attention"
                 if has_execution_attention
-                else ("canceling" if in_flight else "settled")
+                else ("canceling" if in_flight else "required")
             )
             control_status = (
                 "waiting_reconciliation" if has_execution_attention else "active"
@@ -1200,13 +1505,18 @@ class TaskRuntimeProjection:
                 raise StoreConflict(f"非异常终态任务不能结算清理：{task_uuid}")
             if task_row["cleanup_status"] == "settled":
                 return self._aggregate(connection, task_uuid)
-            if task_row["cleanup_status"] not in {
-                "none",
-                "pending",
-                "required",
-                "canceling",
-            }:
+            if (
+                task_row["cleanup_status"]
+                not in CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL
+            ):
                 raise StoreConflict(f"任务清理状态不能结算：{task_uuid}")
+            if self._has_unsettled_job_reconciliation(
+                connection,
+                task_uuid=task_uuid,
+            ):
+                raise StoreConflict(f"任务仍有作业等待物理对账：{task_uuid}")
+            if active_task_device_tenancies(connection, task_uuid=task_uuid):
+                raise StoreConflict(f"任务仍有活动设备托管：{task_uuid}")
             settled_at = utc_now()
             release_task_execution_locks(
                 connection,
@@ -1356,6 +1666,8 @@ class TaskRuntimeProjection:
         required_device_tenancy: Mapping[str, Any] | None = None,
         actual_executor: Mapping[str, Any] | None = None,
         dispatch_permit: Mapping[str, Any] | None = None,
+        manual_confirmation_config: Mapping[str, Any] | None = None,
+        projected_at: str | None = None,
         max_active_tasks: int = 500,
         max_tasks_per_workflow: int = 100,
         max_in_flight_jobs: int = 100,
@@ -1382,7 +1694,12 @@ class TaskRuntimeProjection:
             if job_row["workflow_task_uuid"] != task_uuid:
                 raise StoreConflict(f"作业不属于指定任务：{job_uuid}/{task_uuid}")
             task_row = self._task_row(connection, task_uuid)
-            if job_row["status"] == "dispatched" and task_row["status"] == "running":
+            is_manual_confirmation = str(job_row["executor_kind"]) == "manual_confirm"
+            if (
+                job_row["status"]
+                == ("running" if is_manual_confirmation else "dispatched")
+                and task_row["status"] == "running"
+            ):
                 return self._aggregate(connection, task_uuid)
             if job_row["status"] != "pending":
                 raise StoreConflict(f"作业不能进入 dispatched：{job_uuid}")
@@ -1499,17 +1816,21 @@ class TaskRuntimeProjection:
             )
 
             # ``projected_at`` 是同一事务内任务与作业共享的投影时间。
-            projected_at = utc_now()
+            projected_at = projected_at or utc_now()
+            projected_job_status = (
+                "running" if is_manual_confirmation else "dispatched"
+            )
             dispatch_command_uuid = str(job_row["edge_command_uuid"] or uuid4())
             updated_jobs = connection.execute(
                 """
                 UPDATE workflow_node_job
-                SET status = 'dispatched', param = ?, edge_command_uuid = ?,
+                SET status = ?, param = ?, edge_command_uuid = ?,
                     dispatch_effect_uuid = ?, dispatch_parameter_hash = ?,
                     expected_change_set = ?, update_time = ?
                 WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
                 """,
                 (
+                    projected_job_status,
                     param_json,
                     dispatch_command_uuid,
                     permit["effect_uuid"] if permit else None,
@@ -1543,7 +1864,7 @@ class TaskRuntimeProjection:
                 """
                 UPDATE workflow_node_job
                 SET control_data = ?, update_time = ?
-                WHERE uuid = ? AND status = 'dispatched'
+                WHERE uuid = ? AND status = ?
                   AND deleted_at IS NULL
                 """,
                 (
@@ -1553,61 +1874,60 @@ class TaskRuntimeProjection:
                     ),
                     projected_at,
                     job_uuid,
+                    projected_job_status,
                 ),
             )
             claim = get_execution_claim(connection, job_uuid=job_uuid)
             if claim is None:
                 raise StoreConflict(f"作业派发意图缺少 Claim：{job_uuid}")
-            append_station_event(
-                connection,
-                event_type="job.dispatched",
-                aggregate_type="workflow_node_job",
-                aggregate_uuid=job_uuid,
-                source_kind="job_dispatch",
-                source_uuid=job_uuid,
-                idempotency_key=(
-                    f"station:{job_uuid}:dispatch:{int(job_row['attempt'])}"
-                ),
-                payload={
-                    "task_uuid": task_uuid,
-                    "job_uuid": job_uuid,
-                    "workflow_node_uuid": str(job_row["workflow_node_uuid"]),
-                    "attempt": int(job_row["attempt"]),
-                    "command_uuid": dispatch_command_uuid,
-                    "claim_uuid": claim["claim_uuid"],
-                    "fences": claim["fences"],
-                    "effect_uuid": permit["effect_uuid"] if permit else None,
-                    "parameter_hash": permit["parameter_hash"] if permit else None,
-                    "expected_change_set": (
-                        permit["expected_change_set"] if permit else {}
+            if not is_manual_confirmation:
+                append_station_event(
+                    connection,
+                    event_type="job.dispatched",
+                    aggregate_type="workflow_node_job",
+                    aggregate_uuid=job_uuid,
+                    source_kind="job_dispatch",
+                    source_uuid=job_uuid,
+                    idempotency_key=(
+                        f"station:{job_uuid}:dispatch:{int(job_row['attempt'])}"
                     ),
-                    "actual_param": actual_param,
-                    "actual_executor": actual_executor_snapshot,
-                    "execution_locks": [
-                        dict(request) for request in (execution_locks or ())
-                    ],
-                    "device_tenancy": dict(device_tenancy or {}),
-                    "dispatched_at": projected_at,
-                },
-            )
+                    payload={
+                        "task_uuid": task_uuid,
+                        "job_uuid": job_uuid,
+                        "workflow_node_uuid": str(job_row["workflow_node_uuid"]),
+                        "attempt": int(job_row["attempt"]),
+                        "command_uuid": dispatch_command_uuid,
+                        "claim_uuid": claim["claim_uuid"],
+                        "fences": claim["fences"],
+                        "effect_uuid": permit["effect_uuid"] if permit else None,
+                        "parameter_hash": permit["parameter_hash"] if permit else None,
+                        "expected_change_set": (
+                            permit["expected_change_set"] if permit else {}
+                        ),
+                        "actual_param": actual_param,
+                        "actual_executor": actual_executor_snapshot,
+                        "execution_locks": [
+                            dict(request) for request in (execution_locks or ())
+                        ],
+                        "device_tenancy": dict(device_tenancy or {}),
+                        "dispatched_at": projected_at,
+                    },
+                )
             append_runtime_event(
                 connection,
                 task_uuid=task_uuid,
                 job_uuid=job_uuid,
                 kind="job_transition",
                 from_status="pending",
-                to_status="dispatched",
+                to_status=projected_job_status,
                 now=projected_at,
             )
-            if str(job_row["executor_kind"]) == "manual_confirm":
+            if is_manual_confirmation:
                 open_manual_confirmation(
                     connection,
                     job_row=job_row,
-                    param=(
-                        dict(resolved_param)
-                        if resolved_param is not None
-                        else _decode_json_field(job_row["param"], fallback={})
-                    ),
+                    config=manual_confirmation_config,
+                    opened_at=projected_at,
                 )
             self._append_invalidation(
                 connection,
@@ -1671,6 +1991,7 @@ class TaskRuntimeProjection:
                     to_status="running",
                     now=utc_now(),
                 )
+            resources = _normalize_wait_reason_resources(wait_resources)
             if execution_locks:
                 record_execution_lock_wait(
                     connection,
@@ -1679,6 +2000,7 @@ class TaskRuntimeProjection:
                     requests=execution_locks,
                     blocking_task_uuid=blocking_task_uuid,
                     blocking_job_uuid=blocking_job_uuid,
+                    wait_resources=resources,
                 )
             else:
                 normalized_wait_code = str(wait_code or "").strip()
@@ -1699,7 +2021,6 @@ class TaskRuntimeProjection:
                     "message": normalized_wait_message,
                     "waiting_since": waiting_since,
                 }
-                resources = _normalize_wait_reason_resources(wait_resources)
                 if resources:
                     reason["resources"] = resources
                 encoded_reason = _encode_json_field(
@@ -1884,10 +2205,9 @@ class TaskRuntimeProjection:
     ) -> dict[str, Any] | None:
         """在一个事务内失败因设备执行进程重启而中断的任务。
 
-        参数：``task_uuid`` 是稳定工作流任务（WorkflowTask）UUID。返回：任务包含
-        已派发、运行或取消中的设备作业时返回失败后的任务/作业聚合；尚未越过物理
-        派发边界时返回 ``None``，允许调用方以原身份继续恢复。异常：身份、状态或
-        SQLite 事务冲突原样传播，且不会释放任何缺少物理结算证据的执行占用。
+        参数：``task_uuid`` 是稳定工作流任务（WorkflowTask）UUID。返回：非终态
+        Task 失败后的任务/作业聚合；既有终态 Task 返回 ``None``。已完成
+        Job 保持不变，在途 Job 失败，未开始 Job 取消，旧执行占用释放。
         """
 
         with self._store.transaction() as connection:
@@ -3207,56 +3527,5 @@ class TaskRuntimeProjection:
                 now=finished_at,
             )
             return self._aggregate(connection, task_uuid)
-
-    def recover_pending_manual_confirmation(self, job_uuid: str) -> dict[str, Any]:
-        """把重启前尚未决策、也未下发设备的人工确认恢复为待调度。
-
-        只允许 ``manual_confirm + pending confirmation + dispatched`` 这一可证明
-        未越过物理派发边界的组合。已批准或已下发的作业不能借此
-        退回 pending，应按结果不明处置。
-        """
-
-        with self._store.transaction() as connection:
-            job = self._job_row(connection, job_uuid)
-            if job["executor_kind"] != "manual_confirm":
-                raise StoreConflict("作业不是人工确认节点")
-            confirmation = connection.execute(
-                """
-                SELECT status FROM workflow_manual_confirmation
-                WHERE workflow_node_job_uuid = ?
-                ORDER BY opened_at DESC, uuid DESC LIMIT 1
-                """,
-                (job_uuid,),
-            ).fetchone()
-            if confirmation is None or confirmation["status"] != "pending":
-                raise StoreConflict("人工确认已决策，不能安全重排")
-            if job["status"] == "pending":
-                return self._aggregate(connection, job["workflow_task_uuid"])
-            if job["status"] != "dispatched":
-                raise StoreConflict("人工确认作业状态不可安全恢复")
-            now = utc_now()
-            connection.execute(
-                """
-                UPDATE workflow_node_job
-                SET status = 'pending', started_at = NULL,
-                    cancel_ack_deadline_at = NULL,
-                    cancel_complete_deadline_at = NULL,
-                    wait_reason = '{}', update_time = ?
-                WHERE uuid = ? AND status = 'dispatched'
-                """,
-                (now, job_uuid),
-            )
-            release_execution_locks(connection, job_uuid=job_uuid, now=now)
-            append_runtime_event(
-                connection,
-                task_uuid=job["workflow_task_uuid"],
-                job_uuid=job_uuid,
-                kind="job_transition",
-                from_status="dispatched",
-                to_status="pending",
-                now=now,
-            )
-            return self._aggregate(connection, job["workflow_task_uuid"])
-
 
 __all__ = ["TaskRuntimeProjection"]

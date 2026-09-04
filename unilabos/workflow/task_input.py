@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -38,6 +39,16 @@ class PreparedTaskInput:
     execution_plan: dict[str, Any]
     jobs: list[dict[str, Any]]
 
+    @property
+    def planned_node_uuids(self) -> frozenset[str]:
+        """返回本次冻结计划中的全部节点身份，包括惰性控制流后代。"""
+
+        return frozenset(
+            str(node.get("uuid"))
+            for node in self.execution_plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        )
+
 
 def prepare_task_input(
     *,
@@ -71,7 +82,11 @@ def prepare_task_input(
             supplied,
             resource_resolver=resource_resolver,
         )
-        _bind_active_plan(
+        _bind_inventory_requirement_quantities(
+            snapshot=snapshot,
+            resolved_input=resolved,
+        )
+        _bind_plan_inputs(
             plan=plan,
             jobs=prepared_jobs,
             input_bindings=validated.input_bindings,
@@ -105,6 +120,67 @@ def prepare_task_input(
         execution_plan=plan,
         jobs=prepared_jobs,
     )
+
+
+def _bind_inventory_requirement_quantities(
+    *,
+    snapshot: dict[str, Any],
+    resolved_input: Mapping[str, Any],
+) -> None:
+    """把创作期数量绑定解析为本次 Task 的冻结库存需求。
+
+    参数：``snapshot`` 是即将持久化的独立图快照；``resolved_input`` 已按工作流
+    输入合同补齐默认值并完成类型校验。返回无并原地替换快照需求。异常：绑定
+    元数据损坏、数量非数值或为负时抛 ``TaskInputError``；动态数量为零表示本次
+    任务不启用该需求，不会伪造零数量预留。
+    """
+
+    if "inventory_requirements" not in snapshot:
+        return
+    raw_requirements = snapshot["inventory_requirements"]
+    if not isinstance(raw_requirements, list):
+        raise TaskInputError("工作流数量库存需求必须是数组")
+    requirements: list[dict[str, Any]] = []
+    for raw in raw_requirements:
+        if not isinstance(raw, Mapping):
+            raise TaskInputError("工作流数量库存需求必须是对象")
+        requirement = clone_json(dict(raw))
+        metadata = requirement.get("meta_data")
+        unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+        binding = (
+            unilab.get("quantity_binding") if isinstance(unilab, Mapping) else None
+        )
+        if binding is None:
+            requirements.append(requirement)
+            continue
+        if not isinstance(binding, Mapping):
+            raise TaskInputError("工作流数量绑定无效")
+        kind = binding.get("kind")
+        if kind == "workflow_input":
+            parameter = binding.get("parameter")
+            if not isinstance(parameter, str) or parameter not in resolved_input:
+                raise TaskInputError("工作流数量绑定引用了不存在的输入")
+            raw_quantity = resolved_input[parameter]
+        elif kind == "literal":
+            raw_quantity = binding.get("value")
+        else:
+            raise TaskInputError("工作流数量绑定类型无效")
+        scale = unilab.get("quantity_scale", 1.0)
+        if (
+            isinstance(raw_quantity, bool)
+            or not isinstance(raw_quantity, (int, float))
+            or isinstance(scale, bool)
+            or not isinstance(scale, (int, float))
+        ):
+            raise TaskInputError("工作流数量必须是有限非负数")
+        quantity = float(raw_quantity) * float(scale)
+        if not math.isfinite(quantity) or quantity < 0 or float(scale) <= 0:
+            raise TaskInputError("工作流数量必须是有限非负数")
+        if quantity == 0:
+            continue
+        requirement["required_quantity"] = quantity
+        requirements.append(requirement)
+    snapshot["inventory_requirements"] = requirements
 
 
 def _add_boundary_jobs(
@@ -286,7 +362,7 @@ def _resolve_resource_slot_values(
         material_uuid = validate_uuid(value["uuid"])
         try:
             material = resource_resolver(material_uuid)
-        except Exception as exc:  # noqa: BLE001 - 解析器错误统一关闭为任务输入失败
+        except Exception as exc:
             raise TaskInputError("工作流任务物料解析失败") from exc
         if not isinstance(material, Mapping):
             raise TaskInputError("工作流任务引用的物料不存在")
@@ -318,14 +394,14 @@ def _resolve_resource_slot_values(
     return value
 
 
-def _bind_active_plan(
+def _bind_plan_inputs(
     *,
     plan: dict[str, Any],
     jobs: list[dict[str, Any]],
     input_bindings: Mapping[str, Mapping[str, Mapping[str, str]]],
     resolved_input: Mapping[str, Any],
 ) -> None:
-    """把已解析输入绑定到活动计划节点与对应首次作业。
+    """把已解析输入绑定到计划节点与已存在的首次作业。
 
     参数：``plan``/``jobs`` 是独立可修改副本，``input_bindings`` 是公共校验器
     产出的节点绑定，``resolved_input`` 是规范值。返回：无，原地完成冻结绑定。
@@ -355,14 +431,23 @@ def _bind_active_plan(
         )
         if isinstance(selector, Mapping) and selector.get("group_key")
     }
+    carry_provider_by_handle = {
+        str(handle_uuid)
+        for node in plan_nodes.values()
+        for handle_uuid in (
+            node.get("carry_bindings")
+            if isinstance(node.get("carry_bindings"), Mapping)
+            else {}
+        )
+    }
     for handle_uuid, handle in plan_handles.items():
         if handle.get("io_type") != "target":
             continue
         node_uuid = str(handle.get("node_uuid") or "")
         node = plan_nodes.get(node_uuid)
-        job = jobs_by_node.get(node_uuid)
         if node is None:
             raise TaskInputError("计划连接点未归属唯一活动作业")
+        job = jobs_by_node.get(node_uuid)
         # RepeatUntil 的后代节点是“每轮作业模板”，不会在 Task 创建阶段生成
         # 首轮 Job；它们的冻结参数会在调度器物化每一轮时复制。普通节点仍必须
         # 在同一事务中拥有唯一 Job，不能用该例外掩盖计划损坏。
@@ -388,11 +473,11 @@ def _bind_active_plan(
         if not data_key:
             raise TaskInputError("计划目标连接点缺少参数键")
         node_param = node.get("param")
+        if not isinstance(node_param, dict):
+            raise TaskInputError("计划节点参数不是对象")
         job_param = job.get("param") if job is not None else None
-        if not isinstance(node_param, dict) or (
-            job is not None and not isinstance(job_param, dict)
-        ):
-            raise TaskInputError("计划节点或作业参数不是对象")
+        if job is not None and not isinstance(job_param, dict):
+            raise TaskInputError("计划作业参数不是对象")
         incoming_edges = incoming.get(handle_uuid, [])
         static_provider = data_key in node_param and node_param[data_key] is not None
         # 固定 existing 物料来源（MaterialSource）在计划构建时把同一条物料边
@@ -412,6 +497,7 @@ def _bind_active_plan(
             + len(incoming_edges)
             + int(binding is not None)
             + int(handle_uuid in group_provider_by_handle)
+            + int(handle_uuid in carry_provider_by_handle)
         )
         if provider_count > 1:
             raise TaskInputError("计划目标输入存在多个提供者")
@@ -471,7 +557,7 @@ def _freeze_site_selections(
     """把节点库位选择声明解析成 Task 代际冻结的具体候选 UUID。
 
     参数：``plan`` 与 ``jobs`` 已完成工作流输入绑定；``resolver`` 是库存权威的
-    只读任务准入端口。返回：原位写入同一节点与 Job 的冻结执行策略。异常：
+    只读任务准入端口。返回：原位写入计划节点与已存在 Job 的冻结执行策略。异常：
     选择器、父资源或库存回执不完整时抛 ``TaskInputError``，调用方不得创建任务。
     """
 
@@ -497,11 +583,11 @@ def _freeze_site_selections(
         if job is None and not deferred_job_template:
             raise TaskInputError("计划库位选择器未归属唯一活动作业")
         node_param = node.get("param")
+        if not isinstance(node_param, dict):
+            raise TaskInputError("计划库位选择器节点参数不是对象")
         job_param = job.get("param") if job is not None else None
-        if not isinstance(node_param, dict) or (
-            job is not None and not isinstance(job_param, dict)
-        ):
-            raise TaskInputError("计划库位选择器参数不是对象")
+        if job is not None and not isinstance(job_param, dict):
+            raise TaskInputError("计划库位选择器作业参数不是对象")
         for raw_selector in raw_selectors:
             parameter = str(raw_selector.get("parameter") or "").strip()
             owner_parameter = str(raw_selector.get("owner_parameter") or "").strip()
@@ -557,7 +643,7 @@ def _freeze_site_selections(
             }
             try:
                 resolution = resolver(request)
-            except Exception as exc:  # noqa: BLE001 - 库存边界统一关闭为任务输入失败
+            except Exception as exc:
                 raise TaskInputError("工作流任务库位选择解析失败") from exc
             raw_site_uuids = resolution.get("site_uuids")
             if (
@@ -573,11 +659,11 @@ def _freeze_site_selections(
             if len(set(site_uuids)) != len(site_uuids):
                 raise TaskInputError("库位选择权威返回了重复 UUID")
             policy = node.get("execution_policy")
+            if not isinstance(policy, dict):
+                raise TaskInputError("计划库位选择节点执行策略不是对象")
             job_policy = job.get("execution_policy") if job is not None else None
-            if not isinstance(policy, dict) or (
-                job is not None and not isinstance(job_policy, dict)
-            ):
-                raise TaskInputError("计划库位选择执行策略不是对象")
+            if job is not None and not isinstance(job_policy, dict):
+                raise TaskInputError("计划库位选择作业执行策略不是对象")
             existing = policy.get("target_site_group")
             if existing is not None and list(existing) != site_uuids:
                 raise TaskInputError("库位选择与既有执行策略冲突")

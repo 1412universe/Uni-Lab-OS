@@ -10,10 +10,12 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from starlette.responses import JSONResponse, Response
 
 from unilabos.app.web.openapi_docs import install_openapi_documentation
 from unilabos.config.config import BasicConfig
+from unilabos.app.startup_mode import get_startup_mode
 from unilabos.utils.fastapi.log_adapter import setup_fastapi_logging
 from unilabos.utils.log import error, info
 from unilabos.utils.tracing import install_http_tracing, trace_ui_base_url
@@ -45,6 +47,28 @@ workflow_runtime_loaded = 0
 workflow_runtime_total = 0
 _workflow_runtime_values: dict[str, Any] = {}
 _workflow_runtime_lock = threading.RLock()
+_LEGACY_API_ROUTES_MOUNTED_STATE = "_unilabos_legacy_api_routes_mounted"
+
+
+def setup_api_routes(application: FastAPI | None = None) -> None:
+    """兼容旧启动适配器的 API 路由安装入口。
+
+    参数：``application`` 是要挂载路由的 FastAPI 应用，省略时使用进程应用。
+    返回：无；实际路由表仍由 ``unilabos.app.web.api`` 维护。异常：下层路由导入
+    或挂载失败原样传播。使用延迟导入避免服务模块初始化时引入设备/调度依赖。
+    """
+
+    target = application or app
+    # 旧启动适配器仍可能显式调用这个模块级入口，而正式产品装配也会在
+    # ``setup_server`` 中安装同一套路由。把挂载世代记在目标 FastAPI 实例上，
+    # 让两条入口共享幂等闸门，避免重复 include_router 以及重复创建 startup
+    # 广播任务；失败时不写标记，调用方仍可安全重试。
+    if getattr(target.state, _LEGACY_API_ROUTES_MOUNTED_STATE, False):
+        return
+    from unilabos.app.web.api import setup_api_routes as _install_api_routes
+
+    _install_api_routes(target)
+    setattr(target.state, _LEGACY_API_ROUTES_MOUNTED_STATE, True)
 
 
 class WorkflowRuntimeStarting(RuntimeError):
@@ -189,6 +213,7 @@ def api_readiness() -> Response:
     ready = not required or phase == "ready"
     payload: dict[str, Any] = {
         "status": "ready" if ready else "starting",
+        "startupMode": get_startup_mode().value,
         "phase": "ready" if not required else phase,
         "workflowRuntime": "disabled" if not required else phase,
         "workflowProgress": {"loaded": loaded, "total": total},
@@ -219,6 +244,7 @@ app.add_middleware(
     ],
     expose_headers=["trace_id", "span_id"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
 
 @app.middleware("http")
@@ -420,8 +446,6 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
                 tags=["api"],
             )
     else:
-        from unilabos.app.web.api import setup_api_routes
-
         setup_api_routes(app)
 
     if (

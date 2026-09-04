@@ -99,6 +99,7 @@ def _seed_task(
     *,
     with_material: bool,
     run_mode: str = "normal",
+    with_successor: bool = False,
 ) -> dict[str, Any]:
     """持久化一个带冻结执行计划（ExecutionPlan）的待处理任务。
 
@@ -140,10 +141,41 @@ def _seed_task(
                     "additionalProperties": False,
                 },
                 "material_requirements": material_requirements,
-            }
+            },
+            *(
+                [
+                    {
+                        "uuid": SECOND_NODE_UUID,
+                        "kind": "device_action",
+                        "device_id": "reactor-b",
+                        "action_name": "finish",
+                        "action_type": "UniLabJsonCommand",
+                        "param": {},
+                        "param_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": True,
+                        },
+                        "material_requirements": [],
+                    }
+                ]
+                if with_successor
+                else []
+            ),
         ],
         "handles": [],
-        "edges": [],
+        "edges": (
+            [
+                {
+                    "uuid": "71000000-0000-4000-8000-000000000001",
+                    "source_node_uuid": NODE_UUID,
+                    "target_node_uuid": SECOND_NODE_UUID,
+                    "dependency_only": True,
+                }
+            ]
+            if with_successor
+            else []
+        ),
     }
     with store.transaction() as connection:
         connection.execute(
@@ -151,10 +183,11 @@ def _seed_task(
             INSERT INTO workflow_task(
                 uuid, create_time, update_time, deleted_at, description,
                 meta_data, workflow_uuid, status, workflow_snapshot,
-                execution_plan, run_mode, target_node_uuid, control_status,
+                execution_plan, run_mode, execution_mode, target_node_uuid,
+                control_status,
                 cleanup_status, trace_context, input, output, error_info
             ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, 'pending', '{}', ?,
-                      ?, NULL, ?, 'none', '{}', '{}', '{}', '[]')
+                      ?, ?, NULL, ?, 'none', '{}', '{}', '{}', '[]')
             """,
             (
                 TASK_UUID,
@@ -163,6 +196,7 @@ def _seed_task(
                 WORKFLOW_UUID,
                 json.dumps(execution_plan),
                 run_mode,
+                "step" if run_mode == "step" else "normal",
                 "paused" if run_mode == "step" else "active",
             ),
         )
@@ -180,6 +214,27 @@ def _seed_task(
             """,
             (JOB_UUID, _CREATED_AT, _CREATED_AT, TASK_UUID, NODE_UUID),
         )
+        if with_successor:
+            connection.execute(
+                """
+                INSERT INTO workflow_node_job(
+                    uuid, create_time, update_time, deleted_at, description,
+                    meta_data, workflow_task_uuid, workflow_node_uuid,
+                    feedback_sequence, topological_index, executor_kind,
+                    execution_policy, execution_timeout_seconds, status, attempt,
+                    param, feedback_data, return_info, control_data, error_info
+                ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 0, 1,
+                          'device_action', '{}', 0, 'pending', 1, '{}', '{}',
+                          '{}', '{}', '[]')
+                """,
+                (
+                    SECOND_JOB_UUID,
+                    _CREATED_AT,
+                    _CREATED_AT,
+                    TASK_UUID,
+                    SECOND_NODE_UUID,
+                ),
+            )
     return store.get_task(TASK_UUID)
 
 
@@ -470,6 +525,59 @@ def test_scheduler_wait_projects_authoritative_structured_resources(
     assert store.get_job(JOB_UUID)["wait_reason"]["resources"] == wait_resources
 
 
+def test_scheduler_lock_wait_derives_and_names_resources_from_lock_requests(
+    store: WorkflowStore,
+) -> None:
+    """真实锁竞争没有显式 resources 时也要持久化具体物料名称。"""
+
+    class _WaitInventory:
+        store = None
+
+        def describe_wait_resources(
+            self,
+            resources: list[dict[str, str]],
+        ) -> tuple[dict[str, str], ...]:
+            return tuple(
+                {**resource, "material_name": "样品瓶 A"}
+                for resource in resources
+            )
+
+    _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        station_resources=_WaitInventory(),
+    )
+    bridge = _bridge(store, scheduler)
+    material_uuid = "72000000-0000-4000-8000-000000000001"
+    try:
+        bridge._task_by_job[JOB_UUID] = TASK_UUID
+        bridge._on_job_execution_wait(
+            {
+                "job_id": JOB_UUID,
+                "workflow_id": TASK_UUID,
+                "execution_locks": [
+                    {
+                        "lock_key": f"material/{material_uuid}/exclusive",
+                        "scope": "material",
+                        "material_uuid": material_uuid,
+                    },
+                ],
+                "blocking_job_id": SECOND_JOB_UUID,
+                "blocking_workflow_id": "other-task",
+            }
+        )
+    finally:
+        bridge.close()
+
+    assert store.get_job(JOB_UUID)["wait_reason"]["resources"] == [
+        {
+            "scope": "material",
+            "material_uuid": material_uuid,
+            "material_name": "样品瓶 A",
+        }
+    ]
+
+
 def test_step_task_stays_paused_until_bridge_step_dispatches_one_job(
     store: WorkflowStore,
 ) -> None:
@@ -528,7 +636,7 @@ def test_step_command_api_is_idempotent_and_dispatches_once(
         first = client.post(f"/api/v1/workflow-tasks/{TASK_UUID}/commands", json=body)
         replay = client.post(f"/api/v1/workflow-tasks/{TASK_UUID}/commands", json=body)
 
-        assert first.status_code == 201
+        assert first.status_code == 201, first.text
         assert first.json()["data"]["status"] == "succeeded"
         assert replay.json()["data"]["uuid"] == first.json()["data"]["uuid"]
         assert len(dispatcher.dispatched) == 1
@@ -537,10 +645,65 @@ def test_step_command_api_is_idempotent_and_dispatches_once(
         bridge.close()
 
 
+def test_step_state_api_is_authoritative_and_blocks_overlapping_step(
+    store: WorkflowStore,
+) -> None:
+    """Task 详情只使用后端候选，上一 Job 在途时第二次 Step 被拒绝。"""
+
+    task = _seed_task(store, with_material=False, run_mode="step")
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    bridge = _bridge(store, scheduler)
+    service = WorkflowService(store, task_scheduler_bridge=bridge)
+    client = TestClient(create_workflow_app(service))
+    try:
+        bridge.submit(task)
+        before = client.get(f"/api/v1/workflow-tasks/{TASK_UUID}/step-state")
+        assert before.status_code == 200
+        assert before.json()["data"] == {
+            "workflow_task_uuid": TASK_UUID,
+            "execution_mode": "step",
+            "control_status": "paused",
+            "in_flight_job_count": 0,
+            "requires_selection": False,
+            "can_step": True,
+            "candidates": [
+                {
+                    "node_uuid": NODE_UUID,
+                    "name": "distribute",
+                    "kind": "device_action",
+                    "device_id": "reactor-a",
+                    "action_name": "distribute",
+                }
+            ],
+        }
+
+        first = client.post(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
+            json={"type": "step", "idempotency_key": "step-first"},
+        )
+        second = client.post(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
+            json={"type": "step", "idempotency_key": "step-overlap"},
+        )
+
+        assert first.status_code == 201, first.text
+        assert first.json()["data"]["status"] == "succeeded"
+        assert second.json()["data"]["status"] == "rejected"
+        assert "step is still in progress" in second.json()["data"]["result"][
+            "reason"
+        ]
+        during = client.get(f"/api/v1/workflow-tasks/{TASK_UUID}/step-state")
+        assert during.json()["data"]["can_step"] is False
+        assert during.json()["data"]["in_flight_job_count"] == 1
+    finally:
+        bridge.close()
+
+
 def test_pause_resume_command_api_updates_standard_task_control_status(
     store: WorkflowStore,
 ) -> None:
-    task = _seed_task(store, with_material=False)
+    task = _seed_task(store, with_material=False, with_successor=True)
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
     bridge = _bridge(store, scheduler)
     service = WorkflowService(store, task_scheduler_bridge=bridge)
@@ -553,7 +716,19 @@ def test_pause_resume_command_api_updates_standard_task_control_status(
         )
         assert paused.status_code == 201, paused.text
         assert paused.json()["data"]["status"] == "succeeded"
-        assert store.get_task(TASK_UUID)["control_status"] == "paused"
+        paused_replay = client.post(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
+            json={"type": "pause", "idempotency_key": "pause-once"},
+        )
+        assert paused_replay.json()["data"] == paused.json()["data"]
+        switching = store.get_task(TASK_UUID)
+        assert switching["control_status"] == "paused"
+        assert switching["execution_mode"] == "switching_to_step"
+
+        scheduler.on_job_finished(JOB_UUID, True, {})
+        switched = store.get_task(TASK_UUID)
+        assert switched["execution_mode"] == "step"
+        assert switched["run_mode"] == "normal"
 
         resumed = client.post(
             f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
@@ -561,106 +736,15 @@ def test_pause_resume_command_api_updates_standard_task_control_status(
         )
         assert resumed.status_code == 201, resumed.text
         assert resumed.json()["data"]["status"] == "succeeded"
-        assert store.get_task(TASK_UUID)["control_status"] == "active"
-    finally:
-        bridge.close()
-
-
-def test_debug_hold_step_continue_and_stop_use_real_scheduler_projection(
-    store: WorkflowStore,
-) -> None:
-    """调试命令须在真实调度桥上逐 Hold 放行，并由共享 cancel 停止。"""
-
-    task = _seed_two_node_debug_task(store)
-    dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(dispatcher=dispatcher)
-    bridge = _bridge(store, scheduler)
-    service = WorkflowService(store, task_scheduler_bridge=bridge)
-    client = TestClient(create_workflow_app(service))
-    try:
-        bridge.submit(task)
-        first_hold = store.get_debug_projection(TASK_UUID)["holds"][0]
-        step = client.post(
-            f"/api/v1/debug/workflow-tasks/{TASK_UUID}/commands",
-            json={
-                "type": "step",
-                "scope": {"type": "hold", "hold_uuid": first_hold["uuid"]},
-                "idempotency_key": "debug-first-step",
-            },
-        )
-        assert step.status_code == 201, step.text
-        assert [item["job_id"] for item in dispatcher.dispatched] == [JOB_UUID]
-
-        scheduler.on_job_finished(JOB_UUID, True, {"ok": True})
-        second_hold = store.get_debug_projection(TASK_UUID)["holds"][-1]
-        assert second_hold["workflow_node_uuid"] == SECOND_NODE_UUID
-        assert second_hold["reason"] == "breakpoint"
-
-        continued = client.post(
-            f"/api/v1/debug/workflow-tasks/{TASK_UUID}/commands",
-            json={
-                "type": "continue",
-                "scope": {"type": "hold", "hold_uuid": second_hold["uuid"]},
-                "idempotency_key": "debug-continue",
-            },
-        )
-        assert continued.status_code == 201, continued.text
-        assert [item["job_id"] for item in dispatcher.dispatched] == [
-            JOB_UUID,
-            SECOND_JOB_UUID,
-        ]
-
-        stopped = client.post(
+        resumed_replay = client.post(
             f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
-            json={"type": "cancel", "idempotency_key": "debug-stop"},
+            json={"type": "resume", "idempotency_key": "resume-once"},
         )
-        assert stopped.status_code == 201, stopped.text
-        assert store.get_task(TASK_UUID)["status"] == "canceled"
-        assert store.get_debug_projection(TASK_UUID)["status"] == "stopped"
-    finally:
-        bridge.close()
-
-
-def test_debug_continue_advances_only_after_current_dag_node_is_settled(
-    store: WorkflowStore,
-) -> None:
-    """继续模式在当前节点完成后自动派发已就绪的后继节点。"""
-
-    task = _seed_two_node_debug_task(store)
-    with store.transaction() as connection:
-        connection.execute(
-            """
-            UPDATE workflow_task_debug_configuration
-            SET breakpoint_node_uuids = '[]'
-            WHERE workflow_task_uuid = ?
-            """,
-            (TASK_UUID,),
-        )
-    dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(dispatcher=dispatcher)
-    bridge = _bridge(store, scheduler)
-    service = WorkflowService(store, task_scheduler_bridge=bridge)
-    client = TestClient(create_workflow_app(service))
-    try:
-        bridge.submit(task)
-        first_hold = store.get_debug_projection(TASK_UUID)["holds"][0]
-        continued = client.post(
-            f"/api/v1/debug/workflow-tasks/{TASK_UUID}/commands",
-            json={
-                "type": "continue",
-                "scope": {"type": "hold", "hold_uuid": first_hold["uuid"]},
-                "idempotency_key": "debug-continue-from-start",
-            },
-        )
-        assert continued.status_code == 201, continued.text
-        assert [item["job_id"] for item in dispatcher.dispatched] == [JOB_UUID]
-
-        scheduler.on_job_finished(JOB_UUID, True, {"ok": True})
-
-        assert [item["job_id"] for item in dispatcher.dispatched] == [
-            JOB_UUID,
-            SECOND_JOB_UUID,
-        ]
+        assert resumed_replay.json()["data"] == resumed.json()["data"]
+        automatic = store.get_task(TASK_UUID)
+        assert automatic["control_status"] == "active"
+        assert automatic["execution_mode"] == "normal"
+        assert automatic["run_mode"] == "normal"
     finally:
         bridge.close()
 
@@ -768,7 +852,7 @@ def _seed_two_node_debug_task(store: WorkflowStore) -> dict[str, Any]:
     return store.get_task(TASK_UUID)
 
 
-def test_restart_recovers_pending_paused_step_task_without_dispatch(
+def test_restart_aborts_pending_paused_step_task_without_dispatch(
     store: WorkflowStore,
 ) -> None:
     _seed_task(store, with_material=False, run_mode="step")
@@ -780,8 +864,11 @@ def test_restart_recovers_pending_paused_step_task_without_dispatch(
         assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
         assert dispatcher.dispatched == []
 
-        result = bridge.step(TASK_UUID)
-        assert [item["job_id"] for item in result["dispatched"]] == [JOB_UUID]
+        assert store.get_task(TASK_UUID)["status"] == "failed"
+        assert store.get_job(JOB_UUID)["status"] == "canceled"
+        assert store.get_job(JOB_UUID)["error_info"][0]["code"] == (
+            "task_aborted_by_runtime_restart"
+        )
     finally:
         bridge.close()
 
@@ -1046,6 +1133,36 @@ def test_restart_finishes_terminal_inventory_cleanup_without_reexecution(
     assert dispatcher.dispatched == []
 
 
+def test_restart_finishes_reconciled_attention_cleanup_without_reexecution(
+    store: WorkflowStore,
+) -> None:
+    """重启补扫已完成物理对账、但仍标记 requires_attention 的失败任务。"""
+
+    _seed_task(store, with_material=False)
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status = 'failed', "
+            "cleanup_status = 'requires_attention' WHERE uuid = ?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET status = 'failed', "
+            "uncertainty_reason = NULL WHERE workflow_task_uuid = ?",
+            (TASK_UUID,),
+        )
+
+    dispatcher = RecordingDispatcher()
+    restarted = _bridge(store, EdgeScheduler(dispatcher=dispatcher))
+    try:
+        recovered = restarted.recover_active_tasks()
+    finally:
+        restarted.close()
+
+    assert recovered == []
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert dispatcher.dispatched == []
+
+
 @pytest.mark.parametrize(
     ("outcome", "task_status"),
     [("failed", "failed"), ("canceled", "canceled"), ("timeout", "timeout")],
@@ -1221,6 +1338,9 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             "version": 1,
             "transfer": {
                 "material_param": "resource",
+                "source_owner_param": "",
+                "source_site_uuid_param": "",
+                "source_site_name_param": "",
                 "target_owner_param": "mount_resource",
                 "target_site_uuid_param": "site_uuid",
                 "target_site_name_param": "",
@@ -1583,13 +1703,13 @@ def test_edge_http_unknown_outcome_keeps_running_job_for_reconciliation(
         bridge.close()
 
 
-def test_restart_failed_job_with_uncertain_claim_blocks_scheduler_drain(
+def test_restart_failed_job_releases_uncertain_claim_and_allows_drain(
     store: WorkflowStore,
 ) -> None:
-    """重启失败但仍持不确定占用的作业必须阻止安全停止。
+    """重启失败释放旧执行权，不再阻止新 runtime 安全停止。
 
     参数：``store`` 是隔离任务权威。返回：无；断言新调度器未重放物理动作，
-    但排空状态仍按 Claim 报告原 Job。异常：持久事实漏出排空边界时测试失败。
+    且排空状态不再报告原 Job。异常：旧 Claim 泄漏出重启边界时测试失败。
     """
 
     task = _seed_task(store, with_material=False)
@@ -1618,14 +1738,14 @@ def test_restart_failed_job_with_uncertain_claim_blocks_scheduler_drain(
         restarted_bridge.close()
 
     assert restarted_scheduler.snapshot()["inflight_jobs"] == {}
-    assert drain["phase"] == "draining"
-    assert drain["active_device_job_ids"] == [JOB_UUID]
+    assert drain["phase"] == "drained"
+    assert drain["active_device_job_ids"] == []
 
 
-def test_terminal_recovery_freezes_inventory_claim_before_cleanup(
+def test_terminal_restart_recovery_keeps_released_claim_and_settled_cleanup(
     store: WorkflowStore,
 ) -> None:
-    """失败作业仍待物理结算时，启动恢复只能冻结库存 Claim，不能标记清理完成。"""
+    """重启终态恢复保持 Claim 已释放，清理状态已经结算。"""
 
     class _ClaimRecorder:
         """记录库存 Claim 生命周期转换的窄测试替身。"""
@@ -1648,9 +1768,8 @@ def test_terminal_recovery_freezes_inventory_claim_before_cleanup(
             *,
             known_claim_uuids: tuple[str, ...],
         ) -> tuple[str, ...]:
-            """确认测试 Claim 已在工作流库投影，不释放任何身份。"""
+            """记录恢复扫描，不释放任何未投影身份。"""
 
-            assert known_claim_uuids
             return ()
 
     _seed_task(store, with_material=False)
@@ -1679,9 +1798,85 @@ def test_terminal_recovery_freezes_inventory_claim_before_cleanup(
     finally:
         bridge.close()
 
-    assert inventory.transitions == [(claim["claim_uuid"], "uncertain")]
-    assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
-    assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "uncertain"
+    assert inventory.transitions == [(claim["claim_uuid"], "released")]
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
+
+
+def test_late_result_after_restart_is_ignored_as_stale_execution(
+    store: WorkflowStore,
+) -> None:
+    """重启已冻结结果并释放旧执行权，迟到结果不得覆盖该终态。"""
+
+    class _ClaimRecorder:
+        def __init__(self) -> None:
+            self.transitions: list[tuple[str, str]] = []
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            self.transitions.append((claim_uuid, target_state))
+
+        def release_unprojected_dispatch_permits(
+            self,
+            *,
+            known_claim_uuids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            return ()
+
+    _seed_task(store, with_material=False)
+    projection = TaskRuntimeProjection(store)
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[
+            {"lock_key": "/devices/reactor-a", "scope": "device"},
+        ],
+    )
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_execution_process_restarted(TASK_UUID)
+    claim = projection.get_execution_claim(JOB_UUID)
+    assert claim is not None
+    inventory = _ClaimRecorder()
+    bridge = _bridge(
+        store,
+        EdgeScheduler(
+            dispatcher=RecordingDispatcher(),
+            station_resources=inventory,
+        ),
+    )
+    try:
+        assert bridge._task_by_job == {}
+        bridge._on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome="failed",
+                return_info={},
+                error_info=[{"code": "late_unknown"}],
+                unknown_command_ids=[f"workflow-node-job:{JOB_UUID}"],
+            ),
+        )
+        bridge._on_job_outcome(
+            JOB_UUID,
+            CommittedJobOutcome(
+                outcome="canceled",
+                return_info={},
+                error_info=[],
+                unknown_command_ids=[],
+            ),
+        )
+        bridge._task_by_job[JOB_UUID] = TASK_UUID
+        bridge._on_job_finished(JOB_UUID, True, {"late": True}, "normal")
+    finally:
+        bridge.close()
+
+    assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
+    assert inventory.transitions == []
+    assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
 
 
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(
@@ -1709,13 +1904,13 @@ def test_close_is_idempotent_and_unregisters_scheduler_listeners(
     assert scheduler._execution_process_restarted_listeners == []
 
 
-def test_execution_process_restart_fails_task_and_stops_dag_advance(
+def test_execution_process_restart_fails_task_and_releases_dag_resources(
     store: WorkflowStore,
 ) -> None:
-    """动作执行进程重启必须失败整条任务并保留现场资源占用。
+    """动作执行进程重启必须失败整条任务并释放旧资源占用。
 
     参数：``store`` 是隔离工作流权威。返回无。异常：在途 Job 未失败、后继 Job
-    未跳过、内存 DAG 仍可推进，或 Claim/Fence 被提前释放时由断言失败。
+    未取消、内存 DAG 仍可推进，或 Claim/Fence 未释放时由断言失败。
     """
 
     _seed_two_node_debug_task(store)
@@ -1741,12 +1936,12 @@ def test_execution_process_restart_fails_task_and_stops_dag_advance(
 
         jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
         assert jobs[JOB_UUID]["status"] == "failed"
-        assert jobs[SECOND_JOB_UUID]["status"] == "skipped"
+        assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
         assert store.get_task(TASK_UUID)["status"] == "failed"
         snapshot = scheduler.snapshot()
         assert snapshot["workflows"][TASK_UUID]["state"] == "failed"
-        assert list(snapshot["inflight_jobs"]) == [JOB_UUID]
-        assert bridge.active_or_uncertain_job_ids() == {JOB_UUID}
+        assert snapshot["inflight_jobs"] == {}
+        assert bridge.active_or_uncertain_job_ids() == set()
     finally:
         bridge.close()
 
@@ -1817,7 +2012,7 @@ def test_execution_process_restart_skips_stale_task_and_converges_active_task(
 
     jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
     assert jobs[JOB_UUID]["status"] == "failed"
-    assert jobs[SECOND_JOB_UUID]["status"] == "skipped"
+    assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
     assert store.get_task(TASK_UUID)["status"] == "failed"
 
 
@@ -1827,7 +2022,7 @@ def test_restart_fails_running_task_between_nodes_without_physical_replay(
     """调度进程重启会失败处在两个节点之间的 running 任务。
 
     参数：``store`` 是隔离任务权威。返回无；断言已成功节点保持事实，未开始
-    节点跳过，父任务失败且没有物理重放。异常：恢复继续推进 DAG 会使测试失败。
+    节点取消，父任务失败且没有物理重放。异常：恢复继续推进 DAG 会使测试失败。
     """
 
     _seed_recoverable_test_mode_task(store)
@@ -1842,6 +2037,6 @@ def test_restart_fails_running_task_between_nodes_without_physical_replay(
     assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
     assert dispatcher.dispatched == []
     assert store.get_job(JOB_UUID)["status"] == "succeeded"
-    assert store.get_job(SECOND_JOB_UUID)["status"] == "skipped"
+    assert store.get_job(SECOND_JOB_UUID)["status"] == "canceled"
     assert store.get_task(TASK_UUID)["status"] == "failed"
     assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"

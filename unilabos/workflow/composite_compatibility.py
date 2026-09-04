@@ -96,6 +96,7 @@ def published_workflow_compatibility_projection(
         value_schema = _plain(goal_properties[name])
         if not isinstance(value_schema, dict):
             raise TypeError("已发布工作流输入 Schema 无效")
+        unit = value_schema.pop("x-unilabos-unit", None)
         has_schema_default = "default" in value_schema
         schema_default = value_schema.pop("default", None)
         has_default = name in goal_default
@@ -109,6 +110,7 @@ def published_workflow_compatibility_projection(
             schema=value_schema,
             required=name in required_inputs,
             io_type="target",
+            unit=unit,
         )
         descriptor: dict[str, Any] = {
             "name": name,
@@ -119,26 +121,33 @@ def published_workflow_compatibility_projection(
         }
         if has_default:
             descriptor["default"] = _plain(goal_default[name])
+        if unit is not None:
+            descriptor["unit"] = unit
         inputs.append(descriptor)
 
     outputs: list[dict[str, Any]] = []
     for name in output_order:
         value_schema = _plain(result_properties[name])
+        if not isinstance(value_schema, dict):
+            raise TypeError("已发布工作流输出 Schema 无效")
+        unit = value_schema.pop("x-unilabos-unit", None)
         handle = by_key[("source", name)]
         unilab = _validate_value_handle(
             handle,
             schema=value_schema,
             required=False,
             io_type="source",
+            unit=unit,
         )
-        outputs.append(
-            {
-                "name": name,
-                "schema": value_schema,
-                "implicit": unilab.get("implicit_passthrough") is True,
-                "handle_uuid": _uuid(handle.get("uuid")),
-            }
-        )
+        descriptor = {
+            "name": name,
+            "schema": value_schema,
+            "implicit": unilab.get("implicit_passthrough") is True,
+            "handle_uuid": _uuid(handle.get("uuid")),
+        }
+        if unit is not None:
+            descriptor["unit"] = unit
+        outputs.append(descriptor)
     _validate_ready_handle(by_key[("target", "ready")], "target")
     _validate_ready_handle(by_key[("source", "ready")], "source")
     expected_digest = _contract_digest(
@@ -492,12 +501,13 @@ def _validate_value_handle(
     schema: Mapping[str, Any],
     required: bool,
     io_type: str,
+    unit: Any = None,
 ) -> Mapping[str, Any]:
     """认证一个业务值连接点并返回框架元数据。
 
     参数：``handle`` 是业务连接点，``schema``/``required``/``io_type`` 是合同
-    期望。返回：认证后的 ``meta_data.unilab`` 映射。异常：方向、类型、必填性、
-    数据键或 Schema 不一致时抛出 ``ValueError``。
+    期望，``unit`` 是可选合同单位。返回：认证后的 ``meta_data.unilab`` 映射。
+    异常：方向、类型、必填性、数据键、单位或 Schema 不一致时抛出 ``ValueError``。
     """
 
     name = str(handle.get("handle_key"))
@@ -508,6 +518,14 @@ def _validate_value_handle(
         _plain(slot.get("allowed_resource_template_uuids"))
         if slot is not None
         else None
+    )
+    unit_matches = (
+        isinstance(unilab, Mapping)
+        and (
+            unilab.get("unit") == unit
+            if unit is not None
+            else "unit" not in unilab
+        )
     )
     if (
         not isinstance(unilab, Mapping)
@@ -520,6 +538,7 @@ def _validate_value_handle(
         or unilab.get("editor_control")
         != ("material_port" if slot is not None else "variable_selector")
         or _plain(unilab.get("allowed_resource_template_uuids")) != allowlist
+        or not unit_matches
         or not isinstance(unilab.get("implicit_passthrough"), bool)
         or (io_type == "target" and unilab.get("implicit_passthrough") is not False)
     ):
@@ -585,15 +604,19 @@ def _contract_digest(
         }
         if item.get("has_default") is True:
             descriptor["default"] = _plain(item["default"])
+        if "unit" in item:
+            descriptor["unit"] = _plain(item["unit"])
         input_descriptors.append(descriptor)
-    output_descriptors = [
-        {
+    output_descriptors = []
+    for item in outputs:
+        descriptor = {
             "name": item["name"],
             "schema": _plain(item["schema"]),
             "implicit": item["implicit"],
         }
-        for item in outputs
-    ]
+        if "unit" in item:
+            descriptor["unit"] = _plain(item["unit"])
+        output_descriptors.append(descriptor)
     payload = {
         "version": 1,
         "composition_allow_transparent": mode,
