@@ -101,6 +101,7 @@ from unilabos.workflow.published_contract import (
     PublishedContractConflict,
     PublishedContractInvalid,
     PublishedWorkflowContractStore,
+    published_contract_semantic_hash,
     published_graph_semantic_hash,
 )
 from unilabos.workflow.python_workflow_import import (
@@ -1570,21 +1571,24 @@ class WorkflowService:
             workflow_uuid = str(contract["workflow_uuid"])
             if not self._has_active_source(workflow_uuid):
                 continue
+            # 先记录当前来源的最新合同，再尝试恢复具体定义。冷启动时来源清单
+            # 可能刚安装了空骨架，旧实现因 ``get_workflow`` 尚未可见而直接丢掉
+            # 这条记录，后续就无法把发布合同的修订号预置到首次源码 Apply。
+            prior = latest_entries.get(workflow_uuid)
+            if prior is None or (
+                int(contract["version"]),
+                int(contract["workflow_revision"]),
+                str(contract["uuid"]),
+            ) > (
+                int(prior["contract"]["version"]),
+                int(prior["contract"]["workflow_revision"]),
+                str(prior["contract"]["uuid"]),
+            ):
+                latest_entries[workflow_uuid] = entry
             try:
                 self._definition_store.get_workflow(workflow_uuid)
                 contract_store.restore(contract)
                 restored_any = True
-                prior = latest_entries.get(workflow_uuid)
-                if prior is None or (
-                    int(contract["version"]),
-                    int(contract["workflow_revision"]),
-                    str(contract["uuid"]),
-                ) > (
-                    int(prior["contract"]["version"]),
-                    int(prior["contract"]["workflow_revision"]),
-                    str(prior["contract"]["uuid"]),
-                ):
-                    latest_entries[workflow_uuid] = entry
             except StoreNotFound:
                 continue
             except (PublishedContractConflict, PublishedContractInvalid) as error:
@@ -1606,9 +1610,7 @@ class WorkflowService:
                 contract_source_hash = str(contract["source_hash"])
                 if _HASH_TOKEN.fullmatch(contract_source_hash) is None:
                     raise ValueError("发布合同图摘要格式无效")
-                semantic_graph_hash = published_graph_semantic_hash(
-                    contract["graph_snapshot"]
-                )
+                semantic_graph_hash = published_contract_semantic_hash(contract)
                 # 与随后 candidate Apply 共用工作流锁，避免监视线程恰好在空骨架
                 # 检查后写入图，导致修订基线和候选基线分裂。
                 with self._authoring_lock(workflow_uuid):
@@ -1618,7 +1620,11 @@ class WorkflowService:
                             revision=revision,
                         )
                     )
-            except (StoreConflict, StoreNotFound, TypeError, ValueError):
+            except StoreNotFound:
+                # 兼容该方法在来源清单安装之前被调用的入口；下一次恢复会在
+                # 空骨架创建后重新建立同一发布修订基线。
+                continue
+            except (StoreConflict, TypeError, ValueError):
                 raise WorkflowError("source_publication_failed") from None
             if can_bootstrap:
                 bootstrap_revisions[workflow_uuid] = (
@@ -5270,12 +5276,14 @@ class WorkflowService:
                 # ``composite_child_not_found``，其嵌套图就无法重新生成。
                 self.restore_published_workflow_contracts()
                 continue
+            # 同一层的候选已经提交。先恢复本层刚激活的实验操作发布合同，
+            # 再重建模板目录；否则目录重建会看不到刚恢复的合同，下一轮父
+            # 工作流只能继续使用缺少子模板的旧目录并反复得到
+            # ``composite_catalog_mismatch``。
+            self.restore_published_workflow_contracts()
             self._rebuild_workspace_activation_catalog()
             for result in deferred_results:
                 self._require_workspace_activation_apply_complete(result)
-            # 同一层的候选已经提交且模板目录已换代。此时恢复本层刚激活的
-            # 实验操作发布合同，下一层（或固定点补偿轮）才能解析组合节点。
-            self.restore_published_workflow_contracts()
         unresolved_sources = any(
             self.get_authoring(workflow_uuid).get("state") != "applied"
             for workflow_uuid in registrations_by_uuid
@@ -5344,8 +5352,37 @@ class WorkflowService:
                     )
                     blocked.add(workflow_uuid)
                     continue
-                self._require_workspace_activation_apply_complete(result)
                 applied_any = True
+                apply_result = result.get("apply_result")
+                warnings = (
+                    apply_result.get("warnings")
+                    if isinstance(apply_result, Mapping)
+                    else None
+                )
+                warning_codes = {
+                    str(warning.get("code"))
+                    for warning in warnings or []
+                    if isinstance(warning, Mapping)
+                }
+                if (
+                    self.compiler is not None
+                    and warning_codes
+                    and warning_codes <= {"dependent_authoring_refresh_pending"}
+                ):
+                    # 补偿轮本来就是为了把隐式组合依赖推进到固定点。某些未发布
+                    # 或仍有用户编辑的引用方暂时不能刷新时，已成功提交的当前
+                    # 来源仍可继续提供工作流能力；若把这个业务待办升级成目录
+                    # 不可用，会让无关的有效工作流也无法启动。
+                    logger.warning(
+                        "工作区工作流已应用，但仍有引用方待处理: %s",
+                        ",".join(
+                            str(warning.get("message", ""))
+                            for warning in warnings or []
+                            if isinstance(warning, Mapping)
+                        ),
+                    )
+                else:
+                    self._require_workspace_activation_apply_complete(result)
             if not applied_any:
                 return
 

@@ -115,11 +115,12 @@ def published_graph_source_hash(graph: Mapping[str, Any]) -> str:
 
 
 def published_graph_semantic_hash(graph: Mapping[str, Any]) -> str:
-    """计算忽略存储时间戳后的发布图语义指纹。
+    """计算忽略存储时间戳和包目录摘要后的发布图语义指纹。
 
     参数：``graph`` 是发布时或重新编译得到的完整工作流图。返回：忽略工作流、
-    节点和连线上的 ``create_time``/``update_time`` 后的稳定摘要。异常：图结构
-    或执行器要求非法时抛 ``PublishedContractInvalid``。
+    节点和连线上的 ``create_time``/``update_time``，以及只记录构建来源的
+    ``package_catalog_digest`` 后的稳定摘要。异常：图结构或执行器要求非法时抛
+    ``PublishedContractInvalid``。
 
     时间戳属于当前定义存储的生命周期事实，不是发布合同语义；冷启动编译必然
     会生成新的时间戳。该摘要仅用于确认冷启动候选仍与历史合同是同一张图，持久
@@ -141,14 +142,53 @@ def published_graph_semantic_hash(graph: Mapping[str, Any]) -> str:
     )
 
 
+def published_contract_semantic_hash(contract: Mapping[str, Any]) -> str:
+    """计算已保存发布合同与重新编译工作流可比较的语义摘要。
+
+    参数：``contract`` 是发布目录中的完整合同。返回：与
+    :func:`published_graph_semantic_hash` 相同规则的摘要。发布时为避免把具体
+    设备身份暴露给父工作流，合同图会把设备 ``material_uuid`` 抽象为空值，
+    而重新编译得到的候选图仍带有具体设备 UUID；此函数用合同已有的执行器绑定
+    临时还原这一层信息，使两种表示可以得到同一个摘要。异常：合同字段缺失、
+    绑定结构非法或图不完整时抛出 ``PublishedContractInvalid``。
+    """
+
+    try:
+        graph = _plain(contract["graph_snapshot"])
+        binding_mapping = _plain(contract["executor_binding_mapping"])
+    except (KeyError, TypeError, ValueError):
+        raise PublishedContractInvalid("发布合同图摘要字段无效") from None
+    if not isinstance(graph, dict) or not isinstance(binding_mapping, Mapping):
+        raise PublishedContractInvalid("发布合同图摘要字段无效")
+    nodes = graph.get("nodes")
+    if not isinstance(nodes, list):
+        raise PublishedContractInvalid("发布合同图摘要字段无效")
+    # 合同图里的设备身份已被发布投影清空；填入按绑定 key 区分的稳定占位符后，
+    # ``published_graph_semantic_hash`` 会重新生成与候选图一致的执行器要求摘要。
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise PublishedContractInvalid("发布合同图摘要字段无效")
+        node_uuid = node.get("uuid")
+        binding_key = binding_mapping.get(str(node_uuid))
+        if binding_key is not None:
+            node["material_uuid"] = f"__published_executor__:{binding_key}"
+    return published_graph_semantic_hash(graph)
+
+
 def _strip_graph_lifecycle_timestamps(value: Any) -> Any:
-    """递归移除图投影中的存储生命周期时间戳。"""
+    """递归移除图投影中的存储时间戳和包目录构建来源摘要。"""
 
     if isinstance(value, dict):
         return {
             key: _strip_graph_lifecycle_timestamps(item)
             for key, item in value.items()
-            if key not in {"create_time", "update_time"}
+            if key not in {
+                "create_time",
+                "update_time",
+                # 该摘要覆盖整个包的发现结果；新增无关工作流也会改变它，
+                # 不能作为当前工作流图发生语义变化的证据。
+                "package_catalog_digest",
+            }
         }
     if isinstance(value, list):
         return [_strip_graph_lifecycle_timestamps(item) for item in value]
@@ -1168,6 +1208,7 @@ __all__ = [
     "PublishedContractConflict",
     "PublishedContractInvalid",
     "PublishedWorkflowContractStore",
+    "published_contract_semantic_hash",
     "published_graph_semantic_hash",
     "published_graph_source_hash",
 ]
