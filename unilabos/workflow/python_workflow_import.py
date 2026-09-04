@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
@@ -101,22 +102,34 @@ def validate_python_workflow_import(
             for character in normalized_name
         )
     ):
-        raise PythonWorkflowImportError("只允许上传单个 .py 文件")
+        raise PythonWorkflowImportError(
+            "文件名必须是单个 .py 文件名，不能包含目录路径、控制字符或其他扩展名"
+        )
     if not isinstance(python_source, str) or not python_source.strip():
         raise PythonWorkflowImportError("Python 工作流源码不能为空")
     try:
         python_source.encode("utf-8")
     except UnicodeEncodeError:
         raise PythonWorkflowImportError("Python 工作流源码必须是 UTF-8 文本") from None
+    try:
+        ast.parse(python_source)
+    except (SyntaxError, ValueError) as error:
+        lineno = getattr(error, "lineno", None)
+        offset = getattr(error, "offset", None)
+        location = f"第 {lineno} 行第 {offset} 列" if lineno else "源码"
+        raise PythonWorkflowImportError(
+            f"Python 工作流源码存在语法错误（{location}），请检查括号、缩进和装饰器写法"
+        ) from None
     workflow_uuid = declared_workflow_uuid(python_source)
     if workflow_uuid is None:
         raise PythonWorkflowImportError(
-            "Python 工作流必须包含唯一且显式的 @workflow(workflow_uuid=...) 声明"
+            "未找到唯一且有效的工作流身份声明，请保留一个"
+            " @workflow(workflow_uuid=\"工作流 UUID\") 装饰器"
         )
     workflow_type = declared_workflow_type(python_source)
     if workflow_type is None:
         raise PythonWorkflowImportError(
-            "Python 工作流的 workflow_type 必须是 normal 或 experiment_operation"
+            "工作流类型声明无效，workflow_type 只能填写 normal 或 experiment_operation"
         )
     if not isinstance(source_hash, str) or _SHA256_TOKEN.fullmatch(source_hash) is None:
         raise PythonWorkflowImportError("源码摘要无效")

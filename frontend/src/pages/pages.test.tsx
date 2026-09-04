@@ -266,6 +266,56 @@ describe('WorkflowsPage', () => {
     expect(JSON.parse(String(publishCall?.[1]?.body))).toEqual({ revision: sourceWorkflow.revision })
   })
 
+  /** 验证通用工作流页引用实验操作前，会按发布合同收集本次调用的必填参数。 */
+  it('collects required child inputs before inserting a published experiment operation', async () => {
+    const parent = { ...demoWorkflows[2], status: 'source' as const }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith(`/workflows/${parent.uuid}/graph`)) {
+        return response({ code: 0, data: { workflow: parent, nodes: [], edges: [] } })
+      }
+      if (url.includes('/published-workflow-contracts')) {
+        return response({ code: 0, data: { items: [{
+          uuid: 'contract-child-1',
+          workflow_uuid: 'child-workflow-1',
+          workflow_revision: 3,
+          name: '配样操作',
+          input_contract: {
+            version: 1,
+            parameters: [{ name: 'volume', title: '体积', schema: { type: 'number' }, required: true }],
+          },
+          output_contract: { version: 1, outputs: [] },
+          executor_requirements: [],
+        }], total: 1, page: 1, page_size: 100 } })
+      }
+      if (url.includes('/workflows?workflow_type=experiment_operation&status=published')) {
+        return response({ code: 0, data: { items: [{ uuid: 'child-workflow-1', name: '配样操作', workflow_type: 'experiment_operation', status: 'published' }], total: 1, page: 1, page_size: 100 } })
+      }
+      if (url.endsWith(`/workflows/${parent.uuid}/composite-invocations`) && init?.method === 'POST') {
+        return response({ code: 0, data: { workflow: { ...parent, revision: parent.revision + 1 }, nodes: [], edges: [] } })
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <WorkflowsPage workflows={[parent]} materials={demoMaterials} connected onNavigate={vi.fn()} onNotify={vi.fn()} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '引用已发布子工作流' }))
+    fireEvent.click(await screen.findByRole('button', { name: /配样操作/ }))
+
+    fireEvent.change(await screen.findByLabelText('子工作流参数 配样操作 调用 1 volume'), { target: { value: '2.5' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认引用配样操作' }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/workflows/${parent.uuid}/composite-invocations`,
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('"param":{"volume":2.5}'),
+      }),
+    ))
+  })
+
   it('selects the workflow targeted by a task navigation', async () => {
     const target = demoWorkflows[1]
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

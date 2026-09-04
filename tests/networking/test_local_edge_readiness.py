@@ -277,6 +277,27 @@ def test_readiness_tracks_live_edge_connection_state(tmp_path: Path) -> None:
         authority.stop()
 
 
+def test_edge_auth_error_explains_workspace_token_requirement(tmp_path: Path) -> None:
+    """Edge 鉴权失败时提示缺少或不匹配的工作区令牌及处理方式。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    application = FastAPI()
+    application.include_router(create_local_edge_control_router(authority))
+    client = TestClient(application)
+    try:
+        response = client.post(
+            "/api/v1/edge/sessions",
+            json=_registration_payload(),
+        )
+        assert response.status_code == 401
+        detail = response.json()["detail"]
+        assert "Authorization" in detail
+        assert "当前工作区" in detail
+        assert "Workspace Host" in detail
+    finally:
+        authority.stop()
+
+
 def test_new_connection_retires_stale_connected_session(tmp_path: Path) -> None:
     """新 Edge hello 必须清除 Backend 重启遗留的旧连接事实。
 

@@ -224,7 +224,7 @@ def test_workflow_template_list_and_detail_match_backend_shape() -> None:
 
 
 def test_workflow_template_query_uses_backend_business_errors() -> None:
-    """非法查询身份和未知模板必须使用 Backend HTTP 200 业务错误外壳。"""
+    """非法查询身份和未知模板必须返回稳定的业务错误码和可读说明。"""
 
     client = _client()
     invalid_path = client.get("/api/v1/workflow-node-templates/not-a-uuid")
@@ -238,11 +238,16 @@ def test_workflow_template_query_uses_backend_business_errors() -> None:
 
     assert invalid_path.status_code == 200
     assert invalid_path.json()["code"] == 1000
+    assert "模板查询参数不符合要求" in invalid_path.json()["error"]["msg"]
     assert invalid_resource_template.status_code == 200
     assert invalid_resource_template.json()["code"] == 1000
+    assert "模板查询参数不符合要求" in invalid_resource_template.json()["error"]["msg"]
     assert missing_template.status_code == 200
-    assert missing_template.json()["code"] == 5001
-    assert missing_template.json()["error"]["msg"]
+    assert missing_template.json()["code"] == 3002
+    assert missing_template.json()["error"]["msg"] == (
+        "工作流节点模板不存在或已被删除"
+        "（模板 UUID：ffffffff-ffff-4fff-8fff-ffffffffffff）"
+    )
 
 
 def test_workflow_template_list_exposes_scheduler_control_nodes() -> None:

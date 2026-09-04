@@ -22,14 +22,26 @@ HTTP_BODY_LIMIT = 8 * 1024 * 1024
 INTEGER_DIGIT_LIMIT = 4096
 JSON_DEPTH_LIMIT = 10_000
 
-INVALID_INPUT = {"code": 1000, "error": {"msg": "提交内容格式不正确"}}
+INVALID_INPUT = {
+    "code": 1000,
+    "error": {
+        "msg": "请求参数不符合接口要求，请检查必填字段、字段类型和 JSON 数据格式后重试"
+    },
+}
 CATALOG_UNAVAILABLE = {
     "code": 5001,
-    "error": {"msg": "设备动作模板暂不可用，请稍后重试"},
+    "error": {
+        "msg": (
+            "设备动作目录尚未就绪或加载失败，暂时无法编译或运行工作流；"
+            "请检查设备动作目录和 backend.log，待工作流运行时就绪后重试"
+        )
+    },
 }
 INTERNAL_ERROR = {
     "code": 1,
-    "error": {"msg": "本地工作流服务出现错误，请重试或查看日志"},
+    "error": {
+        "msg": "本地工作流服务处理失败，请查看 backend.log 中的具体错误后重试"
+    },
 }
 
 

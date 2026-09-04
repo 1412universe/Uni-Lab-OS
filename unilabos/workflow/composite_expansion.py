@@ -79,15 +79,16 @@ class CompositeExpansion:
 class _CompositeFailure(RuntimeError):
     """把内部失败收敛成稳定诊断而不泄漏快照内容。"""
 
-    def __init__(self, code: str, path: str) -> None:
-        """保存公共错误码和 JSON Pointer 路径。
+    def __init__(self, code: str, path: str, message: str | None = None) -> None:
+        """保存公共错误码、JSON Pointer 路径和可行动说明。
 
-        参数：``code`` 是稳定诊断码，``path`` 是失败位置。返回：无。异常：无；
-        构造器只保存已判定结果。
+        参数：``code`` 是稳定诊断码，``path`` 是失败位置，``message`` 是已知的
+        具体原因（可省略）。返回：无。异常：无；构造器只保存已判定结果。
         """
 
         self.code = code
         self.path = path
+        self.message = message
         super().__init__(code)
 
 
@@ -159,7 +160,10 @@ class CompositeAuthoring:
                 source = self._resolver.resolve(module, symbol)
             except (LookupError, PublishedSourceCatalogError):
                 raise _CompositeFailure(
-                    "composite_child_not_found", "/source"
+                    "composite_child_not_found",
+                    "/source",
+                    f"找不到被引用的实验操作 {module}:{symbol}；请先发布该实验操作，"
+                    "并确认源码中的导入模块和函数名与发布来源一致",
                 ) from None
             if not isinstance(source, PublishedWorkflowSource):
                 raise _CompositeFailure("composite_catalog_mismatch", "/source")
@@ -176,6 +180,8 @@ class CompositeAuthoring:
                 raise _CompositeFailure(
                     "composite_child_not_found",
                     "/child/workflow_uuid",
+                    f"已找到实验操作 {module}:{symbol}，但没有读取到其已应用版本 "
+                    f"{source.workflow_uuid}；请先应用该实验操作，再重新编译引用方",
                 ) from None
             return self._compile_snapshot(
                 parent_workflow_uuid=parent_uuid,
@@ -189,7 +195,11 @@ class CompositeAuthoring:
                 parent_input_contract=parent_input_contract,
             )
         except _CompositeFailure as error:
-            return _failed_expansion(error.code, error.path)
+            return _failed_expansion(
+                error.code,
+                error.path,
+                message=error.message,
+            )
 
     def _compile_snapshot(
         self,
@@ -609,7 +619,12 @@ def _source_from_template(
     try:
         source = resolver.resolve(module, symbol)
     except (LookupError, PublishedSourceCatalogError):
-        raise _CompositeFailure("composite_child_not_found", "/source") from None
+        raise _CompositeFailure(
+            "composite_child_not_found",
+            "/source",
+            f"找不到嵌套实验操作 {module}:{symbol}；请先发布该实验操作，"
+            "并确认设备动作目录中的来源身份未过期",
+        ) from None
     if not isinstance(source, PublishedWorkflowSource):
         raise _CompositeFailure("composite_catalog_mismatch", "/source")
     return source
@@ -1350,11 +1365,38 @@ def _reject_private_providers(
         visit(value, f"/keyword_arguments/{name}")
 
 
-def _failed_expansion(code: str, path: str) -> CompositeExpansion:
+_COMPOSITE_FAILURE_MESSAGES = {
+    "composite_child_not_found": (
+        "找不到被引用的实验操作；请先发布子工作流，并检查源码中的导入模块和函数名"
+    ),
+    "composite_child_unapplied": (
+        "被引用的实验操作尚未应用当前修订；请先应用子工作流，再重新编译引用方"
+    ),
+    "composite_catalog_mismatch": (
+        "组合工作流引用的设备动作模板与当前目录不一致；请刷新设备动作目录并重新编译"
+    ),
+    "composite_boundary_mapping_invalid": (
+        "组合工作流的输入或输出连接无效；请检查参数名称、必填项和物料占位符类型"
+    ),
+    "composite_recursive_reference": (
+        "组合工作流存在循环引用；请检查父、子工作流之间是否相互引用"
+    ),
+    "composite_external_private_edge": (
+        "组合工作流引用了子工作流内部节点；请只连接子工作流公开的输入和输出"
+    ),
+}
+
+
+def _failed_expansion(
+    code: str,
+    path: str,
+    *,
+    message: str | None = None,
+) -> CompositeExpansion:
     """构造不含任何候选事实的单诊断失败结果。
 
-    参数：``code`` 是稳定错误码，``path`` 是 JSON Pointer。返回：零图事实、
-    单诊断的组合展开结果。异常：无。
+    参数：``code`` 是稳定错误码，``path`` 是 JSON Pointer，``message`` 是已知的
+    具体原因（可省略）。返回：零图事实、单诊断的组合展开结果。异常：无。
     """
 
     return CompositeExpansion(
@@ -1375,7 +1417,10 @@ def _failed_expansion(code: str, path: str) -> CompositeExpansion:
                 "severity": "error",
                 # 路径是服务端可定位的合同字段，不泄露快照内容；保留它能让
                 # 前端在插入组合节点失败时直接指出是来源、目录还是合同 pin。
-                "message": f"组合工作流创作合同校验失败（{path}）",
+                "message": (
+                    f"{message or _COMPOSITE_FAILURE_MESSAGES.get(code, '组合工作流展开失败')}"
+                    f"（字段：{path}）"
+                ),
             },
         ),
     )

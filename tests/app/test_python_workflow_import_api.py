@@ -186,12 +186,35 @@ def test_python_file_import_rejects_invalid_source_without_partial_workflow(
     try:
         response = _upload(client, "raise RuntimeError('must never execute')\n")
         assert response.status_code == 200
-        assert response.json() == {
-            "code": 1000,
-            "error": {"msg": "提交内容格式不正确"},
-        }
+        assert response.json()["code"] == 1000
+        assert response.json()["error"]["msg"] == (
+            "Python 工作流导入失败：未找到唯一且有效的工作流身份声明，请保留一个"
+            " @workflow(workflow_uuid=\"工作流 UUID\") 装饰器"
+        )
         assert store.count_rows("workflow") == 0
         assert store.count_rows("workflow_node") == 0
+    finally:
+        service.close()
+
+
+def test_python_file_import_explains_source_failure_and_file_requirements(
+    tmp_path: Any,
+) -> None:
+    """Python 导入失败时应指出源码问题或文件名要求，而不是只返回通用错误。"""
+
+    client, service, store = _client(tmp_path)
+    try:
+        syntax_error = _upload(client, "def broken(:\n")
+        assert syntax_error.status_code == 200
+        assert syntax_error.json()["code"] == 1000
+        assert "Python 工作流导入失败" in syntax_error.json()["error"]["msg"]
+        assert "语法错误" in syntax_error.json()["error"]["msg"]
+
+        invalid_name = _upload(client, _source(), file_name="nested/sample.py")
+        assert invalid_name.status_code == 200
+        assert invalid_name.json()["code"] == 1000
+        assert "文件名必须是单个 .py 文件名" in invalid_name.json()["error"]["msg"]
+        assert store.count_rows("workflow") == 0
     finally:
         service.close()
 
@@ -213,6 +236,9 @@ def test_python_file_import_rejects_compile_error_without_partial_workflow(
         response = _upload(client, invalid_source)
         assert response.status_code == 200
         assert response.json()["code"] == 3003
+        assert "Python 工作流导入失败" in response.json()["error"]["msg"]
+        assert "源码编译未通过" in response.json()["error"]["msg"]
+        assert "unknown" in response.json()["error"]["msg"]
         assert store.count_rows("workflow") == 0
         assert store.count_rows("workflow_node") == 0
     finally:
@@ -372,6 +398,9 @@ def test_python_file_import_requires_compiler_and_filename_header(
         assert unavailable.json()["code"] == 5001
         assert missing_name.status_code == 200
         assert missing_name.json()["code"] == 1000
+        assert missing_name.json()["error"]["msg"] == (
+            "Python 工作流导入失败：请求头 X-Workflow-Filename 不能为空，必须提供"
+        )
         assert store.count_rows("workflow") == 0
     finally:
         service.close()
@@ -434,10 +463,10 @@ def test_python_file_import_without_unique_domain_target_fails_closed(
             file_name="restart-safe.py",
         )
         assert response.status_code == 200
-        assert response.json() == {
-            "code": 1,
-            "error": {"msg": "当前没有唯一可写的领域包，无法保存工作流源码"},
-        }
+        assert response.json()["code"] == 1
+        assert response.json()["error"]["msg"] == (
+            "Python 工作流导入失败：当前没有唯一可写的领域包，无法保存工作流源码"
+        )
         assert first_definitions.count_rows("workflow") == 0
         assert first_store.count_rows("workflow") == 0
         assert first_store.count_rows("workflow_node") == 0

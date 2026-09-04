@@ -139,6 +139,9 @@ def test_unregistered_child_source_remains_not_found() -> None:
     assert [item["code"] for item in expansion.diagnostics] == [
         "composite_child_not_found"
     ]
+    message = str(expansion.diagnostics[0]["message"])
+    assert "找不到被引用的实验操作" in message
+    assert "导入模块和函数名" in message
     assert provider.read_count == 0
 
 

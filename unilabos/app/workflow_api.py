@@ -123,6 +123,122 @@ def _is_definition_write_request(path: str, method: str) -> bool:
     return True
 
 
+def _import_request_error(
+    path: str,
+    validation_error: RequestValidationError | None = None,
+    request_error: Exception | None = None,
+) -> WorkflowError:
+    """为两条工作流导入接口生成请求层错误说明。
+
+    参数：``path`` 是当前请求路径；``validation_error`` 是可选的 FastAPI 请求
+    校验详情；``request_error`` 是读取请求体或解码 JSON 时的受控异常。返回：
+    保留业务码 ``1000`` 的工作流错误，并尽量指出具体字段、类型或请求体问题；
+    其他路径使用公共参数错误说明。异常：无；该函数不读取请求体，也不改变
+    HTTP 状态码。
+    """
+
+    context = None
+    if path == "/api/v1/workflows/import":
+        context = "JSON 工作流导入失败："
+        default_message = (
+            "请求体必须是合法 JSON 对象，且 nodes、edges、name 等字段类型必须符合"
+            "接口要求"
+        )
+    elif path == "/api/v1/local/workflows/import-python":
+        context = "Python 工作流导入失败："
+        default_message = (
+            "请同时提供 UTF-8 编码的 .py 文件和 X-Workflow-Filename 文件名请求头"
+        )
+    else:
+        return WorkflowError("invalid_input")
+
+    if request_error is not None:
+        raw_message = str(request_error)
+        if "超过公共预算" in raw_message:
+            detail = "请求体大小超过 8 MiB 限制，请缩小工作流文件或 JSON 后重新上传"
+        elif "Content-Length" in raw_message:
+            detail = "请求头 Content-Length 无效，请重新发送完整的工作流请求"
+        elif path == "/api/v1/workflows/import":
+            detail = "请求体不是合法 JSON，请检查引号、括号、逗号和字段类型"
+        else:
+            detail = default_message
+        return WorkflowError("invalid_input", message=f"{context}{detail}")
+    if validation_error is None:
+        return WorkflowError("invalid_input", message=f"{context}{default_message}")
+    issues = _describe_import_validation_errors(validation_error)
+    detail = "；".join(issues) if issues else default_message
+    return WorkflowError("invalid_input", message=f"{context}{detail}")
+
+
+def _describe_import_validation_errors(
+    error: RequestValidationError,
+) -> list[str]:
+    """把 FastAPI 的导入请求校验项转换成用户可直接修改的提示。
+
+    参数：``error`` 是请求模型校验异常。返回：最多四条不含原始输入值的中文
+    字段说明；不向响应泄露源码、文件内容或内部堆栈。异常：单条校验项格式
+    异常时跳过该项，由调用方回退到接口级说明。
+    """
+
+    descriptions: list[str] = []
+    for item in error.errors()[:4]:
+        if not isinstance(item, dict):
+            continue
+        location = item.get("loc")
+        if not isinstance(location, (tuple, list)):
+            location = ()
+        parts = [str(part) for part in location if part not in {"body", "header"}]
+        field = ".".join(parts) if parts else "请求体"
+        if location and location[0] == "header":
+            field = (
+                "请求头 X-Workflow-Filename"
+                if field.lower() == "x-workflow-filename"
+                else f"请求头 {field}"
+            )
+        elif field != "请求体":
+            field = f"字段 {field}"
+        error_type = str(item.get("type") or "")
+        if error_type == "missing" or error_type.endswith("_missing"):
+            reason = "不能为空，必须提供"
+        elif field == "请求体" and "model" in error_type:
+            reason = "必须是 JSON 对象"
+        elif "list" in error_type:
+            reason = "必须是数组"
+        elif "dict" in error_type or "mapping" in error_type:
+            reason = "必须是 JSON 对象"
+        elif "string" in error_type:
+            reason = "必须是字符串"
+        elif "bytes" in error_type:
+            reason = "必须是文件内容"
+        elif "bool" in error_type:
+            reason = "必须是布尔值（true 或 false）"
+        elif "int" in error_type or "float" in error_type:
+            reason = "必须是数字"
+        elif "literal" in error_type:
+            reason = "只能填写接口允许的固定值"
+        elif "extra" in error_type:
+            reason = "不是接口支持的字段"
+        else:
+            reason = "格式不正确"
+        separator = "" if field == "请求体" else " "
+        descriptions.append(f"{field}{separator}{reason}")
+    return descriptions
+
+
+def _with_import_context(error: WorkflowError, *, context: str) -> WorkflowError:
+    """为导入服务错误补充 JSON 或 Python 来源，同时避免重复前缀。
+
+    参数：``error`` 是服务层返回的稳定业务错误；``context`` 是以冒号结尾的
+    ``JSON 工作流导入失败：`` 或 ``Python 工作流导入失败：``。返回：保留原业务
+    错误码、只在消息尚未带来源时补充上下文的错误；HTTP 状态与响应结构不变。
+    异常：无。
+    """
+
+    if error.message.startswith(context):
+        return error
+    return WorkflowError(error.code, message=f"{context}{error.message}")
+
+
 async def _read_limited_body(request: Request) -> bytes:
     """增量读取工作流（Workflow）请求体并在首次超限时停止。
 
@@ -187,8 +303,13 @@ class _BackendJSONRoute(APIRoute):
                     OverflowError,
                     UnicodeError,
                     ValueError,
-                ):
-                    return _error(WorkflowError("invalid_input"))
+                ) as error:
+                    return _error(
+                        _import_request_error(
+                            request.url.path,
+                            request_error=error,
+                        )
+                    )
             return await route_handler(request)
 
         return backend_json_route_handler
@@ -749,8 +870,8 @@ def _success(data: Any = None, *, status: int = 200) -> _BackendJSONResponse:
     return _BackendJSONResponse(status_code=status, content=content)
 
 
-def _error(error: WorkflowError) -> _BackendJSONResponse:
-    conflict_codes = {
+_CONFLICT_ERROR_CODES = frozenset(
+    {
         "conflict",
         "draft_hash_conflict",
         "workflow_revision_conflict",
@@ -768,18 +889,32 @@ def _error(error: WorkflowError) -> _BackendJSONResponse:
         "startup_mode_conflict",
         "startup_mode_switch_blocked",
     }
-    if error.code in {"invalid_input", "invalid_composite_child_type"}:
-        business_code = 1000
-    elif error.code in {"not_found", "workflow_not_found"}:
-        business_code = 3002
-    elif error.code in conflict_codes:
-        business_code = 3003
-    elif error.code in {"read_only_mode", "develop_mode_required"}:
-        business_code = 1001
-    elif error.code == "template_catalog_unavailable":
-        business_code = 5001
-    else:
-        business_code = 1
+)
+
+
+def _business_code(error_code: str) -> int:
+    """把领域错误分类映射为稳定的 Backend 数值业务码。
+
+    参数：``error_code`` 是工作流服务的内部错误分类。返回：响应体 ``code``；
+    HTTP 状态码仍由具体路由自行决定，调用方不能用该数值替代 HTTP 状态。
+    异常：无；未知分类使用通用内部错误码 ``1``，避免把内部名称直接暴露给前端。
+    """
+
+    if error_code in {"invalid_input", "invalid_composite_child_type"}:
+        return 1000
+    if error_code in {"not_found", "workflow_not_found"}:
+        return 3002
+    if error_code in _CONFLICT_ERROR_CODES:
+        return 3003
+    if error_code in {"read_only_mode", "develop_mode_required"}:
+        return 1001
+    if error_code == "template_catalog_unavailable":
+        return 5001
+    return 1
+
+
+def _error(error: WorkflowError) -> _BackendJSONResponse:
+    business_code = _business_code(error.code)
     error_content = {"msg": error.message}
     if error.code in {
         "workflow_identity_mismatch",
@@ -970,14 +1105,21 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def import_legacy_workflow(
         body: LegacyWorkflowImportRequest,
     ) -> JSONResponse:
-        """校验并在一个事务中导入旧版工作流图。"""
+        """校验并在一个事务中导入旧版 JSON 工作流图。
 
-        return _success(
-            _with_workflow_status(
-                service.import_legacy_workflow(payload=body.model_dump())
-            ),
-            status=201,
-        )
+        参数：``body`` 是旧版工作流根对象，支持直接传字段或使用 ``data`` 包装。
+        返回：转换为领域包 Python 定义后的完整工作流图，HTTP 201。异常：节点、
+        连线、模板引用或工作流类型不合法时返回带具体字段位置的业务错误。
+        """
+
+        try:
+            imported = service.import_legacy_workflow(payload=body.model_dump())
+        except WorkflowError as error:
+            raise _with_import_context(
+                error,
+                context="JSON 工作流导入失败：",
+            ) from None
+        return _success(_with_workflow_status(imported), status=201)
 
     @router.post("/local/workflows/import-python", status_code=201)
     def import_python_workflow(
@@ -994,16 +1136,24 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         try:
             python_source = python_file.decode("utf-8")
         except UnicodeDecodeError:
-            raise WorkflowError("invalid_input") from None
-        return _success(
-            _with_workflow_status(
-                service.import_python_workflow(
-                    file_name=file_name,
-                    python_source=python_source,
-                )
-            ),
-            status=201,
-        )
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "Python 工作流导入失败：上传文件不是有效的 UTF-8 文本，"
+                    "请将 .py 文件保存为 UTF-8 编码后重新上传"
+                ),
+            ) from None
+        try:
+            imported = service.import_python_workflow(
+                file_name=file_name,
+                python_source=python_source,
+            )
+        except WorkflowError as error:
+            raise _with_import_context(
+                error,
+                context="Python 工作流导入失败：",
+            ) from None
+        return _success(_with_workflow_status(imported), status=201)
 
     @router.get(
         "/workflows",
@@ -1824,7 +1974,10 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             )
             return _BackendJSONResponse(
                 status_code=status,
-                content={"code": status, "error": {"msg": error.message}},
+                content={
+                    "code": _business_code(error.code),
+                    "error": {"msg": error.message},
+                },
             )
 
     @router.get("/workflow-interventions")
@@ -2017,10 +2170,19 @@ def install_workflow_api(
             "/api/v1/authoring",
         )
         if request.url.path.endswith("/manual-confirmation"):
+            error = WorkflowError("invalid_input")
             return _BackendJSONResponse(
                 status_code=400,
-                content={"code": 400, "error": {"msg": "请求参数错误"}},
+                content={
+                    "code": _business_code(error.code),
+                    "error": {"msg": error.message},
+                },
             )
+        if request.url.path in {
+            "/api/v1/workflows/import",
+            "/api/v1/local/workflows/import-python",
+        }:
+            return _error(_import_request_error(request.url.path, error))
         if any(
             request.url.path == prefix or request.url.path.startswith(f"{prefix}/")
             for prefix in workflow_prefixes

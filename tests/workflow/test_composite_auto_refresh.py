@@ -18,6 +18,10 @@ from .test_c1_r2_static_expansion_contract import (
     PARENT_WORKFLOW_UUID,
 )
 from .test_c1_r4_production_wiring import _child_source, _write_package
+from .test_published_composite_restart import (
+    _RegistryWithPump,
+    _child_source as _executable_child_source,
+)
 
 
 def _apply_source(
@@ -146,6 +150,70 @@ def test_compatible_operation_apply_automatically_refreshes_clean_parent(
         inventory_store.close()
 
 
+def test_first_publication_recompiles_parent_blocked_by_unpublished_child(
+    tmp_path: Path,
+) -> None:
+    """首次发布实验操作后须恢复此前只因未发布而失败的父工作流。
+
+    参数：``tmp_path`` 隔离真实领域包、发布目录和库存库。返回：无；先确认父
+    工作流因找不到未发布子操作而关闭，再经公共发布接口确认父源码自动重编译
+    并应用。异常：若发布只更新子目录而遗漏已登记父源码，状态断言保持 RED。
+    """
+
+    reset_workflow_service_for_test()
+    package_root = tmp_path / "editable"
+    package_root.mkdir()
+    _write_package(package_root)
+    # 显式存在的空发布目录代表一个已经启用发布制度的领域包；与“从未有过
+    # 发布目录”的旧包兼容路径区分开，确保本测试验证新包的发布门槛。
+    # 发布目录属于 manifest 声明的实际 Python 包目录，而不是选择目录；否则
+    # 组合根无法看到它，测试会误走“从未有过发布目录”的兼容路径。
+    package_root.joinpath("c1_product_lab", "workflow_publications.json").write_text(
+        '{"version": 1, "publications": []}\n',
+        encoding="utf-8",
+    )
+    package_root.joinpath("c1_product_lab/workflows/child.py").write_text(
+        _executable_child_source(CHILD_WORKFLOW_UUID).replace(
+            "def child():",
+            "def prepare_sample():",
+        ),
+        encoding="utf-8",
+    )
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        service, _projection = compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=_RegistryWithPump(),
+            editable_package_roots=(package_root,),
+        )
+        parent_before = service.get_authoring(PARENT_WORKFLOW_UUID)
+        assert parent_before["state"] == "draft_invalid"
+        assert {item["code"] for item in parent_before["draft"]["diagnostics"]} == {
+            "composite_child_not_found"
+        }
+
+        child_revision = int(
+            service.get_graph(CHILD_WORKFLOW_UUID)["workflow"]["revision"]
+        )
+        published = service.publish_workflow_contract(
+            CHILD_WORKFLOW_UUID,
+            revision=child_revision,
+        )
+
+        assert published["workflow_uuid"] == CHILD_WORKFLOW_UUID
+        parent_after = service.get_authoring(PARENT_WORKFLOW_UUID)
+        assert parent_after["state"] == "applied"
+        assert parent_after["draft"]["diagnostics"] == []
+        assert {node["type"] for node in service.get_graph(PARENT_WORKFLOW_UUID)["nodes"]} >= {
+            "workflow",
+            "ILab",
+        }
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
+
+
 def test_child_updates_never_apply_parent_file_changed_before_watcher(
     tmp_path: Path,
 ) -> None:
@@ -188,7 +256,8 @@ def test_child_updates_never_apply_parent_file_changed_before_watcher(
             {
                 "code": "dependent_authoring_refresh_pending",
                 "message": (
-                    f"实验操作已更新，但引用方 {PARENT_WORKFLOW_UUID} 仍需处理兼容问题"
+                    f"实验操作已更新，但引用方工作流 {PARENT_WORKFLOW_UUID} 未能自动更新；"
+                    "请打开该工作流，检查组合节点参数和设备动作模板，重新编译并应用"
                 ),
             }
         ]

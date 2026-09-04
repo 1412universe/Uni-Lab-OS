@@ -1300,7 +1300,10 @@ class LocalEdgeControlAuthority:
         """
 
         if not api_key:
-            raise ValueError("Local Edge authority requires an API key")
+            raise ValueError(
+                "本地 Edge 执行服务未配置工作区通信令牌；请通过 Workspace Host 启动，"
+                "或设置 UNILABOS_EDGECONTROLCONFIG_API_KEY"
+            )
         self.store = store
         self.api_key = api_key
         self.device_state = None
@@ -1600,7 +1603,14 @@ def create_local_edge_control_router(
     def authorize(value: str | None) -> None:
         expected = f"Bearer {authority.api_key}"
         if value is None or not hmac.compare_digest(value, expected):
-            raise HTTPException(status_code=401, detail="Edge token invalid")
+            raise HTTPException(
+                status_code=401,
+                detail=(
+                    "Edge 请求未通过身份校验：Authorization 头缺失，或 Bearer 令牌与"
+                    "当前工作区不一致；请由 Workspace Host 启动 Edge Runtime，"
+                    "或使用当前工作区令牌"
+                ),
+            )
 
     @router.get("/readiness")
     def readiness() -> JSONResponse:
@@ -1761,7 +1771,10 @@ def create_local_edge_control_router(
         if authorization is None or not hmac.compare_digest(
             authorization, f"Bearer {authority.api_key}"
         ):
-            await websocket.close(code=4401)
+            await websocket.close(
+                code=4401,
+                reason="Edge 请求未通过身份校验：请使用当前工作区的 Bearer 令牌",
+            )
             return
         await websocket.accept()
         session_uuid = ""

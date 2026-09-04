@@ -139,7 +139,7 @@ class WorkflowTemplateQueryService:
         """按 UUID 返回节点模板及其全部句柄模板。
 
         参数说明：``template_uuid`` 是路径身份；返回后端（Backend）详情形状
-        ``template + handles``，未知身份使用业务码 5001。
+        ``template + handles``，未知模板使用业务码 3002。
         """
 
         template_identity = _validated_uuid(template_uuid, "template_uuid")
@@ -154,8 +154,8 @@ class WorkflowTemplateQueryService:
         )
         if action is None:
             raise WorkflowTemplateQueryError(
-                5001,
-                f"workflow node template {template_identity} does not exist",
+                3002,
+                f"工作流节点模板不存在或已被删除（模板 UUID：{template_identity}）",
             )
         return _omit_none(
             {
@@ -174,7 +174,10 @@ def _validated_uuid(value: str, field: str) -> str:
     try:
         return validate_uuid(value)
     except (TypeError, ValueError):
-        raise WorkflowTemplateQueryError(1000, f"invalid {field}") from None
+        raise WorkflowTemplateQueryError(
+            1000,
+            f"{field} 必须是有效的 UUID，请检查后重试",
+        ) from None
 
 
 def _action_order(action: AuthoringCatalogAction) -> tuple[str, str]:
@@ -210,7 +213,7 @@ def _summary(action: AuthoringCatalogAction) -> dict[str, Any]:
     if not isinstance(resource_template, Mapping):
         raise WorkflowTemplateQueryError(
             5004,
-            "workflow node template is missing its resource template summary",
+            "工作流节点模板缺少关联的资源模板信息，无法展示模板；请检查设备动作目录配置",
         )
     result = {
         "uuid": template["uuid"],
@@ -346,7 +349,12 @@ def install_workflow_template_api(
         """
 
         if request.url.path.startswith("/api/v1/workflow-node-templates"):
-            return _error(WorkflowTemplateQueryError(1000, "Invalid request parameter"))
+            return _error(
+                WorkflowTemplateQueryError(
+                    1000,
+                    "模板查询参数不符合要求，请检查 UUID、页码和每页数量的格式",
+                )
+            )
         return await request_validation_exception_handler(request, error)
 
     app.include_router(create_workflow_template_router(service))

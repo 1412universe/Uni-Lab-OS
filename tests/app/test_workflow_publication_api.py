@@ -337,6 +337,59 @@ def test_composite_invocation_expands_one_frozen_contract_into_parent(tmp_path) 
     store.close()
 
 
+def test_same_published_operation_can_be_invoked_twice_in_one_parent(tmp_path) -> None:
+    """同一已发布实验操作的两次调用须拥有独立调用根与展开节点。
+
+    参数：``tmp_path`` 隔离发布合同与父工作流存储。返回：无。异常：若公共
+    HTTP 接口按子工作流身份错误去重，或两次静态展开产生相同节点身份，由断言暴露。
+    """
+
+    client, store = _client(tmp_path)
+    child_uuid, child_revision = _create_workflow_with_one_node(
+        client,
+        workflow_type="experiment_operation",
+    )
+    contract = client.post(
+        f"/api/v1/workflows/{child_uuid}/publications",
+        json={"revision": child_revision},
+    ).json()["data"]
+    parent = client.post(
+        "/api/v1/workflows",
+        json={"name": "重复调用父工作流", "tags": [], "meta_data": {}},
+    ).json()["data"]
+    invocation_uuids = (
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    )
+
+    graph = None
+    revision = parent["revision"]
+    for invocation_uuid in invocation_uuids:
+        response = client.post(
+            f"/api/v1/workflows/{parent['uuid']}/composite-invocations",
+            json={
+                "revision": revision,
+                "contract_uuid": contract["uuid"],
+                "invocation_uuid": invocation_uuid,
+                "device_bindings": {},
+                "pose": {"x": 120, "y": 100},
+                "param": {},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["code"] == 0
+        graph = response.json()["data"]
+        revision = graph["workflow"]["revision"]
+
+    assert graph is not None
+    roots = [node for node in graph["nodes"] if node["type"] == "workflow"]
+    assert {node["uuid"] for node in roots} == set(invocation_uuids)
+    descendants = [node for node in graph["nodes"] if node.get("parent_uuid")]
+    assert {node["parent_uuid"] for node in descendants} == set(invocation_uuids)
+    assert len({node["uuid"] for node in descendants}) == 2
+    store.close()
+
+
 def test_composite_invocation_resolves_published_template_with_catalog_projection(
     tmp_path,
 ) -> None:

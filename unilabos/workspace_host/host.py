@@ -1171,7 +1171,8 @@ class WorkspaceHost:
                         self._stop_component(plan.component)
                         raise WorkspaceHostError(
                             "backend_readiness_failed",
-                            "Backend 工作流运行时初始化失败；请查看 backend.log",
+                            "Backend 工作流运行时初始化失败：工作流源码或设备动作目录未能完成加载；"
+                            "请先查看 backend.log 中最早的一条错误，再重试",
                         )
                 if status == 200 and accepts(payload):
                     return payload
@@ -1179,7 +1180,8 @@ class WorkspaceHost:
         self._stop_component(plan.component)
         raise WorkspaceHostError(
             "backend_readiness_failed",
-            f"等待 Backend 就绪超时：{path}",
+            f"Backend 在规定时间内未就绪（等待接口：{path}）；请检查 backend.log，"
+            "确认工作流运行时和设备动作目录已完成加载",
         )
 
     def _record_backend_readiness_progress(

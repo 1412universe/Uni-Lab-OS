@@ -24,8 +24,18 @@ import {
 import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowSource, loadWorkflowTaskGraph, publishWorkflow } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget, WorkflowTaskPriority } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
+import { CompositeWorkflowParameterEditor, compositeContractFields, compositeParameterDrafts, compositeParameterProblem, serialiseCompositeParameters } from '../components/CompositeWorkflowParameterEditor'
 import { serialiseTaskInput } from './TasksPage'
 import { WorkflowDag } from '../components/WorkflowDag'
+
+interface PendingChildInvocation {
+  /** 用户刚选择、尚未写入父工作流的发布合同。 */
+  contract: Record<string, any>
+  /** 从发布合同生成的调用输入字段。 */
+  fields: ContractField[]
+  /** 本次调用独立保存的参数文本。 */
+  drafts: Record<string, string>
+}
 
 function tagForWorkflow(workflow: WorkflowDefinition) {
   if (workflow.tags[0]) return workflow.tags[0]
@@ -98,6 +108,7 @@ export function WorkflowsPage({
   )
   const [workspaceView, setWorkspaceView] = useState<'topology' | 'contract' | 'diagnostics' | 'run'>('topology')
   const [childPickerOpen, setChildPickerOpen] = useState(false)
+  const [pendingChildInvocation, setPendingChildInvocation] = useState<PendingChildInvocation | null>(null)
   const [runInput, setRunInput] = useState<Record<string, string>>({})
   const [runDescription, setRunDescription] = useState('从实验运营控制台创建')
   const [runMode, setRunMode] = useState<'normal' | 'step'>('normal')
@@ -263,12 +274,20 @@ export function WorkflowsPage({
       onNotify(`导入失败：${error instanceof Error ? error.message : '未知错误'}`)
     }
   }
-  async function referenceChildWorkflow(contract: Record<string, any>) {
+  /**
+   * 把用户确认的一次已发布实验操作调用写入当前父工作流。
+   * 参数：``pending`` 包含发布合同和本次调用独立填写的固定参数。
+   * 返回：无；成功后刷新父图与工作流目录。异常：接口错误转成页面通知，
+   * 必填值缺失或格式错误时保留表单供用户修正。
+   */
+  async function referenceChildWorkflow(pending: PendingChildInvocation) {
     if (!connected) return
     if (!detail) return
+    const contract = pending.contract
     const contractUuid = String(contract.uuid || '')
     if (!contractUuid) { onNotify('引用失败：发布合同缺少 UUID'); return }
     try {
+      const param = serialiseCompositeParameters(pending.fields, pending.drafts)
       const requirements = Array.isArray(contract.executor_requirements) ? contract.executor_requirements : []
       const deviceBindings = Object.fromEntries(requirements.map((requirement: Record<string, unknown>) => {
         const templateUuid = String(requirement.resource_template_uuid || '')
@@ -285,8 +304,10 @@ export function WorkflowsPage({
         contractUuid,
         deviceBindings,
         pose: { x: 120 + graphNodes.length * 220, y: 180 },
+        param,
       })
       setChildPickerOpen(false)
+      setPendingChildInvocation(null)
       onNotify(`已引用实验操作“${String(contract.name || contract.workflow_uuid)}”，当前工作流已回到 source`)
       await queryClient.invalidateQueries({ queryKey: ['workflow-graph', detail.uuid] })
       await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
@@ -437,7 +458,7 @@ export function WorkflowsPage({
               </div>
               {workspaceView === 'topology' ? <div className="workflow-canvas">
                 <div className="canvas-toolbar"><span><GitBranch size={15} />发布修订拓扑</span><div className="canvas-toolbar-actions"><small>{graphQuery.isFetching ? '正在读取图…' : graphQuery.isError ? '图接口不可用，显示定义摘要' : 'Edge 权威图'}</small><Button icon={<WorkflowIcon size={13} />} disabled={!connected || !detail} onClick={() => setChildPickerOpen((open) => !open)}>引用已发布子工作流</Button></div></div>
-                {childPickerOpen ? <div className="child-workflow-picker"><header><div><strong>选择可引用的实验操作</strong><small>仅展示已发布的 experiment_operation；普通工作流不会出现在这里。</small></div><button type="button" onClick={() => setChildPickerOpen(false)}>×</button></header>{publishedChildrenQuery.isFetching ? <p>正在读取已发布实验操作…</p> : publishedChildrenQuery.data?.length ? <div>{publishedChildrenQuery.data.map((contract) => <button type="button" key={String(contract.uuid)} onClick={() => void referenceChildWorkflow(contract)}><WorkflowIcon size={15} /><span><strong>{String(contract.name || contract.workflow_uuid)}</strong><small>{String(contract.workflow_uuid || '')} · r{String(contract.workflow_revision || contract.version || '')} · {Array.isArray(contract.input_contract?.parameters) ? contract.input_contract.parameters.length : 0} 个输入 · {Array.isArray(contract.output_contract?.outputs) ? contract.output_contract.outputs.length : 0} 个输出</small></span><Plus size={14} /></button>)}</div> : <p>暂无可引用的已发布实验操作。</p>}</div> : null}
+                {childPickerOpen ? <div className="child-workflow-picker"><header><div><strong>{pendingChildInvocation ? `配置“${String(pendingChildInvocation.contract.name || pendingChildInvocation.contract.workflow_uuid)}”` : '选择可引用的实验操作'}</strong><small>{pendingChildInvocation ? '参数只属于本次调用；再次引用同一操作时可填写不同值。' : '仅展示已发布的 experiment_operation；普通工作流不会出现在这里。'}</small></div><button type="button" onClick={() => { setPendingChildInvocation(null); setChildPickerOpen(false) }}>×</button></header>{pendingChildInvocation ? <section className="child-invocation-form"><CompositeWorkflowParameterEditor operationName={String(pendingChildInvocation.contract.name || pendingChildInvocation.contract.workflow_uuid)} invocationIndex={1} fields={pendingChildInvocation.fields} drafts={pendingChildInvocation.drafts} onChange={(parameterName, text) => setPendingChildInvocation((current) => current ? { ...current, drafts: { ...current.drafts, [parameterName]: text } } : current)} /><footer><Button onClick={() => setPendingChildInvocation(null)}>返回列表</Button><Button tone="primary" disabled={Boolean(compositeParameterProblem(pendingChildInvocation.fields, pendingChildInvocation.drafts))} onClick={() => void referenceChildWorkflow(pendingChildInvocation)}>确认引用{String(pendingChildInvocation.contract.name || pendingChildInvocation.contract.workflow_uuid)}</Button></footer></section> : publishedChildrenQuery.isFetching ? <p>正在读取已发布实验操作…</p> : publishedChildrenQuery.data?.length ? <div>{publishedChildrenQuery.data.map((contract) => <button type="button" key={String(contract.uuid)} onClick={() => { const fields = compositeContractFields(contract.input_contract?.parameters); setPendingChildInvocation({ contract, fields, drafts: compositeParameterDrafts(fields) }) }}><WorkflowIcon size={15} /><span><strong>{String(contract.name || contract.workflow_uuid)}</strong><small>{String(contract.workflow_uuid || '')} · r{String(contract.workflow_revision || contract.version || '')} · {Array.isArray(contract.input_contract?.parameters) ? contract.input_contract.parameters.length : 0} 个输入 · {Array.isArray(contract.output_contract?.outputs) ? contract.output_contract.outputs.length : 0} 个输出</small></span><Plus size={14} /></button>)}</div> : <p>暂无可引用的已发布实验操作。</p>}</div> : null}
                 <WorkflowDag
                   key={`${detail.uuid}:${detail.revision}`}
                   nodes={graphNodes}

@@ -317,3 +317,90 @@ def test_legacy_import_accepts_wrapped_payload_and_rebuilds_identities(tmp_path)
     assert imported["nodes"][0]["name"] == "旧计算节点"
     assert store.count_rows("workflow") == 1
     store.close()
+
+
+def test_legacy_import_explains_json_field_and_reference_errors(tmp_path) -> None:
+    """旧版 JSON 导入失败时应指出缺少字段、字段位置或模板引用问题。"""
+
+    client, store = _client(tmp_path, with_import=True)
+    try:
+        missing_nodes = client.post(
+            "/api/v1/workflows/import",
+            json={"name": "缺少节点的流程"},
+        )
+        assert missing_nodes.status_code == 200
+        assert missing_nodes.json()["code"] == 1000
+        assert "nodes 必须是至少包含一个节点的数组" in missing_nodes.json()[
+            "error"
+        ]["msg"]
+
+        malformed_json = client.post(
+            "/api/v1/workflows/import",
+            content=b'{"name":',
+            headers={"Content-Type": "application/json"},
+        )
+        assert malformed_json.status_code == 200
+        assert malformed_json.json()["code"] == 1000
+        assert malformed_json.json()["error"]["msg"] == (
+            "JSON 工作流导入失败：请求体不是合法 JSON，请检查引号、括号、逗号和字段类型"
+        )
+
+        invalid_root = client.post(
+            "/api/v1/workflows/import",
+            json=[{"name": "不能是数组"}],
+        )
+        assert invalid_root.status_code == 200
+        assert invalid_root.json()["code"] == 1000
+        assert invalid_root.json()["error"]["msg"] == (
+            "JSON 工作流导入失败：请求体必须是 JSON 对象"
+        )
+
+        invalid_nodes_type = client.post(
+            "/api/v1/workflows/import",
+            json={"name": "节点类型错误的流程", "nodes": "不是数组"},
+        )
+        assert invalid_nodes_type.status_code == 200
+        assert invalid_nodes_type.json()["code"] == 1000
+        assert invalid_nodes_type.json()["error"]["msg"] == (
+            "JSON 工作流导入失败：字段 nodes 必须是数组"
+        )
+
+        invalid_node_uuid = client.post(
+            "/api/v1/workflows/import",
+            json={
+                "name": "节点身份错误的流程",
+                "nodes": [{"uuid": "not-a-uuid", "type": "compute"}],
+                "edges": [],
+            },
+        )
+        assert invalid_node_uuid.status_code == 200
+        assert invalid_node_uuid.json()["code"] == 1000
+        assert "nodes[0].uuid" in invalid_node_uuid.json()["error"]["msg"]
+
+        missing_template = client.post(
+            "/api/v1/workflows/import",
+            json={
+                "name": "模板不存在的流程",
+                "nodes": [
+                    {
+                        "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                        "workflow_node_template_uuid": (
+                            "ffffffff-ffff-4fff-8fff-ffffffffffff"
+                        ),
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        assert missing_template.status_code == 200
+        assert missing_template.json()["code"] == 3002
+        assert "nodes[0] 引用的工作流节点模板不存在" in missing_template.json()[
+            "error"
+        ]["msg"]
+        assert "ffffffff-ffff-4fff-8fff-ffffffffffff" in missing_template.json()[
+            "error"
+        ]["msg"]
+        assert store.count_rows("workflow") == 0
+    finally:
+        client.close()
+        store.close()

@@ -11,7 +11,10 @@ from unilabos.workflow.composite_contract_refresh import (
     CompositeContractRefreshPending,
     refresh_published_composite_invocations,
 )
-from unilabos.workflow.composite_invocation import expand_composite_invocation
+from unilabos.workflow.composite_invocation import (
+    CompositeInvocationInvalid,
+    expand_composite_invocation,
+)
 
 # 下面的固定 UUID 分别代表子定义、父定义、调用根、上游节点、发布合同和边界连线；
 # 固定身份使测试能够直接证明自动替换前后的节点、连接点（Handle）和边 UUID
@@ -110,11 +113,12 @@ def _handle_uuid(template_uuid: str, name: str) -> str:
     return str(uuid5(UUID(template_uuid), f"published-handle:target:{name}"))
 
 
-def _parent_graph(contract: dict) -> dict:
+def _parent_graph(contract: dict, *, param: dict | None = None) -> dict:
     """构造含一个上游节点和一个已展开子工作流调用的父图。
 
-    参数：``contract`` 是待插入的旧发布合同。返回：带一条外部参数连线的完整父
-    图。异常：合同无法展开时传播 ``CompositeInvocationInvalid``。
+    参数：``contract`` 是待插入的旧发布合同，``param`` 是本次调用的固定参数，
+    省略时使用测试默认值。返回：带一条外部参数连线的完整父图。异常：合同无法
+    展开时传播 ``CompositeInvocationInvalid``。
     """
 
     base = {
@@ -139,7 +143,7 @@ def _parent_graph(contract: dict) -> dict:
         contract=contract,
         invocation_uuid=INVOCATION_UUID,
         pose={"x": 300, "y": 100},
-        param={"sample": "manual"},
+        param={"sample": "manual"} if param is None else param,
         device_bindings={},
     )
     return {
@@ -157,6 +161,42 @@ def _parent_graph(contract: dict) -> dict:
             },
         ],
     }
+
+
+def test_composite_invocation_rejects_missing_required_input_before_expansion() -> None:
+    """组合调用缺少必填参数时须在生成任何节点前关闭式拒绝。
+
+    参数：无。返回：无。异常：若展开函数继续生成节点或没有返回稳定的参数错误，
+    由断言暴露。
+    """
+
+    contract = _contract(
+        identity=OLD_CONTRACT_UUID,
+        template_uuid=OLD_TEMPLATE_UUID,
+        revision=1,
+        inputs=[_input("sample", required=True)],
+    )
+
+    with pytest.raises(CompositeInvocationInvalid, match="缺少必填输入参数"):
+        _parent_graph(contract, param={})
+
+
+def test_composite_invocation_rejects_unknown_input_before_expansion() -> None:
+    """组合调用包含发布合同未声明的参数时须拒绝而不能静默丢弃。
+
+    参数：无。返回：无。异常：若未知参数被静默丢弃并继续展开，或错误类型偏离
+    ``CompositeInvocationInvalid``，由断言暴露。
+    """
+
+    contract = _contract(
+        identity=OLD_CONTRACT_UUID,
+        template_uuid=OLD_TEMPLATE_UUID,
+        revision=1,
+        inputs=[_input("sample", required=True)],
+    )
+
+    with pytest.raises(CompositeInvocationInvalid, match="未知输入参数"):
+        _parent_graph(contract, param={"sample": "manual", "extra": "ignored"})
 
 
 def test_refresh_preserves_invocation_and_remaps_boundary_by_parameter_name() -> None:

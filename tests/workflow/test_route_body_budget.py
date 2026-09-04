@@ -18,7 +18,9 @@ _EXTERNAL_INTEGER_DIGITS = 4096
 _WORKFLOW_UUID = "11111111-1111-4111-8111-111111111111"
 _INVALID_INPUT = {
     "code": 1000,
-    "error": {"msg": "提交内容格式不正确"},
+    "error": {
+        "msg": "请求参数不符合接口要求，请检查必填字段、字段类型和 JSON 数据格式后重试"
+    },
 }
 _BODY_ROUTES = [
     pytest.param("POST", "/api/v1/workflows", id="post-workflow"),

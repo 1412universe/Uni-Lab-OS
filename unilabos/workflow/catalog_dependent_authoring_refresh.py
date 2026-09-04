@@ -170,7 +170,10 @@ def _append_refresh_warning(
 
     warning = {
         "code": "dependent_authoring_refresh_pending",
-        "message": f"实验操作已更新，但引用方 {workflow_uuid} 仍需处理兼容问题",
+        "message": (
+            f"实验操作已更新，但引用方工作流 {workflow_uuid} 未能自动更新；"
+            "请打开该工作流，检查组合节点参数和设备动作模板，重新编译并应用"
+        ),
     }
     if warning not in warnings:
         warnings.append(warning)

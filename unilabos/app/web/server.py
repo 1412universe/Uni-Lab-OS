@@ -193,7 +193,12 @@ async def workflow_runtime_starting_handler(
                     "workflow_runtime_start_failed"
                     if failed
                     else "workflow_runtime_not_ready"
-                )
+                ),
+                "message": (
+                    "工作流运行时启动失败，请查看 backend.log 中的完整上下文"
+                    if failed
+                    else f"工作流运行时正在启动（当前阶段：{phase}），请稍候重试"
+                ),
             },
         },
         headers={"Retry-After": "1"},
@@ -223,7 +228,15 @@ def api_readiness() -> Response:
         payload["observability"] = {"traceUiUrl": signoz_ui_url}
     if runtime_error is not None:
         payload["status"] = "failed"
-        payload["error"] = {"code": "workflow_runtime_start_failed"}
+        detail = str(runtime_error).strip()
+        payload["error"] = {
+            "code": "workflow_runtime_start_failed",
+            "message": (
+                f"工作流运行时初始化失败：{detail}；请查看 backend.log 中的完整上下文"
+                if detail
+                else "工作流运行时初始化失败；请查看 backend.log 中的完整上下文"
+            ),
+        }
     return JSONResponse(status_code=200 if ready else 503, content=payload)
 
 # noinspection PyTypeChecker

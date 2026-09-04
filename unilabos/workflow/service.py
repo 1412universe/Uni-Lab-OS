@@ -166,21 +166,30 @@ _OPERATION_CATEGORY_META_KEY = "operation_category_uuid"
 _OPERATION_CATEGORY_UNSET = object()
 
 _ERRORS = {
-    "invalid_input": (400, "提交内容格式不正确"),
+    "invalid_input": (
+        400,
+        "请求参数不符合接口要求，请检查必填字段、字段类型和 JSON 数据格式后重试",
+    ),
     "read_only_mode": (
         403,
         "生产模式只允许查看已发布普通工作流和创建工作流任务",
     ),
     "develop_mode_required": (403, "单步调度仅在 develop 启动模式可用"),
     "develop_task_conflict": (409, "develop 模式已有未结束的执行任务"),
-    "preflight_failed": (409, "Step Task 创建前的 Preflight 未通过"),
+    "preflight_failed": (
+        409,
+        "任务尚未创建：执行前检查未通过，请根据返回的检查项补齐前置条件后重试",
+    ),
     "startup_mode_conflict": (409, "启动模式已变化，请刷新后重试"),
     "startup_mode_switch_blocked": (
         409,
         "存在未结束或未完成清理的任务，不能切换模式",
     ),
-    "not_found": (404, "请求的资源不存在"),
-    "conflict": (409, "资源已发生冲突，请刷新后重试"),
+    "not_found": (
+        404,
+        "请求的工作流、任务、节点或其他资源不存在，可能已被删除或尚未创建",
+    ),
+    "conflict": (409, "请求与当前数据状态冲突，请刷新最新数据后再重试"),
     "workflow_not_found": (404, "工作流不存在或已被删除"),
     "draft_hash_conflict": (
         409,
@@ -202,7 +211,10 @@ _ERRORS = {
         409,
         "设备动作模板已更新，请重新编译并检查工作流",
     ),
-    "candidate_not_ready": (409, "当前草稿尚未生成可应用的工作流"),
+    "candidate_not_ready": (
+        409,
+        "当前草稿还没有生成可以应用的工作流，请先完成编译并修复编译错误",
+    ),
     "draft_invalid": (422, "草稿存在错误，修复后才能应用"),
     "candidate_invalid": (422, "工作流校验失败，请检查节点、连线和输入输出"),
     "candidate_identity_conflict": (
@@ -214,7 +226,10 @@ _ERRORS = {
     "material_template_mismatch": (409, "物料资源模板与消费者约束不兼容"),
     "template_catalog_unavailable": (
         503,
-        "设备动作模板暂不可用，请稍后重试",
+        (
+            "设备动作目录尚未就绪或加载失败，暂时无法编译或运行工作流；"
+            "请检查设备动作目录和 backend.log，待工作流运行时就绪后重试"
+        ),
     ),
     "source_target_unavailable": (
         503,
@@ -240,7 +255,10 @@ _ERRORS = {
         409,
         "只能引用当前修订已发布的实验操作",
     ),
-    "internal_error": (500, "本地工作流服务出现错误，请重试或查看日志"),
+    "internal_error": (
+        500,
+        "本地工作流服务处理失败，请查看 backend.log 中的具体错误后重试",
+    ),
 }
 _HASH_TOKEN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ISOLATED_WORKSPACE_ACTIVATION_ERRORS = frozenset(
@@ -1694,6 +1712,28 @@ class WorkflowService:
 
         updated: list[str] = []
         pending: list[dict[str, str]] = []
+        source_dependents = set(
+            self._composite_dependent_workflow_uuids(
+                str(contract["workflow_uuid"]),
+            )
+        )
+        # 旧版领域包声明不一定记录 ``dependency_workflow_uuids``。这类父源码在
+        # 子操作首次发布前只能留下稳定的 ``composite_child_not_found`` 诊断；
+        # 目录新增合同后统一重试这些受阻来源，由编译器判断它实际依赖哪个子操作。
+        for registration in self.list_registered_sources():
+            workflow_uuid = str(registration["workflow_uuid"])
+            try:
+                authoring = self.get_authoring(workflow_uuid)
+            except WorkflowError:
+                continue
+            draft = authoring.get("draft")
+            diagnostics = draft.get("diagnostics") if isinstance(draft, dict) else []
+            if {
+                str(item.get("code"))
+                for item in diagnostics or []
+                if isinstance(item, dict) and item.get("code")
+            } == {"composite_child_not_found"}:
+                source_dependents.add(workflow_uuid)
         page = 1
         while True:
             listed = self._definition_store.list_workflows(
@@ -1707,7 +1747,22 @@ class WorkflowService:
                 if parent_uuid == contract.get("workflow_uuid"):
                     continue
                 try:
+                    if parent_uuid in source_dependents:
+                        recovered = self._recover_first_published_source_dependent(
+                            parent_uuid=parent_uuid,
+                        )
+                        if recovered:
+                            updated.append(parent_uuid)
                     graph = self._definition_store.get_graph(parent_uuid)
+                except CompositeContractRefreshPending as error:
+                    pending.append(
+                        {
+                            "workflow_uuid": parent_uuid,
+                            "code": error.code,
+                            "message": str(error),
+                        }
+                    )
+                    continue
                 except StoreNotFound:
                     continue
                 if not graph_references_composite_child(
@@ -1777,6 +1832,72 @@ class WorkflowService:
             "updated_workflow_uuids": sorted(set(updated)),
             "pending": pending,
         }
+
+    def _recover_first_published_source_dependent(
+        self,
+        *,
+        parent_uuid: str,
+    ) -> bool:
+        """恢复只因子实验操作尚未发布而无法应用的父源码。
+
+        参数：``parent_uuid`` 是领域包 AST 已确认引用本次子工作流的父工作流
+        身份。返回：本方法重新编译并应用父源码时返回 ``True``；父源码本来已经
+        应用时返回 ``False``。异常：存在其他诊断、未应用编辑或候选无法提交时抛
+        ``CompositeContractRefreshPending``，发布结果会把它公开为待处理项，绝不
+        覆盖用户编辑。状态不变量：仅有 ``composite_child_not_found`` 诊断的登记
+        源码才允许自动恢复，且始终保留领域包中的原始作者源码字节。
+        """
+
+        before = self.get_authoring(parent_uuid)
+        if before.get("state") == "applied":
+            return False
+        draft = before.get("draft")
+        diagnostics = draft.get("diagnostics") if isinstance(draft, dict) else None
+        diagnostic_codes = {
+            str(item.get("code"))
+            for item in diagnostics or []
+            if isinstance(item, dict) and item.get("code")
+        }
+        if diagnostic_codes != {"composite_child_not_found"}:
+            raise CompositeContractRefreshPending(
+                "composite_parent_dirty",
+                "引用方存在其他诊断或尚未应用的编辑，本次未自动应用",
+            )
+        refreshed = self.reconcile_registered_source(
+            parent_uuid,
+            force_compile=True,
+            preserve_author_source=True,
+        )
+        candidate = refreshed.get("candidate")
+        if not isinstance(candidate, dict):
+            refreshed_draft = refreshed.get("draft")
+            refreshed_diagnostics = (
+                refreshed_draft.get("diagnostics")
+                if isinstance(refreshed_draft, dict)
+                else []
+            )
+            if {
+                str(item.get("code"))
+                for item in refreshed_diagnostics or []
+                if isinstance(item, dict) and item.get("code")
+            } == {"composite_child_not_found"}:
+                return False
+            raise CompositeContractRefreshPending(
+                "composite_parent_invalid",
+                "引用方在子工作流发布后仍未生成可应用版本",
+            )
+        candidate_hash = candidate.get("candidate_hash")
+        if not isinstance(candidate_hash, str) or not candidate_hash:
+            raise CompositeContractRefreshPending(
+                "composite_parent_invalid",
+                "引用方候选缺少稳定身份",
+            )
+        self.apply_authoring(
+            parent_uuid,
+            candidate_hash=candidate_hash,
+            preserve_author_source=True,
+        )
+        return True
 
     def _published_executor_bindings_are_valid(
         self,
@@ -2708,18 +2829,49 @@ class WorkflowService:
         definition = (
             payload.get("data") if isinstance(payload.get("data"), Mapping) else payload
         )
+        if not isinstance(definition, Mapping):
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "JSON 工作流导入失败：请求体必须是 JSON 对象，不能是数组、"
+                    "字符串或空值"
+                ),
+            )
         name_value = definition.get("name") or definition.get("workflow_name")
         if not isinstance(name_value, str) or not name_value.strip():
-            raise WorkflowError("invalid_input")
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "JSON 工作流导入失败：缺少工作流名称，请填写 name 或"
+                    " workflow_name，"
+                    "且名称不能为空"
+                ),
+            )
         source_nodes = definition.get("nodes")
         source_edges = definition.get("edges", [])
         if not isinstance(source_nodes, list) or not source_nodes:
-            raise WorkflowError("invalid_input")
+            raise WorkflowError(
+                "invalid_input",
+                message="JSON 工作流导入失败：nodes 必须是至少包含一个节点的数组",
+            )
         if not isinstance(source_edges, list):
-            raise WorkflowError("invalid_input")
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "JSON 工作流导入失败：edges 必须是数组；没有连线时请传 []"
+                    " 或省略"
+                ),
+            )
         if definition.get("inventory_requirements") not in (None, []):
             # Local 的数量型库存需求必须走已对齐的任务准入合同，不能静默丢弃。
-            raise WorkflowError("invalid_input")
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "JSON 工作流导入失败：暂不支持在导入图中携带"
+                    " inventory_requirements；"
+                    "请先导入工作流，再通过任务输入接口配置物料需求"
+                ),
+            )
         if self._source_target is None:
             raise WorkflowError("source_target_unavailable")
         if self.compiler is None:
@@ -2728,12 +2880,19 @@ class WorkflowService:
         old_to_new: dict[str, str] = {}
         nodes: list[dict[str, Any]] = []
         try:
-            for source in source_nodes:
+            for index, source in enumerate(source_nodes):
                 if not isinstance(source, Mapping):
-                    raise WorkflowDefinitionInvalid("nodes 必须是对象数组")
-                old_uuid = validate_uuid(str(source.get("uuid")))
+                    raise WorkflowDefinitionInvalid(f"nodes[{index}] 必须是对象")
+                try:
+                    old_uuid = validate_uuid(str(source.get("uuid")))
+                except (TypeError, ValueError):
+                    raise WorkflowDefinitionInvalid(
+                        f"nodes[{index}].uuid 必须是有效且非空的 UUID"
+                    ) from None
                 if old_uuid in old_to_new:
-                    raise WorkflowDefinitionInvalid("旧版节点 UUID 重复")
+                    raise WorkflowDefinitionInvalid(
+                        f"nodes[{index}].uuid 与前面的节点重复（UUID：{old_uuid}）"
+                    )
                 node_payload = dict(source)
                 node_payload["workflow_node_template_uuid"] = source.get(
                     "workflow_node_template_uuid"
@@ -2741,43 +2900,112 @@ class WorkflowService:
                 template = None
                 template_uuid = node_payload.get("workflow_node_template_uuid")
                 if template_uuid is not None:
-                    template = self._definition_store.get_node_template(
-                        validate_uuid(str(template_uuid))
+                    try:
+                        template_uuid = validate_uuid(str(template_uuid))
+                    except (TypeError, ValueError):
+                        raise WorkflowDefinitionInvalid(
+                            f"nodes[{index}].workflow_node_template_uuid 必须是有效"
+                            " UUID"
+                        ) from None
+                    try:
+                        template = self._definition_store.get_node_template(
+                            template_uuid
+                        )
+                    except StoreNotFound:
+                        raise WorkflowError(
+                            "not_found",
+                            message=(
+                                f"nodes[{index}] 引用的工作流节点模板不存在"
+                                f"（模板 UUID：{template_uuid}）"
+                            ),
+                        ) from None
+                try:
+                    node = build_workflow_node(
+                        payload=node_payload,
+                        template=template,
                     )
-                node = build_workflow_node(payload=node_payload, template=template)
+                except WorkflowDefinitionInvalid as error:
+                    raise WorkflowDefinitionInvalid(
+                        f"nodes[{index}] 校验失败：{error}"
+                    ) from None
                 old_to_new[old_uuid] = node["uuid"]
                 nodes.append(node)
             for index, source in enumerate(source_nodes):
                 parent_uuid = source.get("parent_uuid")
                 if parent_uuid is not None:
-                    nodes[index]["parent_uuid"] = old_to_new[
-                        validate_uuid(str(parent_uuid))
-                    ]
+                    try:
+                        parent_identity = validate_uuid(str(parent_uuid))
+                    except (TypeError, ValueError):
+                        raise WorkflowDefinitionInvalid(
+                            f"nodes[{index}].parent_uuid 必须是有效 UUID"
+                        ) from None
+                    if parent_identity not in old_to_new:
+                        raise WorkflowDefinitionInvalid(
+                            f"nodes[{index}].parent_uuid 引用了不存在的节点"
+                            f"（UUID：{parent_identity}）"
+                        )
+                    nodes[index]["parent_uuid"] = old_to_new[parent_identity]
             edges: list[dict[str, Any]] = []
-            for source in source_edges:
+            for index, source in enumerate(source_edges):
                 if not isinstance(source, Mapping):
-                    raise WorkflowDefinitionInvalid("edges 必须是对象数组")
+                    raise WorkflowDefinitionInvalid(f"edges[{index}] 必须是对象")
                 edge_payload = dict(source)
-                edge_payload["source_node_uuid"] = old_to_new[
-                    validate_uuid(str(source.get("source_node_uuid")))
-                ]
-                edge_payload["target_node_uuid"] = old_to_new[
-                    validate_uuid(str(source.get("target_node_uuid")))
-                ]
-                edges.append(build_workflow_edge(edge_payload))
-            tags = normalize_json_array(definition.get("tags"))
-            meta_data = normalize_json_object(definition.get("meta_data"))
-            workflow_type = normalize_workflow_type(definition.get("workflow_type"))
+                for field in ("source_node_uuid", "target_node_uuid"):
+                    try:
+                        node_identity = validate_uuid(str(source.get(field)))
+                    except (TypeError, ValueError):
+                        raise WorkflowDefinitionInvalid(
+                            f"edges[{index}].{field} 必须是有效 UUID"
+                        ) from None
+                    if node_identity not in old_to_new:
+                        raise WorkflowDefinitionInvalid(
+                            f"edges[{index}].{field} 引用了不存在的节点"
+                            f"（UUID：{node_identity}）"
+                        )
+                    edge_payload[field] = old_to_new[node_identity]
+                try:
+                    edges.append(build_workflow_edge(edge_payload))
+                except WorkflowDefinitionInvalid as error:
+                    raise WorkflowDefinitionInvalid(
+                        f"edges[{index}] 校验失败：{error}"
+                    ) from None
+            try:
+                tags = normalize_json_array(definition.get("tags"))
+            except (TypeError, ValueError):
+                raise WorkflowDefinitionInvalid("tags 必须是 JSON 数组") from None
+            try:
+                meta_data = normalize_json_object(definition.get("meta_data"))
+            except (TypeError, ValueError):
+                raise WorkflowDefinitionInvalid("meta_data 必须是 JSON 对象") from None
+            try:
+                workflow_type = normalize_workflow_type(definition.get("workflow_type"))
+            except (TypeError, ValueError):
+                raise WorkflowDefinitionInvalid(
+                    "workflow_type 只能是 normal 或 experiment_operation"
+                ) from None
             public_meta_data = dict(meta_data)
             public_meta_data.pop("unilab", None)
-        except (
-            KeyError,
-            TypeError,
-            ValueError,
-            ValidationError,
-            WorkflowDefinitionInvalid,
-        ):
-            raise WorkflowError("invalid_input") from None
+        except WorkflowDefinitionInvalid as error:
+            raise WorkflowError(
+                "invalid_input",
+                message=f"JSON 工作流导入失败：{error}",
+            ) from None
+        except ValidationError:
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "JSON 工作流导入失败：节点或连线字段类型不正确，请检查每个对象的"
+                    " UUID、名称、参数和连接点字段"
+                ),
+            ) from None
+        except (KeyError, TypeError, ValueError):
+            raise WorkflowError(
+                "invalid_input",
+                message=(
+                    "JSON 工作流导入失败：节点、连线或工作流类型不符合导入要求，"
+                    "请检查字段名称、字段类型和引用关系"
+                ),
+            ) from None
         except StoreNotFound:
             raise WorkflowError("not_found") from None
         except StoreAuthoringConflict as error:
@@ -3015,8 +3243,21 @@ class WorkflowService:
                 python_source=python_source,
                 source_hash=_sha256(encoded),
             )
-        except (AttributeError, PythonWorkflowImportError, UnicodeEncodeError):
-            raise WorkflowError("invalid_input") from None
+        except PythonWorkflowImportError as error:
+            raise WorkflowError(
+                "invalid_input",
+                message=str(error),
+            ) from None
+        except UnicodeEncodeError:
+            raise WorkflowError(
+                "invalid_input",
+                message="Python 工作流源码无法按 UTF-8 编码，请检查文件内容后重新上传",
+            ) from None
+        except AttributeError:
+            raise WorkflowError(
+                "invalid_input",
+                message="源码必须是文本内容，不能是空值或其他类型",
+            ) from None
         if self.compiler is None:
             raise WorkflowError("template_catalog_unavailable")
         if self._source_target is None:
@@ -3048,7 +3289,12 @@ class WorkflowService:
                 )
             )
         except Exception:
-            raise WorkflowError("internal_error") from None
+            raise WorkflowError(
+                "internal_error",
+                message=(
+                    "源码编译器处理异常，请查看 backend.log 中的具体错误"
+                ),
+            ) from None
         if compilation.valid and compilation.normalized_python_source is not None:
             function_name = self._authoring_function_name_from_source(
                 compilation.normalized_python_source,
@@ -3079,9 +3325,12 @@ class WorkflowService:
             message = (
                 str(diagnostic.get("message"))
                 if isinstance(diagnostic, Mapping) and diagnostic.get("message")
-                else "Python 工作流未能生成可信候选图"
+                else "源码编译未能生成可信候选图，请检查工作流声明、节点和设备动作参数"
             )
-            raise WorkflowError("draft_invalid", message=message)
+            raise WorkflowError(
+                "draft_invalid",
+                message=f"源码编译未通过：{message}",
+            )
 
         graph = candidate["graph"]
         workflow = graph["workflow"]
@@ -5456,7 +5705,8 @@ class WorkflowService:
                     # 来源仍可继续提供工作流能力；若把这个业务待办升级成目录
                     # 不可用，会让无关的有效工作流也无法启动。
                     logger.warning(
-                        "工作区工作流已应用，但仍有引用方待处理: %s",
+                        "工作区工作流已应用，但以下引用方未能自动更新；请打开引用方工作流，"
+                        "检查组合节点参数和设备动作模板，重新编译并应用: %s",
                         ",".join(
                             str(warning.get("message", ""))
                             for warning in warnings or []

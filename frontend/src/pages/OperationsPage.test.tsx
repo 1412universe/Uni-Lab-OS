@@ -12,7 +12,11 @@ vi.mock('../lib/edgeClient', async () => {
     loadActionTemplates: vi.fn(async () => []),
     loadActionParameters: vi.fn(async () => []),
     loadActionOutputs: vi.fn(async () => []),
-    loadWorkflowGraph: vi.fn(),
+    loadWorkflowGraph: vi.fn(async () => ({
+      workflow: { uuid: 'parent-workflow', name: '父工作流', revision: 3, status: 'source', description: '', nodeCount: 0, tags: [], inputContract: [], outputContract: [], workflowType: 'experiment_operation' },
+      nodes: [],
+      edges: [],
+    })),
     loadControlTemplates: vi.fn(async () => [
       {
         uuid: 'condition-template',
@@ -35,10 +39,17 @@ vi.mock('../lib/edgeClient', async () => {
         parameterSchema: { type: 'object', required: ['max_iterations'] },
       },
     ]),
+    loadPublishedWorkflowContracts: vi.fn(async () => []),
+    createExperimentOperation: vi.fn(async () => ({ workflowUuid: 'parent-workflow', revision: 1 })),
+    insertCompositeWorkflow: vi.fn(async () => ({ workflow: { revision: 2 } })),
+    ensureWorkflowSequenceEdges: vi.fn(async () => undefined),
   }
 })
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.clearAllMocks()
+  vi.unstubAllGlobals()
+})
 
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -165,5 +176,67 @@ describe('OperationsPage control-node authoring', () => {
     expect(screen.getByLabelText('重复直到 第一轮初值')).toBeInTheDocument()
     expect(screen.getByLabelText('重复直到 下一轮值')).toBeInTheDocument()
     expect(screen.queryByLabelText('重复直到 循环变量绑定')).not.toBeInTheDocument()
+  })
+})
+
+describe('OperationsPage composite workflow authoring', () => {
+  /** 验证同一已发布实验操作可作为两个独立调用加入父工作流。 */
+  it('lets a user add the same published experiment operation twice', async () => {
+    const edgeClient = await import('../lib/edgeClient')
+    vi.mocked(edgeClient.loadPublishedWorkflowContracts).mockResolvedValue([
+      {
+        uuid: 'contract-1',
+        workflow_uuid: 'child-workflow-1',
+        workflow_revision: 3,
+        name: '子操作 A',
+        executor_requirements: [],
+      },
+    ])
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: '创建实验操作' }))
+    fireEvent.click(screen.getByRole('button', { name: '引用已发布子工作流' }))
+    fireEvent.click(await screen.findByRole('button', { name: /子操作 A.*添加/ }))
+    fireEvent.click(screen.getByRole('button', { name: '引用已发布子工作流' }))
+    fireEvent.click(await screen.findByRole('button', { name: /子操作 A.*添加/ }))
+
+    const canvas = screen.getByLabelText('实验操作节点画布')
+    expect(within(canvas).getAllByText('子操作 A')).toHaveLength(2)
+  })
+
+  /** 验证重复调用分别填写的固定参数会传给各自的组合调用接口。 */
+  it('keeps fixed input values independent for two invocations of the same operation', async () => {
+    const edgeClient = await import('../lib/edgeClient')
+    vi.mocked(edgeClient.loadPublishedWorkflowContracts).mockResolvedValue([
+      {
+        uuid: 'contract-1',
+        workflow_uuid: 'child-workflow-1',
+        workflow_revision: 3,
+        name: '子操作 A',
+        executor_requirements: [],
+        input_contract: {
+          version: 1,
+          parameters: [{ name: 'value', title: '数值', schema: { type: 'number' }, required: true }],
+        },
+      },
+    ])
+
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: '创建实验操作' }))
+    fireEvent.change(screen.getByLabelText('操作名称'), { target: { value: '重复调用父工作流' } })
+    for (let index = 0; index < 2; index += 1) {
+      fireEvent.click(screen.getByRole('button', { name: '引用已发布子工作流' }))
+      fireEvent.click(await screen.findByRole('button', { name: /子操作 A.*添加/ }))
+    }
+
+    fireEvent.change(screen.getByLabelText('子工作流参数 子操作 A 调用 1 value'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('子工作流参数 子操作 A 调用 2 value'), { target: { value: '2' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存实验操作' }))
+
+    await waitFor(() => expect(edgeClient.insertCompositeWorkflow).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(edgeClient.insertCompositeWorkflow).mock.calls.map(([payload]) => payload.param)).toEqual([
+      { value: 1 },
+      { value: 2 },
+    ])
   })
 })

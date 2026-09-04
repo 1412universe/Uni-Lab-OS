@@ -294,9 +294,16 @@ def build_candidate_graph(
                 declaration.action_name,
             )
         except AuthoringCatalogError as error:
+            source_line = getattr(declaration.source_node, "lineno", None)
+            source_location = (
+                f"源码第 {source_line} 行的" if source_line else "源码中的"
+            )
             raise AuthoringGraphError(
                 "template_catalog_mismatch",
-                "工作流创作目录缺少唯一动作模板",
+                f"{source_location}设备 {declaration.device_symbol} 没有找到"
+                "唯一的动作模板"
+                f"（动作：{declaration.action_name}）；请检查设备动作名称是否正确，"
+                "以及当前设备动作目录是否已加载",
             ) from error
         action_catalog[declaration.node_uuid] = catalog_action
         node = _apply_authoring_structure(

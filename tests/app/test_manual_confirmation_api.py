@@ -43,6 +43,8 @@ def test_manual_confirmation_uses_job_uuid_strict_body_and_specialized_events(
                 json={"action": "approve", "param": {"temperature": 30}},
             )
             assert invalid.status_code == 400
+            assert invalid.json()["code"] == 1000
+            assert "请求参数不符合接口要求" in invalid.json()["error"]["msg"]
             assert runtime.dispatcher.dispatched == []
 
             missing = client.post(
@@ -50,6 +52,8 @@ def test_manual_confirmation_uses_job_uuid_strict_body_and_specialized_events(
                 json={"action": "approve"},
             )
             assert missing.status_code == 404
+            assert missing.json()["code"] == 3002
+            assert "资源不存在" in missing.json()["error"]["msg"]
 
             response = client.post(
                 f"/api/v1/workflow-node-jobs/{job_uuid}/manual-confirmation",
@@ -102,6 +106,7 @@ def test_manual_confirmation_conflicts_are_http_409(tmp_path: Path) -> None:
                 json={"action": "approve"},
             )
             assert ordinary.status_code == 409
+            assert ordinary.json()["code"] == 3003
 
             rejected = client.post(
                 f"/api/v1/workflow-node-jobs/{manual_job_uuid}/manual-confirmation",
@@ -113,6 +118,7 @@ def test_manual_confirmation_conflicts_are_http_409(tmp_path: Path) -> None:
                 json={"action": "approve"},
             )
             assert late.status_code == 409
+            assert late.json()["code"] == 3003
         finally:
             client.close()
     finally:

@@ -267,6 +267,8 @@ def test_authoring_apply_http_rejects_client_supplied_candidate_facts(
     assert response.status_code == 200
     assert response.json() == {
         "code": 1000,
-        "error": {"msg": "提交内容格式不正确"},
+        "error": {
+            "msg": "请求参数不符合接口要求，请检查必填字段、字段类型和 JSON 数据格式后重试"
+        },
     }
     assert service.get_graph(WORKFLOW_UUID)["workflow"]["revision"] == 1

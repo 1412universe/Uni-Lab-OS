@@ -184,9 +184,8 @@ def test_real_web_server_fails_closed_without_template_catalog(
     readiness = TestClient(application).get("/api/v1/readiness")
     assert readiness.status_code == 503
     assert readiness.json()["status"] == "failed"
-    assert readiness.json()["error"] == {
-        "code": "workflow_runtime_start_failed"
-    }
+    assert readiness.json()["error"]["code"] == "workflow_runtime_start_failed"
+    assert "工作流运行时初始化失败" in readiness.json()["error"]["message"]
 
 
 def test_real_web_server_rejects_invalid_root_shape_without_mounting_authority(
@@ -503,6 +502,5 @@ def test_real_server_keeps_liveness_after_deferred_workflow_failure(
     assert health.json()["status"] == "ok"
     assert readiness.status_code == 503
     assert readiness.json()["status"] == "failed"
-    assert readiness.json()["error"] == {
-        "code": "workflow_runtime_start_failed"
-    }
+    assert readiness.json()["error"]["code"] == "workflow_runtime_start_failed"
+    assert "工作流运行时初始化失败" in readiness.json()["error"]["message"]

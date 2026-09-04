@@ -116,18 +116,22 @@ def _invocation_param(
     contract: Mapping[str, Any],
     param: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """合并用户填写值与发布合同声明的可选参数默认值。
+    """合并调用参数并在展开前执行发布合同的参数边界校验。
 
     参数：``contract`` 是待展开发布合同，``param`` 是父调用节点已填写的参数；
-    用户值始终优先。返回：容器分离的完整调用参数。异常：输入合同损坏，或可选
-    参数没有规范默认值时抛 ``CompositeInvocationInvalid``，禁止生成运行时缺值。
+    用户值始终优先。返回：只包含合同声明键、且已补齐可选默认值的完整调用参数。
+    异常：调用参数不是对象、包含未知键、缺少必填参数、输入合同损坏，或可选参数
+    没有规范默认值时抛 ``CompositeInvocationInvalid``，禁止生成运行时缺值或静默
+    丢弃用户输入。状态不变量：函数返回后每个参数都能在冻结合同中找到对应声明。
     """
 
+    if not isinstance(param, Mapping):
+        raise CompositeInvocationInvalid("组合调用参数必须是对象")
     envelope = contract.get("input_contract")
     descriptors = envelope.get("parameters") if isinstance(envelope, Mapping) else None
     if not isinstance(descriptors, list):
         raise CompositeInvocationInvalid("发布合同输入定义损坏")
-    result = deepcopy(dict(param))
+    declared_names: set[str] = set()
     for descriptor in descriptors:
         if (
             not isinstance(descriptor, Mapping)
@@ -136,8 +140,23 @@ def _invocation_param(
         ):
             raise CompositeInvocationInvalid("发布合同输入参数损坏")
         name = str(descriptor["name"])
-        if descriptor["required"]:
+        if not name or name in declared_names:
+            raise CompositeInvocationInvalid("发布合同输入参数名称重复或为空")
+        declared_names.add(name)
+
+    unknown_names = set(param) - declared_names
+    if unknown_names:
+        unknown = ", ".join(sorted(str(name) for name in unknown_names))
+        raise CompositeInvocationInvalid(f"组合调用包含未知输入参数: {unknown}")
+
+    result: dict[str, Any] = {}
+    for descriptor in descriptors:
+        name = str(descriptor["name"])
+        if name in param:
+            result[name] = deepcopy(param[name])
             continue
+        if descriptor["required"]:
+            raise CompositeInvocationInvalid(f"组合调用缺少必填输入参数: {name}")
         if "default" not in descriptor:
             raise CompositeInvocationInvalid("发布合同可选输入缺少默认值")
         if name not in result:

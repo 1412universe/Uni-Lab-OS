@@ -78,7 +78,8 @@ def test_clean_parent_is_applied_while_dirty_parent_remains_for_user() -> None:
         {
             "code": "dependent_authoring_refresh_pending",
             "message": (
-                f"实验操作已更新，但引用方 {dirty_workflow_uuid} 仍需处理兼容问题"
+                f"实验操作已更新，但引用方工作流 {dirty_workflow_uuid} 未能自动更新；"
+                "请打开该工作流，检查组合节点参数和设备动作模板，重新编译并应用"
             ),
         }
     ]
@@ -110,6 +111,9 @@ def test_refresh_failure_becomes_post_commit_warning() -> None:
     assert warnings == [
         {
             "code": "dependent_authoring_refresh_pending",
-            "message": (f"实验操作已更新，但引用方 {parent_uuid} 仍需处理兼容问题"),
+            "message": (
+                f"实验操作已更新，但引用方工作流 {parent_uuid} 未能自动更新；"
+                "请打开该工作流，检查组合节点参数和设备动作模板，重新编译并应用"
+            ),
         }
     ]
