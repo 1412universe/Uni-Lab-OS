@@ -7,6 +7,7 @@ import io
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 
 from unilabos.app.scheduler.inventory.backend_api import install_backend_resource_api
 from unilabos.app.scheduler.inventory.backend_contract import (
@@ -147,6 +148,39 @@ def test_reagent_info_json_file_import_accepts_items_envelope(tmp_path) -> None:
     assert payload["code"] == 0
     assert payload["data"]["created"] == 1
     assert store.query_one("SELECT COUNT(*) AS count FROM reagent_info") == {"count": 1}
+    store.close()
+
+
+def test_reagent_info_xlsx_import_reads_first_sheet(tmp_path) -> None:
+    client, store = _client(tmp_path)
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["cas", "name", "physical_state", "aliases", "meta_data"])
+    worksheet.append(
+        ["64-17-5", "乙醇", "liquid", '["酒精"]', '{"storage":"阴凉通风"}']
+    )
+    output = io.BytesIO()
+    workbook.save(output)
+    workbook.close()
+
+    response = client.post(
+        "/api/v1/reagent-infos/import",
+        files={
+            "file": (
+                "reagent-infos.xlsx",
+                output.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["code"] == 0
+    assert payload["data"]["created"] == 1
+    item = client.get("/api/v1/reagent-infos").json()["data"]["items"][0]
+    assert item["aliases"] == ["酒精"]
+    assert item["meta_data"] == {"storage": "阴凉通风"}
     store.close()
 
 

@@ -238,18 +238,18 @@ curl -X GET "http://localhost:8002/api/v1/job/b6acb586-733a-42ab-9f73-55c9a52aa8
 | GET | `/api/v1/reagent-infos` | 试剂身份目录列表 |
 | POST | `/api/v1/reagent-infos` | 新增一条试剂身份 |
 | POST | `/api/v1/reagent-infos/batch` | JSON 批量新增试剂身份，默认原子提交 |
-| POST | `/api/v1/reagent-infos/import` | 从 JSON/CSV/TSV 文件批量导入试剂身份 |
+| POST | `/api/v1/reagent-infos/import` | 从 JSON/CSV/TSV/XLSX 文件批量导入试剂身份 |
 | GET | `/api/v1/reagents` | 试剂库存列表，含 `active_workflow_reserved_quantity`（未结束任务的活动预留量） |
 | GET | `/api/v1/reagents/{reagent_uuid}` | 单条试剂记录 |
 | POST | `/api/v1/reagents` | 把目录项登记到具体容器 |
 | POST | `/api/v1/reagents/batch` | JSON 批量新增容器级试剂，默认原子提交 |
-| POST | `/api/v1/reagents/import` | 从 JSON/CSV/TSV 文件批量导入容器级试剂 |
+| POST | `/api/v1/reagents/import` | 从 JSON/CSV/TSV/XLSX 文件批量导入容器级试剂 |
 | PUT | `/api/v1/reagents/{reagent_uuid}` | 修正数量、浓度、说明；`meta_data` 整体覆盖，需原样带回 |
 | DELETE | `/api/v1/reagents/{reagent_uuid}` | 软删试剂记录，容器变回空容器 |
 | GET | `/api/v1/materials/{material_uuid}/reagent-history` | 容器上的试剂台账 |
 | POST | `/api/v1/inventory/commands` | 库存命令入口，按 `command_id` 幂等；命令类型见 `type` 字段，其中 `reagent.dispense` 为试剂分装 |
 
-批量接口的请求体格式为 `{"items": [...], "atomic": true}`。每次最多导入 500 行，文件大小不超过 5 MiB。`atomic` 默认为 `true`，校验或写入失败时整批回滚；设为 `false` 时会写入有效行，并在返回的 `errors` 中列出失败行及字段原因。CSV/TSV 的 `aliases` 和 `meta_data` 列使用 JSON 单元格，例如 `"[\"酒精\"]"` 和 `"{\"storage\":\"阴凉通风\"}"`。
+批量接口的请求体格式为 `{"items": [...], "atomic": true}`。每次最多导入 500 行，文件大小不超过 5 MiB。`atomic` 默认为 `true`，校验或写入失败时整批回滚；设为 `false` 时会写入有效行，并在返回的 `errors` 中列出失败行及字段原因。CSV/TSV/XLSX 的 `aliases` 和 `meta_data` 列使用 JSON 单元格，例如 `"[\"酒精\"]"` 和 `"{\"storage\":\"阴凉通风\"}"`。XLSX 导入读取第一个工作表，第一行必须是字段名。
 
 ```bash
 # 直接提交 JSON 批量登记试剂身份

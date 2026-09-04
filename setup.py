@@ -14,6 +14,7 @@ setup(
         'msgcenterpy>=0.1.8,<0.2',
         'pylabrobot==0.2.1',
         'python-multipart>=0.0.9,<1',
+        'openpyxl>=3.1,<4',
     ],
     extras_require={
         'mcp': ['mcp>=1.10,<2'],

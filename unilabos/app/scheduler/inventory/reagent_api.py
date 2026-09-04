@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import Any, Callable, Dict, List, Optional, Sequence, Type
 from uuid import UUID
+from zipfile import BadZipFile
 
 from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.responses import JSONResponse
@@ -151,28 +152,30 @@ def _import_error(
     )
 
 
-def _parse_json_value(value: str, *, field: str, row_number: int) -> Any:
-    """解析 CSV 中的 JSON 字段，并把错误定位到具体行列。"""
+def _parse_json_value(
+    value: str, *, field: str, row_number: int, source: str = "CSV"
+) -> Any:
+    """解析表格中的 JSON 字段，并把错误定位到具体行列。"""
 
     try:
         return json.loads(value)
     except json.JSONDecodeError as error:
         raise BackendContractError(
             INVALID_PARAMETER,
-            f"CSV 第 {row_number} 行的 {field} 不是有效 JSON",
+            f"{source} 第 {row_number} 行的 {field} 不是有效 JSON",
         ) from error
 
 
-def _normalize_csv_row(
-    row: Dict[str, Any], *, row_number: int, allowed_fields: set[str]
+def _normalize_tabular_row(
+    row: Dict[str, Any], *, row_number: int, allowed_fields: set[str], source: str = "CSV"
 ) -> Dict[str, Any]:
-    """把 CSV 字符串单元格转换为 JSON DTO 可接受的值。"""
+    """把表格单元格转换为 JSON DTO 可接受的值。"""
 
     unknown = sorted(set(row) - allowed_fields)
     if unknown:
         raise BackendContractError(
             INVALID_PARAMETER,
-            f"CSV 第 {row_number} 行包含未知字段：{', '.join(unknown)}",
+            f"{source} 第 {row_number} 行包含未知字段：{', '.join(unknown)}",
         )
     normalized: Dict[str, Any] = {}
     for key, raw in row.items():
@@ -197,21 +200,110 @@ def _normalize_csv_row(
             else:
                 normalized[key] = None if key in _OPTIONAL_CSV_FIELDS else ""
         elif key in {"aliases", "meta_data"}:
-            parsed = _parse_json_value(value, field=key, row_number=row_number)
+            parsed = _parse_json_value(
+                value, field=key, row_number=row_number, source=source
+            )
             if key == "aliases" and not isinstance(parsed, list):
                 raise BackendContractError(
                     INVALID_PARAMETER,
-                    f"CSV 第 {row_number} 行的 aliases 必须是 JSON 数组",
+                    f"{source} 第 {row_number} 行的 aliases 必须是 JSON 数组",
                 )
             if key == "meta_data" and not isinstance(parsed, dict):
                 raise BackendContractError(
                     INVALID_PARAMETER,
-                    f"CSV 第 {row_number} 行的 meta_data 必须是 JSON 对象",
+                    f"{source} 第 {row_number} 行的 meta_data 必须是 JSON 对象",
                 )
             normalized[key] = parsed
         else:
             normalized[key] = value
     return normalized
+
+
+def _is_blank_cell(value: Any) -> bool:
+    """判断 Excel 单元格是否为空；数值 0 不能被当作空值。"""
+
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _parse_xlsx_file(
+    content: bytes,
+    *,
+    allowed_fields: set[str],
+) -> List[Dict[str, Any]]:
+    """读取 XLSX 的第一个工作表，并转换成统一的导入行。"""
+
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError as error:  # pragma: no cover - 安装包声明保证正常环境具备依赖。
+        raise BackendContractError(
+            INVALID_PARAMETER,
+            "XLSX 导入需要安装 openpyxl 依赖",
+        ) from error
+
+    try:
+        workbook = load_workbook(
+            filename=io.BytesIO(content), read_only=True, data_only=True
+        )
+    except (BadZipFile, InvalidFileException, KeyError, OSError, ValueError) as error:
+        raise BackendContractError(INVALID_PARAMETER, "XLSX 导入文件格式无效") from error
+    try:
+        worksheet = workbook.worksheets[0] if workbook.worksheets else None
+        if worksheet is None:
+            raise BackendContractError(INVALID_PARAMETER, "XLSX 文件没有工作表")
+        rows = worksheet.iter_rows(values_only=True)
+        try:
+            header_values = next(rows)
+        except StopIteration as error:
+            raise BackendContractError(INVALID_PARAMETER, "XLSX 文件没有表头") from error
+
+        headers = [str(value).strip() if value is not None else "" for value in header_values]
+        while headers and not headers[-1]:
+            headers.pop()
+        if not headers or any(not field for field in headers):
+            raise BackendContractError(INVALID_PARAMETER, "XLSX 文件必须包含非空表头")
+        if len(set(headers)) != len(headers):
+            raise BackendContractError(INVALID_PARAMETER, "XLSX 表头不能重复")
+        unknown = sorted(set(headers) - allowed_fields)
+        if unknown:
+            raise BackendContractError(
+                INVALID_PARAMETER,
+                f"XLSX 表头包含未知字段：{', '.join(unknown)}",
+            )
+
+        parsed_rows: List[Dict[str, Any]] = []
+        for row_number, values in enumerate(rows, 2):
+            if not any(not _is_blank_cell(value) for value in values):
+                continue
+            if len(values) > len(headers) and any(
+                not _is_blank_cell(value) for value in values[len(headers) :]
+            ):
+                raise BackendContractError(
+                    INVALID_PARAMETER,
+                    f"XLSX 第 {row_number} 行列数多于表头",
+                )
+            row = {
+                headers[index]: values[index] if index < len(values) else None
+                for index in range(len(headers))
+            }
+            parsed_rows.append(
+                _normalize_tabular_row(
+                    row,
+                    row_number=row_number,
+                    allowed_fields=allowed_fields,
+                    source="XLSX",
+                )
+            )
+            if len(parsed_rows) > _MAX_IMPORT_ROWS:
+                raise BackendContractError(
+                    INVALID_PARAMETER,
+                    f"单次最多导入 {_MAX_IMPORT_ROWS} 行",
+                )
+        if not parsed_rows:
+            raise BackendContractError(INVALID_PARAMETER, "导入文件没有数据行")
+        return parsed_rows
+    finally:
+        workbook.close()
 
 
 def _parse_import_file(
@@ -225,6 +317,12 @@ def _parse_import_file(
 
     suffix = PurePath(filename.lower()).suffix
     media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    is_xlsx = suffix == ".xlsx" or media_type in {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    if is_xlsx:
+        return _parse_xlsx_file(content, allowed_fields=allowed_fields)
+
     is_json = suffix == ".json" or media_type in {
         "application/json",
         "application/ld+json",
@@ -237,7 +335,7 @@ def _parse_import_file(
     if not is_json and not is_csv:
         raise BackendContractError(
             INVALID_PARAMETER,
-            "仅支持 .json、.csv 或 .tsv 文件",
+            "仅支持 .json、.csv、.tsv 或 .xlsx 文件",
         )
     try:
         text = content.decode("utf-8-sig")
@@ -289,7 +387,7 @@ def _parse_import_file(
         if not any(str(value or "").strip() for value in row.values()):
             continue
         rows.append(
-            _normalize_csv_row(
+            _normalize_tabular_row(
                 {str(key).strip(): value for key, value in row.items()},
                 row_number=row_number,
                 allowed_fields=allowed_fields,
