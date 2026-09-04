@@ -25,6 +25,7 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
 )
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.scheduler.inventory.workflow_quantity import (
+    active_workflow_reserved_quantity,
     WorkflowQuantityReservationError,
     assert_workflow_quantity_mutation_allowed,
 )
@@ -166,6 +167,8 @@ def _ledger_row(row: sqlite3.Row | Dict[str, Any]) -> Dict[str, Any]:
         "operator_type": item.get("actor") or "system",
         "from_site_uuid": None,
         "to_site_uuid": None,
+        # 分装等复合操作按 causation_id 聚合同一次动作的多条台账；读侧原样透出。
+        "causation_id": str(item.get("causation_id") or ""),
         "changes": _json(payload.get("changes"), {}),
         "extension": _json(payload.get("extension"), {}),
         "trace_id": item.get("trace_id") or None,
@@ -412,6 +415,8 @@ class BackendReagentService:
         self,
         conn: sqlite3.Connection,
         values: Dict[str, Any],
+        *,
+        record_history: bool = True,
     ) -> Dict[str, Dict[str, Any]]:
         """复用调用方事务创建试剂，并返回试剂与化学身份快照。
 
@@ -481,11 +486,13 @@ class BackendReagentService:
                     "dictionary" if info["density_g_per_ml"] is not None else None,
                 ),
             )
-            self._append_history(
-                conn, material_uuid=material_uuid, reagent_uuid=identity,
-                event_type="add", quantity_delta=quantity, quantity_unit=unit,
-                revision=1, values=values, recorded_at=now,
-            )
+            # 分装等复合操作自行写带 causation_id 的台账，跳过默认的 add 历史。
+            if record_history:
+                self._append_history(
+                    conn, material_uuid=material_uuid, reagent_uuid=identity,
+                    event_type="add", quantity_delta=quantity, quantity_unit=unit,
+                    revision=1, values=values, recorded_at=now,
+                )
         except sqlite3.IntegrityError as error:
             raise BackendContractError(
                 RESOURCE_DATA_CONFLICT,
@@ -503,6 +510,254 @@ class BackendReagentService:
             "reagent": reagent_row,
             "reagent_info": _info_row(info),
         }
+
+    def dispense_reagent_in_transaction(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        source_reagent_uuid: str,
+        expected_revision: Optional[int],
+        quantity_unit: str,
+        targets: List[Dict[str, Any]],
+        command_id: str,
+        actor: str = "",
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """在调用方事务内把一瓶源试剂分装到若干空容器。
+
+        参数：``conn`` 是已开启的库存写事务；``source_reagent_uuid`` 是源瓶试剂
+        UUID；``expected_revision`` 为源瓶乐观锁；``quantity_unit`` 必须与源瓶一致；
+        ``targets`` 每项含 ``material_uuid`` 与 ``quantity``；``command_id`` 作为全部
+        台账条目的 ``causation_id``。返回：源瓶新状态与各目标试剂摘要。
+        异常：源瓶不存在、修订不符、单位不符、目标重复、目标非空容器、总量超过
+        可分量（源瓶余量减去工作流预留）时抛 Backend 合同错误，由调用方回滚。
+        状态不变量：源瓶与全部目标的数量总和在事务前后相等；任一步失败不留下
+        任何目标试剂或台账。
+        """
+
+        unit = str(quantity_unit or "").strip()
+        if not unit:
+            raise BackendContractError(INVALID_PARAMETER, "quantity_unit is required")
+        if not targets:
+            raise BackendContractError(INVALID_PARAMETER, "targets must not be empty")
+        normalized: List[tuple[str, float]] = []
+        seen: set[str] = set()
+        for index, target in enumerate(targets):
+            material_uuid = str((target or {}).get("material_uuid") or "").strip()
+            if not material_uuid:
+                raise BackendContractError(
+                    INVALID_PARAMETER, f"targets[{index}].material_uuid is required"
+                )
+            if material_uuid in seen:
+                raise BackendContractError(
+                    INVALID_PARAMETER,
+                    f"targets[{index}] duplicates container {material_uuid}",
+                )
+            seen.add(material_uuid)
+            quantity = _non_negative_number(
+                (target or {}).get("quantity"), f"targets[{index}].quantity"
+            )
+            if quantity <= 0:
+                raise BackendContractError(
+                    INVALID_PARAMETER, f"targets[{index}].quantity must be positive"
+                )
+            normalized.append((material_uuid, quantity))
+        total = sum(quantity for _, quantity in normalized)
+
+        source = conn.execute(
+            "SELECT * FROM reagent WHERE uuid=? AND deleted_at IS NULL",
+            (source_reagent_uuid,),
+        ).fetchone()
+        if source is None:
+            raise BackendContractError(RESOURCE_NOT_FOUND, "reagent does not exist")
+        source = dict(source)
+        if expected_revision is not None and int(expected_revision) != int(
+            source["revision"]
+        ):
+            raise BackendContractError(
+                RESOURCE_DATA_CONFLICT, "reagent revision has changed"
+            )
+        if unit.lower() != str(source["quantity_unit"]).lower():
+            raise BackendContractError(
+                INVALID_PARAMETER, "quantity_unit must match the source reagent"
+            )
+        available = float(source["quantity"])
+        if total > available + 1e-9:
+            raise BackendContractError(
+                INVALID_PARAMETER,
+                f"dispense total {total} exceeds source quantity {available}",
+            )
+        remaining = available - total
+
+        try:
+            assert_inventory_mutation_unclaimed(
+                conn, material_uuids=(source["material_uuid"],)
+            )
+        except InventoryMutationConflict as error:
+            raise BackendContractError(RESOURCE_DATA_CONFLICT, str(error)) from error
+        try:
+            assert_workflow_quantity_mutation_allowed(
+                conn,
+                inventory_type="reagent",
+                inventory_uuid=source_reagent_uuid,
+                quantity=remaining,
+                current_unit=str(source["quantity_unit"]),
+                next_unit=unit,
+            )
+        except WorkflowQuantityReservationError as error:
+            raise BackendContractError(RESOURCE_DATA_CONFLICT, str(error)) from error
+
+        inherited = {
+            "reagent_info_uuid": source["reagent_info_uuid"],
+            "quantity_unit": source["quantity_unit"],
+            "concentration_value": source["concentration_value"],
+            "concentration_unit": source["concentration_unit"],
+            "description": source.get("description"),
+        }
+        created: List[Dict[str, Any]] = []
+        for material_uuid, quantity in normalized:
+            snapshot = self.create_reagent_in_transaction(
+                conn,
+                {
+                    **inherited,
+                    "material_uuid": material_uuid,
+                    "quantity": quantity,
+                    "meta_data": {
+                        "source_reagent_uuid": source_reagent_uuid,
+                        "dispense_command_id": command_id,
+                    },
+                },
+                record_history=False,
+            )
+            created.append(snapshot["reagent"])
+
+        now = _now()
+        revision = int(source["revision"]) + 1
+        cursor = conn.execute(
+            "UPDATE reagent SET update_time=?,quantity=?,revision=? "
+            "WHERE uuid=? AND deleted_at IS NULL AND revision=?",
+            (now, remaining, revision, source_reagent_uuid, source["revision"]),
+        )
+        if cursor.rowcount != 1:
+            raise BackendContractError(
+                RESOURCE_DATA_CONFLICT, "reagent revision has changed"
+            )
+
+        occurred_at = _milliseconds(now)
+        self._append_dispense_event(
+            conn,
+            reagent_uuid=source_reagent_uuid,
+            material_uuid=str(source["material_uuid"]),
+            event_type="dispense_source",
+            quantity_delta=-total,
+            quantity_unit=str(source["quantity_unit"]),
+            revision=revision,
+            occurred_at=occurred_at,
+            command_id=command_id,
+            actor=actor,
+            reason=reason,
+            extra={"target_reagent_uuids": [row["uuid"] for row in created]},
+        )
+        for row in created:
+            self._append_dispense_event(
+                conn,
+                reagent_uuid=str(row["uuid"]),
+                material_uuid=str(row["material_uuid"]),
+                event_type="dispense_target",
+                quantity_delta=float(row["quantity"]),
+                quantity_unit=str(row["quantity_unit"]),
+                revision=int(row["revision"]),
+                occurred_at=occurred_at,
+                command_id=command_id,
+                actor=actor,
+                reason=reason,
+                extra={"source_reagent_uuid": source_reagent_uuid},
+            )
+
+        return {
+            "source": {
+                "reagent_uuid": source_reagent_uuid,
+                "material_uuid": source["material_uuid"],
+                "quantity": remaining,
+                "quantity_unit": source["quantity_unit"],
+                "revision": revision,
+            },
+            "targets": [
+                {
+                    "material_uuid": row["material_uuid"],
+                    "reagent_uuid": row["uuid"],
+                    "quantity": row["quantity"],
+                    "quantity_unit": row["quantity_unit"],
+                    "revision": row["revision"],
+                }
+                for row in created
+            ],
+        }
+
+    def _append_dispense_event(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        reagent_uuid: str,
+        material_uuid: str,
+        event_type: str,
+        quantity_delta: float,
+        quantity_unit: str,
+        revision: int,
+        occurred_at: int,
+        command_id: str,
+        actor: str,
+        reason: str,
+        extra: Dict[str, Any],
+    ) -> None:
+        """为分装写一条试剂台账，``causation_id`` 固定为分装命令 ID。"""
+
+        reagent = conn.execute(
+            """SELECT quantity,quantity_unit,concentration_value,concentration_unit,
+            physical_state,density_g_per_ml,revision,meta_data FROM reagent WHERE uuid=?""",
+            (reagent_uuid,),
+        ).fetchone()
+        if reagent is None:
+            raise BackendContractError(RESOURCE_NOT_FOUND, "reagent does not exist")
+        payload = {
+            "changes": {
+                "result": {
+                    "quantity": reagent["quantity"],
+                    "quantity_unit": reagent["quantity_unit"],
+                    "concentration_value": reagent["concentration_value"],
+                    "concentration_unit": reagent["concentration_unit"],
+                    "physical_state": reagent["physical_state"],
+                    "density_g_per_ml": reagent["density_g_per_ml"],
+                    "revision": reagent["revision"],
+                }
+            },
+            "extension": {**_json(reagent["meta_data"], {}), **extra},
+            "workflow_task_uuid": None,
+            "workflow_node_job_uuid": None,
+            "quantity_delta": quantity_delta,
+            "quantity_unit": quantity_unit,
+            "revision": revision,
+        }
+        InventoryStore.tx_append_inventory_event(
+            conn,
+            entry_uuid=new_event_id(occurred_at),
+            edge_id=self.edge_id,
+            lab_id=self.lab_id,
+            occurred_at=occurred_at,
+            aggregate_type="reagent",
+            aggregate_id=reagent_uuid,
+            aggregate_version=revision,
+            event_type=f"reagent.{event_type}",
+            payload=payload,
+            actor=actor or "frontend",
+            reason=reason,
+            causation_id=command_id,
+            material_uuid=material_uuid,
+            subject_type="reagent",
+            quantity_delta=quantity_delta,
+            quantity_unit=quantity_unit,
+            revision=revision,
+        )
 
     def list_reagents(
         self, *, page: int = 1, page_size: int = 20, material_uuid: str = "",
@@ -548,12 +803,32 @@ class BackendReagentService:
             + " ORDER BY LOWER(reagent_info.name),reagent.uuid LIMIT ? OFFSET ?",
             (*params, page_size, (page - 1) * page_size),
         )
+        items = [_reagent_row(row) for row in rows]
+        self._annotate_active_reservations(items)
         return {
-            "items": [_reagent_row(row) for row in rows],
+            "items": items,
             "total": int(count["count"]),
             "page": page,
             "page_size": page_size,
         }
+
+    def _annotate_active_reservations(self, items: List[Dict[str, Any]]) -> None:
+        """为试剂投影补上工作流活动预留量（与数量同单位）。
+
+        参数：``items`` 是已投影的试剂行，原地写入
+        ``active_workflow_reserved_quantity``。预留在建任务事务内生效、任务结算或
+        取消后释放；读侧只在只读连接上汇总，不开事务、不改动库存。异常：预留载荷损坏时由
+        ``active_workflow_reserved_quantity`` 关闭式失败，原样上抛。
+        """
+        if not items:
+            return
+        with self.store.read_connection() as conn:
+            for item in items:
+                item["active_workflow_reserved_quantity"] = active_workflow_reserved_quantity(
+                    conn,
+                    inventory_type="reagent",
+                    inventory_uuid=str(item["uuid"]),
+                )
 
     def get_reagent(self, identity: str) -> Dict[str, Any]:
         """读取一个活动试剂详情；不存在时返回资源未找到。"""
@@ -566,7 +841,9 @@ class BackendReagentService:
         )
         if row is None:
             raise BackendContractError(RESOURCE_NOT_FOUND, "reagent does not exist")
-        return _reagent_row(row)
+        item = _reagent_row(row)
+        self._annotate_active_reservations([item])
+        return item
 
     def update_reagent(self, identity: str, values: Dict[str, Any]) -> Dict[str, Any]:
         """以期望修订更新余量；单位与化学身份保持不可变，并原子追加台账。"""

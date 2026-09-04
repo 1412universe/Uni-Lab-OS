@@ -53,6 +53,7 @@
 .operation-canvas-node .node-body strong,.operation-canvas-node .node-body small,.operation-canvas-node .node-body span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .operation-canvas-node .node-body strong { font-size: 9px; }
 .operation-canvas-node .node-body small,.operation-canvas-node .node-body span { color: #667085; font-size: 7px; }
+.operation-canvas-node .node-body .manual-confirmation-badge { grid-column: 2; max-width: 100%; color: #b54708; font-weight: 700; }
 .operation-canvas-node > select { min-height: 31px; padding: 0 7px; background: #f8fafc; border: 1px solid #d0d5dd; border-radius: 7px; font-size: 8px; }
 .operation-canvas-node .node-port { position: absolute; right: -1px; bottom: -23px; padding: 4px 8px; color: #294ebd; background: #eef3ff; border: 1px solid #b9c8f5; border-radius: 0 0 7px 7px; font-size: 7px; }
 .canvas-edge { display: grid; place-items: center; width: 66px; color: #5475cf; }

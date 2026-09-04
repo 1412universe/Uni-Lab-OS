@@ -49,3 +49,50 @@ describe('ReagentsPage', () => {
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/materials/material-1/reagent-history'))).toBe(true)
   })
 })
+
+describe('ReagentsPage edit and delete', () => {
+  function stubFetch(calls: Array<{ url: string; method: string; body?: unknown }>) {
+    const reagent = {
+      uuid: 'reagent-1', material_uuid: 'material-1', reagent_info_uuid: 'info-1', name: '乙醇',
+      cas: '64-17-5', quantity: 60, quantity_unit: 'mL', revision: 2, container_name: 'R3C2 试剂瓶',
+      meta_data: { source_reagent_uuid: 'reagent-0', dispense_command_id: 'cmd-1' },
+    }
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input); const method = init?.method || 'GET'
+      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      if (url.includes('/reagent-infos?')) return response({ code: 0, data: { items: [], total: 0 } })
+      if (url.includes('/resource-templates')) return response({ code: 0, data: { items: [], total: 0 } })
+      if (url.includes('/reagents?')) return response({ code: 0, data: { items: [reagent], total: 1 } })
+      if (url.endsWith('/reagents/reagent-1') && method === 'PUT') return response({ code: 0, data: { ...reagent, quantity: 45, revision: 3 } })
+      if (url.endsWith('/reagents/reagent-1') && method === 'DELETE') return response({ code: 0 })
+      throw new Error(`Unexpected URL: ${method} ${url}`)
+    }))
+  }
+
+  it('edits the quantity with optimistic revision and keeps dispense lineage metadata', async () => {
+    const calls: Array<{ url: string; method: string; body?: any }> = []
+    stubFetch(calls)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ReagentsPage materials={[]} connected onNotify={vi.fn()} /></QueryClientProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '编辑 乙醇 reagent-1' }))
+    const quantity = screen.getByLabelText('数量') as HTMLInputElement
+    expect(quantity.value).toBe('60')
+    fireEvent.change(quantity, { target: { value: '45' } })
+    fireEvent.change(screen.getByLabelText('说明'), { target: { value: '盘点复核' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }))
+    const put = await vi.waitFor(() => { const found = calls.find((call) => call.method === 'PUT'); if (!found) throw new Error('no PUT yet'); return found })
+    expect(put.url).toBe('/api/v1/reagents/reagent-1')
+    expect(put.body).toMatchObject({ quantity: 45, quantity_unit: 'mL', expected_revision: 2, description: '盘点复核', meta_data: { source_reagent_uuid: 'reagent-0', dispense_command_id: 'cmd-1' } })
+  })
+
+  it('deletes a reagent record after confirmation', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    stubFetch(calls)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><ReagentsPage materials={[]} connected onNotify={vi.fn()} /></QueryClientProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '删除 乙醇 reagent-1' }))
+    await vi.waitFor(() => { if (!calls.some((call) => call.method === 'DELETE')) throw new Error('no DELETE yet') })
+    expect(calls.find((call) => call.method === 'DELETE')?.url).toBe('/api/v1/reagents/reagent-1')
+  })
+})

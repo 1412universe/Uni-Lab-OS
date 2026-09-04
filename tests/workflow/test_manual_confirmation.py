@@ -76,6 +76,38 @@ def test_manual_wrapper_overrides_underlying_device_template_executor_kind() -> 
     assert jobs[0]["executor_kind"] == "manual_confirm"
 
 
+def test_manual_wrapper_accepts_real_ilab_template_type() -> None:
+    """真实注册表把设备动作标为 ``ILab``，仍应允许包装人工确认。"""
+
+    from unilabos.workflow.definition_edit import create_node
+
+    node = create_node(
+        payload={
+            "workflow_node_template_uuid": stable_uuid("template:ilab-wrapper"),
+            "type": "manual_confirm",
+            "name": "人工复核加热",
+            "manual_confirmation": {"timeout_seconds": 30},
+            "meta_data": {
+                "unilab": {
+                    "executor_binding": {
+                        "mode": "fixed",
+                        "device_id": stable_uuid("device:ilab-wrapper"),
+                    }
+                }
+            },
+        },
+        template={
+            "uuid": stable_uuid("template:ilab-wrapper"),
+            "node_type": "ILab",
+            "name": "heat",
+            "type": "UniLabJsonCommand",
+        },
+    )
+
+    assert node["type"] == "manual_confirm"
+    assert node["action_name"] == "heat"
+
+
 def test_approved_confirmation_remains_approved_after_device_outcome(
     tmp_path: Path,
 ) -> None:

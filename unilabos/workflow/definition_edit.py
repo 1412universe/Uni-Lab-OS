@@ -21,6 +21,14 @@ _STANDALONE_NODE_TYPES = {
     "group",
     "tool_call",
 }
+# Registry templates historically expose ordinary device actions as ``ILab``
+# (and a few older aliases), while the workflow planner normalizes those values
+# to ``device_action``.  Manual-confirmation wrapping must use the same
+# normalization; checking only the planner's canonical spelling made the
+# public node-create API reject real device templates.
+_DEVICE_ACTION_TEMPLATE_TYPES = frozenset(
+    {"device_action", "ilab", "device", "action", "resource_action"}
+)
 _PATCHABLE_NODE_FIELDS = {
     "parent_uuid",
     "material_uuid",
@@ -77,7 +85,10 @@ def _template_node(
     template_type = _required_text(template.get("node_type"), "模板 node_type")
     requested_type = str(payload.get("type") or "").strip()
     if requested_type:
-        manual_wrapper = requested_type == "manual_confirm" and template_type == "device_action"
+        manual_wrapper = (
+            requested_type.lower() == "manual_confirm"
+            and template_type.lower() in _DEVICE_ACTION_TEMPLATE_TYPES
+        )
         if not manual_wrapper:
             raise WorkflowDefinitionInvalid("节点 type 由 workflow_node_template_uuid 派生")
         template_type = "manual_confirm"

@@ -1387,21 +1387,35 @@ class WorkflowStore:
         """一次冻结工作流图与应用源码发布资格事实。
 
         参数：``workflow_uuid`` 是活动工作流（Workflow）稳定身份。返回：同一
-        SQLite 锁视图中的完整图及 ``applied_source``；尚未应用时该字段为
-        ``None``。异常：工作流缺失或软删除时抛出 ``StoreNotFound``，持久 JSON
-        损坏等读取错误原样传播。
+        SQLite 锁视图中的完整图、已应用源码和原始草稿字节摘要
+        ``source_draft_hash``；尚未应用时 ``applied_source`` 为 ``None``，草稿
+        摘要也可能为空。组合目录应使用原始草稿摘要核对领域包发布目录，不能把
+        ``applied_source.source_hash``（规范化源码摘要）当作同一证据。异常：
+        工作流缺失或软删除时抛出 ``StoreNotFound``，持久 JSON 损坏等读取错误
+        原样传播。
         """
 
         with self._lock:
             graph = self.get_graph(workflow_uuid, conn=self._conn)
             row = self._conn.execute(
-                "SELECT applied_source FROM workflow_authoring WHERE workflow_uuid = ?",
+                """
+                SELECT observed_draft_hash, applied_source
+                FROM workflow_authoring
+                WHERE workflow_uuid = ?
+                """,
                 (workflow_uuid,),
             ).fetchone()
             applied_source = (
                 _load(row["applied_source"], None) if row is not None else None
             )
-            return {**graph, "applied_source": applied_source}
+            source_draft_hash = (
+                row["observed_draft_hash"] if row is not None else None
+            )
+            return {
+                **graph,
+                "applied_source": applied_source,
+                "source_draft_hash": source_draft_hash,
+            }
 
     def list_published_template_projections(self) -> list[dict[str, Any]]:
         """返回当前进程已恢复的发布组合模板及连接点投影。
@@ -3654,6 +3668,93 @@ class WorkflowStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def bootstrap_workflow_revision(
+        self,
+        workflow_uuid: str,
+        *,
+        revision: int,
+    ) -> bool:
+        """为冷启动空工作流骨架预置已发布合同修订。
+
+        参数：``workflow_uuid`` 是来源清单中的稳定工作流身份；``revision`` 是
+        领域包发布合同固定的工作流修订。返回：目标仍是没有任何图事实的空骨架、
+        且已安全采用该修订时为 ``True``；若图已有事实或当前修订更新，不覆盖并
+        返回 ``False``。异常：工作流不存在或修订格式无效抛 ``StoreNotFound``/
+        ``StoreConflict``；事务整体回滚。
+
+        该接缝只移动冷启动骨架的修订基线，图、物料需求和作者源码仍由随后一次
+        普通 Authoring candidate 提交。通过空骨架和“不降级修订”双重闸门，普通
+        graph apply 的版本递增语义不受影响。
+        """
+
+        if (
+            isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+        ):
+            raise StoreConflict("冷启动发布修订格式无效")
+        with self.transaction() as conn:
+            workflow = self.get_workflow(workflow_uuid, conn=conn)
+            # 查询全部历史行（而非只查 deleted_at IS NULL），避免把一个已有过
+            # 编辑的工作流误判成可覆盖的空骨架。
+            for table in (
+                "workflow_node",
+                "workflow_edge",
+                "workflow_inventory_requirement",
+            ):
+                if conn.execute(
+                    f"SELECT 1 FROM {table} WHERE workflow_uuid = ? LIMIT 1",
+                    (workflow_uuid,),
+                ).fetchone() is not None:
+                    return False
+            # 图为空并不足以证明这是刚由来源清单安装出的骨架：作者记录可能已经
+            # 留有候选、已应用源码、草稿观测或未完成写回。若在这些事实上移动
+            # revision，会把一个真实编辑中的工作流伪装成发布合同基线，随后冷启动
+            # 可能覆盖/跳过其版本。只允许 ``_ensure_empty_authoring`` 写出的全空
+            # 创作记录（以及尚未创建记录的兼容存储）通过此闸门。
+            authoring = conn.execute(
+                """
+                SELECT observed_draft_hash, draft_update_time, diagnostics,
+                       candidate_hash, candidate, applied_source,
+                       writeback_status, writeback_source,
+                       writeback_expected_hash, writeback_generation
+                FROM workflow_authoring
+                WHERE workflow_uuid = ?
+                """,
+                (workflow_uuid,),
+            ).fetchone()
+            if authoring is not None:
+                try:
+                    diagnostics = _load(authoring["diagnostics"], [])
+                    candidate = _load(authoring["candidate"], None)
+                    applied_source = _load(authoring["applied_source"], None)
+                except (TypeError, ValueError, UnicodeError, RecursionError):
+                    # 损坏的创作 JSON 交给后续正常恢复报告；这里绝不先改动版本。
+                    return False
+                if (
+                    authoring["observed_draft_hash"] is not None
+                    or authoring["draft_update_time"] is not None
+                    or diagnostics != []
+                    or authoring["candidate_hash"] is not None
+                    or candidate is not None
+                    or applied_source is not None
+                    or authoring["writeback_status"] != "settled"
+                    or authoring["writeback_source"] is not None
+                    or authoring["writeback_expected_hash"] is not None
+                    or authoring["writeback_generation"] is not None
+                ):
+                    return False
+            current_revision = int(workflow["revision"])
+            if current_revision > revision:
+                return False
+            if current_revision < revision:
+                conn.execute(
+                    "UPDATE workflow SET revision = ?, update_time = ? "
+                    "WHERE uuid = ? AND deleted_at IS NULL",
+                    (revision, utc_now(), workflow_uuid),
+                )
+            return True
+
     def get_authoring_record(self, workflow_uuid: str) -> Dict[str, Any]:
         with self._lock:
             row = self._conn.execute(
@@ -3764,6 +3865,7 @@ class WorkflowStore:
         workflow_uuid: str,
         candidate_hash: str,
         authoring_authority_validator: Callable[[str, str], None],
+        advance_revision: bool = True,
     ) -> Tuple[int, str]:
         """在线性化写事务内应用服务端持久候选版本（Candidate）。
 
@@ -3771,11 +3873,14 @@ class WorkflowStore:
         是调用者持有的服务端签发候选哈希（Candidate Hash）；
         ``authoring_authority_validator`` 在同一 ``BEGIN IMMEDIATE`` 内复核存储
         候选推导出的源码权威（Source Authority）草稿哈希与目录指纹（Catalog
-        Fingerprint）。返回：结果工作流修订（Workflow Revision）与提交后写回
-        世代。异常：任何候选、草稿、目录或修订冲突都在图、事件和写回标记写入
-        前失败，并由事务整体回滚。
+        Fingerprint）；``advance_revision`` 仅供冷启动已发布合同恢复接缝，在
+        已确认的空骨架合同修订上应用图时保持修订，否则必须为 ``True``。返回：
+        结果工作流修订（Workflow Revision）与提交后写回世代。异常：任何候选、
+        草稿、目录或修订冲突都在图、事件和写回标记写入前失败，并由事务整体回滚。
         """
 
+        if not isinstance(advance_revision, bool):
+            raise StoreConflict("工作流修订推进标志格式无效")
         now = utc_now()
         with self.transaction() as conn:
             writeback_generation = str(uuid4())
@@ -3896,7 +4001,7 @@ class WorkflowStore:
                     nodes=nodes,
                     edges=edges,
                     inventory_requirements=inventory_requirements,
-                    advance_revision=True,
+                    advance_revision=advance_revision,
                     protect_reserved_metadata=False,
                     semantic_workflow_meta_data=candidate_meta,
                     validate_workflow_io_contract=True,

@@ -39,10 +39,18 @@ from unilabos.workflow.published_workflow_runtime import (
     PublishedWorkflowGenerationError,
     build_published_workflow_generation,
 )
+from unilabos.workflow.publication_catalog import (
+    WorkflowPublicationCatalog,
+    WorkflowPublicationCatalogError,
+)
 from unilabos.workflow.service import AuthoringCompiler, WorkflowService
 from unilabos.workflow.source_discovery import (
     EditableSourceDiscoveryPlan,
     discover_editable_sources,
+)
+from unilabos.workflow.source_workspace import (
+    SourceWorkspaceError,
+    read_registered_source,
 )
 from unilabos.workflow.source_monitor import WorkflowSourceMonitor
 from unilabos.workflow.store import WorkflowStore
@@ -59,6 +67,7 @@ _editable_package_roots: tuple[Path, ...] = ()
 _editable_source_discovery_plan: Optional[EditableSourceDiscoveryPlan] = None
 _source_monitor_enabled = True
 _fixed_point_activation_enabled = False
+_allow_unpublished_composite_sources = False
 _runtime_template_snapshot_provider: Any = None
 
 
@@ -338,6 +347,10 @@ def compose_workflow_runtime(
             # ``discovery_plan`` 是全量文件预校验结果；服务在单事务中注册后，
             # 才能恢复草稿并建立一致的监视基线。
             new_service.replace_discovered_source_authorizations(discovery_plan)
+            # 发布合同文件是跨重启保留实验操作身份的权威。先恢复合同，再按子到父
+            # 固定点应用源码；这样首个子来源完成应用后的目录重建即可看到合同，
+            # 父来源不会在“合同尚未恢复”的瞬间被编译成不可恢复的缺失诊断。
+            new_service.restore_published_workflow_contracts()
             if (
                 editable_source_discovery_plan is not None
                 or activate_sources_to_fixed_point
@@ -443,6 +456,7 @@ def compose_local_workflow_template_runtime(
     editable_source_discovery_plan: Optional[EditableSourceDiscoveryPlan] = None,
     start_source_monitor: bool = True,
     workflow_activation_progress: Callable[[int, int], None] | None = None,
+    allow_unpublished_composite_sources: bool = False,
 ) -> tuple[WorkflowService, RegistryTemplateProjection]:
     """装配本地模板权威、F02 创作编译器与工作流服务。
 
@@ -455,6 +469,10 @@ def compose_local_workflow_template_runtime(
     （Registry Snapshot）同代的预编译来源计划，存在时禁止再读
     ``package.yaml``；``start_source_monitor`` 仅允许遗留入口启动逐源码监视；
     ``workflow_activation_progress`` 报告工作流源码真实编译进度。
+    ``allow_unpublished_composite_sources`` 仅用于开发工作区：为当前活动源码
+    建立本地组合解析身份，即使来源尚未写入 ``workflow_publications.json`` 也可
+    被父工作流加载。该选项不改变发布文件或 HTTP 可见性；生产模式应保持为
+    ``False``。
     返回：共享同一已发布目录代际的工作流服务
     （WorkflowService）与模板投影（Template Projection）。异常：注册表快照构造、
     本地模板身份同步或模板投影失败时统一抛出
@@ -462,9 +480,15 @@ def compose_local_workflow_template_runtime(
     若失败前已经创建模板投影，则先关闭其持有的工作流存储连接再传播异常。
     """
 
-    global _template_projection
+    global _template_projection, _allow_unpublished_composite_sources
     with _lock:
         if _template_projection is not None:
+            if bool(allow_unpublished_composite_sources) != (
+                _allow_unpublished_composite_sources
+            ):
+                raise RuntimeError(
+                    "工作流权威运行期间不能切换未发布组合来源策略"
+                )
             # 已发布的模板投影必须复用原编译器和授权目录组合身份。
             service = compose_workflow_runtime(
                 working_dir,
@@ -527,6 +551,116 @@ def compose_local_workflow_template_runtime(
             if editable_source_discovery_plan is not None
             else discover_editable_sources(configured_roots)
         )
+        # 每个可编辑包根各自拥有一份发布目录；模板资格必须从当前文件、当前
+        # 源码字节和当前合同修订三项事实交集计算。``seen`` 用来区分“从未有过
+        # 发布目录”的旧包兼容路径与已经撤空/删除发布文件的严格路径：一旦目录
+        # 曾经出现，后续缺失只能表示当前没有可引用合同，不能重新把全部源码当
+        # 成模板暴露。
+        publication_catalogs_by_root = {
+            str(Path(package_root)): WorkflowPublicationCatalog(
+                package_root=Path(package_root),
+                package_root_identity=package_root_identity,
+            )
+            for package_root, package_root_identity in publication_plan.root_identities
+        }
+        publication_roots_seen: set[str] = set()
+        for root_key, catalog in publication_catalogs_by_root.items():
+            try:
+                _entries, present = catalog.list_entries_with_presence()
+            except WorkflowPublicationCatalogError as error:
+                raise RegistryTemplateProjectionError(str(error)) from error
+            if present:
+                publication_roots_seen.add(root_key)
+
+        def _publication_eligibility(
+            registrations: tuple[dict[str, Any], ...],
+        ) -> tuple[set[str], dict[str, int], dict[str, str], set[str]]:
+            """按包根计算当前可引用的发布合同 pin。
+
+            参数：``registrations`` 是进程内当前活动来源注册；返回依次为可引用
+            UUID、合同修订、源码哈希和仅适用于从未拥有发布文件的旧包来源集合。
+            异常：发布目录损坏或源码读取失败转换为模板投影错误；单项合同缺失、
+            撤权或源码哈希漂移均安全地从可引用集合排除。
+            """
+
+            by_root: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for registration in registrations:
+                by_root[str(registration["package_root"])].append(registration)
+            eligible: set[str] = set()
+            revisions: dict[str, int] = {}
+            source_hashes: dict[str, str] = {}
+            legacy: set[str] = set()
+            for root_key, root_registrations in by_root.items():
+                catalog = publication_catalogs_by_root.get(root_key)
+                if catalog is None:
+                    # 遗留的无包目录组合入口没有可核验发布文件；保持其旧
+                    # 适配器语义，但不把这个分支用于已知工作区根。
+                    legacy.update(
+                        str(item["workflow_uuid"]) for item in root_registrations
+                    )
+                    continue
+                try:
+                    entries, present = catalog.list_entries_with_presence()
+                except WorkflowPublicationCatalogError as error:
+                    raise RegistryTemplateProjectionError(str(error)) from error
+                if present:
+                    publication_roots_seen.add(root_key)
+                if root_key not in publication_roots_seen:
+                    # 只有从未产生过发布目录的旧包才允许启动固定点临时引用
+                    # 源码；一旦文件落盘，下一次重建立即切换严格资格。
+                    legacy.update(
+                        str(item["workflow_uuid"]) for item in root_registrations
+                    )
+                    continue
+                latest_by_uuid: dict[str, dict[str, Any]] = {}
+                for entry in entries:
+                    contract = entry.get("contract")
+                    if not isinstance(contract, Mapping):
+                        continue
+                    workflow_uuid = str(contract.get("workflow_uuid") or "")
+                    if not workflow_uuid:
+                        continue
+                    previous = latest_by_uuid.get(workflow_uuid)
+                    if previous is None or int(contract["version"]) > int(
+                        previous["contract"]["version"]
+                    ):
+                        latest_by_uuid[workflow_uuid] = entry
+                for registration in root_registrations:
+                    workflow_uuid = str(registration["workflow_uuid"])
+                    entry = latest_by_uuid.get(workflow_uuid)
+                    if entry is None:
+                        continue
+                    contract = entry.get("contract")
+                    if not isinstance(contract, Mapping):
+                        continue
+                    revision = contract.get("workflow_revision")
+                    if (
+                        isinstance(revision, bool)
+                        or not isinstance(revision, int)
+                        or revision < 1
+                    ):
+                        continue
+                    raw_hash = entry.get("source_draft_hash")
+                    if not isinstance(raw_hash, str) or not raw_hash:
+                        continue
+                    expected_hash = (
+                        raw_hash
+                        if raw_hash.startswith("sha256:")
+                        else f"sha256:{raw_hash}"
+                    )
+                    try:
+                        source = read_registered_source(registration)
+                    except SourceWorkspaceError as error:
+                        raise RegistryTemplateProjectionError(str(error)) from error
+                    if source is None or source.draft_hash != expected_hash:
+                        # 源码已被编辑、文件缺失或合同已撤权时，旧模板不得
+                        # 继续留在目录中；父工作流会得到可定位的缺失诊断。
+                        continue
+                    eligible.add(workflow_uuid)
+                    revisions[workflow_uuid] = revision
+                    source_hashes[workflow_uuid] = expected_hash
+            return eligible, revisions, source_hashes, legacy
+
         active_registrations = tuple(
             {
                 "workflow_uuid": item.workflow_uuid,
@@ -545,6 +679,25 @@ def compose_local_workflow_template_runtime(
             ":memory:",
             template_snapshot_provider=publication_template_provider,
         )
+        # 先把启动发现计划的五项来源身份安装到进程内目录。首次注册表投影发生在
+        # ``compose_workflow_runtime`` 安装服务之前；提前安装让首轮编译与后续重建
+        # 使用同一个可撤销来源集合，避免既看不到静态来源又在运行期撤权后复活。
+        if active_registrations:
+            publication_store.install_discovered_sources(
+                tuple(
+                    {
+                        field: registration[field]
+                        for field in (
+                            "workflow_uuid",
+                            "package_id",
+                            "package_root",
+                            "relative_path",
+                            "source_uri",
+                        )
+                    }
+                    for registration in active_registrations
+                )
+            )
         published_generation: PublishedWorkflowGeneration | None = None
 
         def extend_template_generation(
@@ -566,12 +719,13 @@ def compose_local_workflow_template_runtime(
                 str(registration["workflow_uuid"]): registration
                 for registration in active_registrations
             }
-            current_registrations = []
+            # 来源注册的当前集合由进程内定义目录掌握；首次投影前已经安装了启动
+            # 计划，后续授权替换/增量导入会自然反映在这里，不会把撤权来源重新并入。
+            registered_by_uuid: dict[str, dict[str, Any]] = {}
             for registration in publication_store.list_source_registrations():
                 current = dict(registration)
-                initial = initial_registration_by_uuid.get(
-                    str(current["workflow_uuid"])
-                )
+                workflow_uuid = str(current["workflow_uuid"])
+                initial = initial_registration_by_uuid.get(workflow_uuid)
                 if initial is not None:
                     # 启动发现计划中的静态模块/符号/哈希更可信；动态导入
                     # 来源没有这些字段，build 函数会从已应用源码快照补齐。
@@ -579,7 +733,11 @@ def compose_local_workflow_template_runtime(
                         value = initial.get(field)
                         if value is not None:
                             current[field] = value
-                current_registrations.append(current)
+                registered_by_uuid[workflow_uuid] = current
+            current_registrations = tuple(
+                registered_by_uuid[workflow_uuid]
+                for workflow_uuid in sorted(registered_by_uuid)
+            )
             base_node_uuid_by_key = {
                 (str(node["resource_template_uuid"]), str(node["name"])): str(
                     node["uuid"]
@@ -609,10 +767,45 @@ def compose_local_workflow_template_runtime(
             )
             previous_snapshot = publication_template_provider.replace(base_snapshot)
             try:
+                (
+                    published_workflow_uuids,
+                    published_workflow_revisions,
+                    published_workflow_source_hashes,
+                    legacy_workflow_uuids,
+                ) = _publication_eligibility(current_registrations)
+                strict_publication_catalog = bool(publication_catalogs_by_root)
+                # 开发工作区需要“源码可组合”而不是“已发布才可组合”：未发布的
+                # 子工作流仍然可以参与本地父图编译，但已发布来源继续沿用当前
+                # 合同的 revision/hash pin。生产入口不传该开关，保持严格发布边界。
+                workspace_composite_uuids = set(legacy_workflow_uuids)
+                if allow_unpublished_composite_sources:
+                    workspace_composite_uuids.update(
+                        str(registration["workflow_uuid"])
+                        for registration in current_registrations
+                        if str(registration["workflow_uuid"])
+                        not in published_workflow_revisions
+                    )
                 generation = build_published_workflow_generation(
                     registrations=tuple(current_registrations),
                     snapshot_provider=publication_store,
                     base_node_templates=base_nodes,
+                    # 已出现发布目录的根严格只接受当前源码哈希与合同修订；
+                    # 从未拥有发布文件的旧包才保留有限的启动兼容集合。
+                    published_workflow_revisions=(
+                        published_workflow_revisions
+                        if strict_publication_catalog
+                        else None
+                    ),
+                    published_workflow_source_hashes=(
+                        published_workflow_source_hashes
+                        if strict_publication_catalog
+                        else None
+                    ),
+                    workspace_workflow_uuids=(
+                        workspace_composite_uuids
+                        if strict_publication_catalog
+                        else None
+                    ),
                 )
             except PublishedWorkflowGenerationError as error:
                 publication_template_provider.replace(previous_snapshot)
@@ -710,6 +903,9 @@ def compose_local_workflow_template_runtime(
             publication_store.close()
             raise
         _template_projection = projection
+        _allow_unpublished_composite_sources = bool(
+            allow_unpublished_composite_sources
+        )
         return service, projection
 
 
@@ -886,7 +1082,8 @@ def shutdown_workflow_runtime() -> None:
     global \
         _fixed_point_activation_enabled, \
         _source_monitor_enabled, \
-        _template_projection
+        _template_projection, \
+        _allow_unpublished_composite_sources
     with _lock:
         from unilabos.workflow.station_event_http import (
             shutdown_station_event_projection,
@@ -913,6 +1110,7 @@ def shutdown_workflow_runtime() -> None:
         _editable_package_roots = ()
         _editable_source_discovery_plan = None
         _template_projection = None
+        _allow_unpublished_composite_sources = False
         _source_monitor_enabled = True
         _fixed_point_activation_enabled = False
 

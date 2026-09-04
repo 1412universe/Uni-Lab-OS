@@ -207,6 +207,8 @@ export function WorkflowsPage({
     }
   })
   const preflight = preflightQuery.data
+  /** 编译自 quantity_requirement 的数量需求；Edge 建任务时按来源容器自动绑定并预留，界面只读展示。 */
+  const inventoryRequirements = graphQuery.data?.inventoryRequirements || []
   useEffect(() => setRunInput(initialRunInput(detail)), [detail?.uuid, detail?.revision])
   useEffect(() => {
     if (startupMode !== 'develop') setRunMode('normal')
@@ -489,6 +491,16 @@ export function WorkflowsPage({
                         {!detail.inputContract.length ? <EmptyState title="无需运行输入" description="该工作流可直接进入 Preflight。" /> : null}
                       </div>
                     </section>
+                    {inventoryRequirements.length ? (
+                      <section className="run-input-panel reagent-binding-panel">
+                        <div className="run-section-title"><span>01b</span><div><strong>试剂用量需求</strong><small>{inventoryRequirements.length} 条 · 建任务时按来源容器自动预留，成功后按此量扣减</small></div></div>
+                        <div className="bound-material-list">
+                          {inventoryRequirements.map((requirement) => (
+                            <article key={requirement.uuid}><header><span><FlaskConical size={15} /></span><div><strong>{requirement.requirementKey}</strong><code>需 {requirement.requiredQuantity} {requirement.quantityUnit}</code></div></header>{requirement.description ? <p>{requirement.description}</p> : null}</article>
+                          ))}
+                        </div>
+                      </section>
+                    ) : null}
                     <aside className="run-context-panel">
                       <div className="run-section-title"><span>02</span><div><strong>物料上下文</strong><small>权威库位与未结束任务引用</small></div></div>
                       <div className="bound-material-list">

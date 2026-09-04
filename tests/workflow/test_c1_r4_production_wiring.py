@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from tests.registry.test_f05_material_source_catalog import _Registry
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.workflow_template_api import WorkflowTemplateQueryService
@@ -13,6 +15,7 @@ from unilabos.workflow.composition import (
     compose_local_workflow_template_runtime,
     reset_workflow_service_for_test,
 )
+from unilabos.workflow.store import WorkflowStore
 
 from .test_c1_r2_static_expansion_contract import (
     CHILD_WORKFLOW_UUID,
@@ -213,6 +216,134 @@ def test_product_composition_publishes_and_rebuilds_workflow_templates(
         )
         assert restored.template["uuid"] == first_template_uuid
         assert restarted.compiler is not None
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
+
+
+def test_develop_workspace_loads_unpublished_composite_child(
+    tmp_path: Path,
+) -> None:
+    """开发工作区加载未发布子工作流时仍应完成父图组合和启动恢复。
+
+    参数：``tmp_path`` 隔离包目录与库存数据库。返回：即使包根已经存在严格
+    发布目录，显式开发工作区开关仍把活动源码加入本地组合目录；父工作流能够
+    展开子图且不产生 ``composite_child_not_found``。异常：若未发布来源继续
+    阻断固定点激活，断言会直接报告启动失败。
+    """
+
+    reset_workflow_service_for_test()
+    selected_root = tmp_path / "editable"
+    selected_root.mkdir()
+    _write_package(selected_root)
+    # 合法空发布目录模拟真实包已经进入严格合同模式，但本测试刻意不发布
+    # child，验证开发模式的本地组合例外不会修改该文件。
+    publication_path = selected_root / PACKAGE_ID / "workflow_publications.json"
+    publication_path.write_text(
+        '{"version": 1, "publications": []}\n',
+        encoding="utf-8",
+    )
+    publication_before = publication_path.read_bytes()
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        service, projection = compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=_Registry(),
+            editable_package_roots=(selected_root,),
+            start_source_monitor=False,
+            allow_unpublished_composite_sources=True,
+        )
+        child_authoring = service.get_authoring(CHILD_WORKFLOW_UUID)
+        parent_authoring = service.get_authoring(PARENT_WORKFLOW_UUID)
+        assert child_authoring["state"] == "applied"
+        assert parent_authoring["state"] == "applied"
+        assert parent_authoring["draft"]["diagnostics"] == []
+        parent_graph = service.get_graph(PARENT_WORKFLOW_UUID)
+        assert {node["type"] for node in parent_graph["nodes"]} >= {"workflow"}
+        assert projection.snapshot().require_action(
+            f"{CHILD_MODULE}:prepare_sample",
+            f"workflow:{CHILD_WORKFLOW_UUID}",
+        )
+        assert publication_path.read_bytes() == publication_before
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
+
+
+def test_develop_workspace_skips_malformed_unpublished_child_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """未发布子来源快照损坏时不能阻断开发工作区启动。
+
+    参数：``tmp_path`` 隔离包与库存；``monkeypatch`` 注入只针对未发布子来源的
+    损坏快照。返回：组合目录跳过该来源的模板投影，但 Backend 仍完成启动，父图
+    保留可观察诊断。异常：若损坏的 workspace-only 快照升级为全局目录异常，
+    测试会在组合入口处失败。
+    """
+
+    reset_workflow_service_for_test()
+    selected_root = tmp_path / "editable"
+    selected_root.mkdir()
+    _write_package(selected_root)
+    publication_path = selected_root / PACKAGE_ID / "workflow_publications.json"
+    publication_path.write_text(
+        '{"version": 1, "publications": []}\n',
+        encoding="utf-8",
+    )
+    original_snapshot = WorkflowStore.get_published_workflow_snapshot
+
+    def malformed_child_snapshot(
+        store: WorkflowStore,
+        workflow_uuid: str,
+    ) -> dict[str, object]:
+        if workflow_uuid == CHILD_WORKFLOW_UUID:
+            # _eligible() 会认为修订/应用摘要齐全，真正的合同投影随后发现
+            # nodes 不是数组；这正是此前会抛 PublishedWorkflowGenerationError
+            # 并阻断整个启动的路径。
+            return {
+                "workflow": {
+                    "uuid": CHILD_WORKFLOW_UUID,
+                    "revision": 1,
+                    "workflow_type": "experiment_operation",
+                    "meta_data": {
+                        "unilab": {
+                            "authoring_function_name": "prepare_sample",
+                        }
+                    },
+                },
+                "applied_source": {
+                    "workflow_revision": 1,
+                    "source_hash": "sha256:" + "a" * 64,
+                },
+                "source_draft_hash": "sha256:" + "b" * 64,
+                "nodes": "malformed",
+                "edges": [],
+                "node_templates": [],
+                "handle_templates": [],
+            }
+        return original_snapshot(store, workflow_uuid)
+
+    monkeypatch.setattr(
+        WorkflowStore,
+        "get_published_workflow_snapshot",
+        malformed_child_snapshot,
+    )
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    try:
+        service, _projection = compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=_Registry(),
+            editable_package_roots=(selected_root,),
+            start_source_monitor=False,
+            allow_unpublished_composite_sources=True,
+        )
+        assert service.get_authoring(CHILD_WORKFLOW_UUID)["state"] == "applied"
+        parent = service.get_authoring(PARENT_WORKFLOW_UUID)
+        assert parent["state"] == "draft_invalid"
+        assert parent["draft"]["diagnostics"]
     finally:
         reset_workflow_service_for_test()
         inventory_store.close()

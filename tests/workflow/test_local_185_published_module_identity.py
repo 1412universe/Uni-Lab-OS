@@ -253,3 +253,25 @@ def test_package_rooted_published_source_resolves_composite_invocation() -> None
     assert expansion.diagnostics == ()
     assert expansion.invocation_node is not None
     assert len(expansion.nodes) == 1
+
+
+def test_published_malformed_snapshot_fails_closed() -> None:
+    """已发布来源的损坏快照仍必须阻止发布目录代际构造。
+
+    参数：无。返回：不受 workspace-only 放宽策略影响，严格来源的合同投影
+    损坏仍抛出稳定 ``PublishedWorkflowGenerationError``。异常：若开发模式的
+    隔离逻辑误吞已发布错误，断言会失败。
+    """
+
+    _authoring, provider, _catalog, _source_catalog = _world_components()
+    provider.snapshots[CHILD_WORKFLOW_UUID]["nodes"] = "malformed"
+
+    with pytest.raises(
+        PublishedWorkflowGenerationError,
+        match="composite_catalog_mismatch",
+    ):
+        _published_generation(
+            package_id="c1_published_lab",
+            relative_path="workflows/material_transfer.py",
+            provider=provider,
+        )

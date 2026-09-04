@@ -148,3 +148,79 @@ def test_parent_composite_graph_survives_real_restart(tmp_path: Path) -> None:
     finally:
         reset_workflow_service_for_test()
         inventory_store.close()
+
+
+def test_parent_composite_revision_two_survives_real_restart(tmp_path: Path) -> None:
+    """合同修订大于 1 时冷启动也不能把源码应用再推进一个版本。
+
+    参数：``tmp_path`` 隔离领域包、工作流运行事实与库存数据库。返回：无；先
+    把子工作流源码改成第二个图修订并发布，再重启验证子修订仍为 2，父图仍能
+    展开。异常：若启动骨架总从 revision 1 递增，子会变成 3、父合同解析失败。
+    """
+
+    reset_workflow_service_for_test()
+    package_root = tmp_path / "editable"
+    _write_package_root(package_root)
+    inventory_store = InventoryStore(str(tmp_path / "inventory.db"))
+    child_uuid = str(uuid.uuid4())
+    parent_uuid = str(uuid.uuid4())
+    try:
+        service, _projection = compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=_RegistryWithPump(),
+            editable_package_roots=(package_root,),
+            start_source_monitor=False,
+        )
+        service.import_python_workflow(
+            file_name="child.py",
+            python_source=_child_source(child_uuid),
+        )
+        child_path = (
+            package_root
+            / "restart_composite_lab"
+            / "experiment_operations"
+            / "child.py"
+        )
+        child_path.write_text(
+            _child_source(child_uuid).replace("Restart child", "Restart child v2"),
+            encoding="utf-8",
+        )
+        observed_signature = service.source_signature(child_uuid)
+        assert service.submit_source_change(
+            child_uuid,
+            observed_signature=observed_signature,
+        )
+        candidate = service.get_authoring(child_uuid)["candidate"]
+        assert isinstance(candidate, dict)
+        applied = service.apply_authoring(
+            child_uuid,
+            candidate_hash=str(candidate["candidate_hash"]),
+        )
+        assert applied["apply_result"]["workflow_revision"] == 2
+        service.publish_workflow_contract(child_uuid, revision=2)
+        parent = service.import_python_workflow(
+            file_name="parent.py",
+            python_source=_parent_source(parent_uuid),
+        )
+        assert len(parent["nodes"]) >= 2
+
+        reset_workflow_service_for_test()
+        plan = discover_editable_sources((package_root,))
+        restarted, _restarted_projection = compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=_RegistryWithPump(),
+            editable_source_discovery_plan=plan,
+            start_source_monitor=False,
+        )
+        assert restarted.get_workflow(child_uuid)["revision"] == 2
+        authoring = restarted.get_authoring(parent_uuid)
+        graph = restarted.get_graph(parent_uuid)
+        assert authoring["state"] == "applied"
+        assert authoring["draft"]["diagnostics"] == []
+        assert len(graph["nodes"]) >= 2
+        assert {node["type"] for node in graph["nodes"]} >= {"workflow", "ILab"}
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()

@@ -108,6 +108,8 @@ from unilabos.workflow.published_contract import (
     PublishedContractConflict,
     PublishedContractInvalid,
     PublishedWorkflowContractStore,
+    published_contract_semantic_hash,
+    published_graph_semantic_hash,
 )
 from unilabos.workflow.python_workflow_import import (
     PythonWorkflowImportError,
@@ -610,6 +612,13 @@ class WorkflowService:
         # 自动激活候选由当前线程刚刚编译并安装进内存目录；线程本地授权让
         # Apply 复用这个编译事实，同时保持交互 Apply 的独立重编译复核。
         self._workspace_activation_context = threading.local()
+        # 冷启动发布合同只把“空骨架应采用的修订基线”保存在内存。映射值为
+        # ``(workflow_revision, source_draft_hash, semantic_graph_hash)``；仅固定点
+        # 激活且源码字节与发布时一致、编译出的冻结图也一致时允许 Apply 保持该
+        # 修订，成功后立即消费。普通交互 Apply 永远不读取此映射，避免绕过版本
+        # 推进语义。
+        self._bootstrap_published_revisions_lock = threading.RLock()
+        self._bootstrap_published_revisions: dict[str, tuple[int, str, str]] = {}
         # ``_catalog_generation_tracker`` 隐藏本进程目录编译基线、变化判定和源码
         # 观测签名组合；工作流服务只在编译事务接缝提交已验证指纹。
         self._catalog_generation_tracker = CatalogAuthoringGenerationTracker()
@@ -655,13 +664,40 @@ class WorkflowService:
         projected["operation_category_uuid"] = category_uuid
         identity = str(projected["uuid"])
         latest_contract = self._published_contract_store().latest_for_workflow(identity)
-        if self._publication_catalog is None or not self._has_active_source(identity):
+        if self._publication_catalog is None:
             is_currently_published = latest_contract is not None and int(
                 latest_contract["workflow_revision"]
             ) == int(projected["revision"])
+        elif not self._has_active_source(identity):
+            # 领域包发布目录是当前来源授权的权威边界。内存合同表会保留不可变
+            # 历史，不能因为撤权后工作流修订仍相同，就把孤儿定义继续标成当前
+            # published；否则父工作流和控制台都会重新暴露已撤销来源。
+            is_currently_published = False
         else:
             publication = self._publication_catalog.latest_for_workflow(identity)
             source = self._read_source(self._registration(identity))
+            authoring = self._definition_store.get_authoring_record(identity)
+            applied_source = authoring.get("applied_source")
+            diagnostics = authoring.get("diagnostics")
+            # 发布目录中的 ``source_draft_hash`` 只是持久化的发布事实，不能
+            # 单独把任意后来改写的源码标成 published。当前文件还必须已经被
+            # 本进程的作者权威成功应用到同一修订；否则即使有人同步篡改了目录
+            # 中的源码摘要，draft_invalid/unapplied 工作流也只能显示 source。
+            authoring_matches_source = (
+                source is not None
+                and authoring.get("observed_draft_hash") == source["draft_hash"]
+                and isinstance(applied_source, Mapping)
+                and applied_source.get("workflow_revision")
+                == int(projected["revision"])
+                and authoring.get("candidate") is None
+                and authoring.get("writeback_status") == "settled"
+                and isinstance(diagnostics, list)
+                and not any(
+                    isinstance(item, Mapping)
+                    and str(item.get("severity", "")).lower() == "error"
+                    for item in diagnostics
+                )
+            )
             is_currently_published = (
                 latest_contract is not None
                 and int(latest_contract["workflow_revision"]) == int(projected["revision"])
@@ -669,6 +705,7 @@ class WorkflowService:
                 and source is not None
                 and publication["contract"]["uuid"] == latest_contract["uuid"]
                 and publication["source_draft_hash"] == source["draft_hash"]
+                and authoring_matches_source
             )
         projected["status"] = (
             _WORKFLOW_STATUS_PUBLISHED
@@ -1122,12 +1159,24 @@ class WorkflowService:
             raise WorkflowError("invalid_input") from None
         if status not in {None, _WORKFLOW_STATUS_SOURCE, _WORKFLOW_STATUS_PUBLISHED}:
             raise WorkflowError("invalid_input")
+        authoritative_status_filter = (
+            status is not None and self._publication_catalog is not None
+        )
         if status is not None:
             # 状态筛选依赖不可变发布合同；先建立其表结构，再让目录仓储在数据库
             # 内完成筛选和分页，避免先分页后过滤导致 ``has_more`` 错误。
             self._published_contract_store()
         if operation_category_uuid is not None:
             category_uuid = self.get_operation_category(operation_category_uuid)["uuid"]
+            if authoritative_status_filter:
+                return self._list_workflows_by_authoritative_status(
+                    page=page,
+                    page_size=page_size,
+                    name=name,
+                    workflow_type=normalized_workflow_type,
+                    status=status,
+                    category_uuid=category_uuid,
+                )
             return self._list_workflows_by_operation_category(
                 page=page,
                 page_size=page_size,
@@ -1135,6 +1184,14 @@ class WorkflowService:
                 workflow_type=normalized_workflow_type,
                 status=status,
                 category_uuid=category_uuid,
+            )
+        if authoritative_status_filter:
+            return self._list_workflows_by_authoritative_status(
+                page=page,
+                page_size=page_size,
+                name=name,
+                workflow_type=normalized_workflow_type,
+                status=status,
             )
         result = self._definition_store.list_workflows(
             page=page,
@@ -1147,6 +1204,59 @@ class WorkflowService:
             self._public_workflow_with_status(item) for item in result["items"]
         ]
         return result
+
+    def _list_workflows_by_authoritative_status(
+        self,
+        *,
+        page: int,
+        page_size: int,
+        name: str,
+        workflow_type: str | None,
+        status: str,
+        category_uuid: str | None = None,
+    ) -> dict[str, Any]:
+        """按源码/发布目录权威过滤工作流并在过滤后分页。
+
+        参数：筛选条件与 ``list_workflows`` 相同，``category_uuid`` 是已校验的
+        实验操作类别。返回：当前源码摘要、发布合同身份和工作流修订共同确认的
+        精确分页结果。异常：定义仓储、发布目录或源码读取失败原样传播；不把
+        数据库中仅按修订命中的陈旧合同当作当前已发布工作流。
+
+        组合工作区的发布目录位于文件系统，SQLite 只能证明“曾经存在同修订合同”，
+        不能证明当前源码仍与该合同绑定。因而不能先用 ``publication_status`` 在
+        SQL 层分页再做状态投影，否则源码哈希漂移会同时污染 source/published 两个
+        分页结果。这里先读取定义候选全集，再以同一公开状态投影过滤并重新切页。
+        """
+
+        matched: list[dict[str, Any]] = []
+        source_page = 1
+        while True:
+            batch = self._definition_store.list_workflows(
+                page=source_page,
+                page_size=100,
+                name=name,
+                workflow_type=workflow_type,
+            )
+            for item in batch["items"]:
+                projected = self._public_workflow_with_status(item)
+                if projected.get("status") != status:
+                    continue
+                if (
+                    category_uuid is not None
+                    and projected.get("operation_category_uuid") != category_uuid
+                ):
+                    continue
+                matched.append(projected)
+            if source_page * 100 >= int(batch["total"]):
+                break
+            source_page += 1
+        start = (page - 1) * page_size
+        return {
+            "items": matched[start : start + page_size],
+            "total": len(matched),
+            "page": page,
+            "page_size": page_size,
+        }
 
     def list_referencing_workflows(
         self,
@@ -1472,20 +1582,77 @@ class WorkflowService:
         # 重启持久化，恢复过程不会触碰运行事实 SQLite。
         contract_store = self._published_contract_store()
         restored_any = False
+        latest_entries: dict[str, Mapping[str, Any]] = {}
         for entry in self._publication_catalog.list_entries():
             # ``workflow_uuid`` 是合同来源定义稳定身份；只有同代 manifest 已授权
             # 且 Python 定义已激活时才允许恢复，防止孤儿合同重新暴露已撤权定义。
-            workflow_uuid = str(entry["contract"]["workflow_uuid"])
+            contract = entry["contract"]
+            workflow_uuid = str(contract["workflow_uuid"])
             if not self._has_active_source(workflow_uuid):
                 continue
+            # 先记录当前来源的最新合同，再尝试恢复具体定义。冷启动时来源清单
+            # 可能刚安装了空骨架，旧实现因 ``get_workflow`` 尚未可见而直接丢掉
+            # 这条记录，后续就无法把发布合同的修订号预置到首次源码 Apply。
+            prior = latest_entries.get(workflow_uuid)
+            if prior is None or (
+                int(contract["version"]),
+                int(contract["workflow_revision"]),
+                str(contract["uuid"]),
+            ) > (
+                int(prior["contract"]["version"]),
+                int(prior["contract"]["workflow_revision"]),
+                str(prior["contract"]["uuid"]),
+            ):
+                latest_entries[workflow_uuid] = entry
             try:
                 self._definition_store.get_workflow(workflow_uuid)
-                contract_store.restore(entry["contract"])
+                contract_store.restore(contract)
                 restored_any = True
             except StoreNotFound:
                 continue
             except (PublishedContractConflict, PublishedContractInvalid) as error:
                 raise WorkflowError("source_publication_failed") from error
+        # 来源清单安装出来的定义是空骨架，初始 revision 固定为 1；若该工作流已有
+        # 发布合同，先把合同 revision 作为本轮 AST 编译的基线。随后固定点 Apply
+        # 会按源码哈希决定是否保持该 revision，从而避免冷重启把同一源码/图误报
+        # 为一次新的图编辑。该映射只存在于当前服务实例，且每项成功 Apply 后消费。
+        bootstrap_revisions: dict[str, tuple[int, str, str]] = {}
+        for workflow_uuid, entry in latest_entries.items():
+            contract = entry["contract"]
+            try:
+                revision = int(contract["workflow_revision"])
+                source_hash = str(entry["source_draft_hash"])
+                if not source_hash.startswith("sha256:"):
+                    source_hash = "sha256:" + source_hash
+                if _HASH_TOKEN.fullmatch(source_hash) is None:
+                    raise ValueError("发布源码摘要格式无效")
+                contract_source_hash = str(contract["source_hash"])
+                if _HASH_TOKEN.fullmatch(contract_source_hash) is None:
+                    raise ValueError("发布合同图摘要格式无效")
+                semantic_graph_hash = published_contract_semantic_hash(contract)
+                # 与随后 candidate Apply 共用工作流锁，避免监视线程恰好在空骨架
+                # 检查后写入图，导致修订基线和候选基线分裂。
+                with self._authoring_lock(workflow_uuid):
+                    can_bootstrap = (
+                        self._definition_store.bootstrap_workflow_revision(
+                            workflow_uuid,
+                            revision=revision,
+                        )
+                    )
+            except StoreNotFound:
+                # 兼容该方法在来源清单安装之前被调用的入口；下一次恢复会在
+                # 空骨架创建后重新建立同一发布修订基线。
+                continue
+            except (StoreConflict, TypeError, ValueError):
+                raise WorkflowError("source_publication_failed") from None
+            if can_bootstrap:
+                bootstrap_revisions[workflow_uuid] = (
+                    revision,
+                    source_hash,
+                    semantic_graph_hash,
+                )
+        with self._bootstrap_published_revisions_lock:
+            self._bootstrap_published_revisions = bootstrap_revisions
         # 模板投影在工作流源码激活之前构造，而发布合同在此方法中才从领域包
         # 恢复。恢复后立即重建一次编译目录，确保已发布组合模板（包括其合同
         # UUID/Handle UUID）进入后续 graph save 的同一目录代际；否则父图插入
@@ -3121,6 +3288,10 @@ class WorkflowService:
                 if identity != workflow_uuid
             )
             self._active_source_dependencies.pop(workflow_uuid, None)
+        # 撤销来源同时撤销尚未消费的冷启动修订闸门，避免同一进程随后重新
+        # 导入/创建同 UUID（若调用方恢复墓碑失败也不会沿用旧合同基线）。
+        with self._bootstrap_published_revisions_lock:
+            self._bootstrap_published_revisions.pop(workflow_uuid, None)
 
     def _rollback_domain_import(
         self,
@@ -4921,6 +5092,13 @@ class WorkflowService:
                 with self._active_sources_lock:
                     self._active_source_workflow_uuids = incoming_workflow_uuids
                     self._active_source_dependencies = source_dependencies
+                # 授权替换不仅更新文件访问白名单，也必须撤销已离开集合的
+                # 冷启动修订闸门；否则同进程重新授权同一 UUID 时可能借用旧合同
+                # 基线。不可变合同历史仍保留在定义库，但不会再被这次启动批次
+                # 当作尚未消费的 bootstrap 事实。
+                with self._bootstrap_published_revisions_lock:
+                    for workflow_uuid in current_workflow_uuids - incoming_workflow_uuids:
+                        self._bootstrap_published_revisions.pop(workflow_uuid, None)
             return registered
 
     def replace_active_editable_source_authorization(
@@ -5180,12 +5358,14 @@ class WorkflowService:
                 # ``composite_child_not_found``，其嵌套图就无法重新生成。
                 self.restore_published_workflow_contracts()
                 continue
+            # 同一层的候选已经提交。先恢复本层刚激活的实验操作发布合同，
+            # 再重建模板目录；否则目录重建会看不到刚恢复的合同，下一轮父
+            # 工作流只能继续使用缺少子模板的旧目录并反复得到
+            # ``composite_catalog_mismatch``。
+            self.restore_published_workflow_contracts()
             self._rebuild_workspace_activation_catalog()
             for result in deferred_results:
                 self._require_workspace_activation_apply_complete(result)
-            # 同一层的候选已经提交且模板目录已换代。此时恢复本层刚激活的
-            # 实验操作发布合同，下一层（或固定点补偿轮）才能解析组合节点。
-            self.restore_published_workflow_contracts()
         unresolved_sources = any(
             self.get_authoring(workflow_uuid).get("state") != "applied"
             for workflow_uuid in registrations_by_uuid
@@ -5220,6 +5400,14 @@ class WorkflowService:
             for workflow_uuid in workflow_uuids:
                 if workflow_uuid in blocked:
                     continue
+                # 补偿轮只负责推进尚未成功应用的来源。已经处于 applied 状态的
+                # 来源无需再次 Apply；重复提交会重新触发其父工作流刷新，若父
+                # 来源当前仍是未发布/不可解析的组合操作，反而会产生
+                # ``dependent_authoring_refresh_pending``，把可用的工作区错误地
+                # 判定为目录不可用。
+                current_state = self.get_authoring(workflow_uuid).get("state")
+                if current_state == "applied":
+                    continue
                 self.reconcile_registered_source(
                     workflow_uuid,
                     force_compile=True,
@@ -5246,8 +5434,37 @@ class WorkflowService:
                     )
                     blocked.add(workflow_uuid)
                     continue
-                self._require_workspace_activation_apply_complete(result)
                 applied_any = True
+                apply_result = result.get("apply_result")
+                warnings = (
+                    apply_result.get("warnings")
+                    if isinstance(apply_result, Mapping)
+                    else None
+                )
+                warning_codes = {
+                    str(warning.get("code"))
+                    for warning in warnings or []
+                    if isinstance(warning, Mapping)
+                }
+                if (
+                    self.compiler is not None
+                    and warning_codes
+                    and warning_codes <= {"dependent_authoring_refresh_pending"}
+                ):
+                    # 补偿轮本来就是为了把隐式组合依赖推进到固定点。某些未发布
+                    # 或仍有用户编辑的引用方暂时不能刷新时，已成功提交的当前
+                    # 来源仍可继续提供工作流能力；若把这个业务待办升级成目录
+                    # 不可用，会让无关的有效工作流也无法启动。
+                    logger.warning(
+                        "工作区工作流已应用，但仍有引用方待处理: %s",
+                        ",".join(
+                            str(warning.get("message", ""))
+                            for warning in warnings or []
+                            if isinstance(warning, Mapping)
+                        ),
+                    )
+                else:
+                    self._require_workspace_activation_apply_complete(result)
             if not applied_any:
                 return
 
@@ -5340,13 +5557,14 @@ class WorkflowService:
         self,
         result: Mapping[str, Any],
     ) -> None:
-        """禁止工作区自动激活在提交后恢复未完成时发布 ready。
+        """检查工作区自动激活的目录基础设施状态。
 
         参数：``result`` 是刚完成的 ``apply_authoring`` 结果。返回：没有提交后
-        warning 且当前目录编译器仍可用时无返回值。异常：目录重建或依赖来源刷新
-        未完成时抛 ``template_catalog_unavailable``；其他提交后恢复 warning 抛
-        ``internal_error``。图事务可能已经提交，但组合根必须失败关闭并由下次冷
-        启动从领域源码重新编译，绝不把部分固定点误报为 ready。
+        基础设施 warning 且当前目录编译器仍可用时无返回值。异常：目录重建
+        未完成时抛 ``template_catalog_unavailable``；其他未知提交后 warning 抛
+        ``internal_error``。``dependent_authoring_refresh_pending`` 只表示某个
+        父工作流仍有业务诊断（例如引用未发布子工作流），不影响当前目录和已
+        应用来源的可用性，不能阻断 Workspace 正常启动。
         """
 
         apply_result = result.get("apply_result")
@@ -5362,11 +5580,16 @@ class WorkflowService:
         }
         catalog_incomplete = {
             "template_catalog_rebuild_pending",
-            "dependent_authoring_refresh_pending",
         }
         if self.compiler is None or warning_codes & catalog_incomplete:
             raise WorkflowError("template_catalog_unavailable")
-        if warnings:
+        # 父工作流刷新失败是局部业务状态；其诊断已经由
+        # ``_record_workspace_activation_failure``/依赖刷新器保存，不应把整个
+        # Backend 的 ready 门禁升级为基础设施故障。
+        unexpected_warning_codes = warning_codes - {
+            "dependent_authoring_refresh_pending",
+        }
+        if unexpected_warning_codes:
             raise WorkflowError("internal_error")
 
     def _record_workspace_activation_failure(
@@ -5421,7 +5644,11 @@ class WorkflowService:
                     "candidate_hash": None,
                 },
             )
-        logger.warning(
+        # ament/launch 在测试与部分本地启动路径会把 ``unilabos`` 父 logger
+        # 替换为不向根 logger 传播的适配器；这里的启动失败诊断必须同时进入
+        # 标准根日志（便于 caplog、集中式采集和现场排障），不能只落到
+        # ``lastResort`` 的裸 stderr。
+        logging.getLogger().warning(
             "工作区工作流自动激活失败 workflow_uuid=%s code=%s message=%s",
             workflow_uuid,
             error.code,
@@ -5888,6 +6115,39 @@ class WorkflowService:
                 "prevalidated_candidate",
                 None,
             )
+            # 只有固定点启动线程刚签发的候选，且其源码仍是发布时字节，才可
+            # 使用冷启动合同修订基线。公共/交互 Apply 没有该线程标记，始终
+            # 走普通递增语义。
+            bootstrap_entry: tuple[int, str, str] | None = None
+            bootstrap_attempt = False
+            if (
+                preserve_author_source
+                and prevalidated_candidate == (workflow_uuid, candidate_hash)
+            ):
+                with self._bootstrap_published_revisions_lock:
+                    bootstrap_entry = self._bootstrap_published_revisions.get(
+                        workflow_uuid
+                    )
+                bootstrap_attempt = (
+                    bootstrap_entry is not None
+                    and expected_workflow_revision == bootstrap_entry[0]
+                )
+            bootstrap_no_advance = False
+            if (
+                bootstrap_attempt
+                and bootstrap_entry is not None
+                and actual_hash == bootstrap_entry[1]
+            ):
+                # 原始源码字节哈希相同仍不足以证明发布合同不变：编译器/模板目录
+                # 可能已换代并产生不同图。只有候选图重新计算出的合同图摘要也相同，
+                # 才能在冷启动时保持不可变发布修订；否则按一次真实图编辑递增。
+                try:
+                    candidate_graph_hash = published_graph_semantic_hash(
+                        candidate["graph"]
+                    )
+                except (KeyError, TypeError, ValueError, PublishedContractInvalid):
+                    candidate_graph_hash = None
+                bootstrap_no_advance = candidate_graph_hash == bootstrap_entry[2]
             if prevalidated_candidate != (workflow_uuid, candidate_hash):
                 applied_graph = self.get_graph(workflow_uuid)
                 compilation = self._compile(
@@ -5995,6 +6255,7 @@ class WorkflowService:
                         workflow_uuid=workflow_uuid,
                         candidate_hash=candidate_hash,
                         authoring_authority_validator=(validate_authoring_authorities),
+                        advance_revision=not bootstrap_no_advance,
                     )
                 except StoreAuthoringConflict as error:
                     raise WorkflowConflict(error.code) from None
@@ -6002,6 +6263,14 @@ class WorkflowService:
                     raise WorkflowConflict("workflow_revision_conflict") from None
                 except (StoreConflict, ValidationError):
                     raise WorkflowError("candidate_invalid") from None
+            if bootstrap_attempt:
+                # 无论源码是否仍与合同一致，首次启动 Apply 成功后都消费闸门；
+                # 变化源码已经按普通递增提交，后续监视/交互不能再次借用旧基线。
+                with self._bootstrap_published_revisions_lock:
+                    if self._bootstrap_published_revisions.get(workflow_uuid) == (
+                        bootstrap_entry
+                    ):
+                        self._bootstrap_published_revisions.pop(workflow_uuid, None)
 
             warnings: list[dict[str, str]] = []
             if (
@@ -6446,8 +6715,8 @@ class WorkflowService:
         """判断当前目录重编译是否只重新证明了既有应用事实。
 
         参数：候选版本（Candidate）、已应用源码、当前工作流修订和作者源码哈希。
-        返回：候选不改变图，且同一作者字节已绑定当前修订时为 ``True``。
-        异常：无；持久派生字段形状异常只按不匹配处理。
+        返回：候选不改变图、同一作者字节和同一模板目录代际均已绑定当前修订
+        时为 ``True``。异常：无；持久派生字段形状异常只按不匹配处理。
         """
 
         return (
@@ -6456,6 +6725,9 @@ class WorkflowService:
             and isinstance(applied_source, dict)
             and applied_source.get("workflow_revision") == workflow_revision
             and applied_source.get("source_hash") == draft_hash
+            and isinstance(candidate.get("template_catalog_fingerprint"), str)
+            and candidate.get("template_catalog_fingerprint")
+            == applied_source.get("template_catalog_fingerprint")
         )
 
     def _issue_candidate(

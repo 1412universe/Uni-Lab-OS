@@ -265,6 +265,7 @@ def test_local_product_composition_forwards_the_exact_configured_roots(
         editable_package_roots: tuple[str, ...],
         start_source_monitor: bool,
         workflow_activation_progress: object,
+        allow_unpublished_composite_sources: bool,
     ) -> tuple[object, object]:
         """记录本地组合根收到的工作目录、依赖和源码授权。
 
@@ -281,6 +282,7 @@ def test_local_product_composition_forwards_the_exact_configured_roots(
             editable_package_roots=editable_package_roots,
             start_source_monitor=start_source_monitor,
             workflow_activation_progress=workflow_activation_progress,
+            allow_unpublished_composite_sources=allow_unpublished_composite_sources,
         )
         return workflow_service, template_projection
 
@@ -343,6 +345,7 @@ def test_local_product_composition_forwards_the_exact_configured_roots(
     assert captured["editable_package_roots"] == configured_roots
     assert captured["start_source_monitor"] is True
     assert callable(captured["workflow_activation_progress"])
+    assert isinstance(captured["allow_unpublished_composite_sources"], bool)
 
 
 def test_local_composition_failure_never_falls_back_to_uncompiled_runtime(

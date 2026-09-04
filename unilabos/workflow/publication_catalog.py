@@ -25,6 +25,9 @@ from unilabos.workflow.source_publication import (
 PUBLICATION_FILE_NAME = "workflow_publications.json"
 PUBLICATION_FILE_BYTE_LIMIT = 16 * 1024 * 1024
 PUBLICATION_LIMIT = 1000
+# SQLite ``INTEGER`` 是有符号 64 位整数；在文件边界拒绝更大的 JSON 整数，
+# 避免损坏的发布清单直到合同恢复写库时才泄漏未分类 ``OverflowError``。
+_SQLITE_INT64_MAX = (1 << 63) - 1
 
 
 class WorkflowPublicationCatalogError(RuntimeError):
@@ -70,9 +73,25 @@ class WorkflowPublicationCatalog:
         抛 ``WorkflowPublicationCatalogError``，不返回部分结果。
         """
 
+        entries, _present = self.list_entries_with_presence()
+        return entries
+
+    def list_entries_with_presence(self) -> tuple[list[dict[str, Any]], bool]:
+        """读取发布合同并明确区分“文件缺失”和“合法空目录”。
+
+        参数：无。返回：``(entries, present)``，其中 ``present`` 仅在发布文件
+        存在且通过完整校验时为 ``True``；合法但为空的发布目录仍返回 ``True``。
+        异常：目录身份、文件类型或 JSON 合同不可信时抛
+        ``WorkflowPublicationCatalogError``，不返回部分结果。
+
+        该区别用于组合根的旧包兼容策略：只有从未拥有发布目录的旧包才允许
+        启动期间把源码作为临时候选；一个显式空发布目录表示“当前没有可引用合同”，
+        不能误当成缺失文件而放宽权限。
+        """
+
         with self._lock:
-            entries, _expected_hash = self._read()
-            return deepcopy(entries)
+            entries, expected_hash = self._read()
+            return deepcopy(entries), expected_hash is not None
 
     def latest_for_workflow(self, workflow_uuid: str) -> dict[str, Any] | None:
         """读取指定工作流最新发布条目。
@@ -273,9 +292,14 @@ def _validate_entries(values: list[Any]) -> list[dict[str, Any]]:
         raise WorkflowPublicationCatalogError("invalid_input")
     entries: list[dict[str, Any]] = []
     # ``contract_uuids`` 保证每个不可变合同身份只表示一份内容；
-    # ``workflow_versions`` 保证同一工作流的发布序号不会指向两份合同。
+    # ``node_template_uuids`` 防止两个合同在恢复时占用同一个模板主键；
+    # ``workflow_versions`` 保证同一工作流的公开发布序号不会指向两份合同；
+    # ``workflow_revisions`` 对齐 SQLite 合同表的唯一约束，避免恶意清单在恢复
+    # 第二条同修订合同时才以未分类 ``IntegrityError`` 失败。
     contract_uuids: set[str] = set()
+    node_template_uuids: set[str] = set()
     workflow_versions: set[tuple[str, int]] = set()
+    workflow_revisions: set[tuple[str, int]] = set()
     for value in values:
         if not isinstance(value, dict) or set(value) != {
             "source_draft_hash",
@@ -285,10 +309,21 @@ def _validate_entries(values: list[Any]) -> list[dict[str, Any]]:
         entry = _entry(value["source_draft_hash"], value["contract"])
         contract = entry["contract"]
         version_key = (contract["workflow_uuid"], contract["version"])
-        if contract["uuid"] in contract_uuids or version_key in workflow_versions:
+        revision_key = (
+            contract["workflow_uuid"],
+            contract["workflow_revision"],
+        )
+        if (
+            contract["uuid"] in contract_uuids
+            or contract["node_template_uuid"] in node_template_uuids
+            or version_key in workflow_versions
+            or revision_key in workflow_revisions
+        ):
             raise WorkflowPublicationCatalogError("invalid_input")
         contract_uuids.add(contract["uuid"])
+        node_template_uuids.add(contract["node_template_uuid"])
         workflow_versions.add(version_key)
+        workflow_revisions.add(revision_key)
         entries.append(entry)
     return sorted(
         entries,
@@ -314,6 +349,9 @@ def _entry(source_draft_hash: Any, contract: Any) -> dict[str, Any]:
         character not in "0123456789abcdef" for character in digest
     ):
         raise WorkflowPublicationCatalogError("invalid_input")
+    # 即使旧清单使用无前缀摘要，也统一保存并比较带算法前缀的规范形式；源码
+    # 工作区始终返回带前缀形式，若保留裸摘要会让相同发布在重启后误判为过期。
+    source_draft_hash = "sha256:" + digest
     if not isinstance(contract, Mapping):
         raise WorkflowPublicationCatalogError("invalid_input")
     copied = deepcopy(dict(contract))
@@ -348,11 +386,24 @@ def _entry(source_draft_hash: Any, contract: Any) -> dict[str, Any]:
         isinstance(copied["workflow_revision"], bool)
         or not isinstance(copied["workflow_revision"], int)
         or copied["workflow_revision"] < 1
+        or copied["workflow_revision"] > _SQLITE_INT64_MAX
         or isinstance(copied["version"], bool)
         or not isinstance(copied["version"], int)
         or copied["version"] < 1
+        or copied["version"] > _SQLITE_INT64_MAX
     ):
         raise WorkflowPublicationCatalogError("invalid_input")
+    # 这两个值在恢复时写入 SQLite INTEGER 列；在清单边界校验具体整数类型和
+    # 有符号 64 位范围，防止损坏 JSON 泄漏为 OverflowError 或延迟 CHECK 失败。
+    for field, minimum in (("node_count", 1), ("edge_count", 0)):
+        value = copied[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < minimum
+            or value > _SQLITE_INT64_MAX
+        ):
+            raise WorkflowPublicationCatalogError("invalid_input")
     try:
         json.dumps(copied, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError):

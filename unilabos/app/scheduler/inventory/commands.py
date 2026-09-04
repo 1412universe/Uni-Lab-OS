@@ -26,6 +26,8 @@ from unilabos.app.scheduler.inventory.schemas import (
     JsonObject,
     parse_inventory_command,
 )
+from unilabos.app.scheduler.inventory.backend_contract import BackendContractError
+from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
 from unilabos.app.scheduler.inventory.service import InventoryService
 from unilabos.utils.tracing import add_event, set_error, span
 
@@ -254,6 +256,44 @@ def _handle_adjust(svc: InventoryService, cmd: JsonObject) -> JsonObject:
     )
 
 
+class ReagentCommandRejected(InventoryError):
+    """试剂合同错误在命令层的投影：保留 Backend 合同的数字错误码。
+
+    参数说明：``code`` 是 ``backend_contract`` 定义的数字错误码；``message`` 为可读
+    原因。返回：异常实例。状态不变量：命令层据此把命令记为 ``rejected`` 并回滚
+    本次处理器的全部业务写入，源瓶与目标容器保持事务前状态。
+    """
+
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        # 命令响应合同（InventoryCommandResult.error_code）是字符串；数字码按
+        # 字符串投影，前端与测试用 "4002" 这类值匹配，不改共享线上 schema。
+        self.code = str(code)
+
+
+def _handle_reagent_dispense(svc: InventoryService, cmd: JsonObject) -> JsonObject:
+    """把一瓶源试剂原子分装到若干空容器；沿用命令事务与幂等重放。"""
+
+    p = cmd.get("payload") or {}
+    reagent_service = BackendReagentService(
+        svc.store, edge_id=svc.edge_id, lab_id=svc.lab_id
+    )
+    try:
+        with svc._tx() as conn:
+            return reagent_service.dispense_reagent_in_transaction(
+                conn,
+                source_reagent_uuid=str(p["source_reagent_uuid"]),
+                expected_revision=p.get("expected_revision"),
+                quantity_unit=str(p["quantity_unit"]),
+                targets=list(p.get("targets") or []),
+                command_id=str(cmd["command_id"]),
+                actor=str(cmd.get("actor") or ""),
+                reason=str(p.get("reason") or ""),
+            )
+    except BackendContractError as error:
+        raise ReagentCommandRejected(error.code, error.message) from error
+
+
 COMMAND_HANDLERS: Dict[str, CommandHandler] = {
     "inventory.template.upsert": _handle_template_upsert,
     "inventory.template.delete": _handle_template_delete,
@@ -271,6 +311,7 @@ COMMAND_HANDLERS: Dict[str, CommandHandler] = {
     "material.consume": _handle_consume,
     "material.discard": _handle_discard,
     "material.adjust": _handle_adjust,
+    "reagent.dispense": _handle_reagent_dispense,
 }
 
 

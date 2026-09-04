@@ -442,7 +442,14 @@ class TaskRuntimeProjection:
         if cls._has_unsettled_job_reconciliation(connection, task_uuid=task_uuid):
             return False
         task = cls._task_row(connection, task_uuid)
-        if task["control_status"] != "waiting_reconciliation":
+        # 进程重启会先把任务置为 ``failed/active`` 并保留
+        # ``cleanup_status=requires_attention``。当 Edge 随后提交了明确的停止
+        # 证明时，不确定作业已经清零，但控制状态不会自动回到
+        # ``waiting_reconciliation``；此时仍应进入统一的清理收尾，而不能因为
+        # control_status 不是 waiting_reconciliation 而遗留 requires_attention。
+        if task["control_status"] != "waiting_reconciliation" and task[
+            "cleanup_status"
+        ] != "requires_attention":
             return False
         cleanup_status = (
             "required"

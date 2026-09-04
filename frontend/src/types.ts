@@ -103,6 +103,7 @@ export interface WorkflowGraphNode {
   workflow_node_template_uuid?: string
   material_uuid?: string
   param?: Record<string, any>
+  manual_confirmation?: Record<string, any>
   pose?: Record<string, any>
   meta_data?: Record<string, any>
   parentUuid?: string
@@ -119,12 +120,32 @@ export interface WorkflowGraphEdge {
   uuid: string
   sourceNodeUuid: string
   targetNodeUuid: string
+  /** 数据边使用的源/目标句柄；ready 顺序边也保留这两个字段。 */
+  sourceHandleUuid?: string
+  targetHandleUuid?: string
+  metaData?: Record<string, any>
+}
+
+/** 工作流定义里不绑定具体库存实例的逻辑数量需求；建任务时必须逐条绑定并预留。 */
+export interface WorkflowInventoryRequirement {
+  uuid: string
+  requirementKey: string
+  consumeNodeUuid: string
+  targetType: 'reagent_info' | 'current_substance' | string
+  reagentInfoUuid?: string
+  requiredQuantity: number
+  quantityUnit: string
+  allowSplit: boolean
+  description?: string
+  materialSourceNodeUuid?: string
 }
 
 export interface WorkflowGraph {
   workflow: WorkflowDefinition
   nodes: WorkflowGraphNode[]
   edges: WorkflowGraphEdge[]
+  /** 编译自 material_source(quantity=…, quantity_unit=…) 的库存需求。 */
+  inventoryRequirements?: WorkflowInventoryRequirement[]
   /** 完整图返回的模板快照，包含发布子工作流的合成节点句柄。 */
   nodeTemplates?: Array<Record<string, any>>
   handleTemplates?: Array<Record<string, any>>
@@ -249,6 +270,8 @@ export interface ResourceTemplateRecord {
   displayName: string
   description: string
   resourceType: string
+  /** 模板标签；含 "container" 表示可承载试剂 / 样品 / 当前物质。 */
+  tags?: string[]
   availableSites: Array<{ name: string; label: string }>
 }
 
@@ -272,6 +295,14 @@ export interface ActionParameterRecord {
   key: string
   displayName: string
   required: boolean
+  schema: Record<string, unknown>
+}
+
+/** 设备动作（Action）的数据输出句柄；ready 等流程控制句柄不包含在内。 */
+export interface ActionOutputRecord {
+  handleUuid: string
+  key: string
+  displayName: string
   schema: Record<string, unknown>
 }
 
@@ -326,6 +357,14 @@ export interface ReagentRecord {
   densityGPerMl?: number
   containerName?: string
   containerBarcode?: string
+  /** 未结束任务对该瓶的活动预留量，与 quantity 同单位。 */
+  activeWorkflowReservedQuantity?: number
+  description?: string
+  /** 后端整体覆盖 meta_data；编辑时必须原样带回，否则血缘会丢。 */
+  metaData?: Record<string, unknown>
+  /** 由分装产生时指向源瓶试剂；手工录入的瓶子为空。 */
+  sourceReagentUuid?: string
+  dispenseCommandId?: string
   revision: number
   updatedAt: string
 }
@@ -346,6 +385,10 @@ export interface ReagentHistoryRecord {
   workflowTaskUuid?: string
   workflowNodeJobUuid?: string
   traceId?: string
+  /** 同一次分装的所有台账共用 causation_id（即分装命令 ID）。 */
+  causationId?: string
+  sourceReagentUuid?: string
+  targetReagentUuids?: string[]
 }
 
 export interface RunPreflightCheck {

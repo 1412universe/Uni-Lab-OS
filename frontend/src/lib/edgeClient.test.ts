@@ -9,6 +9,8 @@ import {
   createReagentInfo,
   deleteReagentInfo,
   EdgeApiError,
+  deleteReagent,
+  dispenseReagent,
   instantiateMaterial,
   lookupCompoundByCas,
   loadActionTemplates,
@@ -22,6 +24,7 @@ import {
   switchStartupMode,
   unwrapEnvelope,
   updateExperimentOperation,
+  updateReagent,
 } from './edgeClient'
 
 afterEach(() => vi.unstubAllGlobals())
@@ -98,6 +101,71 @@ describe('switchStartupMode', () => {
       cleanupStatus: 'none',
       executionKind: 'workflow',
     }])
+  })
+})
+
+describe('dispenseReagent', () => {
+  const completed = {
+    command_id: 'cmd-1',
+    status: 'completed',
+    result: {
+      source: { reagent_uuid: 'src', material_uuid: 'm-src', quantity: 50, quantity_unit: 'mL', revision: 2 },
+      targets: [{ material_uuid: 'm-1', reagent_uuid: 'r-1', quantity: 50, quantity_unit: 'mL', revision: 1 }],
+    },
+  }
+
+  it('reads the raw inventory command result instead of the {code,data} envelope', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response(completed))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await dispenseReagent({ commandId: 'cmd-1', sourceReagentUuid: 'src', expectedRevision: 1, quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 50 }] })
+
+    expect(result.source).toMatchObject({ reagentUuid: 'src', quantity: 50, revision: 2 })
+    expect(result.targets).toEqual([{ materialUuid: 'm-1', reagentUuid: 'r-1', quantity: 50, quantityUnit: 'mL', revision: 1 }])
+    expect(result.replayed).toBe(false)
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/inventory/commands')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      command_id: 'cmd-1', type: 'reagent.dispense',
+      payload: { source_reagent_uuid: 'src', expected_revision: 1, quantity_unit: 'mL', targets: [{ material_uuid: 'm-1', quantity: 50 }] },
+    })
+  })
+
+  it('marks an idempotent replay of the same command', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ ...completed, replayed: true })))
+    const result = await dispenseReagent({ commandId: 'cmd-1', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 50 }] })
+    expect(result.replayed).toBe(true)
+  })
+
+  it('exposes dispense lineage on reagent rows and history events', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/reagent-history')) {
+        return response({ code: 0, data: { items: [
+          { uuid: 'h-1', material_uuid: 'm-1', event_type: 'dispense_target', quantity_delta: 30, quantity_unit: 'mL', revision: 1, causation_id: 'cmd-9', changes: { result: { quantity: 30, quantity_unit: 'mL', revision: 1 } }, extension: { source_reagent_uuid: 'src' } },
+          { uuid: 'h-2', material_uuid: 'm-src', event_type: 'dispense_source', quantity_delta: -30, quantity_unit: 'mL', revision: 2, causation_id: 'cmd-9', changes: { result: { quantity: 70, quantity_unit: 'mL', revision: 2 } }, extension: { target_reagent_uuids: ['r-1'] } },
+        ], total: 2, page: 1, page_size: 100 } })
+      }
+      return response({ code: 0, data: { items: [
+        { uuid: 'r-1', material_uuid: 'm-1', reagent_info_uuid: 'info', name: '乙醇', quantity: 30, quantity_unit: 'mL', revision: 1, meta_data: { source_reagent_uuid: 'src', dispense_command_id: 'cmd-9' } },
+        { uuid: 'src', material_uuid: 'm-src', reagent_info_uuid: 'info', name: '乙醇', quantity: 70, quantity_unit: 'mL', revision: 2, meta_data: {} },
+      ], total: 2, page: 1, page_size: 100 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { loadReagents } = await import('./edgeClient')
+    const rows = await loadReagents()
+    expect(rows.find((row) => row.uuid === 'r-1')).toMatchObject({ sourceReagentUuid: 'src', dispenseCommandId: 'cmd-9' })
+    expect(rows.find((row) => row.uuid === 'src')?.sourceReagentUuid).toBeUndefined()
+
+    const history = await loadReagentHistory('m-1')
+    expect(history[0]).toMatchObject({ eventType: 'dispense_target', causationId: 'cmd-9', sourceReagentUuid: 'src' })
+    expect(history[1]).toMatchObject({ eventType: 'dispense_source', causationId: 'cmd-9', targetReagentUuids: ['r-1'] })
+  })
+
+  it('surfaces a business rejection with the server reason', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ command_id: 'cmd-2', status: 'rejected', error: 'dispense total 999.0 exceeds source quantity 100.0', error_code: '1000' })))
+    await expect(dispenseReagent({ commandId: 'cmd-2', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 999 }] }))
+      .rejects.toThrow('exceeds source quantity')
   })
 })
 
@@ -319,6 +387,36 @@ describe('Edge view model adapters', () => {
     expect(edgeBody.target_node_uuid).toBe(graphBody.nodes[1].uuid)
   })
 
+  it('writes manual confirmation as a wrapper around an ILab action template', async () => {
+    let graphBody: Record<string, any> | undefined
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-manual-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-manual')) return response({ code: 0, data: {
+        template: { uuid: 'template-manual', node_type: 'ILab', name: 'transfer_resource', type: 'UniLabJsonCommand' },
+        handles: [{ uuid: 'ready-source', handle_key: 'ready', io_type: 'source' }, { uuid: 'ready-target', handle_key: 'ready', io_type: 'target' }],
+      } })
+      if (url.endsWith('/workflows/operation-manual-1/graph') && init?.method === 'PUT') {
+        graphBody = JSON.parse(String(init.body)) as Record<string, any>
+        return response({ code: 0, data: { workflow: { uuid: 'operation-manual-1', revision: 2 } } })
+      }
+      if (url.endsWith('/workflows/operation-manual-1/graph')) return response({ code: 0, data: { workflow: { uuid: 'operation-manual-1', revision: 2 }, nodes: graphBody?.nodes || [], edges: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createExperimentOperation({
+      name: '人工确认动作', description: '',
+      actions: [{ templateUuid: 'template-manual', nodeType: 'ILab', materialUuid: 'device-1', deviceId: 'device-1', name: '确认后转移', param: {}, inputBindings: {}, manualConfirmation: { timeoutSeconds: 45 } }],
+    })
+
+    expect(graphBody?.nodes[0]).toMatchObject({
+      type: 'manual_confirm',
+      manual_confirmation: { timeout_seconds: 45 },
+      workflow_node_template_uuid: 'template-manual',
+    })
+  })
+
   it('binds an exposed output to the matching action output handle', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -345,6 +443,101 @@ describe('Edge view model adapters', () => {
 
     const metadataCall = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith('/workflows/operation-output-1') && init?.method === 'PUT')
     expect(JSON.parse(String(metadataCall?.[1]?.body))).toMatchObject({ meta_data: { unilab: { output_bindings: { success: { kind: 'node_output', workflow_node_uuid: expect.any(String), source_handle_uuid: 'success-source' } } } } })
+  })
+
+  /** 验证保存实验操作时写入真实数据句柄，并继续建立 ready 顺序边。 */
+  it('persists an upstream action output as a workflow data edge', async () => {
+    let graphBody: Record<string, any> | undefined
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows') && init?.method === 'POST') return response({ code: 0, data: { uuid: 'operation-data-1', revision: 1 } })
+      if (url.endsWith('/workflow-node-templates/template-source')) return response({ code: 0, data: {
+        template: { uuid: 'template-source', node_type: 'compute', type: 'UniLabJsonCommand' },
+        handles: [
+          { uuid: 'ready-source-1', handle_key: 'ready', io_type: 'source' },
+          { uuid: 'ready-target-1', handle_key: 'ready', io_type: 'target' },
+          { uuid: 'output-sample', handle_key: 'sample_id', data_key: 'sample_id', io_type: 'source', type: 'string' },
+        ],
+      } })
+      if (url.endsWith('/workflow-node-templates/template-target')) return response({ code: 0, data: {
+        template: { uuid: 'template-target', node_type: 'compute', type: 'UniLabJsonCommand' },
+        handles: [
+          { uuid: 'ready-source-2', handle_key: 'ready', io_type: 'source' },
+          { uuid: 'ready-target-2', handle_key: 'ready', io_type: 'target' },
+          { uuid: 'input-sample', handle_key: 'sample_id', data_key: 'sample_id', io_type: 'target', required: true, type: 'string' },
+        ],
+      } })
+      if (url.endsWith('/workflows/operation-data-1/graph') && init?.method === 'PUT') {
+        graphBody = JSON.parse(String(init.body)) as Record<string, any>
+        return response({ code: 0, data: { workflow: { uuid: 'operation-data-1', revision: 2 } } })
+      }
+      if (url.endsWith('/workflows/operation-data-1/graph') && (!init?.method || init.method === 'GET')) return response({ code: 0, data: { workflow: { uuid: 'operation-data-1', revision: 1 }, nodes: [], edges: graphBody?.edges || [] } })
+      if (url.endsWith('/workflows/operation-data-1/edges') && init?.method === 'POST') return response({ code: 0, data: { workflow: { uuid: 'operation-data-1', revision: 3 }, edges: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await createExperimentOperation({
+      name: '上游输出传递', description: '',
+      actions: [
+        { draftId: 'first', templateUuid: 'template-source', materialUuid: 'device-1', deviceId: 'device-1', name: '产出样品', param: {}, inputBindings: {} },
+        { draftId: 'second', templateUuid: 'template-target', materialUuid: 'device-2', deviceId: 'device-2', name: '使用样品', param: {}, inputBindings: { 'input-sample': { kind: 'node_output', sourceNodeId: 'first', sourceHandleUuid: 'output-sample' } } },
+      ],
+    })
+
+    expect(graphBody?.edges).toEqual([expect.objectContaining({
+      source_node_uuid: graphBody?.nodes[0].uuid,
+      target_node_uuid: graphBody?.nodes[1].uuid,
+      source_handle_uuid: 'output-sample',
+      target_handle_uuid: 'input-sample',
+      meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } },
+    })])
+    expect(fetchMock.mock.calls.some(([input, init]) => String(input).endsWith('/workflows/operation-data-1/edges') && init?.method === 'POST' && String(init.body).includes('ready-source-1'))).toBe(true)
+  })
+
+  /**
+   * 证明编辑节点输入来源时会替换旧的数据边，同时保留原有 ready 顺序边。
+   * 这能防止一个输入句柄在重复编辑后同时连接多个上游输出。
+   */
+  it('replaces a generated data edge without removing the ready sequence edge', async () => {
+    let savedGraph: Record<string, any> | undefined
+    const initialGraph = {
+      workflow: { uuid: 'wf-data-edit', revision: 4 },
+      nodes: [
+        { uuid: 'source-node', workflow_node_template_uuid: 'template-source', meta_data: { unilab: { sequence_index: 0 } } },
+        { uuid: 'target-node', workflow_node_template_uuid: 'template-target', meta_data: { unilab: { sequence_index: 1 } } },
+      ],
+      edges: [
+        { uuid: 'ready-edge', source_node_uuid: 'source-node', target_node_uuid: 'target-node', source_handle_uuid: 'ready-source', target_handle_uuid: 'ready-target', meta_data: { unilab: { generated_by: 'operation-builder' } } },
+        { uuid: 'old-data-edge', source_node_uuid: 'source-node', target_node_uuid: 'target-node', source_handle_uuid: 'old-output', target_handle_uuid: 'target-input', meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } } },
+      ],
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/workflows/wf-data-edit') && init?.method === 'PUT') return response({ code: 0, data: { uuid: 'wf-data-edit' } })
+      if (url.endsWith('/workflows/wf-data-edit/graph') && init?.method === 'PUT') {
+        savedGraph = JSON.parse(String(init.body)) as Record<string, any>
+        return response({ code: 0, data: { workflow: { uuid: 'wf-data-edit', revision: 5 } } })
+      }
+      if (url.endsWith('/workflows/wf-data-edit/graph')) return response({ code: 0, data: savedGraph
+        ? { workflow: { uuid: 'wf-data-edit', revision: 5 }, nodes: savedGraph.nodes, edges: savedGraph.edges }
+        : initialGraph })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateExperimentOperation({
+      workflowUuid: 'wf-data-edit', name: '修改数据来源', description: '',
+      actions: [
+        { draftId: 'source-draft', nodeUuid: 'source-node', templateUuid: 'template-source', materialUuid: 'device-1', deviceId: 'device-1', name: '来源动作', param: {}, inputBindings: {} },
+        { draftId: 'target-draft', nodeUuid: 'target-node', templateUuid: 'template-target', materialUuid: 'device-2', deviceId: 'device-2', name: '目标动作', param: {}, inputBindings: { 'target-input': { kind: 'node_output', sourceNodeId: 'source-draft', sourceHandleUuid: 'new-output' } } },
+      ],
+    })
+
+    expect(savedGraph?.edges).toEqual([
+      expect.objectContaining({ uuid: 'ready-edge', source_handle_uuid: 'ready-source', target_handle_uuid: 'ready-target' }),
+      expect.objectContaining({ source_handle_uuid: 'new-output', target_handle_uuid: 'target-input', meta_data: { unilab: { generated_by: 'operation-builder', edge_kind: 'data' } } }),
+    ])
   })
 
   it('keeps the previous new node template when editing multiple actions', async () => {
@@ -1485,5 +1678,47 @@ describe('loadEdgeSnapshot', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('loadWorkflowGraph inventory requirements', () => {
+  it('maps inventory_requirements compiled from material_source quantities', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: {
+      workflow: { uuid: 'wf-1', name: 'w', revision: 3, status: 'source' },
+      nodes: [], edges: [], node_templates: [], handle_templates: [],
+      inventory_requirements: [{
+        uuid: 'req-1', requirement_key: 'solvent_a', consume_node_uuid: 'node-9', target_type: 'reagent_info',
+        reagent_info_uuid: null, required_quantity: 10, quantity_unit: 'mL', allow_split: false,
+        meta_data: { unilab: { material_source_node_uuid: 'node-2', quantity_target: 'container_content' } },
+      }],
+    } })))
+    const graph = await loadWorkflowGraph('wf-1')
+    expect(graph.inventoryRequirements).toEqual([{
+      uuid: 'req-1', requirementKey: 'solvent_a', consumeNodeUuid: 'node-9', targetType: 'reagent_info',
+      reagentInfoUuid: undefined, requiredQuantity: 10, quantityUnit: 'mL', allowSplit: false,
+      description: undefined, materialSourceNodeUuid: 'node-2',
+    }])
+  })
+})
+
+describe('updateReagent / deleteReagent', () => {
+  it('sends a PUT with the optimistic revision and carries meta_data back untouched', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0, data: { uuid: 'rg-1', revision: 3 } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateReagent({ uuid: 'rg-1', quantity: 45, quantityUnit: 'mL', expectedRevision: 2, description: '盘点', metaData: { source_reagent_uuid: 'rg-0', dispense_command_id: 'cmd-9' } })
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/reagents/rg-1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('PUT')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      quantity: 45, quantity_unit: 'mL', expected_revision: 2, description: '盘点',
+      meta_data: { source_reagent_uuid: 'rg-0', dispense_command_id: 'cmd-9' },
+    })
+  })
+
+  it('issues a DELETE for the reagent record', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await deleteReagent('rg-1')
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/reagents/rg-1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('DELETE')
   })
 })
