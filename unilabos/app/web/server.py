@@ -310,6 +310,12 @@ def _compose_configured_workflow_runtime() -> tuple[Any, Any | None]:
     if inventory_service is not None and edge_scheduler is not None:
         from unilabos.registry.registry import lab_registry
 
+        # 开发工作区允许父工作流直接组合当前包中尚未发布的子工作流；这只是
+        # 本地编译可见性，不会改变发布目录或生产模式的 HTTP 可见范围。该参数
+        # 只传给带模板投影的本地组合入口；无库存的遗留入口仍使用原有签名。
+        source_plan_arguments["allow_unpublished_composite_sources"] = (
+            get_startup_mode().value == "develop"
+        )
         workflow_service, template_projection = (
             compose_local_workflow_template_runtime(
                 workflow_runtime_directory,

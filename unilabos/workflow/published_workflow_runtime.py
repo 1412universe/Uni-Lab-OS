@@ -41,9 +41,11 @@ def build_published_workflow_generation(
 
     参数：``registrations`` 是本次进程活动可编辑包来源；``snapshot_provider``
     只读工作流图和应用源码；``base_node_templates`` 是同次设备目录编译结果，用于
-    定位唯一宿主节点（Host Node）所有者；``workspace_workflow_uuids`` 是仅供无
-    发布目录的旧包在启动固定点使用的临时来源身份；``published_workflow_revisions``
-    和 ``published_workflow_source_hashes`` 是组合根按当前发布目录和源码读取事实
+    定位唯一宿主节点（Host Node）所有者；``workspace_workflow_uuids`` 是组合根
+    明确允许在本地工作区参与组合的来源身份，既可用于无发布目录的旧包兼容，也
+    可用于开发模式下尚未发布的源码；它们只放宽本地组合解析，不代表已写入发布
+    合同。``published_workflow_revisions`` 和 ``published_workflow_source_hashes``
+    是组合根按当前发布目录和源码读取事实
     计算出的严格资格（提供空映射也表示“没有可引用发布合同”）。返回：一个来源目录和可追加
     到同事务替换的模板/连接点全集。异常：来源、宿主、应用快照或发布合同不一致时
     抛出 ``PublishedWorkflowGenerationError``，不返回部分代际。
@@ -54,10 +56,9 @@ def build_published_workflow_generation(
         (str, bytes),
     ):
         raise PublishedWorkflowGenerationError("活动工作流来源必须是数组")
-    # 生产组合根把“可被引用”定义为已经发布的工作流合同。定义目录里还可能
-    # 存在尚未发布、甚至正在编辑的实验操作；它们不能进入模板目录，否则一次
-    # 保存父工作流就会提前校验这些未发布草稿，导致无关的父图被阻断。内存测试
-    # 提供者没有该可选端口时，保留旧夹具语义（由快照本身决定资格）。
+    # 默认仍只把发布目录中的来源投影为组合模板；本地工作区可通过
+    # ``workspace_workflow_uuids`` 显式加入未发布来源。内存测试提供者没有该
+    # 可选端口时，保留旧夹具语义（由快照本身决定资格）。
     published_projection_reader = getattr(
         snapshot_provider,
         "list_published_template_projections",
@@ -115,6 +116,15 @@ def build_published_workflow_generation(
         if workspace_workflow_uuids is not None
         else set()
     )
+    # 只有明确由组合根放宽、且不在当前发布合同集合中的来源才属于
+    # ``workspace-only``。发布来源即使同时出现在工作区授权集合，也必须继续
+    # 走严格的快照/合同校验，不能借开发模式绕过 fail-closed 边界。
+    published_identity_set = (
+        set(published_workflow_uuids)
+        if published_workflow_uuids is not None
+        else set()
+    )
+    workspace_only_uuids = workspace_uuids - published_identity_set
     if (
         published_workflow_revisions is not None
         and published_workflow_source_hashes is not None
@@ -122,7 +132,7 @@ def build_published_workflow_generation(
         expected_hash_keys = {
             workflow_uuid
             for workflow_uuid in published_workflow_revisions
-            if workflow_uuid not in workspace_uuids
+            if workflow_uuid not in workspace_only_uuids
         }
         if set(published_workflow_source_hashes) != expected_hash_keys:
             raise PublishedWorkflowGenerationError("发布目录读取失败")
@@ -146,24 +156,51 @@ def build_published_workflow_generation(
             and workflow_uuid not in workspace_uuids
         ):
             continue
+        workspace_only = workflow_uuid in workspace_only_uuids
         # ``catalog_identity`` 来自同次包目录（PackageCatalog）静态编译，不触发
-        # 第二次扫描、Python import 或作者源码执行。
-        catalog_identity = _catalog_identity(registration)
+        # 第二次扫描、Python import 或作者源码执行。开发工作区中单个未发布
+        # 来源的身份损坏只会让该来源不可组合，不能阻断其他来源的目录构造；
+        # 已发布来源仍把同一错误作为目录基础设施失败抛出。
+        try:
+            catalog_identity = _catalog_identity(registration)
+        except PublishedWorkflowGenerationError:
+            if workspace_only:
+                continue
+            raise
         try:
             snapshot: Mapping[str, Any] | None = (
                 snapshot_provider.get_published_workflow_snapshot(workflow_uuid)
             )
         except LookupError:
             snapshot = None
+        except (AttributeError, KeyError, TypeError, ValueError):
+            if workspace_only:
+                continue
+            raise PublishedWorkflowGenerationError("发布来源快照读取失败") from None
         if catalog_identity is None:
             # 非工作区遗留入口没有冻结包目录身份时，仅保留既有已应用来源行为。
-            if snapshot is None or not _eligible(snapshot):
+            try:
+                eligible = snapshot is not None and _eligible(snapshot)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                if workspace_only:
+                    continue
+                raise PublishedWorkflowGenerationError("发布来源快照无效") from None
+            if not eligible:
                 continue
-            workflow = snapshot["workflow"]
-            applied_source = snapshot["applied_source"]
-            symbol = _authoring_symbol(workflow)
-            module = _source_module(package_id, relative_path)
-            definition_content_hash = str(applied_source["source_hash"])
+            try:
+                workflow = snapshot["workflow"]
+                applied_source = snapshot["applied_source"]
+                symbol = _authoring_symbol(workflow)
+                module = _source_module(package_id, relative_path)
+                definition_content_hash = str(applied_source["source_hash"])
+            except PublishedWorkflowGenerationError:
+                if workspace_only:
+                    continue
+                raise
+            except (KeyError, TypeError, ValueError):
+                if workspace_only:
+                    continue
+                raise PublishedWorkflowGenerationError("发布来源快照无效") from None
         else:
             module, symbol, definition_content_hash = catalog_identity
         records.append(
@@ -176,20 +213,32 @@ def build_published_workflow_generation(
                 "definition_content_hash": definition_content_hash,
             }
         )
-        if snapshot is not None and _eligible(snapshot):
-            if not _matches_publication_pin(
-                workflow_uuid=workflow_uuid,
-                snapshot=snapshot,
-                published_workflow_revisions=(
-                    published_workflow_revisions
-                    if published_workflow_revisions is not None
-                    else derived_published_revisions
-                ),
-                published_workflow_source_hashes=published_workflow_source_hashes,
-                workspace_workflow_uuids=workspace_uuids,
-            ):
-                continue
-            snapshots[workflow_uuid] = snapshot
+        if snapshot is not None:
+            try:
+                eligible = _eligible(snapshot)
+            except (AttributeError, KeyError, TypeError, ValueError):
+                if workspace_only:
+                    continue
+                raise PublishedWorkflowGenerationError("发布来源快照无效") from None
+            if eligible:
+                try:
+                    matches_pin = _matches_publication_pin(
+                        workflow_uuid=workflow_uuid,
+                        snapshot=snapshot,
+                        published_workflow_revisions=(
+                            published_workflow_revisions
+                            if published_workflow_revisions is not None
+                            else derived_published_revisions
+                        ),
+                        published_workflow_source_hashes=published_workflow_source_hashes,
+                        workspace_workflow_uuids=workspace_only_uuids,
+                    )
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    if workspace_only:
+                        continue
+                    raise PublishedWorkflowGenerationError("发布来源快照无效") from None
+                if matches_pin:
+                    snapshots[workflow_uuid] = snapshot
     try:
         source_catalog = PublishedSourceCatalog.from_records(records)
     except (TypeError, ValueError) as error:
@@ -212,9 +261,23 @@ def build_published_workflow_generation(
                 applied_snapshot=snapshots[source.workflow_uuid],
                 host_node_resource_template=host_summary,
             )
-        except PublishedWorkflowContractError as error:
-            raise PublishedWorkflowGenerationError(error.code) from error
+        except (
+            PublishedWorkflowContractError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as error:
+            if source.workflow_uuid in workspace_only_uuids:
+                # 未发布来源属于开发工作区的可选组合输入。快照/边界合同损坏时
+                # 放弃该来源的模板投影，保留其余目录；父图会收到局部组合诊断，
+                # 而不会把整个 Workspace 启动升级为目录不可用。
+                continue
+            if isinstance(error, PublishedWorkflowContractError):
+                raise PublishedWorkflowGenerationError(error.code) from error
+            raise PublishedWorkflowGenerationError("发布来源快照无效") from error
         if projected is None:
+            if source.workflow_uuid in workspace_only_uuids:
+                continue
             raise PublishedWorkflowGenerationError("发布资格在同一目录构造期间发生漂移")
         nodes.append(projected.template)
         handles.extend(projected.handles)

@@ -5310,6 +5310,14 @@ class WorkflowService:
             for workflow_uuid in workflow_uuids:
                 if workflow_uuid in blocked:
                     continue
+                # 补偿轮只负责推进尚未成功应用的来源。已经处于 applied 状态的
+                # 来源无需再次 Apply；重复提交会重新触发其父工作流刷新，若父
+                # 来源当前仍是未发布/不可解析的组合操作，反而会产生
+                # ``dependent_authoring_refresh_pending``，把可用的工作区错误地
+                # 判定为目录不可用。
+                current_state = self.get_authoring(workflow_uuid).get("state")
+                if current_state == "applied":
+                    continue
                 self.reconcile_registered_source(
                     workflow_uuid,
                     force_compile=True,
@@ -5430,13 +5438,14 @@ class WorkflowService:
         self,
         result: Mapping[str, Any],
     ) -> None:
-        """禁止工作区自动激活在提交后恢复未完成时发布 ready。
+        """检查工作区自动激活的目录基础设施状态。
 
         参数：``result`` 是刚完成的 ``apply_authoring`` 结果。返回：没有提交后
-        warning 且当前目录编译器仍可用时无返回值。异常：目录重建或依赖来源刷新
-        未完成时抛 ``template_catalog_unavailable``；其他提交后恢复 warning 抛
-        ``internal_error``。图事务可能已经提交，但组合根必须失败关闭并由下次冷
-        启动从领域源码重新编译，绝不把部分固定点误报为 ready。
+        基础设施 warning 且当前目录编译器仍可用时无返回值。异常：目录重建
+        未完成时抛 ``template_catalog_unavailable``；其他未知提交后 warning 抛
+        ``internal_error``。``dependent_authoring_refresh_pending`` 只表示某个
+        父工作流仍有业务诊断（例如引用未发布子工作流），不影响当前目录和已
+        应用来源的可用性，不能阻断 Workspace 正常启动。
         """
 
         apply_result = result.get("apply_result")
@@ -5452,11 +5461,16 @@ class WorkflowService:
         }
         catalog_incomplete = {
             "template_catalog_rebuild_pending",
-            "dependent_authoring_refresh_pending",
         }
         if self.compiler is None or warning_codes & catalog_incomplete:
             raise WorkflowError("template_catalog_unavailable")
-        if warnings:
+        # 父工作流刷新失败是局部业务状态；其诊断已经由
+        # ``_record_workspace_activation_failure``/依赖刷新器保存，不应把整个
+        # Backend 的 ready 门禁升级为基础设施故障。
+        unexpected_warning_codes = warning_codes - {
+            "dependent_authoring_refresh_pending",
+        }
+        if unexpected_warning_codes:
             raise WorkflowError("internal_error")
 
     def _record_workspace_activation_failure(

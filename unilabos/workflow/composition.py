@@ -67,6 +67,7 @@ _editable_package_roots: tuple[Path, ...] = ()
 _editable_source_discovery_plan: Optional[EditableSourceDiscoveryPlan] = None
 _source_monitor_enabled = True
 _fixed_point_activation_enabled = False
+_allow_unpublished_composite_sources = False
 _runtime_template_snapshot_provider: Any = None
 
 
@@ -455,6 +456,7 @@ def compose_local_workflow_template_runtime(
     editable_source_discovery_plan: Optional[EditableSourceDiscoveryPlan] = None,
     start_source_monitor: bool = True,
     workflow_activation_progress: Callable[[int, int], None] | None = None,
+    allow_unpublished_composite_sources: bool = False,
 ) -> tuple[WorkflowService, RegistryTemplateProjection]:
     """装配本地模板权威、F02 创作编译器与工作流服务。
 
@@ -467,6 +469,10 @@ def compose_local_workflow_template_runtime(
     （Registry Snapshot）同代的预编译来源计划，存在时禁止再读
     ``package.yaml``；``start_source_monitor`` 仅允许遗留入口启动逐源码监视；
     ``workflow_activation_progress`` 报告工作流源码真实编译进度。
+    ``allow_unpublished_composite_sources`` 仅用于开发工作区：为当前活动源码
+    建立本地组合解析身份，即使来源尚未写入 ``workflow_publications.json`` 也可
+    被父工作流加载。该选项不改变发布文件或 HTTP 可见性；生产模式应保持为
+    ``False``。
     返回：共享同一已发布目录代际的工作流服务
     （WorkflowService）与模板投影（Template Projection）。异常：注册表快照构造、
     本地模板身份同步或模板投影失败时统一抛出
@@ -474,9 +480,15 @@ def compose_local_workflow_template_runtime(
     若失败前已经创建模板投影，则先关闭其持有的工作流存储连接再传播异常。
     """
 
-    global _template_projection
+    global _template_projection, _allow_unpublished_composite_sources
     with _lock:
         if _template_projection is not None:
+            if bool(allow_unpublished_composite_sources) != (
+                _allow_unpublished_composite_sources
+            ):
+                raise RuntimeError(
+                    "工作流权威运行期间不能切换未发布组合来源策略"
+                )
             # 已发布的模板投影必须复用原编译器和授权目录组合身份。
             service = compose_workflow_runtime(
                 working_dir,
@@ -762,6 +774,17 @@ def compose_local_workflow_template_runtime(
                     legacy_workflow_uuids,
                 ) = _publication_eligibility(current_registrations)
                 strict_publication_catalog = bool(publication_catalogs_by_root)
+                # 开发工作区需要“源码可组合”而不是“已发布才可组合”：未发布的
+                # 子工作流仍然可以参与本地父图编译，但已发布来源继续沿用当前
+                # 合同的 revision/hash pin。生产入口不传该开关，保持严格发布边界。
+                workspace_composite_uuids = set(legacy_workflow_uuids)
+                if allow_unpublished_composite_sources:
+                    workspace_composite_uuids.update(
+                        str(registration["workflow_uuid"])
+                        for registration in current_registrations
+                        if str(registration["workflow_uuid"])
+                        not in published_workflow_revisions
+                    )
                 generation = build_published_workflow_generation(
                     registrations=tuple(current_registrations),
                     snapshot_provider=publication_store,
@@ -779,7 +802,7 @@ def compose_local_workflow_template_runtime(
                         else None
                     ),
                     workspace_workflow_uuids=(
-                        legacy_workflow_uuids
+                        workspace_composite_uuids
                         if strict_publication_catalog
                         else None
                     ),
@@ -880,6 +903,9 @@ def compose_local_workflow_template_runtime(
             publication_store.close()
             raise
         _template_projection = projection
+        _allow_unpublished_composite_sources = bool(
+            allow_unpublished_composite_sources
+        )
         return service, projection
 
 
@@ -1056,7 +1082,8 @@ def shutdown_workflow_runtime() -> None:
     global \
         _fixed_point_activation_enabled, \
         _source_monitor_enabled, \
-        _template_projection
+        _template_projection, \
+        _allow_unpublished_composite_sources
     with _lock:
         from unilabos.workflow.station_event_http import (
             shutdown_station_event_projection,
@@ -1083,6 +1110,7 @@ def shutdown_workflow_runtime() -> None:
         _editable_package_roots = ()
         _editable_source_discovery_plan = None
         _template_projection = None
+        _allow_unpublished_composite_sources = False
         _source_monitor_enabled = True
         _fixed_point_activation_enabled = False
 
