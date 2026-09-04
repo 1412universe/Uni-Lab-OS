@@ -470,7 +470,7 @@ def compose_local_workflow_template_runtime(
     ``package.yaml``；``start_source_monitor`` 仅允许遗留入口启动逐源码监视；
     ``workflow_activation_progress`` 报告工作流源码真实编译进度。
     ``allow_unpublished_composite_sources`` 仅用于开发工作区：为当前活动源码
-    建立本地组合解析身份，即使来源尚未写入 ``workflow_publications.json`` 也可
+    建立本地组合解析身份，即使来源尚未写入工作流发布目录也可
     被父工作流加载。该选项不改变发布文件或 HTTP 可见性；生产模式应保持为
     ``False``。
     返回：共享同一已发布目录代际的工作流服务
