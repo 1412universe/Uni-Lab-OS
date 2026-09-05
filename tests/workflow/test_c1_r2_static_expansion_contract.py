@@ -321,6 +321,24 @@ def _repeat_until_template() -> dict[str, Any]:
     }
 
 
+def _condition_template() -> dict[str, Any]:
+    """构造没有执行连接点的 Condition 控制模板。"""
+
+    template = _repeat_until_template()
+    template.update(
+        {
+            "uuid": "a3000000-0000-4000-8000-000000000032",
+            "name": "condition",
+            "display_name": "Condition",
+            "class": "unilabos.workflow.authoring:condition",
+            "type": "condition",
+            "node_type": "condition",
+        }
+    )
+    template["meta_data"] = {"unilab": {"executor_kind": "condition"}}
+    return template
+
+
 def _world_components() -> tuple[
     CompositeAuthoring,
     MemorySnapshotProvider,
@@ -756,6 +774,56 @@ def test_repeat_until_control_does_not_require_structural_ready_handles() -> Non
                 "source_handle_uuid": ACTION_READY_SOURCE_UUID,
             },
         ),
+    }
+
+
+def test_condition_control_does_not_require_structural_ready_handles() -> None:
+    """嵌套子工作流中的 Condition 控制节点不得被当作叶动作查 ready。"""
+
+    from unilabos.workflow.composite_expansion import _structural_mappings
+
+    _authoring, _provider, catalog, _source_catalog = _world_components()
+    condition_template = _condition_template()
+    expanded_catalog = AuthoringCatalogSnapshot.from_entities(
+        [*(action.detached_template() for action in catalog.actions), condition_template],
+        [
+            handle
+            for action in catalog.actions
+            for handle in action.detached_handles()
+        ],
+    )
+    condition_uuid = "22222222-2222-4222-8222-222222222224"
+    action_uuid = "22222222-2222-4222-8222-222222222225"
+    mappings = _structural_mappings(
+        [
+            {
+                "uuid": condition_uuid,
+                "workflow_node_template_uuid": condition_template["uuid"],
+                "type": "condition",
+            },
+            {
+                "uuid": action_uuid,
+                "workflow_node_template_uuid": ACTION_TEMPLATE_UUID,
+                "type": "device",
+            },
+        ],
+        [],
+        catalog=expanded_catalog,
+    )
+
+    assert mappings == {
+        "entry_targets": [
+            {
+                "workflow_node_uuid": action_uuid,
+                "target_handle_uuid": ACTION_READY_TARGET_UUID,
+            },
+        ],
+        "completion_sources": [
+            {
+                "workflow_node_uuid": action_uuid,
+                "source_handle_uuid": ACTION_READY_SOURCE_UUID,
+            },
+        ],
     }
 def test_two_invocations_share_templates_but_not_expanded_node_identity() -> None:
     """重复调用共享目录模板，但每次调用拥有不同展开节点身份。

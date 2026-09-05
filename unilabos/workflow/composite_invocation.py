@@ -18,6 +18,43 @@ class CompositeInvocationInvalid(ValueError):
     """组合调用输入或冻结合同不满足安全展开条件。"""
 
 
+_NODE_REFERENCE_KEYS = frozenset(
+    {
+        "node_uuid",
+        "workflow_node_uuid",
+        "control_region_uuid",
+        "node_uuids",
+        "entry_node_uuids",
+        "exit_node_uuids",
+        "predecessor_node_uuids",
+        "successor_node_uuids",
+    }
+)
+
+
+def _remap_control_references(
+    value: Any,
+    node_uuid_map: Mapping[str, str],
+    *,
+    key: str | None = None,
+) -> Any:
+    """按字段语义重映射控制节点内部的节点/区域 UUID 引用。"""
+
+    if isinstance(value, list):
+        return [
+            _remap_control_references(item, node_uuid_map, key=key)
+            for item in value
+        ]
+    if isinstance(value, Mapping):
+        return {
+            str(name): _remap_control_references(item, node_uuid_map, key=str(name))
+            for name, item in value.items()
+        }
+    if key in _NODE_REFERENCE_KEYS and isinstance(value, str):
+        return node_uuid_map.get(value, value)
+    return deepcopy(value)
+
+
 def _remap_boundary_value(value: Any, node_uuid_map: Mapping[str, str]) -> Any:
     """递归替换边界映射里的来源节点 UUID。"""
 
@@ -41,7 +78,7 @@ def _remap_nested_composite_metadata(
 ) -> dict[str, Any]:
     """复制节点元数据，并重写嵌套组合调用的私有边界引用。"""
 
-    result = deepcopy(dict(meta_data))
+    result = _remap_control_references(meta_data, node_uuid_map)
     unilab = result.get("unilab")
     composite = unilab.get("composite") if isinstance(unilab, dict) else None
     if not isinstance(composite, dict):
@@ -391,6 +428,10 @@ def expand_composite_invocation(
             raise CompositeInvocationInvalid("子节点引用了冻结图外的父节点")
         copied["meta_data"] = _remap_nested_composite_metadata(
             source.get("meta_data") or {},
+            node_uuid_map,
+        )
+        copied["param"] = _remap_control_references(
+            source.get("param") or {},
             node_uuid_map,
         )
         requirement_key = contract["executor_binding_mapping"].get(source_uuid)

@@ -24,6 +24,7 @@ from unilabos.workflow.composite_compatibility import (
     classify_pinned_published_workflow_invocation,
     published_workflow_compatibility_projection,
 )
+from unilabos.workflow.composite_invocation import _remap_control_references
 from unilabos.workflow.handle_projection import resource_slot_schema
 from unilabos.workflow.models import validate_uuid
 from unilabos.workflow.workflow_io import (
@@ -458,6 +459,14 @@ class CompositeAuthoring:
                 copied = _plain(node)
                 copied["uuid"] = mapped_uuid
                 copied["parent_uuid"] = mapped_parent
+                copied["param"] = _remap_control_references(
+                    node.get("param") or {},
+                    node_uuid_map,
+                )
+                copied["meta_data"] = _remap_control_references(
+                    node.get("meta_data") or {},
+                    node_uuid_map,
+                )
                 nodes.append(copied)
                 continue
             nested_source = _source_from_template(self._resolver, action)

@@ -199,6 +199,64 @@ def test_composite_invocation_rejects_unknown_input_before_expansion() -> None:
         _parent_graph(contract, param={"sample": "manual", "extra": "ignored"})
 
 
+def test_composite_invocation_remaps_control_region_references() -> None:
+    """展开后控制节点参数中的内部 UUID 必须与复制节点保持一致。"""
+
+    contract = _contract(
+        identity=OLD_CONTRACT_UUID,
+        template_uuid=OLD_TEMPLATE_UUID,
+        revision=1,
+        inputs=[_input("sample", required=True)],
+    )
+    control_uuid = "10000000-0000-0000-0000-000000000012"
+    body_uuid = CHILD_NODE_UUID
+    control = {
+        "uuid": control_uuid,
+        "name": "重复直到",
+        "type": "repeat_until",
+        "pose": {"x": 0, "y": 0},
+        "param": {
+            "node_uuids": [body_uuid],
+            "entry_node_uuids": [body_uuid],
+            "exit_node_uuids": [body_uuid],
+            "predecessor_node_uuids": [],
+            "successor_node_uuids": [],
+            "initial_carry": {
+                "x": {"kind": "node_result", "node_uuid": body_uuid}
+            },
+        },
+        "execution_policy": {},
+        "disabled": False,
+        "minimized": False,
+        "meta_data": {
+            "unilab": {
+                "carry_bindings": {
+                    "slot": {"control_region_uuid": control_uuid, "key": "x"}
+                }
+            }
+        },
+    }
+    contract["graph_snapshot"]["nodes"].extend([control])
+    expanded_nodes, _ = expand_composite_invocation(
+        parent_graph={"workflow": {"uuid": PARENT_UUID, "revision": 2}, "nodes": [], "edges": []},
+        contract=contract,
+        invocation_uuid=INVOCATION_UUID,
+        pose={"x": 300, "y": 100},
+        param={"sample": "manual"},
+        device_bindings={},
+    )
+
+    expanded_control = next(
+        node for node in expanded_nodes if node["type"] == "repeat_until"
+    )
+    expanded_body_uuid = str(
+        next(node for node in expanded_nodes if node["uuid"] != INVOCATION_UUID)["uuid"]
+    )
+    assert expanded_control["param"]["node_uuids"] == [expanded_body_uuid]
+    assert expanded_control["param"]["initial_carry"]["x"]["node_uuid"] == expanded_body_uuid
+    assert expanded_control["meta_data"]["unilab"]["carry_bindings"]["slot"]["control_region_uuid"] == expanded_control["uuid"]
+
+
 def test_refresh_preserves_invocation_and_remaps_boundary_by_parameter_name() -> None:
     """兼容更新须保留调用身份和填写值，并按参数名迁移外部连线。
 
