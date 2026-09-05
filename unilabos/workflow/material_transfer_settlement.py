@@ -185,10 +185,23 @@ def _transfer_contract(
             raise StoreConflict(f"物料转移作业缺少冻结资源合同：{node_uuid}")
         return None
     required = set(TRANSFER_CONTRACT_FIELDS)
+    optional = {"motion_resource_roles", "tool_resource_roles"}
     if (
         not isinstance(transfer, Mapping)
-        or set(transfer) != required
+        or not required <= set(transfer)
+        or bool(set(transfer) - required - optional)
         or any(not isinstance(transfer[field], str) for field in required)
+        or any(
+            field in transfer
+            and (
+                not isinstance(transfer[field], list)
+                or any(
+                    not isinstance(role, str) or not role
+                    for role in transfer[field]
+                )
+            )
+            for field in optional
+        )
     ):
         raise StoreConflict(f"物料转移作业冻结合同损坏：{node_uuid}")
     return {field: str(transfer[field]) for field in required}

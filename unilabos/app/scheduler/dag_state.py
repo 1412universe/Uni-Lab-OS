@@ -792,6 +792,7 @@ class WorkflowRun:
                 submitted_at=self.spec.submitted_at,
                 lab_id=self.spec.lab_id,
                 run_mode="normal",
+                resource_plan=deepcopy(self.spec.resource_plan),
                 repeat_regions={
                     runtime_by_template[child_template_uuid]: (
                         self._instantiate_nested_repeat_region(

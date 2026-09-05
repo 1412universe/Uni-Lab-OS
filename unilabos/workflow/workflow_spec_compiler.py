@@ -31,6 +31,12 @@ from unilabos.workflow.execution_plan import (
     DYNAMIC_ITERATION_CAPABILITY,
     PLAN_VERSION,
 )
+from unilabos.workflow.resource_lock_plan import (
+    RESOURCE_PLAN_CAPABILITY,
+    STATIC_RESOURCE_DAG_CAPABILITY,
+    ResourcePlanError,
+    deserialize_resource_plan,
+)
 
 
 class WorkflowSpecCompiler:
@@ -76,22 +82,104 @@ class WorkflowSpecCompiler:
                 "invalid_execution_plan",
                 f"执行计划版本必须是 {PLAN_VERSION} 或 {CONTROL_PLAN_VERSION}",
             )
+        capability_set: set[str] = set()
         if version == CONTROL_PLAN_VERSION:
             capabilities = plan.get("capabilities")
-            supported_capabilities = [
-                list(CONTROL_PLAN_CAPABILITIES),
-                [*CONTROL_PLAN_CAPABILITIES, DYNAMIC_ITERATION_CAPABILITY],
-            ]
-            if capabilities not in supported_capabilities:
+            if not isinstance(capabilities, list):
                 raise WorkflowSpecCompilationError(
                     "unsupported_execution_plan_capability",
                     "控制执行计划能力声明不完整",
+                )
+            required_capabilities = set(CONTROL_PLAN_CAPABILITIES)
+            capability_set = set(str(item) for item in capabilities)
+            allowed_extras = {
+                DYNAMIC_ITERATION_CAPABILITY,
+                RESOURCE_PLAN_CAPABILITY,
+                STATIC_RESOURCE_DAG_CAPABILITY,
+            }
+            if not required_capabilities <= capability_set or capability_set - required_capabilities - allowed_extras:
+                raise WorkflowSpecCompilationError(
+                    "unsupported_execution_plan_capability",
+                    "控制执行计划能力声明不完整",
+                )
+            if DYNAMIC_ITERATION_CAPABILITY in capability_set and not any(
+                str(item.get("kind") or "") == "repeat_until"
+                for item in plan.get("nodes", [])
+                if isinstance(item, Mapping)
+            ):
+                raise WorkflowSpecCompilationError(
+                    "unsupported_execution_plan_capability",
+                    "动态迭代能力声明与计划节点不一致",
+                )
+        raw_resource_plan = plan.get("resource_plan")
+        resource_plan = None
+        if raw_resource_plan is not None:
+            try:
+                resource_plan = deserialize_resource_plan(raw_resource_plan)
+            except ResourcePlanError as error:
+                raise WorkflowSpecCompilationError(
+                    "invalid_resource_plan",
+                    f"资源计划无效：{error.message}",
+                ) from error
+            if resource_plan.binding_state != "bound":
+                raise WorkflowSpecCompilationError(
+                    "resource_plan_unbound",
+                    "资源计划必须在任务编译前绑定到具体工站实例",
+                )
+            if STATIC_RESOURCE_DAG_CAPABILITY not in resource_plan.capabilities:
+                raise WorkflowSpecCompilationError(
+                    "invalid_resource_plan",
+                    "资源计划缺少静态无环证明能力",
+                )
+            raw_plan_capabilities = plan.get("capabilities")
+            if not isinstance(raw_plan_capabilities, list) or RESOURCE_PLAN_CAPABILITY not in {
+                str(item) for item in raw_plan_capabilities
+            }:
+                raise WorkflowSpecCompilationError(
+                    "unsupported_execution_plan_capability",
+                    "执行计划缺少资源区间能力声明",
+                )
+        elif isinstance(plan.get("capabilities"), list):
+            plan_capabilities = {str(item) for item in plan["capabilities"]}
+            if RESOURCE_PLAN_CAPABILITY in plan_capabilities or (
+                STATIC_RESOURCE_DAG_CAPABILITY in plan_capabilities
+            ):
+                raise WorkflowSpecCompilationError(
+                    "invalid_resource_plan",
+                    "执行计划声明了资源计划能力但缺少 resource_plan",
                 )
         raw_nodes = mapping_sequence(
             plan.get("nodes"),
             "invalid_execution_plan",
             "task_snapshot.execution_plan.nodes",
         )
+        if resource_plan is not None:
+            interval_ids = {item.interval_id for item in resource_plan.intervals}
+            acquire_set_ids = {
+                item.acquire_set_id for item in resource_plan.acquire_sets
+            }
+            for index, raw_node in enumerate(raw_nodes):
+                raw_interval_ids = raw_node.get("resource_interval_ids") or []
+                if not isinstance(raw_interval_ids, list) or any(
+                    not isinstance(value, str) or value not in interval_ids
+                    for value in raw_interval_ids
+                ):
+                    raise WorkflowSpecCompilationError(
+                        "invalid_resource_plan",
+                        f"计划节点 resource_interval_ids 无效：{index}",
+                    )
+                acquire_set_id = str(raw_node.get("resource_acquire_set_id") or "")
+                if acquire_set_id and acquire_set_id not in acquire_set_ids:
+                    raise WorkflowSpecCompilationError(
+                        "invalid_resource_plan",
+                        f"计划节点 resource_acquire_set_id 无效：{index}",
+                    )
+                node_plan_id = str(raw_node.get("resource_plan_id") or "")
+                if node_plan_id and node_plan_id != resource_plan.plan_id:
+                    raise WorkflowSpecCompilationError(
+                        "invalid_resource_plan",
+                        f"计划节点 resource_plan_id 不匹配：{index}",
+                    )
         raw_handles = mapping_sequence(
             plan.get("handles", []),
             "invalid_execution_plan",
@@ -187,6 +275,9 @@ class WorkflowSpecCompiler:
                 else None
             ),
             repeat_regions=repeat_regions,
+            resource_plan=deepcopy(dict(raw_resource_plan))
+            if isinstance(raw_resource_plan, Mapping)
+            else None,
         )
 
     @staticmethod
@@ -514,6 +605,14 @@ class WorkflowSpecCompiler:
                     always_free=bool(node.get("always_free", False)),
                     material_requirements=requirements,
                     carry_bindings=deepcopy(dict(node.get("carry_bindings") or {})),
+                    resource_plan_id=str(node.get("resource_plan_id") or ""),
+                    resource_interval_ids=[
+                        str(value)
+                        for value in (node.get("resource_interval_ids") or [])
+                    ],
+                    resource_acquire_set_id=str(
+                        node.get("resource_acquire_set_id") or ""
+                    ),
                 )
             )
         return compiled

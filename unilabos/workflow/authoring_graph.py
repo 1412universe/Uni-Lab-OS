@@ -426,8 +426,33 @@ def build_candidate_graph(
         root_fields.add("meta_data")
     if program.workflow_type is not None:
         root_fields.add("workflow_type")
+    if program.root_resources:
+        unilab_meta["resources"] = list(program.root_resources)
+        root_fields.add("resources")
+    elif "resources" in root_fields:
+        unilab_meta.pop("resources", None)
+        root_fields.discard("resources")
+    if program.resource_scopes:
+        unilab_meta["resource_scopes"] = [
+            {
+                "scope_id": scope.scope_id,
+                "kind": "with",
+                "resources": list(scope.resources),
+                "parent_scope_id": scope.parent_scope_id,
+                "entry_node_uuid": scope.entry_node_uuid,
+                "exit_node_uuid": scope.exit_node_uuid,
+                "node_uuids": list(scope.node_uuids),
+                "hard_boundary": True,
+                "source": "authoring.with.resources",
+            }
+            for scope in program.resource_scopes
+        ]
+    else:
+        unilab_meta.pop("resource_scopes", None)
     if root_fields:
         unilab_meta["authoring_root_fields"] = sorted(root_fields)
+    else:
+        unilab_meta.pop("authoring_root_fields", None)
     unilab_meta.update(
         {
             "authoring_function_name": program.function_name,

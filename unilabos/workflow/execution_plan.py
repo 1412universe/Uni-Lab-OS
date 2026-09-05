@@ -20,6 +20,16 @@ from unilabos.workflow.execution_resource_policy import (
     merge_action_resource_policy,
     validate_static_device_tenancy_order,
 )
+from unilabos.workflow.resource_lock_plan import (
+    RESOURCE_PLAN_CAPABILITY,
+    RESOURCE_PLAN_VERSION,
+    STATIC_RESOURCE_DAG_CAPABILITY,
+    ResourcePlanError,
+    bind_station_resource_plan,
+    compile_template_resource_plan,
+    resource_plan_for_node,
+    serialize_resource_plan,
+)
 from unilabos.workflow.manual_confirmation import (
     normalize_manual_confirmation_config,
 )
@@ -440,6 +450,11 @@ class ExecutionPlanBuilder:
                 "static_resource_deadlock",
                 str(error),
             ) from error
+        resource_plan = self._resource_plan(
+            graph=graph,
+            planned_nodes=planned_nodes,
+            planned_edges=planned_edges,
+        )
         has_repeat_regions = any(
             kinds[node_uuid] == "repeat_until" for node_uuid in active
         )
@@ -455,9 +470,80 @@ class ExecutionPlanBuilder:
             plan["capabilities"] = list(CONTROL_PLAN_CAPABILITIES)
             if has_repeat_regions:
                 plan["capabilities"].append(DYNAMIC_ITERATION_CAPABILITY)
+        if resource_plan is not None:
+            plan["resource_plan"] = serialize_resource_plan(resource_plan)
+            capabilities = plan.setdefault("capabilities", [])
+            for capability in resource_plan.capabilities:
+                if capability not in capabilities:
+                    capabilities.append(capability)
+            for node in planned_nodes:
+                node["resource_plan_id"] = resource_plan.plan_id
+                projection = resource_plan_for_node(resource_plan, str(node["uuid"]))
+                if projection["intervals"]:
+                    node["resource_interval_ids"] = [
+                        str(item["interval_id"]) for item in projection["intervals"]
+                    ]
+                if projection["acquire_sets"]:
+                    node["resource_acquire_set_id"] = str(
+                        projection["acquire_sets"][0]["acquire_set_id"]
+                    )
+            planned_by_uuid = {str(node["uuid"]): node for node in planned_nodes}
+            for job in jobs:
+                node = planned_by_uuid.get(str(job.get("workflow_node_uuid") or ""))
+                if node is None:
+                    continue
+                job["resource_plan_id"] = resource_plan.plan_id
+                job["resource_interval_ids"] = list(
+                    node.get("resource_interval_ids") or []
+                )
+                job["resource_acquire_set_id"] = str(
+                    node.get("resource_acquire_set_id") or ""
+                )
         if target_node_uuid is not None:
             plan["target_node_uuid"] = target_node_uuid
         return plan, jobs
+
+    @staticmethod
+    def _resource_plan(
+        *,
+        graph: Mapping[str, Any],
+        planned_nodes: Sequence[Mapping[str, Any]],
+        planned_edges: Sequence[Mapping[str, Any]],
+    ) -> Any:
+        """按需构造资源计划；没有资源声明的旧图保持原有计划形状。"""
+
+        if not _has_resource_declarations(graph, planned_nodes):
+            return None
+        resource_graph = deepcopy(graph)
+        resource_graph["nodes"] = [dict(node) for node in planned_nodes]
+        resource_graph["edges"] = [dict(edge) for edge in planned_edges]
+        _project_resource_scopes_to_planned_nodes(
+            resource_graph,
+            planned_node_uuids={str(node["uuid"]) for node in planned_nodes},
+        )
+        try:
+            template_plan = compile_template_resource_plan(resource_graph)
+            raw_bindings = graph.get("resource_bindings")
+            if raw_bindings is None:
+                return template_plan
+            raw_concurrency = graph.get("concurrent_resource_plans") or ()
+            if not isinstance(raw_concurrency, Sequence) or isinstance(
+                raw_concurrency, (str, bytes)
+            ):
+                raise ResourcePlanError(
+                    "invalid_concurrency",
+                    "concurrent_resource_plans 必须是资源计划数组",
+                )
+            return bind_station_resource_plan(
+                template_plan,
+                raw_bindings,
+                concurrency=raw_concurrency,
+            )
+        except ResourcePlanError as error:
+            raise ExecutionPlanBuildError(
+                "invalid_resource_plan",
+                f"{error.message} ({error.path})",
+            ) from error
 
     @staticmethod
     def _validate_control_nesting(
@@ -1395,10 +1481,99 @@ class ExecutionPlanBuilder:
         return list(value)
 
 
+def _has_resource_declarations(
+    graph: Mapping[str, Any],
+    planned_nodes: Sequence[Mapping[str, Any]],
+) -> bool:
+    """判断冻结图是否显式进入资源计划语义。"""
+
+    if any(graph.get(key) for key in ("resources", "resource_scopes")):
+        return True
+    workflow = graph.get("workflow")
+    workflow_meta = workflow.get("meta_data") if isinstance(workflow, Mapping) else None
+    unilab_meta = workflow_meta.get("unilab") if isinstance(workflow_meta, Mapping) else None
+    if isinstance(unilab_meta, Mapping) and any(
+        unilab_meta.get(key) for key in ("resources", "resource_scopes")
+    ):
+        return True
+    for node in planned_nodes:
+        if node.get("resource_defaults") or node.get("resources"):
+            return True
+        metadata = node.get("meta_data")
+        node_unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+        if isinstance(node_unilab, Mapping) and node_unilab.get("resource_defaults"):
+            return True
+        contract = node.get("action_resource_contract")
+        if isinstance(contract, Mapping):
+            if contract.get("resource_aliases"):
+                return True
+            if contract.get("version") == 2 and contract.get("resource_params"):
+                return True
+    return False
+
+
+def _project_resource_scopes_to_planned_nodes(
+    graph: dict[str, Any],
+    *,
+    planned_node_uuids: set[str],
+) -> None:
+    """去掉只存在于作者图中的展示节点，保留执行节点的资源边界。
+
+    作者 AST 的 scope 成员可以包含 Group/Condition 等结构节点，而执行计划只
+    携带实际作业节点。此 seam 使用已知 planned UUID 做安全投影；未知业务 UUID
+    不会被静默创造，过滤后为空的作用域仍交给资源计划模块报错。
+    """
+
+    def project(raw_scopes: Any) -> Any:
+        if not isinstance(raw_scopes, list):
+            return raw_scopes
+        projected: list[Any] = []
+        for raw_scope in raw_scopes:
+            if not isinstance(raw_scope, Mapping):
+                projected.append(raw_scope)
+                continue
+            scope = dict(raw_scope)
+            raw_members = scope.get("node_uuids")
+            if isinstance(raw_members, Sequence) and not isinstance(
+                raw_members, (str, bytes)
+            ):
+                members = [
+                    str(node_uuid)
+                    for node_uuid in raw_members
+                    if str(node_uuid) in planned_node_uuids
+                ]
+                if raw_members and members:
+                    scope["node_uuids"] = members
+                    if str(scope.get("entry_node_uuid") or "") not in planned_node_uuids:
+                        scope["entry_node_uuid"] = members[0]
+                    if str(scope.get("exit_node_uuid") or "") not in planned_node_uuids:
+                        scope["exit_node_uuid"] = members[-1]
+            projected.append(scope)
+        return projected
+
+    if isinstance(graph.get("resource_scopes"), list):
+        graph["resource_scopes"] = project(graph["resource_scopes"])
+    workflow = graph.get("workflow")
+    if not isinstance(workflow, Mapping):
+        return
+    workflow_meta = workflow.get("meta_data")
+    if not isinstance(workflow_meta, Mapping):
+        return
+    unilab_meta = workflow_meta.get("unilab")
+    if not isinstance(unilab_meta, Mapping):
+        return
+    raw_scopes = unilab_meta.get("resource_scopes")
+    if isinstance(raw_scopes, list):
+        unilab_meta["resource_scopes"] = project(raw_scopes)
+
+
 __all__ = [
     "CONTROL_PLAN_CAPABILITIES",
     "CONTROL_PLAN_VERSION",
     "PLAN_VERSION",
+    "RESOURCE_PLAN_CAPABILITY",
+    "RESOURCE_PLAN_VERSION",
+    "STATIC_RESOURCE_DAG_CAPABILITY",
     "ExecutionPlanBuildError",
     "ExecutionPlanBuilder",
 ]

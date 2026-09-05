@@ -2598,6 +2598,9 @@ class EdgeScheduler:
                             for field in required_dispatch_fields
                         },
                         resource_lock_keys=set(lock_keys),
+                        resource_plan_id=task.node.resource_plan_id,
+                        resource_interval_ids=list(task.node.resource_interval_ids),
+                        resource_acquire_set_id=task.node.resource_acquire_set_id,
                         estimated_s=estimated_s,
                         estimate_source=estimate_source,
                     )
@@ -3473,6 +3476,14 @@ class EdgeScheduler:
             return snap
 
     def snapshot(self) -> dict[str, Any]:
+        """返回调度器当前工作流、在途作业和排空状态的只读快照。
+
+        参数：无。返回：包含工作流运行投影、在途作业的稳定身份/资源计划元数据、
+        重排次数和排空状态的字典；资源计划字段仅描述冻结计划，不替代持久作业
+        执行占用（JobExecutionClaim）。异常：资源阻塞读取端口损坏时由排空投影
+        原样抛出，避免以不完整快照掩盖安全事实。
+        """
+
         with self._lock:
             snapshot = {
                 "workflows": {
@@ -3489,6 +3500,9 @@ class EdgeScheduler:
                         "started_at": j.dispatched_at,
                         "estimated_s": round(j.estimated_s, 3),
                         "estimate_source": j.estimate_source,
+                        "resource_plan_id": j.resource_plan_id,
+                        "resource_interval_ids": list(j.resource_interval_ids),
+                        "resource_acquire_set_id": j.resource_acquire_set_id,
                     }
                     for job_id, j in self._inflight.items()
                 },

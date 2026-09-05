@@ -496,6 +496,11 @@ class WorkflowTaskSchedulerBridge(Protocol):
 
         ...
 
+    def reschedule(self) -> None:
+        """在外部持久事实释放后唤醒本地调度循环。"""
+
+        ...
+
 
 class WorkflowInterventionDelivery(Protocol):
     """本地设备异常决定的投递端口。"""
@@ -4467,6 +4472,78 @@ class WorkflowService:
             return self._store.get_task(identity)
         except StoreNotFound:
             raise WorkflowError("not_found") from None
+
+    def list_workflow_task_execution_locks(
+        self,
+        task_uuid: str,
+    ) -> dict[str, Any]:
+        """读取任务详情页的活动执行锁与人工释放资格。"""
+
+        try:
+            identity = validate_uuid(task_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        try:
+            return TaskRuntimeProjection(self._store).list_task_execution_locks(
+                identity
+            )
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+
+    def force_release_workflow_task_execution_lock(
+        self,
+        task_uuid: str,
+        lease_uuid: str,
+        *,
+        expected_claim_uuid: str,
+        expected_fencing_token: int,
+        reason: str,
+        physical_settlement_confirmed: bool,
+    ) -> dict[str, Any]:
+        """执行带物理确认与 CAS 校验的人工锁释放，并唤醒调度器。"""
+
+        try:
+            task_identity = validate_uuid(task_uuid)
+            lease_identity = validate_uuid(lease_uuid)
+            expected_claim_identity = validate_uuid(expected_claim_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        if (
+            isinstance(expected_fencing_token, bool)
+            or not isinstance(expected_fencing_token, int)
+            or expected_fencing_token <= 0
+            or not isinstance(reason, str)
+            or not reason.strip()
+            or len(reason.strip()) > 500
+            or not isinstance(physical_settlement_confirmed, bool)
+        ):
+            raise WorkflowError("invalid_input")
+        projection = TaskRuntimeProjection(self._store)
+        try:
+            result = projection.force_release_execution_lock(
+                task_identity,
+                lease_identity,
+                expected_claim_uuid=expected_claim_identity,
+                expected_fencing_token=expected_fencing_token,
+                reason=reason,
+                physical_settlement_confirmed=physical_settlement_confirmed,
+            )
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreConflict as error:
+            raise WorkflowConflict("conflict", message=str(error)) from error
+        reschedule = (
+            getattr(self._task_scheduler_bridge, "reschedule", None)
+            if self._task_scheduler_bridge is not None
+            else None
+        )
+        if result.get("status") == "released" and callable(reschedule):
+            try:
+                reschedule()
+            except Exception:
+                # DB 事实已经安全提交；调度器恢复后会通过持久扫描重新发现释放。
+                logger.warning("人工释放执行锁后调度器唤醒失败", exc_info=True)
+        return result
 
     def get_workflow_task_step_state(self, task_uuid: str) -> dict[str, Any]:
         """返回 Task 详情页的权威单步候选和当前模式。"""

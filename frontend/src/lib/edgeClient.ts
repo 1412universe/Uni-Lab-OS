@@ -15,6 +15,10 @@ import type {
   WorkflowGraphNode,
   WorkflowSource,
   WorkflowTask,
+  WorkflowTaskExecutionLock,
+  WorkflowTaskExecutionLockReleaseRequest,
+  WorkflowTaskExecutionLockReleaseResult,
+  WorkflowTaskExecutionLockSnapshot,
   WorkflowTaskPriority,
   WorkflowStepState,
   ResourceTemplateRecord,
@@ -2269,6 +2273,75 @@ export async function loadWorkflowTaskDetail(
     '',
     labels,
   )
+}
+
+function adaptWorkflowTaskExecutionLock(raw: RawRecord): WorkflowTaskExecutionLock {
+  return {
+    uuid: String(raw.uuid || ''),
+    workflowTaskUuid: String(raw.workflow_task_uuid || ''),
+    workflowNodeJobUuid: String(raw.workflow_node_job_uuid || ''),
+    lockKey: String(raw.lock_key || ''),
+    scope: String(raw.scope || 'unknown'),
+    materialUuid: raw.material_uuid ? String(raw.material_uuid) : undefined,
+    siteUuid: raw.site_uuid ? String(raw.site_uuid) : undefined,
+    state: String(raw.state || 'unknown'),
+    claimUuid: String(raw.claim_uuid || ''),
+    fencingToken: Number(raw.fencing_token || 0),
+    jobStatus: String(raw.job_status || 'unknown'),
+    claimState: String(raw.claim_state || 'unknown'),
+    canRelease: Boolean(raw.can_release),
+    releaseBlockReason: raw.release_block_reason
+      ? String(raw.release_block_reason)
+      : undefined,
+  }
+}
+
+export async function loadWorkflowTaskExecutionLocks(
+  taskUuid: string,
+  signal?: AbortSignal,
+): Promise<WorkflowTaskExecutionLockSnapshot> {
+  const snapshot = await requestData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/execution-locks`,
+    signal,
+  )
+  return {
+    workflowTaskUuid: String(snapshot.workflow_task_uuid || taskUuid),
+    taskStatus: String(snapshot.task_status || 'unknown'),
+    locks: Array.isArray(snapshot.locks)
+      ? snapshot.locks.map((lock: RawRecord) => adaptWorkflowTaskExecutionLock(lock))
+      : [],
+    activeDeviceTenancyCount: Number(snapshot.active_device_tenancy_count || 0),
+  }
+}
+
+export async function forceReleaseWorkflowTaskExecutionLock(
+  taskUuid: string,
+  leaseUuid: string,
+  request: WorkflowTaskExecutionLockReleaseRequest,
+): Promise<WorkflowTaskExecutionLockReleaseResult> {
+  const result = await postData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/execution-locks/${encodeURIComponent(leaseUuid)}/force-release`,
+    {
+      expected_claim_uuid: request.expectedClaimUuid,
+      expected_fencing_token: request.expectedFencingToken,
+      reason: request.reason,
+      physical_settlement_confirmed: request.physicalSettlementConfirmed,
+    },
+  )
+  return {
+    status: String(result.status || 'unknown'),
+    releasedLockUuids: Array.isArray(result.released_lock_uuids)
+      ? result.released_lock_uuids.map(String)
+      : [],
+    action: result.action && typeof result.action === 'object'
+      ? {
+          uuid: result.action.uuid ? String(result.action.uuid) : undefined,
+          result: result.action.result ? String(result.action.result) : undefined,
+          reason: result.action.reason ? String(result.action.reason) : undefined,
+          createTime: result.action.create_time ? String(result.action.create_time) : undefined,
+        }
+      : undefined,
+  }
 }
 
 export function materialsWithTaskReferences(

@@ -220,6 +220,8 @@ OPERATION_DESCRIPTIONS = {
     ("POST", "/api/v1/debug/workflow-tasks/{task_uuid}/commands"): "向调试工作流任务提交继续、暂停或其他已支持的控制命令。重复请求使用同一个防重复编号时，不会重复执行。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}"): "查询一条工作流任务的当前状态和运行信息。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}/jobs"): "查询指定工作流任务拆分出的全部节点任务。",
+    ("GET", "/api/v1/workflow-tasks/{task_uuid}/execution-locks"): "查询指定工作流任务当前活动的设备、物料和库位执行锁，并返回人工释放资格。",
+    ("POST", "/api/v1/workflow-tasks/{task_uuid}/execution-locks/{lease_uuid}/force-release"): "在物理安全确认和 Claim/Fence 并发校验通过后，释放指定节点作业持有的全部执行锁并记录审计。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}/manual-confirmations"): "查询指定工作流任务中需要或已经完成人工确认的记录。",
     ("GET", "/api/v1/workflow-node-jobs/{job_uuid}"): "查询一条节点任务的当前状态、执行信息和结果。",
     ("POST", "/api/v1/workflow-node-jobs/{job_uuid}/resolve-uncertain"): "人工确认状态不确定的节点任务最终应按成功还是失败处理。",

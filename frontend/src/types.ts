@@ -218,6 +218,49 @@ export interface WorkflowTask {
   }
 }
 
+/** 工作流任务详情页的持久执行锁租约；释放资格由 Edge 后端权威判定。 */
+export interface WorkflowTaskExecutionLock {
+  uuid: string
+  workflowTaskUuid: string
+  workflowNodeJobUuid: string
+  lockKey: string
+  scope: string
+  materialUuid?: string
+  siteUuid?: string
+  state: string
+  claimUuid: string
+  fencingToken: number
+  jobStatus: string
+  claimState: string
+  canRelease: boolean
+  releaseBlockReason?: string
+}
+
+export interface WorkflowTaskExecutionLockSnapshot {
+  workflowTaskUuid: string
+  taskStatus: string
+  locks: WorkflowTaskExecutionLock[]
+  activeDeviceTenancyCount: number
+}
+
+export interface WorkflowTaskExecutionLockReleaseRequest {
+  expectedClaimUuid: string
+  expectedFencingToken: number
+  reason: string
+  physicalSettlementConfirmed: boolean
+}
+
+export interface WorkflowTaskExecutionLockReleaseResult {
+  status: 'released' | 'already_released' | string
+  releasedLockUuids: string[]
+  action?: {
+    uuid?: string
+    result?: string
+    reason?: string
+    createTime?: string
+  }
+}
+
 export interface MaterialTaskReference {
   taskUuid: string
   taskStatus: TaskPresentationStatus

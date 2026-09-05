@@ -446,6 +446,13 @@ class TaskSchedulerBridge:
         self._scheduler.reschedule()
         return self._aggregate(normalized_uuid)
 
+    def reschedule(self) -> None:
+        """在人工释放持久执行锁后唤醒共享调度器。"""
+
+        if self._closed:
+            raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        self._scheduler.reschedule()
+
     def step(
         self,
         task_uuid: str,

@@ -13,18 +13,36 @@ import {
   ExternalLink,
   FlaskConical,
   LoaderCircle,
+  Lock,
   Plus,
   Pause,
   Play,
   RefreshCw,
   Send,
+  ShieldCheck,
   ShieldAlert,
   Square,
   StepForward,
   X,
 } from 'lucide-react'
-import { commandWorkflowTask, createWorkflowTask, decideManualConfirmation, loadWorkflowTaskDetail, loadWorkflowTaskStepState } from '../lib/edgeClient'
-import type { ContractField, MaterialRecord, TaskNode, WorkflowDefinition, WorkflowTarget, WorkflowTask } from '../types'
+import {
+  commandWorkflowTask,
+  createWorkflowTask,
+  decideManualConfirmation,
+  forceReleaseWorkflowTaskExecutionLock,
+  loadWorkflowTaskDetail,
+  loadWorkflowTaskExecutionLocks,
+  loadWorkflowTaskStepState,
+} from '../lib/edgeClient'
+import type {
+  ContractField,
+  MaterialRecord,
+  TaskNode,
+  WorkflowDefinition,
+  WorkflowTarget,
+  WorkflowTask,
+  WorkflowTaskExecutionLock,
+} from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
@@ -376,6 +394,202 @@ function TaskNodeInspector({ task, node, onClose }: { task: WorkflowTask; node: 
           <pre>{jsonEvidence(node.job?.errorInfo, '暂无错误')}</pre>
         </article>
       </div>
+    </section>
+  )
+}
+
+const executionLockStateLabels: Record<string, string> = {
+  reserved: '已预留',
+  running: '执行中',
+  uncertain: '结果不确定',
+  released: '已释放',
+}
+
+const executionLockScopeLabels: Record<string, string> = {
+  device: '设备',
+  material: '物料',
+  material_site: '物料库位',
+}
+
+function executionLockStateLabel(value: string) {
+  return executionLockStateLabels[value] || value || '未知状态'
+}
+
+function executionLockScopeLabel(value: string) {
+  return executionLockScopeLabels[value] || value || '未知范围'
+}
+
+function lockGroups(locks: WorkflowTaskExecutionLock[]) {
+  const groups = new Map<string, WorkflowTaskExecutionLock[]>()
+  locks.forEach((lock) => {
+    const current = groups.get(lock.workflowNodeJobUuid) || []
+    current.push(lock)
+    groups.set(lock.workflowNodeJobUuid, current)
+  })
+  return [...groups.entries()]
+}
+
+function TaskExecutionLocks({
+  taskUuid,
+  taskStatus,
+  connected,
+  onNotify,
+}: {
+  taskUuid: string
+  taskStatus: WorkflowTask['status']
+  connected: boolean
+  onNotify: (message: string) => void
+}) {
+  const queryClient = useQueryClient()
+  const [releaseTarget, setReleaseTarget] = useState<WorkflowTaskExecutionLock>()
+  const [releaseReason, setReleaseReason] = useState('')
+  const [physicalConfirmed, setPhysicalConfirmed] = useState(false)
+  const locksQuery = useQuery({
+    queryKey: ['workflow-task-execution-locks', taskUuid],
+    queryFn: ({ signal }) => loadWorkflowTaskExecutionLocks(taskUuid, signal),
+    enabled: connected && Boolean(taskUuid),
+    staleTime: 5_000,
+    refetchInterval: 10_000,
+  })
+  const releaseMutation = useMutation({
+    mutationFn: () => {
+      if (!connected) throw new Error('Edge 未连接，写操作已暂停')
+      if (!releaseTarget) throw new Error('请选择要释放的执行锁')
+      if (!releaseTarget.canRelease) throw new Error(releaseTarget.releaseBlockReason || '该执行锁当前不可释放')
+      if (!releaseReason.trim()) throw new Error('请填写人工释放原因')
+      if (!physicalConfirmed) throw new Error('请确认设备已停止且物理现场已安全')
+      return forceReleaseWorkflowTaskExecutionLock(taskUuid, releaseTarget.uuid, {
+        expectedClaimUuid: releaseTarget.claimUuid,
+        expectedFencingToken: releaseTarget.fencingToken,
+        reason: releaseReason.trim(),
+        physicalSettlementConfirmed: true,
+      })
+    },
+    onSuccess: (result) => {
+      const message = result.status === 'already_released'
+        ? '执行锁已经被其他操作释放，列表已刷新。'
+        : `已释放该作业的 ${result.releasedLockUuids.length || 1} 把执行锁。`
+      onNotify(message)
+      setReleaseTarget(undefined)
+      setReleaseReason('')
+      setPhysicalConfirmed(false)
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-execution-locks', taskUuid] })
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-detail', taskUuid] })
+    },
+    onError: (error) => {
+      onNotify(`执行锁释放失败：${error instanceof Error ? error.message : '未知错误'}`)
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-execution-locks', taskUuid] })
+    },
+  })
+
+  const openReleaseDialog = (lock: WorkflowTaskExecutionLock) => {
+    releaseMutation.reset()
+    setReleaseTarget(lock)
+    setReleaseReason('')
+    setPhysicalConfirmed(false)
+  }
+
+  return (
+    <section className="task-execution-locks" aria-label="任务执行锁">
+      <header className="task-execution-locks-header">
+        <div>
+          <span className="task-lock-eyebrow"><Lock size={13} /> EXECUTION LOCKS</span>
+          <h3>执行锁</h3>
+          <p>任务异常结束后的持久设备、物料和库位占用。</p>
+        </div>
+        <Button
+          icon={<RefreshCw size={13} />}
+          onClick={() => void locksQuery.refetch()}
+          disabled={!connected || locksQuery.isFetching}
+        >
+          刷新锁状态
+        </Button>
+      </header>
+      {!connected ? (
+        <div className="task-lock-empty"><AlertCircle size={15} />Edge 未连接，执行锁面板保持只读。</div>
+      ) : null}
+      {locksQuery.isPending ? <div className="task-lock-empty"><LoaderCircle className="spin" size={15} />正在读取任务执行锁…</div> : null}
+      {locksQuery.isError ? (
+        <div className="task-lock-error" role="alert">
+          <AlertCircle size={15} />读取执行锁失败：{locksQuery.error instanceof Error ? locksQuery.error.message : '未知错误'}
+        </div>
+      ) : null}
+      {locksQuery.data ? (
+        <>
+          <div className="task-lock-warning" role="alert">
+            <ShieldAlert size={16} />
+            <span><strong>人工释放是现场处置动作。</strong>只在设备已停止、物理现场安全且确认没有在途动作时操作；一次释放会回收该 Job 的整组执行锁。</span>
+          </div>
+          {locksQuery.data.activeDeviceTenancyCount > 0 ? (
+            <div className="task-lock-tenancy-warning"><AlertCircle size={15} />当前任务仍有 {locksQuery.data.activeDeviceTenancyCount} 个活动设备托管，后端会禁止释放。</div>
+          ) : null}
+          {locksQuery.data.locks.length ? (
+            <div className="task-lock-groups">
+              {lockGroups(locksQuery.data.locks).map(([jobUuid, locks]) => {
+                const releaseCandidate = locks.find((lock) => lock.canRelease)
+                return (
+                  <article className="task-lock-group" key={jobUuid}>
+                    <header>
+                      <div><strong>Job {jobUuid}</strong><small>Claim {locks[0].claimUuid || '未知'} · {locks[0].jobStatus}</small></div>
+                      <span className={`task-lock-group-state ${releaseCandidate ? 'can-release' : 'blocked'}`}>
+                        {releaseCandidate ? '可人工释放' : '暂不可释放'}
+                      </span>
+                    </header>
+                    <div className="task-lock-list">
+                      {locks.map((lock) => (
+                        <div className="task-lock-row" key={lock.uuid}>
+                          <div className="task-lock-row-main">
+                            <span className="task-lock-scope">{executionLockScopeLabel(lock.scope)}</span>
+                            <code title={lock.lockKey}>{lock.lockKey}</code>
+                            <span className={`task-lock-state task-lock-state-${lock.state}`}>{executionLockStateLabel(lock.state)}</span>
+                          </div>
+                          <div className="task-lock-row-meta">
+                            <span>Fence {lock.fencingToken}</span>
+                            <span>{lock.canRelease ? '可释放' : lock.releaseBlockReason || '后端安全门禁阻止释放'}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <footer>
+                      <small>{taskStatus === 'failed' || taskStatus === 'canceled' || taskStatus === 'timeout' ? '任务已终止，可按后端资格处置' : '仅终态任务允许人工处置'}</small>
+                      <Button
+                        tone="danger"
+                        icon={<ShieldCheck size={13} />}
+                        disabled={!connected || !releaseCandidate || releaseMutation.isPending}
+                        onClick={() => releaseCandidate && openReleaseDialog(releaseCandidate)}
+                      >
+                        解除这组锁
+                      </Button>
+                    </footer>
+                  </article>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="task-lock-empty"><ShieldCheck size={15} />当前任务没有活动执行锁。</div>
+          )}
+        </>
+      ) : null}
+      {releaseTarget ? (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setReleaseTarget(undefined) }}>
+          <section className="task-lock-dialog" role="dialog" aria-modal="true" aria-labelledby="task-lock-release-title">
+            <header>
+              <div><span>OPERATOR ACTION</span><h2 id="task-lock-release-title">人工解除执行锁</h2><p>目标锁：{releaseTarget.lockKey}</p></div>
+              <button type="button" aria-label="关闭执行锁释放对话框" onClick={() => setReleaseTarget(undefined)}><X size={18} /></button>
+            </header>
+            <form onSubmit={(event) => { event.preventDefault(); releaseMutation.mutate() }}>
+              <div className="task-lock-dialog-content">
+                <div className="task-lock-dialog-warning"><AlertCircle size={16} /><span>这会释放 Job {releaseTarget.workflowNodeJobUuid} 的全部活动执行锁，并写入操作审计。后端会再次校验 Claim 和 Fence。</span></div>
+                {releaseMutation.isError ? <div className="task-lock-dialog-error" role="alert"><AlertCircle size={15} />{releaseMutation.error instanceof Error ? releaseMutation.error.message : '释放失败，请刷新锁列表后重试。'}<small>页面快照可能已过期；请关闭窗口并重新读取当前锁状态。</small></div> : null}
+                <label className="form-field"><span>人工释放原因<em>必填</em></span><textarea maxLength={500} required value={releaseReason} onChange={(event) => setReleaseReason(event.target.value)} placeholder="例如：设备已断电，现场人员确认无在途动作。" rows={4} /></label>
+                <label className="task-lock-confirmation"><input type="checkbox" checked={physicalConfirmed} onChange={(event) => setPhysicalConfirmed(event.target.checked)} /><span>我已确认设备已停止，物理现场安全，且不存在未上报的在途动作。</span></label>
+              </div>
+              <footer><Button type="button" onClick={() => setReleaseTarget(undefined)}>取消</Button><Button type="submit" tone="danger" icon={releaseMutation.isPending ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />} disabled={!connected || releaseMutation.isPending || !releaseReason.trim() || !physicalConfirmed}>确认解除整组锁</Button></footer>
+            </form>
+          </section>
+        </div>
+      ) : null}
     </section>
   )
 }
@@ -854,6 +1068,12 @@ export function TasksPage({
                   <code>{selected.trace.traceId || selected.uuid}</code>
                 </a>
               ) : null}
+              <TaskExecutionLocks
+                taskUuid={selected.uuid}
+                taskStatus={selected.status}
+                connected={connected}
+                onNotify={onNotify}
+              />
             </>
           ) : <EmptyState title="没有选中任务" description="从矩阵中选择任务查看详情。" />}
         </Panel>

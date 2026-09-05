@@ -127,6 +127,10 @@ class WorkflowNode:
     material_requirements: List[MaterialRequirement] = field(default_factory=list)
     # 目标 Handle UUID 到祖先 RepeatUntil carry 键的冻结绑定；每轮物化时解析。
     carry_bindings: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # 资源计划中该节点覆盖的占用区间和新增集合；空值保持旧计划兼容。
+    resource_plan_id: str = ""
+    resource_interval_ids: List[str] = field(default_factory=list)
+    resource_acquire_set_id: str = ""
 
     @property
     def device_action_key(self) -> str:
@@ -190,6 +194,8 @@ class WorkflowSpec:
     # 恢复时以上一次 workflow span 为父上下文，使 Trace ID 跨进程重启稳定。
     trace_context: Dict[str, str] = field(default_factory=dict)
     repeat_regions: Dict[str, "RepeatUntilRegion"] = field(default_factory=dict)
+    # 已绑定的资源计划 JSON 投影；旧工作流为空，不改变旧调度数据模型。
+    resource_plan: Dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.task_id:
@@ -253,6 +259,10 @@ class DispatchedJob:
     dispatch_credentials: Dict[str, Any] = field(default_factory=dict)
     # 人工等待与批准后的设备动作始终复用同一组 Claim/Fence 与资源占用。
     resource_lock_keys: set[str] = field(default_factory=set)
+    # 绑定资源计划的只读运行投影；旧恢复记录为空时仍走兼容 lock key。
+    resource_plan_id: str = ""
+    resource_interval_ids: List[str] = field(default_factory=list)
+    resource_acquire_set_id: str = ""
     manual_confirmation_approved: bool = False
     manual_action_dispatched: bool = False
     # 下发时刻的预估执行时长（泳道图预估终点）与来源（declared/historical/default）
@@ -303,6 +313,11 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
     raw_resource_contract = data.get("action_resource_contract") or {}
     if not isinstance(raw_resource_contract, Mapping):
         raise TypeError("action_resource_contract 必须是对象")
+    raw_interval_ids = data.get("resource_interval_ids") or []
+    if not isinstance(raw_interval_ids, list) or any(
+        not isinstance(value, str) or not value.strip() for value in raw_interval_ids
+    ):
+        raise TypeError("resource_interval_ids 必须是字符串数组")
     return WorkflowNode(
         id=str(data["id"]),
         result_name=str(data.get("result_name") or ""),
@@ -333,6 +348,9 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
             for handle_uuid, binding in (data.get("carry_bindings") or {}).items()
             if isinstance(binding, Mapping)
         },
+        resource_plan_id=str(data.get("resource_plan_id") or ""),
+        resource_interval_ids=[str(value) for value in raw_interval_ids],
+        resource_acquire_set_id=str(data.get("resource_acquire_set_id") or ""),
     )
 
 
@@ -373,6 +391,11 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
         lab_id=str(data.get("lab_id", "") or ""),
         task_id=str(data.get("task_id", "") or ""),
         run_mode=str(data.get("run_mode", "normal") or "normal"),
+        resource_plan=(
+            dict(data["resource_plan"])
+            if isinstance(data.get("resource_plan"), Mapping)
+            else None
+        ),
     )
 
 

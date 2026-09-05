@@ -26,6 +26,7 @@ from unilabos.workflow.execution_lock_lease import (
     mark_execution_locks_running,
     mark_execution_locks_uncertain,
     mirror_execution_locks_from_permit,
+    record_execution_lock_operator_action,
     record_execution_lock_wait,
     release_execution_locks,
     release_task_execution_locks,
@@ -44,6 +45,7 @@ from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.manual_confirmation import (
     ManualConfirmationStore,
     close_pending_manual_confirmation,
+    manual_confirmation_projection,
     open_manual_confirmation,
 )
 from unilabos.workflow.material_source import MaterialCustodyPolicy
@@ -81,6 +83,37 @@ from unilabos.workflow.workflow_boundary import (
     WorkflowBoundaryProjection,
     project_ready_workflow_output,
 )
+
+
+def _lock_release_block_reason(
+    *,
+    task_status: str,
+    job_status: str,
+    uncertainty_reason: str,
+    lease_state: str,
+    claim_state: str,
+    has_active_tenancy: bool,
+) -> str | None:
+    """返回锁详情页展示的人工释放阻断原因；可释放时返回 ``None``。"""
+
+    if task_status not in {"failed", "canceled", "timeout"}:
+        return "任务尚未进入失败、取消或超时终态"
+    if job_status not in {"failed", "canceled", "timeout"}:
+        return "所属作业尚未进入终态"
+    if uncertainty_reason:
+        return "作业存在结果不确定原因，需先完成物理结算"
+    if lease_state == "uncertain":
+        return "锁处于结果不确定状态，禁止人工释放"
+    if lease_state not in {"reserved", "running"}:
+        return "锁已释放"
+    if claim_state == "uncertain":
+        return "Claim 处于结果不确定状态，禁止人工释放"
+    if claim_state not in {"reserved", "running"}:
+        return "Claim 不处于活动状态"
+    if has_active_tenancy:
+        return "任务仍有活动设备托管"
+    return None
+
 
 _ACTIVE_JOB_STATES = frozenset({"pending", "dispatched", "running"})
 _TERMINAL_JOB_STATES = frozenset(
@@ -509,9 +542,27 @@ class TaskRuntimeProjection:
         # ``task_row`` 与 ``job_rows`` 来自同一 SQLite 快照，避免撕裂读取。
         task_row = cls._task_row(connection, task_uuid)
         job_rows = cls._job_rows(connection, task_uuid)
+        confirmations = {
+            str(row["workflow_node_job_uuid"]): manual_confirmation_projection(row)
+            for row in connection.execute(
+                "SELECT * FROM workflow_manual_confirmation "
+                "WHERE workflow_task_uuid = ?",
+                (task_uuid,),
+            ).fetchall()
+        }
         return {
             "task": WorkflowStore._task_row(task_row),
-            "jobs": [WorkflowStore._job_row(row) for row in job_rows],
+            "jobs": [
+                {
+                    **WorkflowStore._job_row(row),
+                    **(
+                        {"manual_confirmation": confirmations[str(row["uuid"])]}
+                        if str(row["uuid"]) in confirmations
+                        else {}
+                    ),
+                }
+                for row in job_rows
+            ],
         }
 
     def project_submission(
@@ -2498,6 +2549,213 @@ class TaskRuntimeProjection:
 
         with self._store.transaction() as connection:
             return list_execution_locks(connection, job_uuid=job_uuid)
+
+    def list_task_execution_locks(self, task_uuid: str) -> dict[str, Any]:
+        """读取任务详情页所需的活动执行锁与人工释放资格。"""
+
+        with self._store.transaction() as connection:
+            task = self._task_row(connection, task_uuid)
+            task_status = str(task["status"])
+            terminal_task = task_status in {"failed", "canceled", "timeout"}
+            tenancies = active_task_device_tenancies(
+                connection,
+                task_uuid=task_uuid,
+            )
+            # ``list_execution_locks`` is the historical fact reader and also
+            # returns released lease rows for audit/history views.  The task
+            # detail endpoint is an operator surface for *current* locks, so
+            # keep only states that still represent an active reservation or
+            # an unresolved outcome.
+            leases = [
+                lease
+                for lease in list_execution_locks(connection, task_uuid=task_uuid)
+                if str(lease["state"]) in {"reserved", "running", "uncertain"}
+            ]
+            job_rows = {
+                str(row["uuid"]): row
+                for row in connection.execute(
+                    """
+                    SELECT uuid, status, uncertainty_reason
+                    FROM workflow_node_job
+                    WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+                    """,
+                    (task_uuid,),
+                ).fetchall()
+            }
+            result: list[dict[str, Any]] = []
+            for lease in leases:
+                job_uuid = str(lease["workflow_node_job_uuid"])
+                job = job_rows.get(job_uuid)
+                claim = connection.execute(
+                    """
+                    SELECT state FROM execution_claim
+                    WHERE claim_uuid = ? LIMIT 1
+                    """,
+                    (lease.get("claim_uuid"),),
+                ).fetchone()
+                job_status = str(job["status"]) if job is not None else "unknown"
+                reason = _lock_release_block_reason(
+                    task_status=task_status,
+                    job_status=job_status,
+                    uncertainty_reason=(
+                        str(job["uncertainty_reason"] or "")
+                        if job is not None
+                        else ""
+                    ),
+                    lease_state=str(lease["state"]),
+                    claim_state=(
+                        str(claim["state"]) if claim is not None else "missing"
+                    ),
+                    has_active_tenancy=bool(tenancies),
+                )
+                result.append(
+                    {
+                        **lease,
+                        "job_status": job_status,
+                        "claim_state": (
+                            str(claim["state"]) if claim is not None else "missing"
+                        ),
+                        "can_release": terminal_task and reason is None,
+                        "release_block_reason": reason,
+                    }
+                )
+            return {
+                "workflow_task_uuid": task_uuid,
+                "task_status": task_status,
+                "locks": result,
+                "active_device_tenancy_count": len(tenancies),
+            }
+
+    def force_release_execution_lock(
+        self,
+        task_uuid: str,
+        lease_uuid: str,
+        *,
+        expected_claim_uuid: str,
+        expected_fencing_token: int,
+        reason: str,
+        physical_settlement_confirmed: bool,
+    ) -> dict[str, Any]:
+        """在安全条件满足时人工释放目标作业的完整执行占用。"""
+
+        with self._store.transaction() as connection:
+            task = self._task_row(connection, task_uuid)
+            task_status = str(task["status"])
+            if task_status not in {"failed", "canceled", "timeout"}:
+                raise StoreConflict("只有失败、取消或超时任务才能人工释放执行锁")
+            lease = connection.execute(
+                """
+                SELECT * FROM execution_lock_lease
+                WHERE uuid = ? AND workflow_task_uuid = ? AND deleted_at IS NULL
+                """,
+                (lease_uuid, task_uuid),
+            ).fetchone()
+            if lease is None:
+                raise StoreNotFound(f"执行锁租约不存在：{lease_uuid}")
+            job_uuid = str(lease["workflow_node_job_uuid"])
+            job = connection.execute(
+                """
+                SELECT uuid, status, uncertainty_reason
+                FROM workflow_node_job
+                WHERE uuid = ? AND workflow_task_uuid = ? AND deleted_at IS NULL
+                """,
+                (job_uuid, task_uuid),
+            ).fetchone()
+            if job is None:
+                raise StoreNotFound(f"执行锁所属作业不存在：{job_uuid}")
+            job_status = str(job["status"])
+            if job_status not in {"failed", "canceled", "timeout"}:
+                raise StoreConflict("只有终态作业才能人工释放执行锁")
+            if str(job["uncertainty_reason"] or "").strip():
+                raise StoreConflict("作业仍有结果不确定原因，不能人工释放执行锁")
+            if not physical_settlement_confirmed:
+                raise StoreConflict("必须确认设备已停止且物理现场已安全")
+            if not reason.strip():
+                raise StoreConflict("人工释放必须填写原因")
+            if active_task_device_tenancies(connection, task_uuid=task_uuid):
+                raise StoreConflict("任务仍有活动设备托管，不能人工释放执行锁")
+            claim = connection.execute(
+                """
+                SELECT * FROM execution_claim
+                WHERE workflow_node_job_uuid = ?
+                ORDER BY attempt DESC LIMIT 1
+                """,
+                (job_uuid,),
+            ).fetchone()
+            if claim is None:
+                raise StoreConflict("执行锁租约缺少 Claim，拒绝人工处置")
+            claim_uuid = str(claim["claim_uuid"])
+            if str(lease["claim_uuid"] or "") != claim_uuid:
+                raise StoreConflict("锁租约不属于当前作业 Claim，拒绝人工处置")
+            if claim_uuid != expected_claim_uuid:
+                raise StoreConflict("Claim 已变化，请刷新任务锁列表后重试")
+            if int(lease["fencing_token"] or 0) != expected_fencing_token:
+                raise StoreConflict("Fence 已变化，请刷新任务锁列表后重试")
+            if str(lease["state"]) == "uncertain":
+                raise StoreConflict("锁处于结果不确定状态，必须先完成物理结算")
+            if str(claim["state"]) == "uncertain":
+                raise StoreConflict("Claim 处于结果不确定状态，必须先完成物理结算")
+            active_leases = [
+                item
+                for item in list_execution_locks(connection, job_uuid=job_uuid)
+                if str(item["state"]) in {"reserved", "running", "uncertain"}
+            ]
+            if str(lease["state"]) not in {"reserved", "running", "uncertain"}:
+                action = record_execution_lock_operator_action(
+                    connection,
+                    task_uuid=task_uuid,
+                    job_uuid=job_uuid,
+                    lease_uuid=lease_uuid,
+                    claim_uuid=claim_uuid,
+                    expected_claim_uuid=expected_claim_uuid,
+                    expected_fencing_token=expected_fencing_token,
+                    reason=reason.strip(),
+                    physical_settlement_confirmed=physical_settlement_confirmed,
+                    result="already_released",
+                    released_lock_uuids=[],
+                    now=utc_now(),
+                )
+                return {"status": "already_released", "action": action}
+            now = utc_now()
+            released_uuids = [str(item["uuid"]) for item in active_leases]
+            release_execution_locks(connection, job_uuid=job_uuid, now=now)
+            action = record_execution_lock_operator_action(
+                connection,
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                lease_uuid=lease_uuid,
+                claim_uuid=claim_uuid,
+                expected_claim_uuid=expected_claim_uuid,
+                expected_fencing_token=expected_fencing_token,
+                reason=reason.strip(),
+                physical_settlement_confirmed=physical_settlement_confirmed,
+                result="released",
+                released_lock_uuids=released_uuids,
+                now=now,
+            )
+            append_runtime_event(
+                connection,
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                kind="lock_operator_released",
+                from_status=str(lease["state"]),
+                to_status="released",
+                data={
+                    "lease_uuid": lease_uuid,
+                    "claim_uuid": claim_uuid,
+                    "released_lock_uuids": released_uuids,
+                    "reason": reason.strip(),
+                    "physical_settlement_confirmed": True,
+                    "operator_action_uuid": action["uuid"],
+                },
+                now=now,
+            )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
+            return {
+                "status": "released",
+                "action": action,
+                "released_lock_uuids": released_uuids,
+            }
 
     def list_device_tenancies(
         self,

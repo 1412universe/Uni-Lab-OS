@@ -609,6 +609,74 @@ def ensure_execution_lock_schema(connection: sqlite3.Connection) -> None:
         ON execution_lock_lease(claim_uuid, fencing_token)
         """
     )
+    _execute_script_in_transaction(
+        connection,
+        """
+        CREATE TABLE IF NOT EXISTS execution_lock_operator_action (
+            uuid TEXT PRIMARY KEY,
+            create_time TEXT NOT NULL,
+            update_time TEXT NOT NULL,
+            workflow_task_uuid TEXT NOT NULL,
+            workflow_node_job_uuid TEXT NOT NULL,
+            lease_uuid TEXT NOT NULL,
+            claim_uuid TEXT NOT NULL,
+            expected_claim_uuid TEXT NOT NULL,
+            expected_fencing_token INTEGER NOT NULL CHECK (expected_fencing_token > 0),
+            action TEXT NOT NULL CHECK (action IN ('force_release')),
+            result TEXT NOT NULL CHECK (result IN ('released', 'already_released')),
+            reason TEXT NOT NULL,
+            physical_settlement_confirmed INTEGER NOT NULL
+                CHECK (physical_settlement_confirmed IN (0, 1)),
+            released_lock_uuids TEXT NOT NULL DEFAULT '[]',
+            meta_data TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(workflow_task_uuid) REFERENCES workflow_task(uuid),
+            FOREIGN KEY(workflow_node_job_uuid) REFERENCES workflow_node_job(uuid),
+            FOREIGN KEY(lease_uuid) REFERENCES execution_lock_lease(uuid)
+        );
+        CREATE INDEX IF NOT EXISTS ix_execution_lock_operator_action_task
+            ON execution_lock_operator_action(workflow_task_uuid, create_time, uuid);
+        """,
+    )
+
+
+def ensure_workflow_runtime_journal_schema(connection: sqlite3.Connection) -> None:
+    """为运行日志增加人工执行锁释放事件类型，并兼容既有数据库。"""
+
+    row = connection.execute(
+        "SELECT sql FROM sqlite_schema "
+        "WHERE type = 'table' AND name = 'workflow_runtime_journal'"
+    ).fetchone()
+    table_sql = str(row["sql"] or "") if row is not None else ""
+    if "'lock_operator_released'" in table_sql:
+        return
+    old = "'uncertainty_resolved',\n            'startup_recovered'"
+    new = "'uncertainty_resolved',\n            'lock_operator_released',\n            'startup_recovered'"
+    if old not in table_sql:
+        raise sqlite3.OperationalError(
+            "workflow_runtime_journal 定义无法安全增加人工锁事件类型"
+        )
+    schema_version = int(connection.execute("PRAGMA schema_version").fetchone()[0])
+    connection.execute("PRAGMA writable_schema = ON")
+    try:
+        connection.execute(
+            """
+            UPDATE sqlite_schema
+            SET sql = replace(sql, ?, ?)
+            WHERE type = 'table' AND name = 'workflow_runtime_journal'
+            """,
+            (old, new),
+        )
+        connection.execute(f"PRAGMA schema_version = {schema_version + 1}")
+    finally:
+        connection.execute("PRAGMA writable_schema = OFF")
+    refreshed = connection.execute(
+        "SELECT sql FROM sqlite_schema "
+        "WHERE type = 'table' AND name = 'workflow_runtime_journal'"
+    ).fetchone()
+    if refreshed is None or "'lock_operator_released'" not in str(refreshed["sql"]):
+        raise sqlite3.OperationalError(
+            "workflow_runtime_journal 人工锁事件类型迁移未生效"
+        )
 
 
 def ensure_local_cancellation_schema(connection: sqlite3.Connection) -> None:
@@ -745,6 +813,7 @@ __all__ = [
     "ensure_execution_lock_schema",
     "ensure_local_cancellation_schema",
     "ensure_task_material_admission_schema",
+    "ensure_workflow_runtime_journal_schema",
     "ensure_workflow_task_control_schema",
     "ensure_workflow_inventory_schema",
 ]

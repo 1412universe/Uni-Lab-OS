@@ -577,17 +577,21 @@ def list_execution_locks(
     connection: sqlite3.Connection,
     *,
     job_uuid: str | None = None,
+    task_uuid: str | None = None,
 ) -> list[dict[str, Any]]:
-    """按作业可选过滤并返回稳定排序的执行锁事实。"""
+    """按作业或任务可选过滤并返回稳定排序的执行锁事实。"""
 
     query = "SELECT * FROM execution_lock_lease WHERE deleted_at IS NULL"
-    parameters: tuple[str, ...] = ()
+    parameters: list[str] = []
     if job_uuid is not None:
         query += " AND workflow_node_job_uuid = ?"
-        parameters = (job_uuid,)
+        parameters.append(job_uuid)
+    if task_uuid is not None:
+        query += " AND workflow_task_uuid = ?"
+        parameters.append(task_uuid)
     query += " ORDER BY create_time ASC, uuid ASC"
     result: list[dict[str, Any]] = []
-    for row in connection.execute(query, parameters).fetchall():
+    for row in connection.execute(query, tuple(parameters)).fetchall():
         item = dict(row)
         metadata = _lease_metadata(row)
         semantic_scope = str(metadata.get("semantic_scope") or "").strip()
@@ -595,6 +599,66 @@ def list_execution_locks(
             item["scope"] = semantic_scope
         result.append(item)
     return result
+
+
+def record_execution_lock_operator_action(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    job_uuid: str,
+    lease_uuid: str,
+    claim_uuid: str,
+    expected_claim_uuid: str,
+    expected_fencing_token: int,
+    reason: str,
+    physical_settlement_confirmed: bool,
+    result: str,
+    released_lock_uuids: Sequence[str],
+    now: str,
+) -> dict[str, Any]:
+    """在当前事务内持久化一次执行锁人工处置审计。"""
+
+    if result not in {"released", "already_released"}:
+        raise StoreConflict("执行锁人工处置结果非法")
+    action_uuid = str(uuid4())
+    connection.execute(
+        """
+        INSERT INTO execution_lock_operator_action(
+            uuid, create_time, update_time, workflow_task_uuid,
+            workflow_node_job_uuid, lease_uuid, claim_uuid,
+            expected_claim_uuid, expected_fencing_token, action, result,
+            reason, physical_settlement_confirmed, released_lock_uuids, meta_data
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'force_release', ?, ?, ?, ?, '{}')
+        """,
+        (
+            action_uuid,
+            now,
+            now,
+            task_uuid,
+            job_uuid,
+            lease_uuid,
+            claim_uuid,
+            expected_claim_uuid,
+            expected_fencing_token,
+            result,
+            reason,
+            1 if physical_settlement_confirmed else 0,
+            encode_json(list(released_lock_uuids), sort_keys=True).decode("utf-8"),
+        ),
+    )
+    return {
+        "uuid": action_uuid,
+        "workflow_task_uuid": task_uuid,
+        "workflow_node_job_uuid": job_uuid,
+        "lease_uuid": lease_uuid,
+        "claim_uuid": claim_uuid,
+        "action": "force_release",
+        "result": result,
+        "reason": reason,
+        "physical_settlement_confirmed": physical_settlement_confirmed,
+        "released_lock_uuids": list(released_lock_uuids),
+        "create_time": now,
+    }
 
 
 def _ensure_waiters(
@@ -944,6 +1008,7 @@ __all__ = [
     "ExecutionLockDecision",
     "ExecutionLockRequest",
     "list_execution_locks",
+    "record_execution_lock_operator_action",
     "mark_execution_locks_running",
     "mark_execution_locks_uncertain",
     "normalize_execution_lock_requests",

@@ -60,6 +60,7 @@ from unilabos.workflow.store_migrations import (
     ensure_station_task_submission_schema,
     ensure_task_material_admission_schema,
     ensure_workflow_inventory_schema,
+    ensure_workflow_runtime_journal_schema,
     ensure_workflow_task_control_schema,
 )
 
@@ -517,6 +518,7 @@ CREATE TABLE IF NOT EXISTS workflow_runtime_journal (
             'feedback_committed',
             'uncertainty_opened',
             'uncertainty_resolved',
+            'lock_operator_released',
             'startup_recovered'
         )
     ),
@@ -648,6 +650,7 @@ class WorkflowStore:
                     if not self._persist_workflow_definitions:
                         ensure_ephemeral_workflow_reference_schema(self._conn)
                     ensure_task_material_admission_schema(self._conn)
+                    ensure_workflow_runtime_journal_schema(self._conn)
                     ensure_execution_lock_schema(self._conn)
                     ensure_local_cancellation_schema(self._conn)
                     ensure_workflow_inventory_schema(self._conn)
