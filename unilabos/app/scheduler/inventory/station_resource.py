@@ -16,6 +16,8 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
     acquire_dispatch_permit,
     acquire_dispatch_permit_candidates,
     release_unprojected_dispatch_permits,
+    release_preheld_dispatch_claims,
+    retain_dispatch_permit_resources,
     transition_dispatch_permit,
 )
 from unilabos.app.scheduler.inventory.store import InventoryStore
@@ -247,6 +249,23 @@ class StationResourceInventory(Protocol):
         参数：``known_claim_uuids`` 是工作流权威当前仍保存的全部活动 Claim。
         返回：本次释放的库存 Claim UUID。异常：身份或数据库错误原样传播。
         """
+
+    def retain_dispatch_permit_resources(
+        self,
+        claim_uuid: str,
+        *,
+        keep_lock_keys: Sequence[str],
+    ) -> None:
+        """只释放连续交接后不再需要的临时 Claim 资源。"""
+
+    def release_preheld_dispatch_claims(
+        self,
+        *,
+        task_uuid: str,
+        job_uuids: Sequence[str],
+        lock_keys: Sequence[str],
+    ) -> tuple[str, ...]:
+        """在后继派发已投影后收敛前一 Job 的物理 Claim。"""
 
 
 class SqliteStationResourceInventory:
@@ -677,6 +696,38 @@ class SqliteStationResourceInventory:
             return release_unprojected_dispatch_permits(
                 connection,
                 known_claim_uuids=known_claim_uuids,
+            )
+
+    def retain_dispatch_permit_resources(
+        self,
+        claim_uuid: str,
+        *,
+        keep_lock_keys: Sequence[str],
+    ) -> None:
+        """在库存事务中保留连续区间资源并释放其余资源。"""
+
+        with self._store.transaction() as connection:
+            retain_dispatch_permit_resources(
+                connection,
+                claim_uuid=claim_uuid,
+                keep_lock_keys=keep_lock_keys,
+            )
+
+    def release_preheld_dispatch_claims(
+        self,
+        *,
+        task_uuid: str,
+        job_uuids: Sequence[str],
+        lock_keys: Sequence[str],
+    ) -> tuple[str, ...]:
+        """在库存事务中收敛前一 Job 的 Claim。"""
+
+        with self._store.transaction() as connection:
+            return release_preheld_dispatch_claims(
+                connection,
+                task_uuid=task_uuid,
+                job_uuids=job_uuids,
+                lock_keys=lock_keys,
             )
 
     def _site_candidates(

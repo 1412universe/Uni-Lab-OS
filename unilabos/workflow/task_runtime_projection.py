@@ -119,6 +119,46 @@ _ACTIVE_JOB_STATES = frozenset({"pending", "dispatched", "running"})
 _TERMINAL_JOB_STATES = frozenset(
     {"succeeded", "failed", "skipped", "canceled", "timeout"}
 )
+
+
+def _continuing_resource_intervals(
+    *,
+    task_row: sqlite3.Row,
+    job_row: sqlite3.Row,
+    control_data: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """返回当前成功节点之后仍未到释放边界的区间身份。"""
+
+    raw_ids = control_data.get("resource_interval_ids")
+    if not isinstance(raw_ids, Sequence) or isinstance(raw_ids, (str, bytes)):
+        return ()
+    interval_ids = {str(value).strip() for value in raw_ids if str(value).strip()}
+    if not interval_ids:
+        return ()
+    plan = _decode_json_field(task_row["execution_plan"], fallback={})
+    if not isinstance(plan, Mapping):
+        return ()
+    plan = plan.get("resource_plan", plan)
+    if not isinstance(plan, Mapping):
+        return ()
+    current_node = str(job_row["workflow_node_uuid"])
+    result: list[str] = []
+    for raw in plan.get("intervals", ()):
+        if not isinstance(raw, Mapping):
+            continue
+        interval_id = str(raw.get("interval_id") or "")
+        nodes = raw.get("node_uuids")
+        if (
+            interval_id in interval_ids
+            and isinstance(nodes, Sequence)
+            and not isinstance(nodes, (str, bytes))
+            and current_node in {str(value) for value in nodes}
+            and str(raw.get("release_node_uuid") or "") != current_node
+        ):
+            result.append(interval_id)
+    return tuple(sorted(result))
+
+
 _FINISHED_STATE_MAP = {
     "success": "succeeded",
     "failed": "failed",
@@ -1717,6 +1757,10 @@ class TaskRuntimeProjection:
         required_device_tenancy: Mapping[str, Any] | None = None,
         actual_executor: Mapping[str, Any] | None = None,
         dispatch_permit: Mapping[str, Any] | None = None,
+        resource_plan_id: str | None = None,
+        resource_interval_ids: Sequence[str] = (),
+        resource_acquire_set_id: str | None = None,
+        resource_interval_ids_by_lock: Mapping[str, Sequence[str]] | None = None,
         manual_confirmation_config: Mapping[str, Any] | None = None,
         projected_at: str | None = None,
         max_active_tasks: int = 500,
@@ -1838,6 +1882,10 @@ class TaskRuntimeProjection:
                     requests=execution_locks,
                     claim_uuid=permit["claim_uuid"],
                     fencing_tokens=permit["fencing_tokens"],
+                    resource_plan_id=resource_plan_id,
+                    resource_interval_ids=resource_interval_ids,
+                    resource_acquire_set_id=resource_acquire_set_id,
+                    resource_interval_ids_by_lock=resource_interval_ids_by_lock,
                 )
             else:
                 lock_decision = try_acquire_execution_locks(
@@ -1845,6 +1893,10 @@ class TaskRuntimeProjection:
                     task_uuid=task_uuid,
                     job_uuid=job_uuid,
                     requests=execution_locks,
+                    resource_plan_id=resource_plan_id,
+                    resource_interval_ids=resource_interval_ids,
+                    resource_acquire_set_id=resource_acquire_set_id,
+                    resource_interval_ids_by_lock=resource_interval_ids_by_lock,
                     aging_interval_seconds=aging_interval_seconds,
                 )
             if not lock_decision.acquired:
@@ -1911,6 +1963,17 @@ class TaskRuntimeProjection:
             updated_control_data["execution_locks"] = [
                 dict(request) for request in (execution_locks or ())
             ]
+            updated_control_data["resource_plan_id"] = str(resource_plan_id or "")
+            updated_control_data["resource_interval_ids"] = [
+                str(value) for value in resource_interval_ids
+            ]
+            updated_control_data["resource_acquire_set_id"] = str(
+                resource_acquire_set_id or ""
+            )
+            updated_control_data["resource_interval_ids_by_lock"] = {
+                str(lock_key): [str(value) for value in values]
+                for lock_key, values in (resource_interval_ids_by_lock or {}).items()
+            }
             connection.execute(
                 """
                 UPDATE workflow_node_job
@@ -3553,10 +3616,16 @@ class TaskRuntimeProjection:
                 if same_return_info and same_error_info:
                     replayed_at = utc_now()
                     if not job_row["uncertainty_reason"]:
+                        keep_interval_ids = _continuing_resource_intervals(
+                            task_row=task_row,
+                            job_row=job_row,
+                            control_data=control_data,
+                        )
                         release_execution_locks(
                             connection,
                             job_uuid=job_uuid,
                             now=replayed_at,
+                            keep_interval_ids=keep_interval_ids,
                         )
                     close_pending_manual_confirmation(
                         connection,
@@ -3616,10 +3685,16 @@ class TaskRuntimeProjection:
                     now=finished_at,
                 )
             else:
+                keep_interval_ids = _continuing_resource_intervals(
+                    task_row=task_row,
+                    job_row=job_row,
+                    control_data=updated_control_data,
+                )
                 release_execution_locks(
                     connection,
                     job_uuid=job_uuid,
                     now=finished_at,
+                    keep_interval_ids=keep_interval_ids,
                 )
             settle_intervention_for_job(
                 connection,

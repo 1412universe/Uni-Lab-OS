@@ -31,6 +31,41 @@ from unilabos.workflow.store import StoreConflict, utc_now
 _SCOPES = frozenset({"device", "material", "material_site"})
 
 
+def _normalize_interval_ids_by_lock(
+    value: Mapping[str, Sequence[str]] | None,
+    *,
+    requested_keys: set[str],
+    interval_ids: set[str],
+) -> dict[str, set[str]]:
+    """校验连续区间到锁键的精确归属，避免临时锁被错误续持。"""
+
+    if not interval_ids:
+        if value:
+            raise StoreConflict("无连续区间时不能提供锁键区间映射")
+        return {}
+    if value is None:
+        if len(requested_keys) == 1:
+            only_key = next(iter(requested_keys))
+            return {only_key: set(interval_ids)}
+        raise StoreConflict("多资源连续区间缺少按锁键的区间映射")
+    result: dict[str, set[str]] = {}
+    for raw_key, raw_values in value.items():
+        lock_key = str(raw_key or "").strip()
+        if lock_key not in requested_keys:
+            raise StoreConflict("连续区间映射包含当前作业未声明的资源")
+        if not isinstance(raw_values, Sequence) or isinstance(raw_values, (str, bytes)):
+            raise StoreConflict("连续区间映射的区间身份必须是序列")
+        ids = {str(item).strip() for item in raw_values if str(item).strip()}
+        if not ids or not ids <= interval_ids:
+            raise StoreConflict("连续区间映射包含未声明的区间身份")
+        result[lock_key] = ids
+    if not result:
+        raise StoreConflict("连续区间映射至少需要一个连续资源")
+    if set().union(*result.values()) != interval_ids:
+        raise StoreConflict("连续区间映射未覆盖全部区间身份")
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class ExecutionLockRequest:
     """一个作业需要全有或全无取得的设备、物料或库位执行占用。"""
@@ -85,6 +120,39 @@ def normalize_execution_lock_requests(
     return tuple(normalized[key] for key in sorted(normalized))
 
 
+def _find_interval_leases(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    plan_id: str | None,
+    interval_ids: set[str],
+) -> list[sqlite3.Row]:
+    """读取当前 Task 尚未到释放边界的活动区间租约。"""
+
+    if not plan_id or not interval_ids:
+        return []
+    rows = connection.execute(
+        """
+        SELECT * FROM execution_lock_lease
+        WHERE workflow_task_uuid=? AND deleted_at IS NULL
+          AND state IN ('reserved','running')
+        ORDER BY acquired_at ASC, uuid ASC
+        """,
+        (task_uuid,),
+    ).fetchall()
+    result: list[sqlite3.Row] = []
+    for row in rows:
+        metadata = _lease_metadata(row)
+        if str(metadata.get("resource_plan_id") or "") != str(plan_id):
+            continue
+        raw_ids = metadata.get("resource_interval_ids")
+        if not isinstance(raw_ids, Sequence) or isinstance(raw_ids, (str, bytes)):
+            continue
+        if interval_ids.intersection(str(value) for value in raw_ids):
+            result.append(row)
+    return result
+
+
 def try_acquire_execution_locks(
     connection: sqlite3.Connection,
     *,
@@ -93,6 +161,11 @@ def try_acquire_execution_locks(
     requests: Sequence[Mapping[str, Any]] | None,
     claim_uuid: str | None = None,
     fencing_tokens: Mapping[str, int] | None = None,
+    resource_plan_id: str | None = None,
+    resource_interval_ids: Sequence[str] = (),
+    resource_acquire_set_id: str | None = None,
+    resource_interval_ids_by_lock: Mapping[str, Sequence[str]] | None = None,
+    authoritative_permit: bool = False,
     aging_interval_seconds: float = DEFAULT_AGING_INTERVAL_SECONDS,
 ) -> ExecutionLockDecision:
     """在当前写事务中投影一个作业全有或全无的库存执行占用。
@@ -106,7 +179,34 @@ def try_acquire_execution_locks(
     normalized = normalize_execution_lock_requests(requests)
     provided_fences = dict(fencing_tokens or {})
     normalized_keys = {request.lock_key for request in normalized}
-    if claim_uuid is not None and set(provided_fences) != normalized_keys:
+    interval_ids = {
+        str(value).strip() for value in resource_interval_ids if str(value).strip()
+    }
+    interval_ids_by_lock = _normalize_interval_ids_by_lock(
+        resource_interval_ids_by_lock,
+        requested_keys=normalized_keys,
+        interval_ids=interval_ids,
+    )
+    inherited_rows = _find_interval_leases(
+        connection,
+        task_uuid=task_uuid,
+        plan_id=resource_plan_id,
+        interval_ids=interval_ids,
+    )
+    inherited_by_key: dict[str, sqlite3.Row] = {}
+    for row in inherited_rows:
+        lock_key = str(row["lock_key"])
+        if lock_key in inherited_by_key:
+            raise StoreConflict(f"连续区间存在重复活动租约：{lock_key}")
+        inherited_by_key[lock_key] = row
+    inherited_keys = set(inherited_by_key)
+    if not inherited_keys <= normalized_keys:
+        raise StoreConflict("连续区间继承的资源不在当前作业完整锁集合中")
+    provided_fence_keys = set(provided_fences)
+    if claim_uuid is not None and provided_fence_keys not in (
+        normalized_keys,
+        normalized_keys - inherited_keys,
+    ):
         raise StoreConflict("库存 Permit Fence 与完整执行锁集合不一致")
     if any(token <= 0 for token in provided_fences.values()):
         raise StoreConflict("库存 Permit Fence 必须是正整数")
@@ -137,8 +237,9 @@ def try_acquire_execution_locks(
         for row in active_rows
         if _lease_acquired_by(row) == job_uuid
     }
+    own_keys |= inherited_keys
     requested_keys = {request.lock_key for request in normalized}
-    if own_keys:
+    if own_keys and not inherited_keys:
         if own_keys != requested_keys:
             raise StoreConflict(f"作业持久执行锁集合发生变化：{job_uuid}")
         claim = required_active_claim(connection, job_uuid=job_uuid)
@@ -162,19 +263,24 @@ def try_acquire_execution_locks(
             fencing_tokens=fencing_tokens,
         )
 
-    enqueued_at = _ensure_waiters(
-        connection,
-        task_uuid=task_uuid,
-        job_uuid=job_uuid,
-        requests=normalized,
+    enqueued_at = (
+        utc_now()
+        if authoritative_permit
+        else _ensure_waiters(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            requests=normalized,
+        )
     )
-    blockers = [
+    blockers = [] if authoritative_permit else [
         row
         for row in active_rows
         if _lease_acquired_by(row) != job_uuid
         and row["workflow_node_job_uuid"] != job_uuid
+        and str(row["lock_key"]) not in inherited_keys
         and conflicting_resource_lock_keys(
-            requested_keys,
+            requested_keys - inherited_keys,
             {str(row["lock_key"])},
         )
     ]
@@ -207,7 +313,7 @@ def try_acquire_execution_locks(
             ORDER BY acquired_at, uuid LIMIT 1
             """,
             (*device_keys, task_uuid),
-        ).fetchone()
+            ).fetchone() if not authoritative_permit else None
     if blockers:
         blocker = blockers[0]
         return _record_wait(
@@ -236,14 +342,14 @@ def try_acquire_execution_locks(
     ).fetchone()
     if current_task is None:
         raise StoreConflict(f"执行锁所属任务不存在：{task_uuid}")
-    older = _older_conflicting_waiter(
+    older = None if authoritative_permit else _older_conflicting_waiter(
         connection,
         job_uuid=job_uuid,
         current_enqueued_at=enqueued_at,
         current_task_create_time=str(current_task["create_time"]),
         current_task_uuid=task_uuid,
         current_priority=priority_weight(current_task["priority"]),
-        requested_keys=requested_keys - owned_tenancy_keys,
+        requested_keys=requested_keys - owned_tenancy_keys - inherited_keys,
         aging_interval_seconds=aging_interval_seconds,
     )
     if older is not None:
@@ -268,7 +374,61 @@ def try_acquire_execution_locks(
     )
     claim_uuid = str(claim["claim_uuid"])
     fencing_tokens: list[tuple[str, int]] = []
+    old_claims: set[str] = set()
+    for inherited in inherited_rows:
+        old_claim = str(inherited["claim_uuid"] or "")
+        if old_claim and old_claim != claim_uuid:
+            old_claims.add(old_claim)
+        metadata = _lease_metadata(inherited)
+        metadata.update(
+            {
+                "acquired_by_job_uuid": job_uuid,
+                "resource_plan_id": str(
+                    resource_plan_id or metadata.get("resource_plan_id") or ""
+                ),
+                "resource_interval_ids": sorted(
+                    interval_ids_by_lock.get(str(inherited["lock_key"]), ())
+                ),
+                "resource_acquire_set_id": str(
+                    resource_acquire_set_id
+                    or metadata.get("resource_acquire_set_id")
+                    or ""
+                ),
+                "handoff_from_job_uuid": str(inherited["workflow_node_job_uuid"]),
+            }
+        )
+        if authoritative_permit:
+            metadata["authority"] = "inventory_dispatch_permit"
+        connection.execute(
+            """
+            UPDATE execution_lock_lease
+            SET workflow_node_job_uuid=?, claim_uuid=?, meta_data=?,
+                fencing_token=?, update_time=?
+            WHERE uuid=? AND state IN ('reserved','running','uncertain')
+            """,
+            (
+                job_uuid,
+                claim_uuid,
+                encode_json(metadata, sort_keys=True).decode("utf-8"),
+                int(
+                    provided_fences.get(
+                        str(inherited["lock_key"]), inherited["fencing_token"]
+                    )
+                ),
+                acquired_at,
+                inherited["uuid"],
+            ),
+        )
     for request in normalized:
+        if request.lock_key in inherited_by_key:
+            inherited = inherited_by_key[request.lock_key]
+            fencing_tokens.append(
+                (
+                    request.lock_key,
+                    int(provided_fences.get(request.lock_key, inherited["fencing_token"])),
+                )
+            )
+            continue
         fencing_token = provided_fences.get(request.lock_key)
         if fencing_token is None:
             fencing_token = next_fencing_token(
@@ -280,7 +440,14 @@ def try_acquire_execution_locks(
         metadata = {
             "semantic_scope": request.scope,
             "acquired_by_job_uuid": job_uuid,
+            "resource_plan_id": str(resource_plan_id or ""),
+            "resource_interval_ids": sorted(
+                interval_ids_by_lock.get(request.lock_key, ())
+            ),
+            "resource_acquire_set_id": str(resource_acquire_set_id or ""),
         }
+        if authoritative_permit:
+            metadata["authority"] = "inventory_dispatch_permit"
         connection.execute(
             """
             INSERT INTO execution_lock_lease(
@@ -307,6 +474,24 @@ def try_acquire_execution_locks(
                 fencing_token,
             ),
         )
+    for old_claim in old_claims:
+        remaining = connection.execute(
+            """
+            SELECT 1 FROM execution_lock_lease
+            WHERE claim_uuid=? AND deleted_at IS NULL
+              AND state IN ('reserved','running','uncertain') LIMIT 1
+            """,
+            (old_claim,),
+        ).fetchone()
+        if remaining is None:
+            connection.execute(
+                """
+                UPDATE execution_claim
+                SET state='released', released_at=?, update_time=?
+                WHERE claim_uuid=? AND state IN ('reserved','running','uncertain')
+                """,
+                (acquired_at, acquired_at, old_claim),
+            )
     _release_waiters(connection, job_uuid=job_uuid, released_at=acquired_at)
     _clear_wait_reason(connection, task_uuid=task_uuid, job_uuid=job_uuid)
     return ExecutionLockDecision(
@@ -324,12 +509,30 @@ def mirror_execution_locks_from_permit(
     requests: Sequence[Mapping[str, Any]] | None,
     claim_uuid: str,
     fencing_tokens: Mapping[str, int],
+    resource_plan_id: str | None = None,
+    resource_interval_ids: Sequence[str] = (),
+    resource_acquire_set_id: str | None = None,
+    resource_interval_ids_by_lock: Mapping[str, Sequence[str]] | None = None,
 ) -> ExecutionLockDecision:
     """只镜像库存 Permit，不在工作流库再次进行资源仲裁。"""
 
     normalized = normalize_execution_lock_requests(requests)
     provided_fences = {str(key): int(value) for key, value in fencing_tokens.items()}
     requested_keys = {request.lock_key for request in normalized}
+    if resource_interval_ids:
+        return try_acquire_execution_locks(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            requests=requests,
+            claim_uuid=claim_uuid,
+            fencing_tokens=provided_fences,
+            resource_plan_id=resource_plan_id,
+            resource_interval_ids=resource_interval_ids,
+            resource_acquire_set_id=resource_acquire_set_id,
+            resource_interval_ids_by_lock=resource_interval_ids_by_lock,
+            authoritative_permit=True,
+        )
     if not claim_uuid or set(provided_fences) != requested_keys:
         raise StoreConflict("库存 Permit Fence 与完整执行锁集合不一致")
     if any(token <= 0 for token in provided_fences.values()):
@@ -388,6 +591,19 @@ def mirror_execution_locks_from_permit(
                         "semantic_scope": request.scope,
                         "acquired_by_job_uuid": job_uuid,
                         "authority": "inventory_dispatch_permit",
+                        "resource_plan_id": str(resource_plan_id or ""),
+                        "resource_interval_ids": sorted(
+                            _normalize_interval_ids_by_lock(
+                                resource_interval_ids_by_lock,
+                                requested_keys=requested_keys,
+                                interval_ids={
+                                    str(value).strip()
+                                    for value in resource_interval_ids
+                                    if str(value).strip()
+                                },
+                            ).get(request.lock_key, ())
+                        ),
+                        "resource_acquire_set_id": str(resource_acquire_set_id or ""),
                     },
                     sort_keys=True,
                 ).decode("utf-8"),
@@ -506,8 +722,60 @@ def release_execution_locks(
     *,
     job_uuid: str,
     now: str,
+    keep_interval_ids: Sequence[str] = (),
 ) -> None:
-    """在明确结果提交后幂等释放一个作业的全部持久执行锁。"""
+    """在明确结果提交后释放作业锁，可保留仍在区间内的资源。"""
+
+    keep = {str(value).strip() for value in keep_interval_ids if str(value).strip()}
+    if keep:
+        rows = connection.execute(
+            """
+            SELECT * FROM execution_lock_lease
+            WHERE workflow_node_job_uuid = ?
+              AND state IN ('reserved', 'running', 'uncertain')
+              AND deleted_at IS NULL
+            """,
+            (job_uuid,),
+        ).fetchall()
+        release_rows: list[sqlite3.Row] = []
+        for row in rows:
+            metadata = _lease_metadata(row)
+            raw_ids = metadata.get("resource_interval_ids")
+            interval_ids = (
+                {str(value) for value in raw_ids}
+                if isinstance(raw_ids, Sequence) and not isinstance(raw_ids, (str, bytes))
+                else set()
+            )
+            if not interval_ids.intersection(keep):
+                release_rows.append(row)
+        for row in release_rows:
+            connection.execute(
+                """
+                UPDATE execution_lock_lease
+                SET state='released', released_at=?, update_time=?
+                WHERE uuid=? AND state IN ('reserved','running','uncertain')
+                """,
+                (now, now, row["uuid"]),
+            )
+        remaining = connection.execute(
+            """
+            SELECT 1 FROM execution_lock_lease
+            WHERE workflow_node_job_uuid=? AND state IN ('reserved','running','uncertain')
+              AND deleted_at IS NULL LIMIT 1
+            """,
+            (job_uuid,),
+        ).fetchone()
+        if remaining is None:
+            connection.execute(
+                """
+                UPDATE execution_claim
+                SET state='released', released_at=?, update_time=?
+                WHERE workflow_node_job_uuid=?
+                  AND state IN ('reserved','running','uncertain')
+                """,
+                (now, now, job_uuid),
+            )
+        return
 
     connection.execute(
         """

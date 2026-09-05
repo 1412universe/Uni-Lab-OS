@@ -12,6 +12,7 @@ import pytest
 from tests.workflow.test_f05_task_scheduler_bridge import (
     JOB_UUID,
     MATERIAL_UUID,
+    NODE_UUID,
     TASK_UUID,
     WORKFLOW_UUID,
     _seed_task,
@@ -20,6 +21,11 @@ from unilabos.app.scheduler.dispatch import CancelDispatchState, RecordingDispat
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.workflow.execution_claim import get_execution_claim
 from unilabos.workflow.execution_lock_lease import mirror_execution_locks_from_permit
+from unilabos.workflow.resource_lock_plan import (
+    bind_station_resource_plan,
+    compile_template_resource_plan,
+    serialize_resource_plan,
+)
 from unilabos.workflow.store import StoreConflict, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 from unilabos.workflow.task_scheduler_bridge import TaskSchedulerBridge
@@ -250,6 +256,216 @@ def test_cleanup_settled_releases_regular_task_claim(
     assert release_states == {
         "released"
     }
+
+
+def test_resource_interval_handoff_keeps_claim_across_jobs(
+    store: WorkflowStore,
+) -> None:
+    """连续区间完成前一 Job 后，Claim 必须转移到后继 Job。"""
+
+    _seed_task(store, with_material=False)
+    plan = serialize_resource_plan(
+        bind_station_resource_plan(
+            compile_template_resource_plan(
+                {
+                    "workflow_uuid": WORKFLOW_UUID,
+                    "nodes": [
+                        {"uuid": NODE_UUID, "resource_defaults": ["robot"]},
+                        {"uuid": SECOND_NODE_UUID, "resource_defaults": ["robot"]},
+                    ],
+                    "edges": [
+                        {
+                            "source_node_uuid": NODE_UUID,
+                            "target_node_uuid": SECOND_NODE_UUID,
+                        }
+                    ],
+                }
+            ),
+            {
+                "robot": {
+                    "canonical_key": "/devices/reactor-a",
+                    "kind": "device",
+                }
+            },
+        )
+    )
+    first_interval = str(plan["intervals"][0]["interval_id"])
+    second_acquire = next(
+        item for item in plan["acquire_sets"] if item["node_uuid"] == NODE_UUID
+    )
+    with store.transaction() as connection:
+        execution_plan = json.loads(
+            connection.execute(
+                "SELECT execution_plan FROM workflow_task WHERE uuid=?",
+                (TASK_UUID,),
+            ).fetchone()[0]
+        )
+        execution_plan["resource_plan"] = plan
+        execution_plan["nodes"].append(
+            {
+                **execution_plan["nodes"][0],
+                "uuid": SECOND_NODE_UUID,
+                "resource_plan_id": plan["plan_id"],
+                "resource_interval_ids": [first_interval],
+                "resource_acquire_set_id": second_acquire["acquire_set_id"],
+            }
+        )
+        execution_plan["nodes"][0].update(
+            {
+                "resource_plan_id": plan["plan_id"],
+                "resource_interval_ids": [first_interval],
+                "resource_acquire_set_id": next(
+                    item
+                    for item in plan["acquire_sets"]
+                    if item["node_uuid"] == NODE_UUID
+                )["acquire_set_id"],
+            }
+        )
+        execution_plan["edges"].append(
+            {
+                "uuid": "interval-handoff-edge",
+                "source_node_uuid": NODE_UUID,
+                "target_node_uuid": SECOND_NODE_UUID,
+                "dependency_only": True,
+            }
+        )
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=? WHERE uuid=?",
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+    _seed_release_job(
+        store,
+        task_uuid=TASK_UUID,
+        node_uuid=SECOND_NODE_UUID,
+        job_uuid=SECOND_JOB_UUID,
+    )
+    projection = TaskRuntimeProjection(store)
+    lock = {"lock_key": "/devices/reactor-a", "scope": "device"}
+    transient_lock = {
+        "lock_key": "/devices/transient-inspector",
+        "scope": "device",
+    }
+    first = projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[lock, transient_lock],
+        resource_plan_id=str(plan["plan_id"]),
+        resource_interval_ids=[first_interval],
+        resource_interval_ids_by_lock={lock["lock_key"]: [first_interval]},
+        resource_acquire_set_id=str(
+            next(
+                item
+                for item in plan["acquire_sets"]
+                if item["node_uuid"] == NODE_UUID
+            )["acquire_set_id"]
+        ),
+    )
+    assert first["jobs"][0]["status"] == "dispatched"
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_job_finished(job_uuid=JOB_UUID, scheduler_state="success")
+
+    with store.transaction() as connection:
+        lease = connection.execute(
+            "SELECT * FROM execution_lock_lease WHERE lock_key=? AND state != 'released'",
+            (lock["lock_key"],),
+        ).fetchone()
+        assert lease is not None
+        assert lease["workflow_node_job_uuid"] == JOB_UUID
+        transient = connection.execute(
+            "SELECT state FROM execution_lock_lease WHERE lock_key=?",
+            (transient_lock["lock_key"],),
+        ).fetchone()
+        assert transient is not None and transient["state"] == "released"
+
+    second = projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=SECOND_JOB_UUID,
+        execution_locks=[lock],
+        resource_plan_id=str(plan["plan_id"]),
+        resource_interval_ids=[first_interval],
+        resource_interval_ids_by_lock={lock["lock_key"]: [first_interval]},
+        resource_acquire_set_id=str(second_acquire["acquire_set_id"]),
+    )
+    assert second["jobs"][-1]["status"] == "dispatched"
+    with store.transaction() as connection:
+        lease = connection.execute(
+            "SELECT * FROM execution_lock_lease WHERE lock_key=? AND state != 'released'",
+            (lock["lock_key"],),
+        ).fetchone()
+        claim = get_execution_claim(connection, job_uuid=SECOND_JOB_UUID)
+        old_claim = get_execution_claim(connection, job_uuid=JOB_UUID)
+        assert lease is not None and lease["workflow_node_job_uuid"] == SECOND_JOB_UUID
+        assert claim is not None
+        assert old_claim is not None and old_claim["state"] == "released"
+
+    projection.project_job_finished(job_uuid=SECOND_JOB_UUID, scheduler_state="success")
+    assert {
+        lease["state"]
+        for lease in projection.list_execution_locks(SECOND_JOB_UUID)
+    } == {"released"}
+
+
+@pytest.mark.parametrize("scheduler_state", ["failed", "canceled"])
+def test_resource_interval_failure_or_cancel_preserves_uncertain_lease(
+    store: WorkflowStore,
+    scheduler_state: str,
+) -> None:
+    """连续区间中失败/取消不能把可能仍在物理现场的 Lease 自动释放。"""
+
+    _seed_task(store, with_material=False)
+    interval_id = "interval-uncertain"
+    with store.transaction() as connection:
+        execution_plan = json.loads(
+            connection.execute(
+                "SELECT execution_plan FROM workflow_task WHERE uuid=?",
+                (TASK_UUID,),
+            ).fetchone()[0]
+        )
+        execution_plan["resource_plan"] = {
+            "plan_id": "plan-uncertain",
+            "intervals": [
+                {
+                    "interval_id": interval_id,
+                    "node_uuids": [NODE_UUID],
+                    "release_node_uuid": RELEASE_NODE_UUID,
+                }
+            ],
+        }
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=? WHERE uuid=?",
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+
+    projection = TaskRuntimeProjection(store)
+    lock = {"lock_key": "/devices/reactor-a", "scope": "device"}
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[lock],
+        resource_plan_id="plan-uncertain",
+        resource_interval_ids=[interval_id],
+        resource_interval_ids_by_lock={lock["lock_key"]: [interval_id]},
+        resource_acquire_set_id="acquire-uncertain",
+    )
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_node_job SET expected_change_set=? WHERE uuid=?",
+            (json.dumps({"kind": "material_transfer"}), JOB_UUID),
+        )
+    projection.project_dispatch_accepted(JOB_UUID)
+    projection.project_job_finished(
+        job_uuid=JOB_UUID,
+        scheduler_state=scheduler_state,
+        return_info={"device_state": "unknown"},
+    )
+
+    job = store.get_job(JOB_UUID)
+    assert job["uncertainty_reason"]
+    assert {
+        lease["state"]
+        for lease in projection.list_execution_locks(JOB_UUID)
+        if lease["state"] != "released"
+    } == {"uncertain"}
 
 
 def test_material_parent_lock_blocks_child_site_until_explicit_result(

@@ -72,6 +72,8 @@ class DispatchAdmissionRequest:
     parameter_hash: str
     expected_change_set: Mapping[str, Any]
     resources: tuple[DispatchResource, ...]
+    preheld_lock_keys: tuple[str, ...] = ()
+    preheld_job_uuids: tuple[str, ...] = ()
     transfer: TransferDispatchCondition | None = None
     operate_in_place: OperateInPlaceCondition | None = None
     aliquot: AliquotDispatchCondition | None = None
@@ -424,11 +426,21 @@ def acquire_dispatch_permit(
         """
     ).fetchall()
     requested_keys = {resource.lock_key for resource in normalized.resources}
+    preheld_keys = set(normalized.preheld_lock_keys)
+    preheld_jobs = set(normalized.preheld_job_uuids)
+    if preheld_keys and not preheld_jobs:
+        raise DispatchAdmissionConflict("连续区间预持有资源缺少前一 Job 身份")
     for lease in active:
         if conflicting_resource_lock_keys(
             requested_keys,
             {str(lease["lock_key"])},
         ):
+            if (
+                str(lease["task_uuid"]) == normalized.task_uuid
+                and str(lease["lock_key"]) in preheld_keys
+                and str(lease["job_uuid"]) in preheld_jobs
+            ):
+                continue
             return DispatchAdmissionDecision(
                 wait_code="resource_claimed",
                 wait_message=f"资源 {lease['lock_key']} 已由其他作业申领",
@@ -503,6 +515,56 @@ def acquire_dispatch_permit(
             fences=tuple(fences),
         )
     )
+
+
+def release_preheld_dispatch_claims(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    job_uuids: Sequence[str],
+    lock_keys: Sequence[str],
+) -> tuple[str, ...]:
+    """在后继派发意图已投影后收敛前一 Job 的物理 Claim。"""
+
+    jobs = {str(value or "").strip() for value in job_uuids if str(value or "").strip()}
+    keys = {str(value or "").strip() for value in lock_keys if str(value or "").strip()}
+    if not jobs or not keys:
+        return ()
+    rows = connection.execute(
+        "SELECT claim_uuid, job_uuid FROM station_execution_claim "
+        "WHERE task_uuid=? AND job_uuid IN (%s) "
+        "AND state IN ('prepared','reserved','running')"
+        % ",".join("?" for _ in jobs),
+        (task_uuid, *sorted(jobs)),
+    ).fetchall()
+    released: list[str] = []
+    now = _utc_now()
+    for row in rows:
+        claim_uuid = str(row["claim_uuid"])
+        active = {
+            str(item["lock_key"])
+            for item in connection.execute(
+                "SELECT lock_key FROM station_execution_lock_lease "
+                "WHERE claim_uuid=? AND state IN ('prepared','reserved','running')",
+                (claim_uuid,),
+            ).fetchall()
+        }
+        if not active <= keys:
+            raise DispatchAdmissionConflict(
+                "前一 Job Claim 包含未声明的临时资源，拒绝收敛"
+            )
+        connection.execute(
+            "UPDATE station_execution_claim SET state='released', released_at=?, update_time=? "
+            "WHERE claim_uuid=?",
+            (now, now, claim_uuid),
+        )
+        connection.execute(
+            "UPDATE station_execution_lock_lease SET state='released', released_at=?, update_time=? "
+            "WHERE claim_uuid=? AND state IN ('prepared','reserved','running')",
+            (now, now, claim_uuid),
+        )
+        released.append(claim_uuid)
+    return tuple(sorted(released))
 
 
 def acquire_dispatch_permit_candidates(
@@ -634,6 +696,61 @@ def transition_dispatch_permit(
     )
 
 
+def retain_dispatch_permit_resources(
+    connection: sqlite3.Connection,
+    *,
+    claim_uuid: str,
+    keep_lock_keys: Sequence[str],
+) -> None:
+    """在连续区间成功交接时只释放当前 Claim 的临时资源。"""
+
+    keep = {
+        str(value or "").strip() for value in keep_lock_keys if str(value or "").strip()
+    }
+    row = connection.execute(
+        "SELECT state FROM station_execution_claim WHERE claim_uuid=?",
+        (claim_uuid,),
+    ).fetchone()
+    if row is None:
+        raise DispatchAdmissionConflict(f"库存 Claim 不存在：{claim_uuid}")
+    state = str(row["state"])
+    if state not in {"prepared", "reserved", "running"}:
+        raise DispatchAdmissionConflict(
+            f"库存 Claim 不能进行连续资源保留：{claim_uuid}"
+        )
+    active_rows = connection.execute(
+        "SELECT lock_key FROM station_execution_lock_lease "
+        "WHERE claim_uuid=? AND state IN ('prepared','reserved','running')",
+        (claim_uuid,),
+    ).fetchall()
+    active_keys = {str(item["lock_key"]) for item in active_rows}
+    if not keep <= active_keys:
+        raise DispatchAdmissionConflict("连续区间保留资源不属于当前库存 Claim")
+    if not keep:
+        transition_dispatch_permit(
+            connection,
+            claim_uuid=claim_uuid,
+            target_state="released",
+        )
+        return
+    now = _utc_now()
+    release_keys = tuple(sorted(active_keys - keep))
+    placeholders = ",".join("?" for _ in release_keys)
+    if release_keys:
+        connection.execute(
+            "UPDATE station_execution_lock_lease "
+            "SET state='released', released_at=?, update_time=? "
+            f"WHERE claim_uuid=? AND lock_key IN ({placeholders}) "
+            "AND state IN ('prepared','reserved','running')",
+            (now, now, claim_uuid, *release_keys),
+        )
+    connection.execute(
+        "UPDATE station_execution_claim SET resource_keys=?, update_time=? "
+        "WHERE claim_uuid=?",
+        (_canonical_json(sorted(keep)), now, claim_uuid),
+    )
+
+
 def release_unprojected_dispatch_permits(
     connection: sqlite3.Connection,
     *,
@@ -707,6 +824,35 @@ def _normalize_request(request: DispatchAdmissionRequest) -> DispatchAdmissionRe
         if previous is not None and previous != normalized:
             raise DispatchAdmissionConflict(f"同一派发资源定义冲突：{lock_key}")
         resources[lock_key] = normalized
+    preheld_lock_keys = tuple(
+        sorted(
+            {
+                str(value or "").strip()
+                for value in request.preheld_lock_keys
+                if str(value or "").strip()
+            }
+        )
+    )
+    if not set(preheld_lock_keys) <= set(resources):
+        raise DispatchAdmissionConflict("连续区间预持有资源不在完整派发资源集合中")
+    preheld_job_uuids = tuple(
+        sorted(
+            {
+                str(value or "").strip()
+                for value in request.preheld_job_uuids
+                if str(value or "").strip()
+            }
+        )
+    )
+    for preheld_job_uuid in preheld_job_uuids:
+        try:
+            UUID(preheld_job_uuid)
+        except (AttributeError, TypeError, ValueError) as error:
+            raise DispatchAdmissionConflict(
+                "连续区间前一 Job 身份非法"
+            ) from error
+    if str(request.job_uuid) in preheld_job_uuids:
+        raise DispatchAdmissionConflict("连续区间前一 Job 不能是当前 Job")
     return DispatchAdmissionRequest(
         effect_uuid=str(request.effect_uuid),
         task_uuid=str(request.task_uuid),
@@ -715,6 +861,8 @@ def _normalize_request(request: DispatchAdmissionRequest) -> DispatchAdmissionRe
         parameter_hash=str(request.parameter_hash).strip(),
         expected_change_set=dict(request.expected_change_set),
         resources=tuple(resources[key] for key in sorted(resources)),
+        preheld_lock_keys=preheld_lock_keys,
+        preheld_job_uuids=preheld_job_uuids,
         transfer=request.transfer,
         operate_in_place=request.operate_in_place,
         aliquot=request.aliquot,
@@ -1231,7 +1379,9 @@ __all__ = [
     "acquire_dispatch_permit_candidates",
     "assert_inventory_mutation_unclaimed",
     "migrate_dispatch_admission_schema",
+    "release_preheld_dispatch_claims",
     "release_unprojected_dispatch_permits",
+    "retain_dispatch_permit_resources",
     "transition_dispatch_permit",
     "validate_physical_settlement_credentials",
 ]

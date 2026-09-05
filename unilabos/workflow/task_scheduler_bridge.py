@@ -76,6 +76,44 @@ _SUBMISSION_PHASE_PRE_DISPATCH = "pre_dispatch"
 _SUBMISSION_PHASE_LOCAL_CONTROL = "local_control"
 
 
+def _continuing_interval_ids_for_result(
+    task: Mapping[str, Any],
+    job: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """返回明确成功后仍需跨 Job 持有的资源区间。"""
+
+    control_data = job.get("control_data")
+    if not isinstance(control_data, Mapping):
+        return ()
+    raw_ids = control_data.get("resource_interval_ids")
+    if not isinstance(raw_ids, (list, tuple, set, frozenset)):
+        return ()
+    interval_ids = {str(value).strip() for value in raw_ids if str(value).strip()}
+    if not interval_ids:
+        return ()
+    execution_plan = task.get("execution_plan")
+    if not isinstance(execution_plan, Mapping):
+        return ()
+    plan = execution_plan.get("resource_plan", execution_plan)
+    if not isinstance(plan, Mapping):
+        return ()
+    node_uuid = str(job.get("workflow_node_uuid") or "")
+    return tuple(
+        sorted(
+            str(item.get("interval_id"))
+            for item in plan.get("intervals", ())
+            if isinstance(item, Mapping)
+            and str(item.get("interval_id") or "") in interval_ids
+            and node_uuid in {
+                str(value)
+                for value in (item.get("node_uuids") or ())
+                if str(value).strip()
+            }
+            and str(item.get("release_node_uuid") or "") != node_uuid
+        )
+    )
+
+
 class TaskSchedulerBridgeError(RuntimeError):
     """工作流任务不能安全进入本地调度器时使用的稳定桥接错误。"""
 
@@ -1279,6 +1317,27 @@ class TaskSchedulerBridge:
         for job in recoverable_jobs:
             job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
             self._task_by_job[job_uuid] = task_uuid
+        restored_interval_handoffs = []
+        for job in ordinary_jobs:
+            if job.get("status") != "succeeded":
+                continue
+            control_data = job.get("control_data")
+            if not isinstance(control_data, Mapping):
+                continue
+            interval_ids = control_data.get("resource_interval_ids")
+            interval_map = control_data.get("resource_interval_ids_by_lock")
+            if not isinstance(interval_ids, (list, tuple, set, frozenset)):
+                continue
+            if not interval_ids or not isinstance(interval_map, Mapping):
+                continue
+            restored_interval_handoffs.append(
+                {
+                    "node_id": str(job.get("workflow_node_uuid") or ""),
+                    "job_id": str(job.get("uuid") or ""),
+                    "resource_interval_ids": list(interval_ids),
+                    "resource_interval_ids_by_lock": dict(interval_map),
+                }
+            )
         self._submitted_tasks.add(task_uuid)
         try:
             restored = self._scheduler.restore_workflow(
@@ -1286,6 +1345,7 @@ class TaskSchedulerBridge:
                 completed_results,
                 [],
                 skipped_nodes,
+                restored_interval_handoffs,
             )
             self._project_scheduler_trace_context(
                 task_uuid,
@@ -1607,6 +1667,15 @@ class TaskSchedulerBridge:
             projection_kwargs: dict[str, Any] = {}
             if required_device_tenancy is not None:
                 projection_kwargs["required_device_tenancy"] = required_device_tenancy
+            for field in (
+                "resource_plan_id",
+                "resource_interval_ids",
+                "resource_acquire_set_id",
+                "resource_interval_ids_by_lock",
+            ):
+                value = dispatching.get(field)
+                if value:
+                    projection_kwargs[field] = value
             if "manual_confirmation" in dispatching:
                 manual_config = dispatching.get("manual_confirmation")
                 if not isinstance(manual_config, Mapping):
@@ -1657,6 +1726,39 @@ class TaskSchedulerBridge:
                     permit.claim_uuid,
                     target_state="reserved",
                 )
+                preheld_jobs = tuple(
+                    sorted(
+                        {
+                            str(value)
+                            for value in (dispatching.get("resource_preheld_job_uuids") or [])
+                            if str(value).strip()
+                        }
+                    )
+                )
+                preheld_keys = tuple(
+                    sorted(
+                        {
+                            str(value)
+                            for value in (dispatching.get("resource_preheld_lock_keys") or [])
+                            if str(value).strip()
+                        }
+                    )
+                )
+                if preheld_jobs:
+                    release_preheld = getattr(
+                        inventory_authority,
+                        "release_preheld_dispatch_claims",
+                        None,
+                    )
+                    if not callable(release_preheld):
+                        raise StoreConflict(
+                            "库存权威不支持安全的连续 Claim 交接"
+                        )
+                    release_preheld(
+                        task_uuid=task_uuid,
+                        job_uuids=preheld_jobs,
+                        lock_keys=preheld_keys,
+                    )
                 permit_committed = True
         except BaseException:
             if (
@@ -1882,6 +1984,24 @@ class TaskSchedulerBridge:
             parameter_hash=parameter_hash,
             expected_change_set=expected_change_set,
             resources=tuple(resources),
+            preheld_lock_keys=tuple(
+                sorted(
+                    {
+                        str(value)
+                        for value in (dispatching.get("resource_preheld_lock_keys") or [])
+                        if str(value).strip()
+                    }
+                )
+            ),
+            preheld_job_uuids=tuple(
+                sorted(
+                    {
+                        str(value)
+                        for value in (dispatching.get("resource_preheld_job_uuids") or [])
+                        if str(value).strip()
+                    }
+                )
+            ),
             transfer=transfer,
             operate_in_place=operate_in_place,
             aliquot=aliquot,
@@ -2650,6 +2770,13 @@ class TaskSchedulerBridge:
         settled_job = next(
             item for item in aggregate["jobs"] if item["uuid"] == job_uuid
         )
+        continuing_interval_ids = (
+            _continuing_interval_ids_for_result(aggregate["task"], settled_job)
+            if scheduler_state == "success"
+            and aggregate["task"].get("status")
+            not in {"succeeded", "failed", "canceled", "timeout"}
+            else ()
+        )
         inventory_claim_state = (
             "uncertain"
             if str(settled_job.get("uncertainty_reason") or "").strip()
@@ -2657,10 +2784,44 @@ class TaskSchedulerBridge:
         )
         inventory_authority = self._scheduler.station_resource_inventory
         if inventory_authority is not None and claim is not None:
-            inventory_authority.transition_dispatch_permit(
-                str(claim["claim_uuid"]),
-                target_state=inventory_claim_state,
-            )
+            if continuing_interval_ids:
+                control_data = settled_job.get("control_data")
+                interval_map = (
+                    control_data.get("resource_interval_ids_by_lock", {})
+                    if isinstance(control_data, Mapping)
+                    else {}
+                )
+                keep_lock_keys = tuple(
+                    sorted(
+                        str(lock_key)
+                        for lock_key, raw_ids in interval_map.items()
+                        if isinstance(raw_ids, (list, tuple, set, frozenset))
+                        and set(str(value) for value in raw_ids)
+                        & set(continuing_interval_ids)
+                    )
+                )
+                if not keep_lock_keys:
+                    raise StoreConflict(
+                        "连续区间结果缺少可保留的物理资源映射"
+                    )
+                retain = getattr(
+                    inventory_authority,
+                    "retain_dispatch_permit_resources",
+                    None,
+                )
+                if not callable(retain):
+                    raise StoreConflict(
+                        "库存权威不支持连续区间的部分 Claim 释放"
+                    )
+                retain(
+                    str(claim["claim_uuid"]),
+                    keep_lock_keys=keep_lock_keys,
+                )
+            else:
+                inventory_authority.transition_dispatch_permit(
+                    str(claim["claim_uuid"]),
+                    target_state=inventory_claim_state,
+                )
         elif self._scheduler.physical_dispatch_enabled:
             raise StoreConflict(f"物理作业结果缺少库存 Claim：{job_uuid}")
         self._cancel_cancel_timer(job_uuid)

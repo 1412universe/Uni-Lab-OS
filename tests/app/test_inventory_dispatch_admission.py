@@ -247,6 +247,150 @@ def test_transfer_conditions_and_all_claims_commit_in_one_inventory_transaction(
     ) == {"state": "prepared", "parameter_hash": "sha256:test-parameters"}
 
 
+def test_continuation_admission_releases_only_previous_job_claim_after_handoff(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """连续区间的物理预持有资源允许同任务后继接管，并收敛前一 Job Claim。"""
+
+    store, service, identities = station_inventory
+    shared_key = f"/devices/{identities['source_device']}"
+    trailing_key = f"/devices/{identities['target_device']}"
+    first_job = "40000000-0000-4000-8000-000000000201"
+    second_job = "40000000-0000-4000-8000-000000000202"
+    task_uuid = "30000000-0000-4000-8000-000000000201"
+
+    first = service.station_resources.acquire_dispatch_permit(
+        DispatchAdmissionRequest(
+            effect_uuid="50000000-0000-4000-8000-000000000201",
+            task_uuid=task_uuid,
+            job_uuid=first_job,
+            attempt=1,
+            parameter_hash="sha256:interval-first",
+            expected_change_set={"kind": "no_inventory_change"},
+            resources=(
+                DispatchResource(
+                    lock_key=shared_key,
+                    scope="device",
+                    material_uuid=identities["source_device"],
+                ),
+                DispatchResource(
+                    lock_key=trailing_key,
+                    scope="device",
+                    material_uuid=identities["target_device"],
+                ),
+            ),
+        )
+    )
+    assert first.acquired and first.permit is not None
+    service.station_resources.transition_dispatch_permit(
+        first.permit.claim_uuid,
+        target_state="reserved",
+    )
+    service.station_resources.transition_dispatch_permit(
+        first.permit.claim_uuid,
+        target_state="running",
+    )
+    service.station_resources.retain_dispatch_permit_resources(
+        first.permit.claim_uuid,
+        keep_lock_keys=(shared_key,),
+    )
+
+    second = service.station_resources.acquire_dispatch_permit(
+        DispatchAdmissionRequest(
+            effect_uuid="50000000-0000-4000-8000-000000000202",
+            task_uuid=task_uuid,
+            job_uuid=second_job,
+            attempt=1,
+            parameter_hash="sha256:interval-second",
+            expected_change_set={"kind": "no_inventory_change"},
+            resources=(
+                DispatchResource(
+                    lock_key=shared_key,
+                    scope="device",
+                    material_uuid=identities["source_device"],
+                ),
+            ),
+            preheld_lock_keys=(shared_key,),
+            preheld_job_uuids=(first_job,),
+        )
+    )
+    assert second.acquired and second.permit is not None
+    assert second.permit.claim_uuid != first.permit.claim_uuid
+    service.station_resources.release_preheld_dispatch_claims(
+        task_uuid=task_uuid,
+        job_uuids=(first_job,),
+        lock_keys=(shared_key,),
+    )
+    assert store.query_one(
+        "SELECT state FROM station_execution_claim WHERE claim_uuid=?",
+        (first.permit.claim_uuid,),
+    ) == {"state": "released"}
+    assert store.query_one(
+        "SELECT state FROM station_execution_claim WHERE claim_uuid=?",
+        (second.permit.claim_uuid,),
+    ) == {"state": "prepared"}
+    assert store.query_all(
+        "SELECT lock_key FROM station_execution_lock_lease "
+        "WHERE claim_uuid=? AND state <> 'released'",
+        (first.permit.claim_uuid,),
+    ) == []
+
+
+def test_preheld_admission_requires_the_declared_previous_job_identity(
+    station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
+) -> None:
+    """同 Task 的其他并行 Job 不能借预持有键绕过活动 Claim。"""
+
+    _store, service, identities = station_inventory
+    shared_key = f"/devices/{identities['source_device']}"
+    first_job = "40000000-0000-4000-8000-000000000211"
+    second_job = "40000000-0000-4000-8000-000000000212"
+    task_uuid = "30000000-0000-4000-8000-000000000211"
+    first = service.station_resources.acquire_dispatch_permit(
+        DispatchAdmissionRequest(
+            effect_uuid="50000000-0000-4000-8000-000000000211",
+            task_uuid=task_uuid,
+            job_uuid=first_job,
+            attempt=1,
+            parameter_hash="sha256:preheld-first",
+            expected_change_set={"kind": "no_inventory_change"},
+            resources=(
+                DispatchResource(
+                    lock_key=shared_key,
+                    scope="device",
+                    material_uuid=identities["source_device"],
+                ),
+            ),
+        )
+    )
+    assert first.acquired and first.permit is not None
+    service.station_resources.transition_dispatch_permit(
+        first.permit.claim_uuid,
+        target_state="reserved",
+    )
+    blocked = service.station_resources.acquire_dispatch_permit(
+        DispatchAdmissionRequest(
+            effect_uuid="50000000-0000-4000-8000-000000000212",
+            task_uuid=task_uuid,
+            job_uuid=second_job,
+            attempt=1,
+            parameter_hash="sha256:preheld-second",
+            expected_change_set={"kind": "no_inventory_change"},
+            resources=(
+                DispatchResource(
+                    lock_key=shared_key,
+                    scope="device",
+                    material_uuid=identities["source_device"],
+                ),
+            ),
+            preheld_lock_keys=(shared_key,),
+            preheld_job_uuids=("40000000-0000-4000-8000-000000000299",),
+        )
+    )
+    assert not blocked.acquired
+    assert blocked.blocking_job_uuid == first_job
+
+
 def test_gate7_claims_fallback_site_in_same_inventory_transaction(
     station_inventory: tuple[InventoryStore, InventoryService, dict[str, str]],
 ) -> None:

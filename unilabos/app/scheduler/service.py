@@ -111,6 +111,11 @@ from unilabos.workflow.execution_resource_policy import (
     ExecutionResourcePolicyError,
     resolve_execution_resource_policy,
 )
+from unilabos.workflow.resource_lock_plan import (
+    ResourcePlan,
+    deserialize_resource_plan,
+    resource_plan_for_node,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +150,25 @@ def _log_background_reconcile_failure(future: Future[Any]) -> None:
 _DEFAULT_MAX_IN_FLIGHT_JOBS = 100
 _DEFAULT_MAX_ACTIVE_TASKS = 500
 _DEFAULT_MAX_TASKS_PER_WORKFLOW = 100
+
+
+def _bound_resource_lock_key(resource: Mapping[str, Any]) -> str:
+    """把 bound 计划资源投影为当前调度器使用的规范互斥键。"""
+
+    canonical_key = str(resource.get("canonical_key") or "").strip()
+    if canonical_key.startswith("/"):
+        return canonical_key
+    kind = str(resource.get("kind") or "").strip().lower()
+    instance_uuid = str(resource.get("instance_uuid") or "").strip()
+    if kind in {"device", "motion", "tool", "robot", "rail"} and instance_uuid:
+        return f"/devices/{instance_uuid}"
+    if kind in {"material", "container", "sample"} and instance_uuid:
+        return material_lock_key(instance_uuid)
+    if kind in {"site", "material_site"} and canonical_key:
+        return canonical_key
+    if canonical_key.startswith(("material/", "/devices/")):
+        return canonical_key
+    return canonical_key
 
 
 class ExecutionPolicyError(ValueError):
@@ -296,6 +320,11 @@ class EdgeScheduler:
         self._device_target_resolver = device_target_resolver
         # job_id -> 该作业（Job）持有的物料与库位锁键；完成或取消时释放。
         self._job_resource_locks: dict[str, set[str]] = {}
+        # （工作流、区间）→ 已完成 Job 之后仍保留的具体锁键；这是内存连续持有
+        # 投影，持久桥在 Lease 元数据中镜像同一所有权。
+        self._interval_resource_holders: dict[tuple[str, str], set[str]] = {}
+        self._interval_resource_holder_jobs: dict[tuple[str, str], str] = {}
+        self._resource_plans: dict[str, ResourcePlan] = {}
         # 时长预估器（declared / historical / auto 三种 mode，内含两种计算模式）
         self._estimator = estimator or DurationEstimator()
         # 泳道图时间线：已完结 job 的起止记录（环形缓冲）
@@ -751,6 +780,8 @@ class EdgeScheduler:
                         suc_type="execution_process_restarted",
                         state="failed",
                     )
+            for workflow_id in affected_workflow_ids:
+                self._clear_interval_holders(workflow_id)
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
 
@@ -1234,6 +1265,10 @@ class EdgeScheduler:
         }
         event = self._notify_local_control(event)
         run.commit_local_control(event)
+        self._release_interval_holders_for_skipped_nodes(
+            run.spec.workflow_id,
+            event.get("skipped_node_ids", ()),
+        )
         return event
 
     def _advance_step_repeat_transitions_locked(self, run: WorkflowRun) -> None:
@@ -1301,13 +1336,16 @@ class EdgeScheduler:
         completed_results: dict[str, Any],
         restored_jobs: Sequence[DispatchedJob] = (),
         skipped_nodes: Mapping[str, str] | None = None,
+        restored_interval_handoffs: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         """从持久成功事实恢复一个未终态工作流（Workflow）。
 
         参数：``spec`` 是原任务冻结规格；``completed_results`` 按节点
         UUID 提供已持久成功的返回值。返回：恢复后状态与本轮新派
         发摘要。异常：未知完成节点、重复运行或派发失败原样传播；
-        已完成节点只恢复 DAG 状态，绝不重放设备动作。
+        已完成节点只恢复 DAG 状态，绝不重放设备动作；
+        ``restored_interval_handoffs`` 是成功 Job 持久化的连续区间元数据，
+        仅用于重建内存所有权，不会重复发送设备命令。
         """
 
         skipped_nodes = dict(skipped_nodes or {})
@@ -1350,6 +1388,11 @@ class EdgeScheduler:
                         run.mark_finished(node.id, completed_results[node.id])
                     elif node.id in skipped_nodes:
                         run.mark_skipped(node.id, reason=skipped_nodes[node.id])
+                self._restore_interval_handoffs(
+                    spec,
+                    completed_results,
+                    restored_interval_handoffs,
+                )
                 nodes_by_id = {node.id: node for node in spec.nodes}
                 for restored_job in restored_jobs:
                     node = nodes_by_id.get(restored_job.node_id)
@@ -1396,6 +1439,62 @@ class EdgeScheduler:
             workflow_trace.end()
             self._workflow_spans.pop(spec.workflow_id, None)
             raise
+
+    def _restore_interval_handoffs(
+        self,
+        spec: WorkflowSpec,
+        completed_results: Mapping[str, Any],
+        handoffs: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """从已持久化成功 Job 的区间元数据恢复内存连续所有权。"""
+
+        plan = self._resource_plan_for_spec(spec)
+        if plan is None:
+            return
+        intervals = {str(item.interval_id): item for item in plan.intervals}
+        completed = {str(node_id) for node_id in completed_results}
+        resources = {item.resource_id: item for item in plan.resources}
+        for raw in handoffs:
+            if not isinstance(raw, Mapping):
+                continue
+            node_id = str(raw.get("node_id") or "")
+            job_id = str(raw.get("job_id") or "")
+            if not node_id or not job_id or node_id not in completed:
+                continue
+            interval_ids = {
+                str(value).strip()
+                for value in (raw.get("resource_interval_ids") or ())
+                if str(value).strip()
+            }
+            raw_by_lock = raw.get("resource_interval_ids_by_lock")
+            by_lock = (
+                raw_by_lock if isinstance(raw_by_lock, Mapping) else {}
+            )
+            for interval_id in interval_ids:
+                interval = intervals.get(interval_id)
+                if interval is None or interval.release_node_uuid == node_id:
+                    continue
+                held: set[str] = set()
+                for raw_key, raw_ids in by_lock.items():
+                    if not isinstance(raw_ids, Sequence) or isinstance(raw_ids, (str, bytes)):
+                        continue
+                    if interval_id in {str(value) for value in raw_ids}:
+                        held.add(str(raw_key))
+                if not held and interval.resource_id in resources:
+                    resource = resources[interval.resource_id]
+                    held.add(
+                        _bound_resource_lock_key(
+                            {
+                                "canonical_key": resource.canonical_key,
+                                "kind": resource.kind,
+                                "instance_uuid": resource.instance_uuid,
+                            }
+                        )
+                    )
+                if held:
+                    key = (spec.workflow_id, interval_id)
+                    self._interval_resource_holders[key] = held
+                    self._interval_resource_holder_jobs[key] = job_id
 
     def _try_reserve(self, run: WorkflowRun) -> bool:
         """尝试整 DAG 预留；不足返回 False（幂等，可反复重试）。"""
@@ -1572,6 +1671,7 @@ class EdgeScheduler:
                 self._notify_job_outcome(job_id, committed_outcome)
             else:
                 self._notify_job_finished(job_id, success, ret_value, suc_type)
+            self._record_interval_handoff(job, success=success)
             self._inflight.pop(job_id, None)
             self._job_resource_locks.pop(job_id, None)
 
@@ -1599,6 +1699,13 @@ class EdgeScheduler:
                     job.node_id,
                     job.workflow_id,
                 )
+            if run.state in {
+                WorkflowState.SUCCESS,
+                WorkflowState.FAILED,
+                WorkflowState.CANCELED,
+                WorkflowState.WAITING_MATERIAL,
+            }:
+                self._clear_interval_holders(job.workflow_id)
 
             # normal→step 的切换请求在最后一个在途 Job 结算前始终保持排空态；
             # 必须先从 ``_inflight`` 删除当前 Job、再完成切换，保证下一轮重排
@@ -1936,8 +2043,16 @@ class EdgeScheduler:
         busy = self._busy_keys()
         held_resource_locks = self._held_resource_locks()
         ordered = self._orderer.order(ready, OrderingContext(set(busy)))
+        ordered.sort(
+            key=lambda item: (
+                0
+                if self._continuation_resource_keys(item.workflow_id, item.node)
+                else 1
+            )
+        )
 
         dispatched: list[dict[str, Any]] = list(continued)
+        claimed_continuation_keys: set[str] = set()
         for task in ordered:
             # 人工确认必须先占完整设备/物料/Site 资源，即使底层动作声明
             # always_free 也不能绕过设备互斥；这是人员到场确认的安全边界。
@@ -1946,9 +2061,22 @@ class EdgeScheduler:
             # ``job_id`` 优先复用标准工作流节点作业（WorkflowNodeJob）身份；旧整图
             # 没有提供时才维持历史随机身份行为。等待与派发必须使用同一身份。
             job_id = task.node.job_id or uuid_mod.uuid4().hex
+            run = self._workflows[task.workflow_id]
+            continuation_keys = self._continuation_resource_keys(
+                task.workflow_id,
+                task.node,
+            )
+            if continuation_keys & claimed_continuation_keys:
+                # 同一轮中并行分支不能同时绕过同一连续区间的互斥；首个已
+                # 接管的 Job 保持设备命令逐条串行，后续分支进入等待。
+                continuation_keys = set()
 
             try:
-                selected_device = self._resolve_device_target(task.node, busy)
+                selected_device = self._resolve_device_target(
+                    task.node,
+                    busy - continuation_keys,
+                    continuation_keys=continuation_keys,
+                )
             except DeviceTargetUnavailable as error:
                 self._notify_job_execution_wait(
                     {
@@ -1976,7 +2104,6 @@ class EdgeScheduler:
                 else f"/devices/{selected_device_id}"
             )
 
-            run = self._workflows[task.workflow_id]
             # ``transfer_dispatch_condition`` 由库存解析快照产生，但只在门禁 7 的
             # 同一库存事务内复验后才具有派发效力。
             transfer_dispatch_condition: dict[str, str] | None = None
@@ -2342,12 +2469,35 @@ class EdgeScheduler:
                 )
                 run.mark_failed(task.node.id)
                 continue
+            (
+                _plan,
+                plan_resource_keys,
+                inherited_resource_keys,
+                interval_ids_by_lock,
+            ) = self._interval_projection(
+                run,
+                task.node,
+                selected_device_keys=(
+                    f"/devices/{selected_device_material_uuid}"
+                    if selected_device_material_uuid
+                    else "",
+                    f"/devices/{selected_device_id}",
+                ),
+            )
+            continuation_job_uuids = self._continuation_resource_job_uuids(
+                task.workflow_id,
+                task.node,
+            )
+            inherited_resource_keys &= continuation_keys
+            lock_keys.update(plan_resource_keys)
+            lock_keys.update(inherited_resource_keys)
             conflicting_lock_keys = conflicting_resource_lock_keys(
-                lock_keys,
-                held_resource_locks,
+                lock_keys - inherited_resource_keys,
+                held_resource_locks - inherited_resource_keys,
             )
             device_conflict = not bypass_device_lock and (
-                action_key in busy or device_key in busy
+                action_key in (busy - inherited_resource_keys)
+                or device_key in (busy - inherited_resource_keys)
             )
             if defer_site_availability:
                 # 命名组和精确覆盖的物理可用性只由 Gate 7 的单一库存事务裁决。
@@ -2395,6 +2545,15 @@ class EdgeScheduler:
                         "node_id": task.node.id,
                         "resolved_args": resolved_args,
                         "execution_locks": execution_locks,
+                        "resource_plan_id": task.node.resource_plan_id,
+                        "resource_interval_ids": list(task.node.resource_interval_ids),
+                        "resource_acquire_set_id": task.node.resource_acquire_set_id,
+                        "resource_preheld_lock_keys": sorted(inherited_resource_keys),
+                        "resource_preheld_job_uuids": sorted(continuation_job_uuids),
+                        "resource_interval_ids_by_lock": {
+                            key: sorted(value)
+                            for key, value in interval_ids_by_lock.items()
+                        },
                         "device_tenancy": resource_policy.device_tenancy,
                         "blocking_job_id": (
                             blocking_job.job_id if blocking_job is not None else None
@@ -2478,6 +2637,15 @@ class EdgeScheduler:
                             "material_uuid": selected_device_material_uuid,
                         },
                         "execution_locks": execution_locks,
+                        "resource_plan_id": task.node.resource_plan_id,
+                        "resource_interval_ids": list(task.node.resource_interval_ids),
+                        "resource_acquire_set_id": task.node.resource_acquire_set_id,
+                        "resource_preheld_lock_keys": sorted(inherited_resource_keys),
+                        "resource_preheld_job_uuids": sorted(continuation_job_uuids),
+                        "resource_interval_ids_by_lock": {
+                            key: sorted(value)
+                            for key, value in interval_ids_by_lock.items()
+                        },
                         "device_tenancy": resource_policy.device_tenancy,
                         "transfer_dispatch_condition": transfer_dispatch_condition,
                         "site_selection": site_selection_audit,
@@ -2607,6 +2775,7 @@ class EdgeScheduler:
                     if lock_keys:
                         self._job_resource_locks[job_id] = lock_keys
                         held_resource_locks |= lock_keys
+                    claimed_continuation_keys |= inherited_resource_keys
                     if not manual_confirm:
                         self._dispatcher.dispatch(payload)
                         self._notify_job_dispatch_accepted(job_id)
@@ -2769,6 +2938,8 @@ class EdgeScheduler:
         self,
         node: Any,
         busy_keys: set[str],
+        *,
+        continuation_keys: set[str] | None = None,
     ) -> ResolvedDeviceTarget:
         """返回固定设备，或按冻结类型从当前注册选择首个可用实例。"""
 
@@ -2783,7 +2954,8 @@ class EdgeScheduler:
                         "material_uuid": material_uuid,
                     },
                     str(getattr(node, "action_name", "") or ""),
-                    set(busy_keys) | self._held_resource_locks(),
+                    set(busy_keys)
+                    | (self._held_resource_locks() - set(continuation_keys or ())),
                 )
             if self.physical_dispatch_enabled:
                 raise DeviceTargetUnavailable(
@@ -2808,7 +2980,8 @@ class EdgeScheduler:
         return self._device_target_resolver(
             selector,
             str(getattr(node, "action_name", "") or ""),
-            set(busy_keys) | self._held_resource_locks(),
+            set(busy_keys)
+            | (self._held_resource_locks() - set(continuation_keys or ())),
         )
 
     def preflight_device_target(
@@ -2849,7 +3022,198 @@ class EdgeScheduler:
         held: set[str] = set()
         for keys in self._job_resource_locks.values():
             held |= keys
+        for keys in self._interval_resource_holders.values():
+            held |= keys
         return held
+
+    def _resource_plan_for_spec(self, spec: WorkflowSpec) -> ResourcePlan | None:
+        """恢复并缓存当前 WorkflowSpec 的 bound 资源计划。"""
+
+        raw_plan = spec.resource_plan
+        if not isinstance(raw_plan, Mapping):
+            return None
+        cached = self._resource_plans.get(spec.workflow_id)
+        if cached is not None and cached.plan_id == str(raw_plan.get("plan_id") or ""):
+            return cached
+        plan = deserialize_resource_plan(raw_plan)
+        self._resource_plans[spec.workflow_id] = plan
+        return plan
+
+    def _interval_projection(
+        self,
+        run: WorkflowRun,
+        node: WorkflowNode,
+        *,
+        selected_device_keys: Sequence[str] = (),
+    ) -> tuple[ResourcePlan | None, set[str], set[str], dict[str, set[str]]]:
+        """返回节点计划资源、继承资源及锁键到区间身份的映射。"""
+
+        plan = self._resource_plan_for_spec(run.spec)
+        if plan is None or not node.resource_interval_ids:
+            return None, set(), set(), {}
+        node_projection = resource_plan_for_node(plan, node.id)
+        interval_ids = set(node.resource_interval_ids)
+        if node.resource_plan_id and node.resource_plan_id != plan.plan_id:
+            raise ExecutionPolicyError(
+                "节点引用的资源计划身份与工作流冻结计划不一致"
+            )
+        available_interval_ids = {
+            str(item.get("interval_id") or "")
+            for item in node_projection["intervals"]
+        }
+        if not interval_ids <= available_interval_ids:
+            raise ExecutionPolicyError(
+                "节点引用了不属于自身资源计划范围的连续区间"
+            )
+        if node.resource_acquire_set_id and not any(
+            str(item.get("acquire_set_id") or "") == node.resource_acquire_set_id
+            for item in node_projection["acquire_sets"]
+        ):
+            raise ExecutionPolicyError(
+                "节点引用了不属于自身的资源新增集合"
+            )
+        intervals = [
+            interval
+            for interval in node_projection["intervals"]
+            if str(interval.get("interval_id") or "") in interval_ids
+        ]
+        resources = {item.resource_id: item for item in plan.resources}
+        interval_ids_by_lock: dict[str, set[str]] = {}
+        for interval in intervals:
+            resource = resources.get(str(interval.get("resource_id") or ""))
+            if resource is None:
+                raise ExecutionPolicyError(
+                    "资源计划区间引用了不存在的资源："
+                    f"{interval.get('resource_id')}"
+                )
+            lock_key = _bound_resource_lock_key(
+                {
+                    "canonical_key": resource.canonical_key,
+                    "kind": resource.kind,
+                    "instance_uuid": resource.instance_uuid,
+                }
+            )
+            if lock_key:
+                interval_ids_by_lock.setdefault(lock_key, set()).add(
+                    str(interval["interval_id"])
+                )
+            if (
+                (resource.kind == "device" or lock_key.startswith("/devices/"))
+                and selected_device_keys
+            ):
+                if lock_key not in {str(key) for key in selected_device_keys if key}:
+                    raise ExecutionPolicyError(
+                        "动态设备与冻结资源计划绑定实例不一致："
+                        f"{lock_key}"
+                    )
+        plan_keys = set(interval_ids_by_lock)
+        inherited: set[str] = set()
+        for interval_id in interval_ids:
+            inherited |= self._interval_resource_holders.get(
+                (run.spec.workflow_id, interval_id),
+                set(),
+            )
+        return plan, plan_keys, inherited, interval_ids_by_lock
+
+    def _continuation_resource_keys(
+        self,
+        workflow_id: str,
+        node: WorkflowNode,
+    ) -> set[str]:
+        return set(
+            key
+            for interval_id in node.resource_interval_ids
+            for key in self._interval_resource_holders.get(
+                (workflow_id, interval_id),
+                set(),
+            )
+        )
+
+    def _continuation_resource_job_uuids(
+        self,
+        workflow_id: str,
+        node: WorkflowNode,
+    ) -> set[str]:
+        """返回当前区间预持有资源对应的上一 Job 身份。"""
+
+        return {
+            job_uuid
+            for interval_id in node.resource_interval_ids
+            if (job_uuid := self._interval_resource_holder_jobs.get(
+                (workflow_id, interval_id)
+            ))
+        }
+
+    def _record_interval_handoff(
+        self,
+        job: DispatchedJob,
+        *,
+        success: bool,
+    ) -> None:
+        """在明确成功后保留未到释放节点的区间资源。"""
+
+        run = self._workflows.get(job.workflow_id)
+        if run is None or not job.resource_interval_ids:
+            return
+        plan = self._resource_plan_for_spec(run.spec)
+        if plan is None:
+            return
+        intervals = {item.interval_id: item for item in plan.intervals}
+        for interval_id in job.resource_interval_ids:
+            interval = intervals.get(interval_id)
+            key = (job.workflow_id, interval_id)
+            if not success or interval is None or interval.release_node_uuid == job.node_id:
+                self._interval_resource_holders.pop(key, None)
+                self._interval_resource_holder_jobs.pop(key, None)
+                continue
+            resources = {item.resource_id: item for item in plan.resources}
+            held = {
+                _bound_resource_lock_key(
+                    {
+                        "canonical_key": resources[interval.resource_id].canonical_key,
+                        "kind": resources[interval.resource_id].kind,
+                        "instance_uuid": resources[interval.resource_id].instance_uuid,
+                    }
+                )
+            }
+            held &= set(job.resource_lock_keys)
+            if held:
+                self._interval_resource_holders[key] = held
+                self._interval_resource_holder_jobs[key] = job.job_id
+
+    def _clear_interval_holders(self, workflow_id: str) -> None:
+        for key in tuple(self._interval_resource_holders):
+            if key[0] == workflow_id:
+                self._interval_resource_holders.pop(key, None)
+                self._interval_resource_holder_jobs.pop(key, None)
+
+    def _release_interval_holders_for_skipped_nodes(
+        self,
+        workflow_id: str,
+        skipped_node_ids: Sequence[str],
+    ) -> None:
+        """条件分支排除释放边界时，立即终止对应连续持有。"""
+
+        skipped = {str(value) for value in skipped_node_ids if str(value)}
+        if not skipped:
+            return
+        run = self._workflows.get(workflow_id)
+        plan = self._resource_plan_for_spec(run.spec) if run is not None else None
+        if plan is None:
+            return
+        release_nodes = {
+            str(interval.release_node_uuid)
+            for interval in plan.intervals
+            if str(interval.release_node_uuid) in skipped
+        }
+        for key in tuple(self._interval_resource_holders):
+            if key[0] == workflow_id and key[1] in {
+                str(interval.interval_id)
+                for interval in plan.intervals
+                if str(interval.release_node_uuid) in release_nodes
+            }:
+                self._interval_resource_holders.pop(key, None)
+                self._interval_resource_holder_jobs.pop(key, None)
 
     @staticmethod
     def _execution_lock_descriptors(
@@ -3222,6 +3586,8 @@ class EdgeScheduler:
         for job in self._inflight.values():
             busy.add(job.device_action_key)
             busy.add(f"/devices/{job.device_material_uuid or job.device_id}")
+        for keys in self._interval_resource_holders.values():
+            busy |= keys
         return busy
 
     # ── 泳道图时间线 ─────────────────────────────────────────
@@ -3569,6 +3935,7 @@ class EdgeScheduler:
                         state="canceled",
                     )
                     self._notify_job_settled(job_id, False, None, "canceled")
+                    self._clear_interval_holders(workflow_id)
                     continue
                 try:
                     state = (
@@ -3619,6 +3986,7 @@ class EdgeScheduler:
                             state="canceled",
                         )
                     self._notify_job_settled(job_id, False, None, "canceled")
+                    self._clear_interval_holders(workflow_id)
                     continue
                 self._notify_job_cancel_uncertain(
                     job_id,
