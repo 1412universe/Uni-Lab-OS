@@ -918,7 +918,13 @@ def _structural_mappings(
                 "composite_catalog_mismatch",
                 "/catalog/structural",
             ) from None
-        if node.get("type") == "group" or action.template.get("node_type") == "group":
+        # 展示分组和结构化控制区域由调度器解释，不是拥有 ready Handle 的叶动作。
+        # 组合边界只需要投影真正的可执行节点入口/出口；否则 repeat_until/
+        # condition 会被误当成设备动作，在下一步查找不存在的 ready Handle。
+        node_kind = str(
+            action.template.get("node_type") or node.get("type") or ""
+        ).strip().lower()
+        if node_kind in {"group", "condition", "repeat_until"}:
             continue
         node_ids.add(node_uuid)
     incoming = {str(edge["target_node_uuid"]) for edge in edges}

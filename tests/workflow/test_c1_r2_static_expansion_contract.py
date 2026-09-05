@@ -300,6 +300,27 @@ def _group_template() -> dict[str, Any]:
     }
 
 
+def _repeat_until_template() -> dict[str, Any]:
+    """构造没有执行连接点的 RepeatUntil 控制模板。"""
+
+    return {
+        "uuid": "a3000000-0000-4000-8000-000000000031",
+        "resource_template_uuid": ACTION_RESOURCE_TEMPLATE_UUID,
+        "name": "repeat_until",
+        "display_name": "RepeatUntil",
+        "description": "control fixture",
+        "class": "unilabos.workflow.authoring:repeat_until",
+        "goal": {},
+        "goal_default": {},
+        "feedback": {},
+        "result": {},
+        "schema": None,
+        "type": "repeat_until",
+        "node_type": "repeat_until",
+        "meta_data": {"unilab": {"executor_kind": "repeat_until"}},
+    }
+
+
 def _world_components() -> tuple[
     CompositeAuthoring,
     MemorySnapshotProvider,
@@ -656,6 +677,72 @@ def test_presentation_group_does_not_require_structural_ready_handles() -> None:
     assert next(
         node for node in expansion.nodes if node["uuid"] == EXPANDED_CHILD_NODE_UUID
     )["parent_uuid"] == expanded_group_uuid
+    assert expansion.structural_mappings == {
+        "entry_targets": (
+            {
+                "workflow_node_uuid": EXPANDED_CHILD_NODE_UUID,
+                "target_handle_uuid": ACTION_READY_TARGET_UUID,
+            },
+        ),
+        "completion_sources": (
+            {
+                "workflow_node_uuid": EXPANDED_CHILD_NODE_UUID,
+                "source_handle_uuid": ACTION_READY_SOURCE_UUID,
+            },
+        ),
+    }
+
+
+def test_repeat_until_control_does_not_require_structural_ready_handles() -> None:
+    """嵌套子工作流中的 RepeatUntil 控制节点不得被当作叶动作查 ready。"""
+
+    _authoring, provider, catalog, source_catalog = _world_components()
+    snapshot = provider.snapshots[CHILD_WORKFLOW_UUID]
+    repeat_uuid = "22222222-2222-4222-8222-222222222223"
+    repeat_template = _repeat_until_template()
+    snapshot["nodes"][0]["parent_uuid"] = repeat_uuid
+    snapshot["nodes"].append(
+        {
+            "uuid": repeat_uuid,
+            "workflow_uuid": CHILD_WORKFLOW_UUID,
+            "workflow_node_template_uuid": repeat_template["uuid"],
+            "material_uuid": None,
+            "parent_uuid": None,
+            "name": "repeat_until",
+            "status": "idle",
+            "type": "repeat_until",
+            "pose": {},
+            "param": {"node_uuids": [CHILD_NODE_UUID]},
+            "execution_policy": {},
+            "disabled": False,
+            "minimized": False,
+            "meta_data": {"unilab": {"control_region_kind": "repeat_until"}},
+            "create_time": "2026-08-02T00:00:00Z",
+            "update_time": "2026-08-02T00:00:00Z",
+        }
+    )
+    snapshot["node_templates"].append(repeat_template)
+    expanded_catalog = AuthoringCatalogSnapshot.from_entities(
+        [*(action.detached_template() for action in catalog.actions), repeat_template],
+        [
+            handle
+            for action in catalog.actions
+            for handle in action.detached_handles()
+        ],
+    )
+    expansion = CompositeAuthoring(
+        snapshot_provider=provider,
+        catalog=expanded_catalog,
+        resolver=source_catalog,
+    ).compile_invocation(
+        parent_workflow_uuid=PARENT_WORKFLOW_UUID,
+        invocation_uuid=INVOCATION_UUID,
+        module="c1_published_lab.workflows.child",
+        symbol="prepare_sample",
+        keyword_arguments={"value": 7.5},
+    )
+
+    assert expansion.diagnostics == ()
     assert expansion.structural_mappings == {
         "entry_targets": (
             {
