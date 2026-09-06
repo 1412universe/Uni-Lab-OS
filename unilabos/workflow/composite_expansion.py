@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -299,6 +300,7 @@ class CompositeAuthoring:
             workflow_io.input_bindings,
             boundary_handles,
             node_uuid_map,
+            nodes=nodes,
         )
         _materialize_boundary_arguments(
             nodes,
@@ -836,14 +838,19 @@ def _target_mappings(
     input_bindings: Mapping[str, Mapping[str, Mapping[str, str]]],
     boundary_handles: Sequence[Mapping[str, Any]],
     node_uuid_map: Mapping[str, str],
+    *,
+    nodes: Sequence[Mapping[str, Any]],
 ) -> dict[str, list[dict[str, str]]]:
     """把工作流输入绑定投影到真实展开节点目标连接点。
 
-    参数：输入合同、节点输入绑定、边界连接点与节点身份映射来自同一快照。返回：
+    参数：输入合同、节点输入绑定、边界连接点与节点身份映射来自同一快照；
+    ``nodes`` 用于识别仅被 condition/repeat_until 控制节点消费的输入。返回：
     按边界连接点索引的内部目标列表。异常：覆盖、节点或连接点身份无效时抛出
-    ``_CompositeFailure``。
+    ``_CompositeFailure``。控制节点没有动作目标连接点时允许空目标列表，后续由
+    ``_materialize_control_arguments`` 把调用实参固化到控制表达式中。
     """
 
+    control_parameters = _control_workflow_input_parameters(nodes)
     result: dict[str, list[dict[str, str]]] = {}
     for descriptor in input_contract["parameters"]:
         name = str(descriptor["name"])
@@ -858,7 +865,7 @@ def _target_mappings(
                             "target_handle_uuid": handle_uuid,
                         }
                     )
-        if not targets:
+        if not targets and name not in control_parameters:
             raise _CompositeFailure(
                 "composite_boundary_mapping_invalid",
                 f"/target_mappings/{name}",
@@ -1087,6 +1094,10 @@ def _materialize_boundary_arguments(
     模板不属于同一目录代际时抛出稳定组合失败。
     """
 
+    _materialize_control_arguments(
+        nodes,
+        keyword_arguments=keyword_arguments,
+    )
     node_by_uuid = {str(node["uuid"]): node for node in nodes}
     boundary_by_name = {
         str(handle["handle_key"]): str(handle["uuid"])
@@ -1158,6 +1169,163 @@ def _materialize_boundary_arguments(
                     f"/target_mappings/{name}",
                 )
             param[str(handles[0]["data_key"])] = _plain(value)
+
+
+def _control_workflow_input_parameters(
+    nodes: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    """返回仅由结构化控制区域引用的工作流输入名称。"""
+
+    result: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            if (
+                value.get("kind") == "workflow_input"
+                and isinstance(value.get("parameter"), str)
+            ):
+                result.add(str(value["parameter"]))
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                visit(child)
+
+    for node in nodes:
+        if str(node.get("type") or node.get("node_type") or "") not in {
+            "condition",
+            "repeat_until",
+        }:
+            continue
+        visit(node.get("param"))
+    return result
+
+
+def _replace_control_expression_variable(
+    value: Any,
+    replacements: Mapping[str, Any],
+) -> Any:
+    """把控制表达式中的变量替换为调用方提供的字面量。"""
+
+    if isinstance(value, Mapping):
+        variable = value.get("var")
+        if (
+            set(value) == {"var"}
+            and isinstance(variable, str)
+            and variable in replacements
+        ):
+            return {"lit": _plain(replacements[variable])}
+        return {
+            str(key): _replace_control_expression_variable(child, replacements)
+            for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _replace_control_expression_variable(child, replacements)
+            for child in value
+        ]
+    return deepcopy(value)
+
+
+def _materialize_control_binding_value(
+    value: Any,
+    keyword_arguments: Mapping[str, object],
+) -> Any:
+    """递归固化控制区域 carry 中的工作流输入来源。"""
+
+    if isinstance(value, Mapping):
+        if (
+            value.get("kind") == "workflow_input"
+            and isinstance(value.get("parameter"), str)
+            and value["parameter"] in keyword_arguments
+        ):
+            argument = keyword_arguments[str(value["parameter"])]
+            if isinstance(argument, Mapping):
+                kind = argument.get("kind")
+                if kind == "workflow_input" and isinstance(
+                    argument.get("parameter"), str
+                ):
+                    return {
+                        "kind": "workflow_input",
+                        "parameter": str(argument["parameter"]),
+                    }
+                if kind == "node_output":
+                    raise _CompositeFailure(
+                        "composite_boundary_mapping_invalid",
+                        "/keyword_arguments",
+                    )
+            return {"kind": "literal", "value": _plain(argument)}
+        return {
+            str(key): _materialize_control_binding_value(child, keyword_arguments)
+            for key, child in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _materialize_control_binding_value(child, keyword_arguments)
+            for child in value
+        ]
+    return deepcopy(value)
+
+
+def _materialize_control_arguments(
+    nodes: Sequence[dict[str, Any]],
+    *,
+    keyword_arguments: Mapping[str, object],
+) -> None:
+    """把组合实参固化到 condition/repeat_until 控制区域。"""
+
+    for node in nodes:
+        if str(node.get("type") or node.get("node_type") or "") not in {
+            "condition",
+            "repeat_until",
+        }:
+            continue
+        params = node.get("param")
+        if not isinstance(params, dict):
+            continue
+        bindings = params.get("bindings")
+        literal_replacements: dict[str, Any] = {}
+        if isinstance(bindings, dict):
+            for variable, binding in list(bindings.items()):
+                if not isinstance(binding, Mapping):
+                    continue
+                if (
+                    binding.get("kind") != "workflow_input"
+                    or not isinstance(binding.get("parameter"), str)
+                    or binding["parameter"] not in keyword_arguments
+                ):
+                    continue
+                argument = keyword_arguments[str(binding["parameter"])]
+                if isinstance(argument, Mapping):
+                    kind = argument.get("kind")
+                    if kind == "workflow_input" and isinstance(
+                        argument.get("parameter"), str
+                    ):
+                        bindings[str(variable)] = {
+                            "kind": "workflow_input",
+                            "parameter": str(argument["parameter"]),
+                        }
+                        continue
+                    if kind == "node_output":
+                        raise _CompositeFailure(
+                            "composite_boundary_mapping_invalid",
+                            "/keyword_arguments",
+                        )
+                literal_replacements[str(variable)] = _plain(argument)
+                bindings.pop(variable, None)
+
+        for key in ("branches", "until"):
+            if key in params and literal_replacements:
+                params[key] = _replace_control_expression_variable(
+                    params[key],
+                    literal_replacements,
+                )
+        for key in ("initial_carry", "next_carry"):
+            if key in params:
+                params[key] = _materialize_control_binding_value(
+                    params[key],
+                    keyword_arguments,
+                )
 
 
 def _referenced_templates(
