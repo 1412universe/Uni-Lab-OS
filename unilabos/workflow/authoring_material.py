@@ -86,6 +86,7 @@ class MaterialSourceDeclaration:
     flow_role: str
     custody_policy: str
     source_node: ast.Assign
+    site_parameter: str | None = None
     arguments: tuple[tuple[str, Any], ...] = ()
 
 
@@ -103,6 +104,7 @@ def parse_material_source_declaration(
     imports: Mapping[str, str],
     anchors: Mapping[int, str],
     node_metadata: Mapping[int, tuple[str, str]],
+    input_names: set[str] | None = None,
 ) -> MaterialSourceDeclaration | None:
     """识别并静态解析一条物料来源（MaterialSource）声明。
 
@@ -150,7 +152,15 @@ def parse_material_source_declaration(
         keywords["material_uuid"],
         label="固定物料 UUID",
     )
-    site = _optional_uuid(keywords["site"], label="库位（Site）UUID")
+    site_expression = keywords["site"]
+    site_parameter = None
+    if isinstance(site_expression, ast.Name) and site_expression.id in (input_names or set()):
+        site_parameter = site_expression.id
+        site = None
+    else:
+        site = _optional_uuid(site_expression, label="库位（Site）UUID")
+    if site_parameter and (mode != "existing" or material_uuid is not None):
+        _fail("启动库位参数只适用于未固定物料 UUID 的 existing 来源", call)
     slot_range = _optional_uuid_list(
         keywords["slot_range"],
         label="库位（Slot）范围",
@@ -186,6 +196,7 @@ def parse_material_source_declaration(
         flow_role=flow_role,
         custody_policy=custody_policy,
         source_node=statement,
+        site_parameter=site_parameter,
     )
 
 
@@ -290,6 +301,10 @@ def build_material_source_node(
             }
         },
     }
+    if declaration.site_parameter:
+        node["meta_data"]["unilab"]["material_source_site_binding"] = {
+            "parameter": declaration.site_parameter,
+        }
     return node, framework
 
 
@@ -350,12 +365,20 @@ def render_material_source_call(
         and mount_binding.get("resource_id")
         else selector["mount"]["uuid"]
     )
+    site_binding = unilab.get("material_source_site_binding")
+    site_expression = repr(selector["site"])
+    if site_binding is not None:
+        if not isinstance(site_binding, Mapping) or set(site_binding) != {"parameter"}:
+            raise MaterialAuthoringError("invalid_material_source", "启动库位绑定格式无效")
+        site_expression = site_binding["parameter"]
+        if not isinstance(site_expression, str) or not site_expression.isidentifier():
+            raise MaterialAuthoringError("invalid_material_source", "启动库位参数名称无效")
     arguments = [
         f"resource_template={symbol}",
         f"mode={selector['mode']!r}",
         f"mount=resource_ref({json.dumps(mount_resource_id, ensure_ascii=False)})",
         f"material_uuid={selector['material_uuid']!r}",
-        f"site={selector['site']!r}",
+        f"site={site_expression}",
         f"slot_range={selector['slot_range']!r}",
         f"flow_role=MaterialFlowRole.{role_member}",
         f"custody_policy=MaterialCustodyPolicy.{policy_member}",

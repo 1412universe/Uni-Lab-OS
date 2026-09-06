@@ -1060,7 +1060,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         ):
             raise WorkflowError("not_found")
 
-    @router.put("/startup-mode")
+    @router.put("/startup-mode", summary="切换启动模式")
     def switch_startup_mode(body: StartupModeSwitchRequest) -> JSONResponse:
         """在没有活动或未清理 Task 时切换当前 Runtime 会话模式。
 

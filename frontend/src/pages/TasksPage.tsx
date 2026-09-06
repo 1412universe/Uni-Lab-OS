@@ -31,6 +31,7 @@ import {
   decideManualConfirmation,
   forceReleaseWorkflowTaskExecutionLock,
   loadFailedMaterialTransferSettlementContext,
+  loadWorkflowGraph,
   loadWorkflowTaskDetail,
   loadWorkflowTaskExecutionLocks,
   loadWorkflowTaskStepState,
@@ -46,6 +47,7 @@ import type {
   WorkflowTask,
   WorkflowTaskExecutionLock,
 } from '../types'
+import { sourceSiteOptions } from '../lib/sourceSiteOptions'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
@@ -847,6 +849,16 @@ function CreateTaskDialog({
   const workflow = workflows.find((item) => item.uuid === workflowUuid) || workflows[0]
   const [description, setDescription] = useState('从实验运营控制台创建')
   const [input, setInput] = useState<Record<string, string>>({})
+  const needsSiteGraph = Boolean(workflow?.inputContract.some((field) => Array.isArray(field.schema.enum)))
+  const sourceGraph = useQuery({
+    queryKey: ['task-source-site-graph', workflow?.uuid, workflow?.revision],
+    queryFn: ({ signal }) => loadWorkflowGraph(workflow!.uuid, signal),
+    enabled: connected && needsSiteGraph,
+  })
+  const siteOptions = sourceSiteOptions(sourceGraph.data, workflow?.inputContract || [], materials)
+  const selectedMaterials = [...siteOptions].flatMap(([name, options]) => options.filter((option) => option.value === input[name]).map((option) => option.materialUuid))
+  const duplicateMaterial = new Set(selectedMaterials).size !== selectedMaterials.length
+  const siteInputBlocked = (needsSiteGraph && !sourceGraph.data) || duplicateMaterial || [...siteOptions].some(([name, options]) => !options.some((option) => option.value === input[name]))
 
   useEffect(() => {
     if (!workflow) return
@@ -890,6 +902,7 @@ function CreateTaskDialog({
     mutationFn: () => {
       if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       if (!workflow) throw new Error('请选择可运行的工作流')
+      if (siteInputBlocked) throw new Error('请为每个来源选择有匹配物料的不同库位')
       return createWorkflowTask({
         workflowUuid: workflow.uuid,
         description,
@@ -925,8 +938,18 @@ function CreateTaskDialog({
                 : []
               return (
               <label className={`form-field ${resourceSlot ? 'resource-slot-field' : ''}`} key={field.name}>
-                <span>{field.name}<em>{field.required ? `必填 · ${field.type}` : field.type}</em></span>
-                {resourceSlot ? (
+                <span>{field.title || field.name}<em>{field.required ? `必填 · ${field.type}` : field.type}</em></span>
+                {siteOptions.has(field.name) ? (
+                  <select required={field.required} value={input[field.name] ?? ''} onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.value }))}>
+                    <option value="">{siteOptions.get(field.name)?.length ? '请选择有匹配物料的库位' : '没有存放匹配物料的可选库位'}</option>
+                    {siteOptions.get(field.name)?.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                ) : Array.isArray(schema.enum) ? (
+                  <select required={field.required} disabled={needsSiteGraph && !sourceGraph.data} value={input[field.name] ?? ''} onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.value }))}>
+                    <option value="">请选择</option>
+                    {schema.enum.map((value: unknown) => <option key={String(value)} value={String(value)}>{String(value)}</option>)}
+                  </select>
+                ) : resourceSlot ? (
                   <select required={field.required} value={input[field.name] ?? ''} onChange={(event) => setInput((current) => ({ ...current, [field.name]: event.target.value }))}>
                     <option value="">{materialOptions.length ? '选择 Edge 物料' : '没有符合模板约束的物料'}</option>
                     {materialOptions.map((material) => (
@@ -967,8 +990,11 @@ function CreateTaskDialog({
             }) : <div className="no-input-note"><Circle size={15} />该工作流没有公开输入，可直接创建任务。</div>}
           </div>
           {!connected ? <div className="dialog-warning"><AlertCircle size={16} />Edge 未连接，当前不能提交真实任务。</div> : null}
+          {needsSiteGraph && sourceGraph.isPending ? <p role="status">正在读取来源库位配置…</p> : null}
+          {needsSiteGraph && sourceGraph.isError ? <p role="alert">来源库位读取失败，请关闭后重试。</p> : null}
+          {duplicateMaterial ? <p role="alert">不同来源不能选择同一份物料。</p> : null}
           </div>
-          <footer><Button type="button" onClick={onClose}>取消</Button><Button type="submit" tone="primary" icon={mutation.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />} disabled={!connected || !workflow || mutation.isPending}>提交任务</Button></footer>
+          <footer><Button type="button" onClick={onClose}>取消</Button><Button type="submit" tone="primary" icon={mutation.isPending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />} disabled={!connected || !workflow || mutation.isPending || siteInputBlocked}>提交任务</Button></footer>
         </form>
       </section>
     </div>

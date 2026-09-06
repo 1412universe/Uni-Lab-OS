@@ -45,7 +45,6 @@ from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.manual_confirmation import (
     ManualConfirmationStore,
     close_pending_manual_confirmation,
-    manual_confirmation_projection,
     open_manual_confirmation,
 )
 from unilabos.workflow.material_source import MaterialCustodyPolicy
@@ -566,9 +565,8 @@ class TaskRuntimeProjection:
             is not None
         )
 
-    @classmethod
     def _aggregate(
-        cls,
+        self,
         connection: sqlite3.Connection,
         task_uuid: str,
     ) -> dict[str, Any]:
@@ -579,30 +577,26 @@ class TaskRuntimeProjection:
         ``StoreNotFound`` 或 ``StoreConflict``。
         """
 
-        # ``task_row`` 与 ``job_rows`` 来自同一 SQLite 快照，避免撕裂读取。
-        task_row = cls._task_row(connection, task_uuid)
-        job_rows = cls._job_rows(connection, task_uuid)
+        # ``task_row``、``job_rows`` 和确认记录来自同一 SQLite 快照，避免撕裂读取。
+        task_row = self._task_row(connection, task_uuid)
+        job_rows = self._job_rows(connection, task_uuid)
         confirmations = {
-            str(row["workflow_node_job_uuid"]): manual_confirmation_projection(row)
-            for row in connection.execute(
-                "SELECT * FROM workflow_manual_confirmation "
-                "WHERE workflow_task_uuid = ?",
-                (task_uuid,),
-            ).fetchall()
+            item["workflow_node_job_uuid"]: item
+            for item in self._manual_confirmations.list_by_task(
+                task_uuid,
+                connection=connection,
+            )
         }
+        jobs: list[dict[str, Any]] = []
+        for row in job_rows:
+            job = WorkflowStore._job_row(row)
+            confirmation = confirmations.get(job["uuid"])
+            if confirmation is not None:
+                job["manual_confirmation"] = confirmation
+            jobs.append(job)
         return {
             "task": WorkflowStore._task_row(task_row),
-            "jobs": [
-                {
-                    **WorkflowStore._job_row(row),
-                    **(
-                        {"manual_confirmation": confirmations[str(row["uuid"])]}
-                        if str(row["uuid"]) in confirmations
-                        else {}
-                    ),
-                }
-                for row in job_rows
-            ],
+            "jobs": jobs,
         }
 
     def project_submission(

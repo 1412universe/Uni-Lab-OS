@@ -207,6 +207,14 @@ def build_candidate_graph(
                 symbol=declaration.symbol,
                 keyword_arguments=keyword_arguments,
                 parent_input_contract=effective_input_contract,
+                base_node=next(
+                    (
+                        candidate
+                        for candidate in applied["nodes"]
+                        if str(candidate.get("uuid")) == declaration.node_uuid
+                    ),
+                    None,
+                ),
             )
             _require_composite_expansion(expansion)
             assert expansion.invocation_node is not None

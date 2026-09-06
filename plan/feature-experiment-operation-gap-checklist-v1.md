@@ -36,7 +36,7 @@
 | 项目 | 内容 |
 |---|---|
 | 文档需求 | 实验操作库支持按名称搜索，按类型、状态筛选；默认按设备操作、集成操作、人工操作分类展示；列表展示名称、类型和草稿/已验证状态。 |
-| 当前实现 | 工作流定义包含 `workflow_type=normal\|experiment_operation`，省略时默认 `normal`；类型在创建时决定 `workflows/` 或 `experiment_operations/` 目录，后续更新不能跨目录改类型。类别接口提供设备操作、集成操作、人工操作三个默认类别，支持查、新增、改名、调整顺序和删除；类别写入唯一领域包的 `operation_categories.json`，不新增 SQLite 表。发布合同写入同一领域包的 `workflow_publications.json`，OS 重启后恢复原合同 UUID、版本和 `published` 状态；运行事实 SQLite 不保存工作流定义或发布合同。实验操作通过稳定的 `operation_category_uuid` 引用类别，类别改名不影响工作流。`GET /api/v1/workflows` 可按 `workflow_type`、`status`、名称和类别组合查询，省略新增条件仍返回全部。旧 `device_operation`、`integration_operation` / `integrated_operation`、`manual_operation` 标签仍能映射到默认类别。 |
+| 当前实现 | 工作流定义包含 `workflow_type=normal\|experiment_operation`，省略时默认 `normal`；类型在创建时决定 `workflows/` 或 `experiment_operations/` 目录，后续更新不能跨目录改类型。类别接口提供设备操作、集成操作、人工操作三个默认类别，支持查、新增、改名、调整顺序和删除；类别写入唯一领域包的 `operation_categories.json`，不新增 SQLite 表。发布合同按工作流写入同一领域包的 `workflow_publications/<workflow_uuid>/manifest.json` 和 `contracts/<contract_uuid>.json`，旧 `workflow_publications.json` 仅作迁移/兼容读取；OS 重启后恢复原合同 UUID、版本和 `published` 状态；运行事实 SQLite 不保存工作流定义或发布合同。实验操作通过稳定的 `operation_category_uuid` 引用类别，类别改名不影响工作流。`GET /api/v1/workflows` 可按 `workflow_type`、`status`、名称和类别组合查询，省略新增条件仍返回全部。旧 `device_operation`、`integration_operation` / `integrated_operation`、`manual_operation` 标签仍能映射到默认类别。 |
 | 前端接入 | 实验操作库先读取 `GET /api/v1/experiment-operation-categories`，再以 `workflow_type=experiment_operation` 一次读取实验操作，并按返回的 `operation_category_uuid` 分组；只看单一类别时可追加同名查询参数。类别管理使用同一路径的 POST、PUT、DELETE。 |
 | 删除规则 | 类别仍被任一实验操作引用时拒绝删除；先修改或清空这些实验操作的 `operation_category_uuid`，再删除类别。 |
 | 验收条件 | 类别 CRUD、跨 OS 重启恢复、实验操作绑定与筛选、普通工作流拒绝挂类别、引用删除保护和旧标签兼容均通过公共 HTTP 回归。 |

@@ -75,11 +75,14 @@ same registered Python source before the in-memory revision advances.
 _Avoid_: SQLite definition authority, temporary upload, Backend replica
 
 **Local Workflow Publication Catalog**:
-The domain-package `workflow_publications.json` file that stores immutable
-published Workflow contracts and their source hashes. Local Authority restores
-these contracts into the process-local catalog after Python sources are
-activated, so published status and ExperimentOperation reuse survive restart.
-It is definition-side file authority, not runtime SQLite state.
+The domain-package `workflow_publications/<workflow_uuid>/` directory that stores
+immutable published Workflow contracts and their source hashes. Each workflow has
+a small `manifest.json` index and one complete contract file per immutable
+contract. The legacy `workflow_publications.json` file is read only for migration
+and backward compatibility; it is not the new-format authority. Local Authority
+restores these contracts into the process-local catalog after Python sources are
+activated, so published status and ExperimentOperation reuse survive restart. It
+is definition-side file authority, not runtime SQLite state.
 _Avoid_: SQLite publication authority, derived status without restart recovery
 
 **组合工作流调用（CompositeWorkflowInvocation）**:

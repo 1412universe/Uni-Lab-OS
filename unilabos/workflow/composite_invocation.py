@@ -18,6 +18,43 @@ class CompositeInvocationInvalid(ValueError):
     """组合调用输入或冻结合同不满足安全展开条件。"""
 
 
+_NODE_REFERENCE_KEYS = frozenset(
+    {
+        "node_uuid",
+        "workflow_node_uuid",
+        "control_region_uuid",
+        "node_uuids",
+        "entry_node_uuids",
+        "exit_node_uuids",
+        "predecessor_node_uuids",
+        "successor_node_uuids",
+    }
+)
+
+
+def _remap_control_references(
+    value: Any,
+    node_uuid_map: Mapping[str, str],
+    *,
+    key: str | None = None,
+) -> Any:
+    """按字段语义重映射控制节点内部的节点/区域 UUID 引用。"""
+
+    if isinstance(value, list):
+        return [
+            _remap_control_references(item, node_uuid_map, key=key)
+            for item in value
+        ]
+    if isinstance(value, Mapping):
+        return {
+            str(name): _remap_control_references(item, node_uuid_map, key=str(name))
+            for name, item in value.items()
+        }
+    if key in _NODE_REFERENCE_KEYS and isinstance(value, str):
+        return node_uuid_map.get(value, value)
+    return deepcopy(value)
+
+
 def _remap_boundary_value(value: Any, node_uuid_map: Mapping[str, str]) -> Any:
     """递归替换边界映射里的来源节点 UUID。"""
 
@@ -41,7 +78,7 @@ def _remap_nested_composite_metadata(
 ) -> dict[str, Any]:
     """复制节点元数据，并重写嵌套组合调用的私有边界引用。"""
 
-    result = deepcopy(dict(meta_data))
+    result = _remap_control_references(meta_data, node_uuid_map)
     unilab = result.get("unilab")
     composite = unilab.get("composite") if isinstance(unilab, dict) else None
     if not isinstance(composite, dict):
@@ -200,11 +237,31 @@ def _materialize_published_arguments(
         raise CompositeInvocationInvalid("发布合同缺少输入边界映射")
     target_mappings = boundary_mapping.get("target_mappings")
     descriptors = input_contract.get("parameters")
-    # 早期发布合同没有保存内部连接点快照；只要没有目标映射，
-    # 这类合同仍可安全展开（参数保持原合同的节点绑定）。
+    # 早期发布合同没有保存内部连接点快照；只要没有目标映射，控制节点参数已在
+    # 上面固化，其他不涉及动作目标的历史绑定仍可沿用冻结图事实。
     snapshot_handles = snapshot.get("handle_templates")
     if not isinstance(target_mappings, Mapping) or not isinstance(descriptors, list):
         raise CompositeInvocationInvalid("发布合同输入边界映射损坏")
+
+    # 控制节点（condition/repeat_until）的输入不会出现在动作目标映射中，
+    # 但仍必须在真实组合展开路径固化为调用实参。该实现位于静态组合编译器，
+    # 这里采用延迟导入以避开 composite_expansion -> composite_invocation 的既有
+    # 反向导入环；两条展开路径因此共享完全相同的控制参数语义。
+    try:
+        from unilabos.workflow.composite_expansion import (
+            _CompositeFailure,
+            _materialize_control_arguments,
+        )
+
+        _materialize_control_arguments(
+            expanded_nodes,
+            keyword_arguments=normalized_param,
+        )
+    except _CompositeFailure as error:
+        raise CompositeInvocationInvalid(
+            f"{error.code} ({error.path})"
+        ) from None
+
     # 旧版合同可能只有参数描述，没有内部目标映射；这表示展开时继续沿用
     # 冻结图自身的绑定，不应因为新增的快照校验把历史合同判为损坏。
     if not target_mappings:
@@ -351,7 +408,14 @@ def expand_composite_invocation(
                     "contract_uuid": contract["uuid"],
                     "child_workflow_uuid": child_workflow_uuid,
                     "child_workflow_revision": contract["workflow_revision"],
-                    "child_source_hash": contract["source_hash"],
+                    # ``source_hash`` 是发布图摘要；组合兼容性 pin 使用子工作流
+                    # 已应用源码摘要。服务入口会从同一工作流记录注入
+                    # ``applied_source_hash``，旧合同没有该字段时才回退到图摘要，
+                    # 保留历史非源码工作流的可读性。
+                    "child_applied_source_hash": contract.get(
+                        "applied_source_hash",
+                        contract["source_hash"],
+                    ),
                     "contract_digest": contract["contract_digest"],
                     "contract_compatibility": {
                         "parameters": contract["input_contract"]["parameters"],
@@ -391,6 +455,10 @@ def expand_composite_invocation(
             raise CompositeInvocationInvalid("子节点引用了冻结图外的父节点")
         copied["meta_data"] = _remap_nested_composite_metadata(
             source.get("meta_data") or {},
+            node_uuid_map,
+        )
+        copied["param"] = _remap_control_references(
+            source.get("param") or {},
             node_uuid_map,
         )
         requirement_key = contract["executor_binding_mapping"].get(source_uuid)

@@ -208,22 +208,38 @@ class ManualConfirmationStore:
             raise StoreNotFound(f"manual confirmation for job {job_uuid} not found")
         return _row(row)
 
-    def list_by_task(self, task_uuid: str) -> list[dict[str, Any]]:
-        with self._store.read() as connection:
-            task = connection.execute(
-                "SELECT 1 FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
-                (task_uuid,),
-            ).fetchone()
-            if task is None:
-                raise StoreNotFound(f"workflow task {task_uuid} not found")
-            rows = connection.execute(
-                """
-                SELECT * FROM workflow_manual_confirmation
-                WHERE workflow_task_uuid = ?
-                ORDER BY opened_at DESC, workflow_node_job_uuid DESC
-                """,
-                (task_uuid,),
-            ).fetchall()
+    def list_by_task(
+        self,
+        task_uuid: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> list[dict[str, Any]]:
+        """读取一个 Task 的确认记录，可复用调用方的事务快照。"""
+
+        if connection is not None:
+            return self._list_by_task_connection(connection, task_uuid)
+        with self._store.read() as read_connection:
+            return self._list_by_task_connection(read_connection, task_uuid)
+
+    @staticmethod
+    def _list_by_task_connection(
+        connection: sqlite3.Connection,
+        task_uuid: str,
+    ) -> list[dict[str, Any]]:
+        task = connection.execute(
+            "SELECT 1 FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
+            (task_uuid,),
+        ).fetchone()
+        if task is None:
+            raise StoreNotFound(f"workflow task {task_uuid} not found")
+        rows = connection.execute(
+            """
+            SELECT * FROM workflow_manual_confirmation
+            WHERE workflow_task_uuid = ?
+            ORDER BY opened_at DESC, workflow_node_job_uuid DESC
+            """,
+            (task_uuid,),
+        ).fetchall()
         return [_row(row) for row in rows]
 
     def list_by_tasks(

@@ -26,6 +26,7 @@ import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, Workflo
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { CompositeWorkflowParameterEditor, compositeContractFields, compositeParameterDrafts, compositeParameterProblem, serialiseCompositeParameters } from '../components/CompositeWorkflowParameterEditor'
 import { serialiseTaskInput } from './TasksPage'
+import { sourceSiteOptions } from '../lib/sourceSiteOptions'
 import { WorkflowDag } from '../components/WorkflowDag'
 
 interface PendingChildInvocation {
@@ -224,7 +225,10 @@ export function WorkflowsPage({
   useEffect(() => {
     if (startupMode !== 'develop') setRunMode('normal')
   }, [startupMode])
-  const requiredInputReady = Boolean(detail) && detail.inputContract.every((field) => (
+  const siteOptions = sourceSiteOptions(graphQuery.data, detail?.inputContract || [], materials)
+  const selectedSourceMaterials = [...siteOptions].map(([name, options]) => options.find((option) => option.value === runInput[name])?.materialUuid)
+  const sourceSitesReady = selectedSourceMaterials.every(Boolean) && new Set(selectedSourceMaterials).size === selectedSourceMaterials.length
+  const requiredInputReady = sourceSitesReady && Boolean(detail) && detail.inputContract.every((field) => (
     !field.required || field.defaultValue !== undefined || Boolean(runInput[field.name]?.trim())
   ))
   const boundMaterials = detail?.inputContract.flatMap((field) => {
@@ -235,6 +239,7 @@ export function WorkflowsPage({
     mutationFn: async () => {
       if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       if (!detail) throw new Error('请选择工作流')
+      if (!requiredInputReady) throw new Error('请选择有效且不重复的来源库位，并填写必填输入')
       return createWorkflowTask({
         workflowUuid: detail.uuid,
         description: runDescription,
@@ -507,7 +512,8 @@ export function WorkflowsPage({
                           const slot = resourceSlotSchema(field)
                           const allowed = Array.isArray(slot?.allowed_resource_template_uuids) ? new Set(slot.allowed_resource_template_uuids.map(String)) : undefined
                           const options = slot ? materials.filter((material) => !allowed || Boolean(material.resourceTemplateUuid && allowed.has(material.resourceTemplateUuid))) : []
-                          return <label className={slot ? 'run-field resource-binding-field' : 'run-field'} key={field.name}><span><code>{field.name}</code><em>{field.required ? '必填' : '可选'} · {field.type}</em></span>{slot ? <select value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))}><option value="">{options.length ? '选择权威物料实例' : '没有符合模板约束的物料'}</option>{options.map((material) => <option key={material.uuid} value={material.uuid}>{material.name} · {material.currentLocation.label}</option>)}</select> : <input value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))} placeholder={field.type} />}</label>
+                          const sites = siteOptions.get(field.name)
+                          return <label className={slot ? 'run-field resource-binding-field' : 'run-field'} key={field.name}><span><code>{field.title || field.name}</code><em>{field.required ? '必填' : '可选'} · {field.type}</em></span>{sites ? <select value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))}><option value="">{sites.length ? '请选择有物料的库位' : '没有符合要求的有料库位'}</option>{sites.map((site) => <option key={site.value} value={site.value}>{site.label}</option>)}</select> : slot ? <select value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))}><option value="">{options.length ? '选择权威物料实例' : '没有符合模板约束的物料'}</option>{options.map((material) => <option key={material.uuid} value={material.uuid}>{material.name} · {material.currentLocation.label}</option>)}</select> : <input value={runInput[field.name] || ''} onChange={(event) => setRunInput((current) => ({ ...current, [field.name]: event.target.value }))} placeholder={field.type} />}</label>
                         })}
                         {!detail.inputContract.length ? <EmptyState title="无需运行输入" description="该工作流可直接进入 Preflight。" /> : null}
                       </div>

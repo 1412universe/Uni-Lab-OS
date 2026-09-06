@@ -525,6 +525,7 @@ def test_task_input_freezes_repeat_template_site_selection() -> None:
     measure = next(node for node in plan["nodes"] if node["uuid"] == MEASURE_NODE_UUID)
     measure["site_selectors"] = [
         {
+            "handle_uuid": "73000000-0000-4000-8000-000000000032",
             "parameter": "target_site",
             "owner_parameter": "sample",
             "group_key": "measurement_sites",

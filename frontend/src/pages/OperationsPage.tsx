@@ -453,7 +453,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
           }
         }
       }
-      setEditingUuid(operation.uuid); setCreating(true); setSelectedOperation(null); setName(operation.name); setDescription(operation.description); setCategoryUuid(operation.operationCategoryUuid || ''); setInputContractFields(inputFields); setOutputContractFields((operation.outputContract || []).map((field) => editableField(field, 'output'))); setChildWorkflowRefs(children); setChildPickerOpen(false); setDraft(actions); setDraftControls(controls); setExpandedControlId('')
+      setEditingUuid(operation.uuid); setCreating(true); setSelectedOperation(null); setName(operation.name); setDescription(operation.description); setCategoryUuid(operation.operationCategoryUuid || ''); setInputContractFields(inputFields); setOutputContractFields((operation.outputContract || []).map((field) => editableField(field, 'output'))); setChildWorkflowRefs(children); setChildPickerOpen(false); setDraft(actions); setDraftControls(controls); setExpandedActionId(''); setExpandedControlId('')
     } catch (error) { onNotify(`读取实验操作失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
   /**
@@ -627,7 +627,7 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
       if (!savedGraph.nodes.some((node) => isControlNode(node))) {
         await ensureWorkflowSequenceEdges(savedWorkflowUuid, [...childNodeUuids, ...actionNodeUuids])
       }
-      setCreating(false); setDraft([]); setDraftControls([])
+      setCreating(false); setDraft([]); setDraftControls([]); setExpandedActionId(''); setExpandedControlId('')
       await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] })
       await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
     } catch (error) {

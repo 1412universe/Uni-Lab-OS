@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from tests.workflow.test_authoring_engine import (
 )
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow import domain_source_target, source_publication
+from unilabos.workflow import publication_catalog
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
 from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
@@ -178,7 +180,7 @@ def test_published_experiment_operation_survives_restart_in_domain_package(
     selected_root = tmp_path / "domain"
     package_root = _empty_domain_package(selected_root)
     database_path = tmp_path / "workflow_history.db"
-    service, runtime_store, _definitions = _service(
+    service, runtime_store, definitions = _service(
         database_path=database_path,
         selected_root=selected_root,
     )
@@ -217,6 +219,24 @@ def test_published_experiment_operation_survives_restart_in_domain_package(
         assert service.get_workflow(WORKFLOW_UUID)["status"] == "published"
         publication_path = package_root / "workflow_publications.json"
         assert publication_path.is_file()
+        publication_root = package_root / "workflow_publications" / WORKFLOW_UUID
+        manifest_path = publication_root / "manifest.json"
+        contract_path = publication_root / "contracts" / f"{contract['uuid']}.json"
+        assert manifest_path.is_file()
+        assert contract_path.is_file()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert manifest["workflow_uuid"] == WORKFLOW_UUID
+        assert manifest["latest_contract_uuid"] == contract["uuid"]
+        stored_entry = json.loads(contract_path.read_text(encoding="utf-8"))
+        assert stored_entry["contract"]["uuid"] == contract["uuid"]
+        assert stored_entry["contract"]["workflow_uuid"] == WORKFLOW_UUID
+        assert stored_entry["contract"]["graph_snapshot"]["workflow"]["uuid"] == (
+            WORKFLOW_UUID
+        )
+        assert "graph_snapshot" not in json.loads(
+            publication_path.read_text(encoding="utf-8")
+        )
+        assert not (package_root / "catalog.sqlite").exists()
         assert (
             len(
                 yaml.safe_load(publication_path.read_text(encoding="utf-8"))[
@@ -236,6 +256,10 @@ def test_published_experiment_operation_survives_restart_in_domain_package(
                 ).fetchone()
                 is None
             )
+        # 运行时表不是领域包文件的持久化权威；模拟旧进程退出前表被清理，
+        # 下次启动应由新目录合同重新建表并恢复。
+        with definitions.transaction() as connection:
+            connection.execute("DROP TABLE published_workflow_contract")
     finally:
         service.close()
 
@@ -261,6 +285,137 @@ def test_published_experiment_operation_survives_restart_in_domain_package(
                 ).fetchone()
                 is None
             )
+    finally:
+        reopened.close()
+
+
+def test_publication_marker_failure_keeps_authoritative_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """兼容索引写失败时，已提交的工作流合同仍应可冷启动恢复。"""
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    database_path = tmp_path / "workflow_history.db"
+    service, _runtime_store, _definitions = _service(
+        database_path=database_path,
+        selected_root=selected_root,
+    )
+
+    def fail_marker(
+        _catalog: publication_catalog.WorkflowPublicationCatalog,
+        **_kwargs: object,
+    ) -> None:
+        """模拟非权威兼容索引写入失败。"""
+
+        raise publication_catalog.WorkflowPublicationCatalogError("unavailable")
+
+    monkeypatch.setattr(
+        publication_catalog.WorkflowPublicationCatalog,
+        "_write_legacy_marker",
+        fail_marker,
+    )
+    try:
+        imported = service.import_python_workflow(
+            file_name="marker_failure.py",
+            python_source=_source().replace(
+                '    description="Prepare and analyze one sample.",\n',
+                '    description="Prepare and analyze one sample.",\n'
+                '    workflow_type="experiment_operation",\n',
+            ),
+        )
+        published = service.publish_workflow_contract(
+            WORKFLOW_UUID,
+            revision=int(imported["workflow"]["revision"]),
+        )
+        assert published["workflow_uuid"] == WORKFLOW_UUID
+        assert (
+            package_root
+            / "workflow_publications"
+            / WORKFLOW_UUID
+            / "manifest.json"
+        ).is_file()
+    finally:
+        service.close()
+
+    monkeypatch.undo()
+    reopened, _reopened_runtime, _reopened_definitions = _service(
+        database_path=database_path,
+        selected_root=selected_root,
+    )
+    try:
+        # 测试装配器的源码激活发生在合同恢复之前，会把单修订工作流推进一次
+        # revision；这里验证的是合同确实从 manifest 恢复，而非兼容索引失败后
+        # 被当作发布失败丢弃。
+        assert reopened.list_published_workflow_contracts()["items"]
+    finally:
+        reopened.close()
+
+
+def test_uncommitted_contract_without_manifest_is_ignored_after_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """manifest 提交前进程退出留下的合同文件不能在重启时自行生效。"""
+
+    selected_root = tmp_path / "domain"
+    package_root = _empty_domain_package(selected_root)
+    database_path = tmp_path / "workflow_history.db"
+    service, _runtime_store, _definitions = _service(
+        database_path=database_path,
+        selected_root=selected_root,
+    )
+
+    def fail_manifest(
+        _workflow_dir: Path,
+        _workflow_identity: tuple[int, int],
+        _workflow_uuid: str,
+        _entries: list[dict[str, object]],
+    ) -> None:
+        """模拟合同文件已写入但 manifest 原子提交失败。"""
+
+        raise publication_catalog.WorkflowPublicationCatalogError("unavailable")
+
+    monkeypatch.setattr(
+        publication_catalog.WorkflowPublicationCatalog,
+        "_write_manifest",
+        fail_manifest,
+    )
+    try:
+        imported = service.import_python_workflow(
+            file_name="manifest_failure.py",
+            python_source=_source(),
+        )
+        with pytest.raises(WorkflowError) as failed:
+            service.publish_workflow_contract(
+                WORKFLOW_UUID,
+                revision=int(imported["workflow"]["revision"]),
+            )
+        assert failed.value.code == "source_publication_failed"
+        contracts_dir = (
+            package_root
+            / "workflow_publications"
+            / WORKFLOW_UUID
+            / "contracts"
+        )
+        assert list(contracts_dir.glob("*.json"))
+        assert not (
+            package_root
+            / "workflow_publications"
+            / WORKFLOW_UUID
+            / "manifest.json"
+        ).exists()
+    finally:
+        service.close()
+
+    monkeypatch.undo()
+    reopened, _reopened_runtime, _reopened_definitions = _service(
+        database_path=database_path,
+        selected_root=selected_root,
+    )
+    try:
+        assert reopened.list_published_workflow_contracts()["items"] == []
     finally:
         reopened.close()
 
