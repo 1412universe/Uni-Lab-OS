@@ -580,6 +580,7 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
                 from unilabos.app.scheduler.inventory.backend_contract import (
                     BackendResourceService,
                 )
+                from unilabos.app.scheduler.monitor import monitor_bus
                 from unilabos.app.scheduler.inventory.api import (
                     create_legacy_material_router,
                     create_router as create_inventory_router,
@@ -593,6 +594,7 @@ def setup_server(*, defer_workflow_initialization: bool = False) -> FastAPI:
                             inventory_service.store,
                             edge_id=inventory_service.edge_id,
                             lab_id=inventory_service.lab_id,
+                            monitor=monitor_bus,
                         ),
                         material_shapes=get_material_shapes(),
                         material_model_catalog=get_material_model_catalog(),

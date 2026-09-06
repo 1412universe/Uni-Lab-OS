@@ -100,6 +100,7 @@ class BackendResourceService:
         *,
         edge_id: str = "edge-default",
         lab_id: str = "edge-lab",
+        monitor: Any = None,
     ):
         """绑定 OS Local 库与当前 Edge 身份。
 
@@ -110,6 +111,27 @@ class BackendResourceService:
         self.store = store
         self.edge_id = edge_id
         self.lab_id = lab_id
+        self._monitor = monitor
+
+    def _notify_material_changed(self, material_uuid: str, operation: str) -> None:
+        """在 Backend 物料写事务提交后通知本地调度器。"""
+
+        if self._monitor is None:
+            return
+        try:
+            self._monitor.emit(
+                "material",
+                "material_changed",
+                {
+                    "material_uuid": str(material_uuid),
+                    "operation": operation,
+                    "edge_id": self.edge_id,
+                    "lab_id": self.lab_id,
+                },
+            )
+        except Exception:
+            # 通知故障不能回滚已经成功提交的物料事务。
+            pass
 
     # Resource Template -------------------------------------------------
 
@@ -568,6 +590,7 @@ class BackendResourceService:
                 MATERIAL_IDENTITY_CONFLICT,
                 "Material barcode or sibling name conflicts with an existing material",
             ) from exc
+        self._notify_material_changed(material_uuid, "created")
         result = self.get_material(material_uuid)
         result["children"] = []
         if content_snapshot is not None:
@@ -800,6 +823,7 @@ class BackendResourceService:
                 MATERIAL_IDENTITY_CONFLICT,
                 "Material barcode or sibling name conflicts with an existing material",
             ) from exc
+        self._notify_material_changed(material_uuid, "updated")
         return self.get_material(material_uuid)
 
     def delete_material(self, material_uuid: str) -> None:
@@ -863,6 +887,7 @@ class BackendResourceService:
                 MATERIAL_ACTIVE_CLAIM_CONFLICT,
                 str(error),
             ) from error
+        self._notify_material_changed(material_uuid, "deleted")
 
     def material_graph(self) -> Dict[str, Any]:
         materials = self.store.query_all(
