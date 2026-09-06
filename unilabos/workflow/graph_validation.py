@@ -370,7 +370,11 @@ def _project_composite_boundary_inputs(
                 if (
                     target_node is None
                     or target_handle is None
-                    or target_node.parent_uuid != invocation_uuid
+                    or not _is_composite_descendant(
+                        target_node_uuid,
+                        invocation_uuid,
+                        nodes,
+                    )
                     or target_handle.get("workflow_node_template_uuid")
                     != target_node.workflow_node_template_uuid
                     or target_handle.get("io_type") != "target"
@@ -386,6 +390,31 @@ def _project_composite_boundary_inputs(
                     continue
                 connected_inputs[target_input] = f"composite:{invocation_uuid}"
                 available_data_keys[target_node_uuid].append(target_key)
+
+
+def _is_composite_descendant(
+    node_uuid: str,
+    invocation_uuid: str,
+    nodes: Mapping[str, WorkflowNodeWrite],
+) -> bool:
+    """判断映射目标是否位于调用节点的任意深度子树内。
+
+    RepeatUntil/condition 会在展开图中形成额外的控制层级。组合参数仍然
+    只能进入当前调用节点的私有子树，但不应被错误限制为必须是直接子节点。
+    参数沿父引用向上追溯，遇到调用根即成功；缺失父节点或循环则失败关闭。
+    """
+
+    current = node_uuid
+    visited: set[str] = set()
+    while current not in visited:
+        if current == invocation_uuid:
+            return True
+        visited.add(current)
+        node = nodes.get(current)
+        if node is None or node.parent_uuid is None:
+            return False
+        current = str(node.parent_uuid)
+    return False
 
 
 def _validate_parent_cycles(nodes: Iterable[WorkflowNodeWrite]) -> None:
