@@ -275,6 +275,50 @@ def classify_pinned_published_workflow_invocation(
             Mapping,
         ):
             return "breaking"
+        if _is_legacy_projection(current_projection):
+            # ``_invocation_node`` deliberately preserves a server-generated
+            # legacy projection for an unchanged pin.  It is safe to accept
+            # only an exact byte-for-byte pin/contract match here.
+            if not _is_legacy_projection(previous_projection):
+                return "breaking"
+            if previous_node.get("workflow_node_template_uuid") != current_node.get(
+                "workflow_node_template_uuid"
+            ):
+                return "breaking"
+            if any(
+                previous.get(key) != current.get(key)
+                for key in (
+                    "child_workflow_uuid",
+                    "child_workflow_revision",
+                    "child_applied_source_hash",
+                    "contract_digest",
+                    "executor_requirements",
+                    "device_bindings",
+                )
+            ):
+                return "breaking"
+            return (
+                "exact"
+                if previous_projection == current_projection
+                else "breaking"
+            )
+        # The API composition endpoint historically emitted a compact
+        # ``{parameters, outputs}`` projection.  A server-generated candidate
+        # is compiled once more through the source authoring path, which emits
+        # the authenticated v1 projection.  Treat the compact form as a
+        # compatibility bridge when it describes the same child pin and
+        # boundary; otherwise keep the fail-closed behaviour.
+        if _is_legacy_projection(previous_projection):
+            return _classify_legacy_projection(
+                previous_node=previous_node,
+                current_node=current_node,
+                previous=previous,
+                current=current,
+                previous_projection=previous_projection,
+                current_projection=current_projection,
+                current_templates=current_templates,
+                current_handles=current_handles,
+            )
         if not _pin_matches_projection(previous, previous_projection):
             return "breaking"
         if not _pin_matches_projection(current, current_projection):
@@ -356,8 +400,146 @@ def classify_pinned_published_workflow_invocation(
             previous_projection,
             current_projection,
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError) as exc:
         return "breaking"
+
+
+def _is_legacy_projection(projection: Mapping[str, Any]) -> bool:
+    """判断 API 早期生成的仅含边界参数/输出的投影。"""
+
+    return set(projection) == {"parameters", "outputs"}
+
+
+def _classify_legacy_projection(
+    *,
+    previous_node: Mapping[str, Any],
+    current_node: Mapping[str, Any],
+    previous: Mapping[str, Any],
+    current: Mapping[str, Any],
+    previous_projection: Mapping[str, Any],
+    current_projection: Mapping[str, Any],
+    current_templates: Sequence[Mapping[str, Any]] | None,
+    current_handles: Sequence[Mapping[str, Any]] | None,
+) -> PublishedWorkflowCompatibility:
+    """把旧 API 投影提升为当前投影后再做兼容性分类。"""
+
+    if not _pin_fields_are_valid(previous, current):
+        return "breaking"
+    if not _pin_matches_projection(current, current_projection):
+        return "breaking"
+    if previous.get("child_workflow_uuid") != current.get("child_workflow_uuid"):
+        return "breaking"
+    if previous.get("executor_requirements") != current.get("executor_requirements"):
+        return "breaking"
+    template_uuid = current_projection.get("template_uuid")
+    if previous_node.get("workflow_node_template_uuid") != template_uuid:
+        return "breaking"
+    if current_node.get("workflow_node_template_uuid") != template_uuid:
+        return "breaking"
+    if current_templates is not None and current_handles is not None:
+        matches = [item for item in current_templates if item.get("uuid") == template_uuid]
+        owned_handles = [
+            item
+            for item in current_handles
+            if item.get("workflow_node_template_uuid") == template_uuid
+        ]
+        if len(matches) != 1:
+            return "breaking"
+        try:
+            authenticated = published_workflow_compatibility_projection(
+                matches[0], owned_handles
+            )
+        except (KeyError, TypeError, ValueError):
+            return "breaking"
+        if authenticated != _plain(current_projection):
+            return "breaking"
+
+    previous_parameters = previous_projection.get("parameters")
+    previous_outputs = previous_projection.get("outputs")
+    current_parameters = current_projection.get("parameters")
+    current_outputs = current_projection.get("outputs")
+    if not isinstance(previous_parameters, (list, tuple)) or not isinstance(
+        previous_outputs, (list, tuple)
+    ):
+        return "breaking"
+    if not isinstance(current_parameters, (list, tuple)) or not isinstance(
+        current_outputs, (list, tuple)
+    ):
+        return "breaking"
+    normalized_parameters = _legacy_boundary_descriptors(
+        previous_parameters, current_parameters, output=False
+    )
+    normalized_outputs = _legacy_boundary_descriptors(
+        previous_outputs, current_outputs, output=True
+    )
+    if normalized_parameters is None or normalized_outputs is None:
+        return "breaking"
+    normalized_previous = {
+        "template_uuid": current_projection["template_uuid"],
+        "workflow_uuid": current_projection["workflow_uuid"],
+        "mode": current_projection["mode"],
+        "digest": _contract_digest(
+            inputs=normalized_parameters,
+            outputs=normalized_outputs,
+            mode=current_projection["mode"],
+        ),
+        "parameters": normalized_parameters,
+        "outputs": normalized_outputs,
+    }
+    return classify_published_workflow_compatibility_projections(
+        normalized_previous, current_projection
+    )
+
+
+def _legacy_boundary_descriptors(
+    previous_values: Sequence[Any],
+    current_values: Sequence[Any],
+    *,
+    output: bool,
+) -> list[dict[str, Any]] | None:
+    """按名称将旧边界描述符绑定到当前已认证的句柄身份。"""
+
+    by_name = {
+        item.get("name"): item
+        for item in current_values
+        if isinstance(item, Mapping) and isinstance(item.get("name"), str)
+    }
+    result: list[dict[str, Any]] = []
+    for item in previous_values:
+        if not isinstance(item, Mapping) or not isinstance(item.get("name"), str):
+            return None
+        current_item = by_name.get(item["name"])
+        if current_item is None:
+            return None
+        semantic_keys = ("name", "schema", "unit")
+        if any(item.get(key) != current_item.get(key) for key in semantic_keys if key in item):
+            return None
+        if output:
+            if item.get("implicit", False) != current_item.get("implicit", False):
+                return None
+        elif item.get("required") != current_item.get("required"):
+            return None
+        if "default" in item and item.get("default") != current_item.get("default"):
+            return None
+        result.append(_plain(current_item))
+    return result
+
+
+def _pin_fields_are_valid(previous: Mapping[str, Any], current: Mapping[str, Any]) -> bool:
+    """校验旧/新 pin 的基本身份字段，避免宽松兼容篡改数据。"""
+
+    for value in (previous, current):
+        if not isinstance(value.get("child_workflow_uuid"), str):
+            return False
+        if isinstance(value.get("child_workflow_revision"), bool) or not isinstance(
+            value.get("child_workflow_revision"), int
+        ):
+            return False
+        if not _digest(value.get("child_applied_source_hash")):
+            return False
+        if not _digest(value.get("contract_digest")):
+            return False
+    return True
 
 
 def _stored_projection_is_canonical(projection: Mapping[str, Any]) -> bool:

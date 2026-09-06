@@ -257,6 +257,70 @@ def test_composite_invocation_remaps_control_region_references() -> None:
     assert expanded_control["meta_data"]["unilab"]["carry_bindings"]["slot"]["control_region_uuid"] == expanded_control["uuid"]
 
 
+def test_published_invocation_materializes_repeat_inputs_before_target_mapping() -> None:
+    """发布合同展开时也必须固化无动作目标的 RepeatUntil 输入。
+
+    参数：无。返回：无。异常：如果真实组合展开路径在目标映射处理前直接返回，
+    控制节点仍会携带子工作流输入绑定，父图保存时会被严格 I/O 校验拒绝。
+    """
+
+    node_uuid = CHILD_NODE_UUID
+    template_uuid = OLD_TEMPLATE_UUID
+    boundary_uuid = _handle_uuid(template_uuid, "repeat_count")
+    source_node = {
+        "uuid": node_uuid,
+        "name": "循环控制",
+        # 旧冻结快照可能只保存 node_type；真实展开不能因此退回普通动作路径。
+        "node_type": "repeat_until",
+        "pose": {"x": 0, "y": 0},
+        "param": {
+            "bindings": {
+                "repeat_count": {
+                    "kind": "workflow_input",
+                    "parameter": "repeat_count",
+                }
+            },
+            "until": {"var": "repeat_count"},
+            "initial_carry": {"count": {"kind": "literal", "value": 0}},
+            "next_carry": {"count": {"kind": "literal", "value": 1}},
+        },
+        "meta_data": {},
+    }
+    contract = _contract(
+        identity=OLD_CONTRACT_UUID,
+        template_uuid=template_uuid,
+        revision=1,
+        inputs=[
+            {
+                "name": "repeat_count",
+                "schema": {"type": "integer"},
+                "required": True,
+            }
+        ],
+    )
+    contract["boundary_mapping"]["target_mappings"] = {boundary_uuid: []}
+    contract["graph_snapshot"]["nodes"] = [source_node]
+
+    expanded_nodes, _ = expand_composite_invocation(
+        parent_graph={
+            "workflow": {"uuid": PARENT_UUID, "revision": 1},
+            "nodes": [],
+            "edges": [],
+        },
+        contract=contract,
+        invocation_uuid=INVOCATION_UUID,
+        pose={"x": 100, "y": 100},
+        param={"repeat_count": 3},
+        device_bindings={},
+    )
+    expanded_node = next(
+        node for node in expanded_nodes if node["uuid"] != INVOCATION_UUID
+    )
+
+    assert expanded_node["param"]["bindings"] == {}
+    assert expanded_node["param"]["until"] == {"lit": 3}
+
+
 def test_refresh_preserves_invocation_and_remaps_boundary_by_parameter_name() -> None:
     """兼容更新须保留调用身份和填写值，并按参数名迁移外部连线。
 

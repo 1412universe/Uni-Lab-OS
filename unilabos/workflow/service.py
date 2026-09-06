@@ -32,6 +32,7 @@ from unilabos.workflow.authoring_candidate_hash import (
 )
 from unilabos.workflow.authoring_identity import declared_workflow_uuid
 from unilabos.workflow.authoring_python import _safe_identifier
+from unilabos.workflow.authoring_graph_semantics import candidate_changeset
 from unilabos.workflow.candidate_validation import (
     CandidateBundleError,
     validate_candidate_bundle,
@@ -1976,7 +1977,9 @@ class WorkflowService:
             if parent_graph["workflow"]["revision"] != revision:
                 raise WorkflowConflict("workflow_revision_conflict")
             try:
-                contract = self._published_contract_store().get(contract_identity)
+                contract = deepcopy(
+                    self._published_contract_store().get(contract_identity)
+                )
             except KeyError:
                 raise WorkflowError("not_found") from None
             # 复合节点只能引用已发布的实验操作合同；普通工作流即使存在发布
@@ -1987,6 +1990,24 @@ class WorkflowService:
                 raise WorkflowError("invalid_composite_child_type")
             if child.get("status") != "published":
                 raise WorkflowError("invalid_composite_child_status")
+            # 发布合同的 ``source_hash`` 是冻结图摘要，而组合节点合同 pin 需要
+            # 子工作流当前已应用源码摘要。两者不能混用；从同一 SQLite 视图读取
+            # 应用记录并把摘要仅注入本次展开，避免改写不可变发布合同表。
+            try:
+                child_snapshot = self._definition_store.get_published_workflow_snapshot(
+                    child_uuid
+                )
+            except (StoreNotFound, KeyError, TypeError, ValueError):
+                child_snapshot = None
+            applied_source = (
+                child_snapshot.get("applied_source")
+                if isinstance(child_snapshot, Mapping)
+                else None
+            )
+            if isinstance(applied_source, Mapping) and isinstance(
+                applied_source.get("source_hash"), str
+            ):
+                contract["applied_source_hash"] = applied_source["source_hash"]
             requirements = contract["executor_requirements"]
             required_keys = {str(item["key"]) for item in requirements}
             if set(normalized_bindings) != required_keys:
@@ -2370,6 +2391,7 @@ class WorkflowService:
             python_source=compilation.normalized_python_source,
             expected_draft_hash=source["draft_hash"],
             expected_workflow_revision=revision,
+            compilation_base_graph=graph,
         )
         candidate = authoring.get("candidate")
         if candidate is None:
@@ -5946,6 +5968,7 @@ class WorkflowService:
         python_source: str,
         expected_draft_hash: str | None,
         expected_workflow_revision: int,
+        compilation_base_graph: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._validate_hash(expected_draft_hash, nullable=True)
         workflow_uuid = self._get_authoring_workflow(workflow_uuid)["uuid"]
@@ -5985,12 +6008,35 @@ class WorkflowService:
             if source["draft_hash"] != encoded_hash:
                 raise WorkflowConflict("draft_hash_conflict")
             applied_graph = self.get_graph(workflow_uuid)
+            # 系统生成的组合图可能刚把具体执行器绑定到新建的组合根；源码调用
+            # 本身只表达子工作流边界参数，编译固定点需要同时看到这张候选图，
+            # 才能从已有组合元数据恢复设备绑定。候选签发仍以真实已应用图为
+            # 变更基线，避免跳过修订推进或把未提交图误当成事实。
+            compilation_graph = (
+                compilation_base_graph
+                if compilation_base_graph is not None
+                else applied_graph
+            )
             compilation = self._compile(
                 workflow=workflow,
-                graph=applied_graph,
+                graph=compilation_graph,
                 registration=registration,
                 python_source=source["python_source"],
             )
+            # When an API-generated composite graph is used as the compiler
+            # base, the compiler's local changeset is relative to that
+            # candidate rather than to the actually applied parent graph.
+            # Rebase the changeset on the real applied graph before signing;
+            # otherwise the candidate is rejected as an inexact change set.
+            if compilation.graph is not None:
+                compilation = compilation.model_copy(
+                    update={
+                        "changeset": candidate_changeset(
+                            graph=compilation.graph,
+                            applied_graph=applied_graph,
+                        )
+                    }
+                )
             candidate = self._issue_candidate(
                 workflow_revision=workflow["revision"],
                 draft_hash=source["draft_hash"],
@@ -6400,9 +6446,17 @@ class WorkflowService:
                 bootstrap_no_advance = candidate_graph_hash == bootstrap_entry[2]
             if prevalidated_candidate != (workflow_uuid, candidate_hash):
                 applied_graph = self.get_graph(workflow_uuid)
+                # Revalidate against the exact candidate graph used when the
+                # hash was signed.  This is important for server-generated
+                # composite invocations: the API has already materialized
+                # executor bindings in that candidate, while the authoring
+                # source alone cannot express those runtime bindings.
+                compilation_graph = candidate.get("graph")
+                if not isinstance(compilation_graph, Mapping):
+                    raise WorkflowError("candidate_invalid")
                 compilation = self._compile(
                     workflow=workflow,
-                    graph=applied_graph,
+                    graph=compilation_graph,
                     registration=registration,
                     python_source=source["python_source"],
                 )
@@ -6410,8 +6464,17 @@ class WorkflowService:
                     compilation = self._preserve_author_source_compilation(
                         compilation=compilation,
                         workflow=workflow,
-                        graph=applied_graph,
+                        graph=compilation_graph,
                         python_source=source["python_source"],
+                    )
+                if compilation.graph is not None:
+                    compilation = compilation.model_copy(
+                        update={
+                            "changeset": candidate_changeset(
+                                graph=compilation.graph,
+                                applied_graph=applied_graph,
+                            )
+                        }
                     )
                 if not self._normalize_candidate_diagnostics(
                     compilation,

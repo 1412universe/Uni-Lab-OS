@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from tests.registry.test_f05_material_source_catalog import _Registry
+from tests.registry.test_template_projection import FakeRegistry
+from unilabos.registry.template_identity import device_template_uuid
 from unilabos.app.scheduler.inventory.store import InventoryStore
 from unilabos.app.workflow_template_api import WorkflowTemplateQueryService
 from unilabos.workflow.composition import (
@@ -395,6 +398,210 @@ def test_composite_task_persists_only_parent_workflow_authority(
         assert page["items"][0]["workflow_uuid"] == PARENT_WORKFLOW_UUID
         assert page["items"][0]["workflow_uuid"] != CHILD_WORKFLOW_UUID
         assert service.list_workflow_node_jobs(task["uuid"]) == []
+    finally:
+        reset_workflow_service_for_test()
+        inventory_store.close()
+
+
+REPEAT_CHILD_WORKFLOW_UUID = "a1000000-0000-4000-8000-000000000101"
+REPEAT_PARENT_WORKFLOW_UUID = "a1000000-0000-4000-8000-000000000102"
+REPEAT_INVOCATION_UUID = "a1000000-0000-4000-8000-000000000103"
+REPEAT_CHILD_NODE_UUID = "a1000000-0000-4000-8000-000000000104"
+REPEAT_NODE_UUID = "a1000000-0000-4000-8000-000000000105"
+REPEAT_CHILD_MODULE = "c1_repeat_lab.workflows.child"
+REPEAT_PACKAGE_ID = "c1_repeat_lab"
+REPEAT_SOURCE_DEVICE_UUID = "30000000-0000-4000-8000-000000000001"
+REPEAT_BOUND_DEVICE_UUID = "30000000-0000-4000-8000-000000000002"
+REPEAT_DEVICE_TEMPLATE_UUID = device_template_uuid("pump")
+
+
+def _repeat_child_source() -> str:
+    """返回含 RepeatUntil 和真实注册动作的子工作流源码。"""
+
+    return f'''from lab.devices import Pump
+from unilabos.workflow.authoring import device, repeat_until, until, workflow, workflow_output
+
+
+pump: Pump = device("{REPEAT_SOURCE_DEVICE_UUID}")
+
+
+@workflow(
+    workflow_uuid="{REPEAT_CHILD_WORKFLOW_UUID}",
+    displayname="Repeat child",
+    workflow_type="experiment_operation",
+)
+def repeat_child():
+    # unilab:node_uuid={REPEAT_NODE_UUID}
+    with repeat_until(max_iterations=3, carry={{}}) as loop:
+        # unilab:node_uuid={REPEAT_CHILD_NODE_UUID}
+        accepted = pump.transfer(volume=1.5)
+        until(accepted.accepted)
+    return workflow_output()
+'''
+
+
+def _repeat_parent_source() -> str:
+    """返回不含组合调用、供真实 API 插入的父工作流源码。"""
+
+    return f'''from unilabos.workflow.authoring import workflow, workflow_output
+
+
+@workflow(workflow_uuid="{REPEAT_PARENT_WORKFLOW_UUID}", displayname="Repeat parent")
+def repeat_parent():
+    return workflow_output()
+'''
+
+
+def _write_repeat_package(selected_root: Path) -> None:
+    """写入 RepeatUntil 子/父工作流和显式包清单。"""
+
+    source_path = selected_root / REPEAT_PACKAGE_ID / "workflows" / "child.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(_repeat_child_source(), encoding="utf-8")
+    (selected_root / REPEAT_PACKAGE_ID / "workflows" / "parent.py").write_text(
+        _repeat_parent_source(), encoding="utf-8"
+    )
+    selected_root.joinpath("package.yaml").write_text(
+        "package:\n"
+        f"  name: {REPEAT_PACKAGE_ID}\n"
+        "workflows:\n"
+        f"  - workflow_uuid: {REPEAT_CHILD_WORKFLOW_UUID}\n"
+        f"    source: {REPEAT_PACKAGE_ID}/workflows/child.py\n"
+        f"  - workflow_uuid: {REPEAT_PARENT_WORKFLOW_UUID}\n"
+        f"    source: {REPEAT_PACKAGE_ID}/workflows/parent.py\n",
+        encoding="utf-8",
+    )
+
+
+class _RepeatRegistry(FakeRegistry):
+    """为源托管组合回归测试提供带 Pump 动作的注册表。"""
+
+    def obtain_registry_device_info(self) -> list[dict[str, Any]]:
+        """同时提供组合宿主节点和 Pump 动作模板。"""
+
+        return [
+            *_Registry().obtain_registry_device_info(),
+            *super().obtain_registry_device_info(),
+        ]
+
+    def obtain_registry_resource_info(self) -> list[dict[str, Any]]:
+        """沿用基础注册表的独立资源定义，避免业务 ID 重复。"""
+
+        return _Registry().obtain_registry_resource_info()
+
+
+def test_source_backed_repeat_composition_preserves_parent_device_binding(
+    tmp_path: Path,
+) -> None:
+    """API 组合 RepeatUntil 后，父源码固定点必须保留实际设备绑定。"""
+
+    reset_workflow_service_for_test()
+    selected_root = tmp_path / "editable"
+    selected_root.mkdir()
+    _write_repeat_package(selected_root)
+    inventory_store = InventoryStore()
+    try:
+        with InventoryStore.transaction(inventory_store) as transaction:
+            transaction.execute(
+                """
+                INSERT INTO resource_template(
+                    uuid, create_time, update_time, meta_data,
+                    name, display_name, resource_type, module
+                ) VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    REPEAT_DEVICE_TEMPLATE_UUID,
+                    "2026-01-01T00:00:00.000Z",
+                    "2026-01-01T00:00:00.000Z",
+                    "{}",
+                    "pump",
+                    "注射泵动作",
+                    "device",
+                    "lab.devices:Pump",
+                ),
+            )
+            transaction.execute(
+                "INSERT INTO resource_template_inventory(resource_template_uuid, aggregate_version) VALUES (?,1)",
+                (REPEAT_DEVICE_TEMPLATE_UUID,),
+            )
+            transaction.execute(
+                """
+                INSERT INTO material(
+                    uuid, create_time, update_time, meta_data,
+                    resource_template_uuid, class, barcode, name
+                ) VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    REPEAT_SOURCE_DEVICE_UUID,
+                    "2026-01-01T00:00:00.000Z",
+                    "2026-01-01T00:00:00.000Z",
+                    '{"edge_local_id":"pump-01"}',
+                    REPEAT_DEVICE_TEMPLATE_UUID,
+                    "device",
+                    "",
+                    "pump-01",
+                ),
+            )
+            transaction.execute(
+                "INSERT INTO material_inventory(material_uuid, aggregate_version) VALUES (?,1)",
+                (REPEAT_SOURCE_DEVICE_UUID,),
+            )
+            transaction.execute(
+                """
+                INSERT INTO material(
+                    uuid, create_time, update_time, meta_data,
+                    resource_template_uuid, class, barcode, name
+                ) VALUES (?,?,?,?,?,?,?,?)
+                """,
+                (
+                    REPEAT_BOUND_DEVICE_UUID,
+                    "2026-01-01T00:00:00.000Z",
+                    "2026-01-01T00:00:00.000Z",
+                    '{"edge_local_id":"pump-02"}',
+                    REPEAT_DEVICE_TEMPLATE_UUID,
+                    "device",
+                    "",
+                    "pump-02",
+                ),
+            )
+            transaction.execute(
+                "INSERT INTO material_inventory(material_uuid, aggregate_version) VALUES (?,1)",
+                (REPEAT_BOUND_DEVICE_UUID,),
+            )
+        service, _projection = compose_local_workflow_template_runtime(
+            tmp_path,
+            inventory_store=inventory_store,
+            registry=_RepeatRegistry(),
+            editable_package_roots=(selected_root,),
+            start_source_monitor=False,
+        )
+        child_graph = service.get_graph(REPEAT_CHILD_WORKFLOW_UUID)
+        assert {node["type"] for node in child_graph["nodes"]} >= {
+            "repeat_until",
+            "ILab",
+        }, service.get_authoring(REPEAT_CHILD_WORKFLOW_UUID)
+        child_contract = service.publish_workflow_contract(
+            REPEAT_CHILD_WORKFLOW_UUID,
+            revision=child_graph["workflow"]["revision"],
+        )
+        result = service.insert_composite_workflow(
+            REPEAT_PARENT_WORKFLOW_UUID,
+            revision=service.get_graph(REPEAT_PARENT_WORKFLOW_UUID)["workflow"]["revision"],
+            contract_uuid=child_contract["uuid"],
+            invocation_uuid=REPEAT_INVOCATION_UUID,
+            device_bindings={"executor_1": REPEAT_BOUND_DEVICE_UUID},
+            pose={"x": 0, "y": 0},
+            param={},
+        )
+        nodes = {str(node["uuid"]): node for node in result["nodes"]}
+        assert nodes[REPEAT_INVOCATION_UUID]["type"] == "workflow"
+        bound_actions = [
+            node
+            for node in result["nodes"]
+            if node.get("type") == "ILab"
+            and node.get("material_uuid") == REPEAT_BOUND_DEVICE_UUID
+        ]
+        assert len(bound_actions) == 1
     finally:
         reset_workflow_service_for_test()
         inventory_store.close()

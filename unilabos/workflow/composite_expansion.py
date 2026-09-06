@@ -36,6 +36,9 @@ from unilabos.workflow.workflow_io import (
 from unilabos.workflow.workflow_type import WORKFLOW_TYPE_EXPERIMENT_OPERATION
 
 
+_CONTROL_NODE_TYPES = frozenset({"condition", "repeat_until"})
+
+
 class PublishedWorkflowSnapshotProvider(Protocol):
     """按稳定工作流身份读取同视图已应用快照的窄端口。"""
 
@@ -131,6 +134,7 @@ class CompositeAuthoring:
         symbol: str,
         keyword_arguments: Mapping[str, object],
         parent_input_contract: Mapping[str, object] | None = None,
+        base_node: Mapping[str, Any] | None = None,
     ) -> CompositeExpansion:
         """只读编译一个组合工作流调用并把失败转换为零写诊断。
 
@@ -185,6 +189,10 @@ class CompositeAuthoring:
                     f"已找到实验操作 {module}:{symbol}，但没有读取到其已应用版本 "
                     f"{source.workflow_uuid}；请先应用该实验操作，再重新编译引用方",
                 ) from None
+            # API 组合展开会把具体执行器写入调用根元数据。领域源码本身只保存
+            # ``child(...)`` 调用，重新编译时从同一已应用根节点恢复这组绑定，
+            # 否则候选图会退回子工作流发布时的旧设备身份。
+            device_bindings = _node_device_bindings(base_node)
             return self._compile_snapshot(
                 parent_workflow_uuid=parent_uuid,
                 invocation_uuid=invocation,
@@ -193,8 +201,9 @@ class CompositeAuthoring:
                 keyword_arguments=dict(keyword_arguments),
                 snapshot=snapshot,
                 workflow_stack=(parent_uuid,),
-                base_node=None,
+                base_node=base_node,
                 parent_input_contract=parent_input_contract,
+                device_bindings=device_bindings,
             )
         except _CompositeFailure as error:
             return _failed_expansion(
@@ -215,6 +224,7 @@ class CompositeAuthoring:
         workflow_stack: tuple[str, ...],
         base_node: Mapping[str, Any] | None,
         parent_input_contract: Mapping[str, object] | None,
+        device_bindings: Mapping[str, str] | None,
     ) -> CompositeExpansion:
         """验证一个快照并构造实验操作的平面展开结果。
 
@@ -294,6 +304,37 @@ class CompositeAuthoring:
                 input_contract=input_contract,
             )
         )
+        executor_requirements, executor_mapping = _snapshot_executor_requirements(
+            graph
+        )
+        if device_bindings is not None:
+            if set(device_bindings) != set(executor_mapping.values()):
+                raise _CompositeFailure(
+                    "composite_boundary_mapping_invalid",
+                    "/composite/device_bindings",
+                    "组合调用设备绑定与发布合同要求不一致",
+                )
+            for source_uuid, requirement_key in executor_mapping.items():
+                mapped_uuid = node_uuid_map.get(source_uuid)
+                if mapped_uuid is None:
+                    raise _CompositeFailure(
+                        "composite_boundary_mapping_invalid",
+                        "/composite/device_bindings",
+                    )
+                target = next(
+                    (
+                        candidate
+                        for candidate in nodes
+                        if str(candidate.get("uuid")) == mapped_uuid
+                    ),
+                    None,
+                )
+                if target is None:
+                    raise _CompositeFailure(
+                        "composite_boundary_mapping_invalid",
+                        "/composite/device_bindings",
+                    )
+                target["material_uuid"] = str(device_bindings[requirement_key])
         boundary_handles = template_action.handles
         target_mappings = _target_mappings(
             input_contract,
@@ -352,6 +393,8 @@ class CompositeAuthoring:
             source_mappings=source_mappings,
             structural_mappings=structural,
             base_node=base_node,
+            executor_requirements=executor_requirements,
+            device_bindings=device_bindings,
         )
         referenced_nodes, referenced_handles = _referenced_templates(
             self._catalog,
@@ -498,6 +541,7 @@ class CompositeAuthoring:
                 workflow_stack=next_stack,
                 base_node=node,
                 parent_input_contract=effective_input_contract,
+                device_bindings=_node_device_bindings(node),
             )
             if nested.invocation_node is None:
                 raise _CompositeFailure(
@@ -657,6 +701,105 @@ def _node_keyword_arguments(node: Mapping[str, Any]) -> dict[str, object]:
             "/child/nodes/param",
         )
     return _plain(arguments)
+
+
+def _node_device_bindings(node: Mapping[str, Any] | None) -> dict[str, str] | None:
+    """读取已应用组合根保存的执行器绑定。
+
+    参数：``node`` 是已有组合调用根或空值。返回：缺少组合绑定时为 ``None``，
+    否则返回经过 UUID/键校验的独立映射。异常：绑定元数据损坏时抛出稳定组合
+    诊断，避免源码固定点静默丢失用户选择的设备。
+    """
+
+    if node is None:
+        return None
+    meta_data = node.get("meta_data")
+    unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
+    composite = unilab.get("composite") if isinstance(unilab, Mapping) else None
+    if not isinstance(composite, Mapping) or "device_bindings" not in composite:
+        return None
+    raw = composite.get("device_bindings")
+    if not isinstance(raw, Mapping) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in raw.items()
+    ):
+        raise _CompositeFailure(
+            "composite_boundary_mapping_invalid",
+            "/composite/device_bindings",
+        )
+    return {
+        str(key): _canonical_uuid(
+            value,
+            "composite_boundary_mapping_invalid",
+            "/composite/device_bindings",
+        )
+        for key, value in raw.items()
+    }
+
+
+def _snapshot_executor_requirements(
+    graph: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """按发布合同同一规则推导快照执行器要求与节点映射。"""
+
+    raw_nodes = graph.get("nodes")
+    raw_templates = graph.get("node_templates")
+    if not isinstance(raw_nodes, list) or not isinstance(raw_templates, list):
+        raise _CompositeFailure(
+            "composite_catalog_mismatch",
+            "/child/executor_requirements",
+        )
+    templates = {
+        str(item.get("uuid")): item
+        for item in raw_templates
+        if isinstance(item, Mapping) and isinstance(item.get("uuid"), str)
+    }
+    groups: dict[str, dict[str, Any]] = {}
+    requirements: list[dict[str, Any]] = []
+    mapping: dict[str, str] = {}
+    for item in raw_nodes:
+        if not isinstance(item, Mapping):
+            raise _CompositeFailure(
+                "composite_catalog_mismatch",
+                "/child/executor_requirements",
+            )
+        material_uuid = item.get("material_uuid")
+        if material_uuid is None:
+            continue
+        source_uuid = item.get("uuid")
+        template = templates.get(str(item.get("workflow_node_template_uuid")))
+        resource_template_uuid = (
+            template.get("resource_template_uuid")
+            if isinstance(template, Mapping)
+            else None
+        )
+        if (
+            not isinstance(source_uuid, str)
+            or not isinstance(resource_template_uuid, str)
+        ):
+            raise _CompositeFailure(
+                "composite_catalog_mismatch",
+                "/child/executor_requirements",
+            )
+        material_key = str(material_uuid)
+        group = groups.get(material_key)
+        if group is None:
+            key = f"executor_{len(requirements) + 1}"
+            group = {
+                "key": key,
+                "display_name": f"执行设备 {len(requirements) + 1}",
+                "resource_template_uuid": resource_template_uuid,
+                "required": True,
+            }
+            groups[material_key] = group
+            requirements.append(group)
+        elif group["resource_template_uuid"] != resource_template_uuid:
+            raise _CompositeFailure(
+                "composite_catalog_mismatch",
+                "/child/executor_requirements",
+            )
+        mapping[source_uuid] = str(group["key"])
+    return requirements, mapping
 
 
 def _assert_nested_pin(
@@ -1036,6 +1179,8 @@ def _invocation_node(
     source_mappings: Mapping[str, Mapping[str, str]],
     structural_mappings: Mapping[str, Sequence[Mapping[str, str]]],
     base_node: Mapping[str, Any] | None,
+    executor_requirements: Sequence[Mapping[str, Any]],
+    device_bindings: Mapping[str, str] | None,
 ) -> dict[str, Any]:
     """构造父图中真实存在但不拥有运行时任务权威的调用节点。
 
@@ -1051,7 +1196,37 @@ def _invocation_node(
         "target_mappings": _plain(target_mappings),
         "source_mappings": _plain(source_mappings),
         "structural_mappings": _plain(structural_mappings),
+        "executor_requirements": _plain(executor_requirements),
     }
+    if device_bindings is not None:
+        composite["device_bindings"] = _plain(device_bindings)
+    # A composite invocation created by the API may carry the compact legacy
+    # boundary projection.  During source-backed recompilation preserve that
+    # trusted shape when it is the same pinned child; otherwise use the new
+    # canonical projection assembled above.
+    if isinstance(base_node, Mapping):
+        base_meta = base_node.get("meta_data")
+        base_unilab = base_meta.get("unilab") if isinstance(base_meta, Mapping) else None
+        base_composite = (
+            base_unilab.get("composite")
+            if isinstance(base_unilab, Mapping)
+            else None
+        )
+        if (
+            isinstance(base_composite, Mapping)
+            and set(base_composite.get("contract_compatibility", {}))
+            == {"parameters", "outputs"}
+            and all(
+                base_composite.get(key) == composite.get(key)
+                for key in (
+                    "child_workflow_uuid",
+                    "child_workflow_revision",
+                    "child_applied_source_hash",
+                    "executor_requirements",
+                )
+            )
+        ):
+            composite = _plain(base_composite)
     result = _plain(base_node) if base_node is not None else {}
     meta_data = result.get("meta_data")
     meta_data = _plain(meta_data) if isinstance(meta_data, Mapping) else {}
@@ -1192,10 +1367,12 @@ def _control_workflow_input_parameters(
                 visit(child)
 
     for node in nodes:
-        if str(node.get("type") or node.get("node_type") or "") not in {
-            "condition",
-            "repeat_until",
-        }:
+        node_type = str(node.get("type") or "")
+        node_node_type = str(node.get("node_type") or "")
+        if (
+            node_type not in _CONTROL_NODE_TYPES
+            and node_node_type not in _CONTROL_NODE_TYPES
+        ):
             continue
         visit(node.get("param"))
     return result
@@ -1275,10 +1452,12 @@ def _materialize_control_arguments(
     """把组合实参固化到 condition/repeat_until 控制区域。"""
 
     for node in nodes:
-        if str(node.get("type") or node.get("node_type") or "") not in {
-            "condition",
-            "repeat_until",
-        }:
+        node_type = str(node.get("type") or "")
+        node_node_type = str(node.get("node_type") or "")
+        if (
+            node_type not in _CONTROL_NODE_TYPES
+            and node_node_type not in _CONTROL_NODE_TYPES
+        ):
             continue
         params = node.get("param")
         if not isinstance(params, dict):
