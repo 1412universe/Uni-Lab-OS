@@ -486,6 +486,8 @@ class BackendReagentService:
                 "provide exactly one of reagent_info_uuid or cas",
             )
         quantity = _non_negative_number(values.get("quantity"), "quantity")
+        if quantity <= 0:
+            raise BackendContractError(INVALID_PARAMETER, "quantity must be positive")
         unit = str(values.get("quantity_unit") or "").strip()
         if not unit:
             raise BackendContractError(INVALID_PARAMETER, "quantity_unit is required")

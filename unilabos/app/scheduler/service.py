@@ -422,7 +422,15 @@ class EdgeScheduler:
         """库存提交后异步唤醒等待任务，重新检查库位/物料前置条件。"""
 
         try:
-            self._wake_reconcile()
+            # 库存事件可能正由任务完成/结算线程发布，而该线程仍持有调度锁。
+            # 这里只投递到唯一重排线程，绝不调用 ``Future.result`` 同步等待，
+            # 否则重排线程会反过来等待同一把锁，导致完成回调死锁。
+            future = submit_with_context(
+                _RECONCILE_EXECUTOR,
+                _run_reconcile,
+                self.reschedule,
+            )
+            future.add_done_callback(_log_background_reconcile_failure)
         except Exception:
             logger.exception("[EdgeScheduler] material change reconcile failed")
 
