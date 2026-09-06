@@ -250,6 +250,84 @@ def _bridge(store: WorkflowStore, scheduler: EdgeScheduler) -> Any:
     return bridge_module.TaskSchedulerBridge(store, scheduler=scheduler)
 
 
+def test_recovery_freezes_only_jobs_waiting_for_physical_settlement(
+    store: WorkflowStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """终态恢复不能要求普通成功作业持有库存占用（Claim）。
+
+    参数：``store`` 是隔离工作流权威；``monkeypatch`` 记录执行锁查询。
+    返回：无；断言同一失败任务中的工作流输入等普通成功作业被跳过，只有声明
+    ``uncertainty_reason`` 的物理作业被冻结。异常：恢复误查无 Claim 的普通作业
+    时测试保持 RED，对应真实 Backend 重启失败。
+    """
+
+    class _RecoveryInventory:
+        """记录恢复阶段的库存占用状态转换。"""
+
+        store = None
+
+        def __init__(self) -> None:
+            """初始化空转换记录；参数与异常均为空。"""
+
+            self.transitions: list[tuple[str, str]] = []
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            """记录 Claim 身份和目标状态；返回与异常均为空。"""
+
+            self.transitions.append((claim_uuid, target_state))
+
+    inventory = _RecoveryInventory()
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        inventory=inventory,
+        station_resources=inventory,
+    )
+    bridge = _bridge(store, scheduler)
+    queried_jobs: list[str] = []
+
+    def _execution_claim(job_uuid: str) -> dict[str, Any] | None:
+        """只为等待物理结算的作业返回生产形状 Claim。"""
+
+        queried_jobs.append(job_uuid)
+        if job_uuid != "job-awaiting-settlement":
+            return None
+        return {"claim_uuid": "claim-awaiting-settlement"}
+
+    monkeypatch.setattr(bridge._projection, "get_execution_claim", _execution_claim)
+    try:
+        bridge._mark_inventory_claims_uncertain(
+            {
+                "jobs": [
+                    {
+                        "uuid": "workflow-input-job",
+                        "status": "succeeded",
+                        "uncertainty_reason": None,
+                    },
+                    {
+                        "uuid": "job-awaiting-settlement",
+                        "status": "failed",
+                        "uncertainty_reason": (
+                            "material_transfer_inventory_reconciliation_required"
+                        ),
+                    },
+                ]
+            }
+        )
+    finally:
+        bridge.close()
+
+    assert queried_jobs == ["job-awaiting-settlement"]
+    assert inventory.transitions == [
+        ("claim-awaiting-settlement", "uncertain")
+    ]
+
+
 def _seed_recoverable_test_mode_task(store: WorkflowStore) -> None:
     """持久化一个已完成取料、待执行放料的测试模式任务。
 

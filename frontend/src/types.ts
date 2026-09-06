@@ -261,6 +261,25 @@ export interface WorkflowTaskExecutionLockReleaseResult {
   }
 }
 
+/** 失败物料转运等待人工核验的权威上下文。 */
+export interface FailedMaterialTransferSettlementContext {
+  jobUuid: string
+  materialUuid: string
+  sourceSiteUuid: string
+  targetSiteUuid: string
+}
+
+/** 操作员确认的物料转运实际位置。 */
+export interface FailedMaterialTransferSettlementRequest {
+  actualChangeSet: {
+    kind: 'material_transfer'
+    material_uuid: string
+    target_owner_material_uuid: string
+    target_site_uuid: string
+  }
+  reason: string
+}
+
 export interface MaterialTaskReference {
   taskUuid: string
   taskStatus: TaskPresentationStatus

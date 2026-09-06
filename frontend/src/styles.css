@@ -1025,6 +1025,7 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .task-lock-group > footer { border-top: 1px solid #edf0f5; background: #fff; }
 .task-lock-group > footer small { color: var(--subtle); font-size: 7px; }
 .task-lock-group > footer .button { min-height: 25px; padding: 0 8px; gap: 4px; border-radius: 6px; font-size: 8px; box-shadow: none; }
+.task-lock-group-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .task-lock-empty { display: flex; align-items: center; gap: 6px; margin: 10px 12px 12px; padding: 12px 9px; color: var(--subtle); background: #f8fafc; border-radius: 7px; font-size: 8px; }
 .task-lock-dialog { width: min(510px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #e4e7ec; border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,.28); }
 .task-lock-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; padding: 17px 18px; border-bottom: 1px solid var(--line); }
@@ -1038,6 +1039,11 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .task-lock-dialog-error small { grid-column: 2; color: #912f40; font-size: 8px; }
 .task-lock-confirmation { display: flex; align-items: flex-start; gap: 8px; color: #344054; font-size: 9px; line-height: 1.5; }
 .task-lock-confirmation input { flex: none; width: 14px; height: 14px; margin-top: 1px; accent-color: #b42318; }
+.task-lock-settlement-options { display: grid; gap: 8px; margin: 0; padding: 11px; border: 1px solid #d0d5dd; border-radius: 8px; }
+.task-lock-settlement-options legend { padding: 0 5px; color: #344054; font-size: 9px; font-weight: 700; }
+.task-lock-settlement-options label { display: flex; align-items: flex-start; gap: 8px; padding: 8px; color: #344054; background: #f8fafc; border: 1px solid transparent; border-radius: 7px; font-size: 9px; line-height: 1.45; cursor: pointer; }
+.task-lock-settlement-options label:has(input:checked) { color: #7a2e0e; background: #fffaeb; border-color: #fdb022; }
+.task-lock-settlement-options input { flex: none; width: 14px; height: 14px; margin-top: 1px; accent-color: #b54708; }
 .task-lock-dialog > form > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; background: #f9fafb; border-top: 1px solid var(--line); }
 .task-lock-dialog .button:disabled { cursor: not-allowed; opacity: .48; transform: none; }
 .running-job-list { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding: 12px; }

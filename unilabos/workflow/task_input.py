@@ -20,6 +20,7 @@ from unilabos.workflow.workflow_io import (
     WorkflowIOValidationError,
     validate_workflow_graph_io,
 )
+from unilabos.workflow.workflow_boundary_binding import flatten_output_bindings
 
 
 class TaskInputError(ValueError):
@@ -98,12 +99,22 @@ def prepare_task_input(
             resolver=site_selection_resolver,
             resolved_input=resolved,
         )
+        output_bindings = flatten_output_bindings(
+            graph_nodes=snapshot.get("nodes", []),
+            output_bindings=validated.output_bindings,
+            planned_node_uuids={
+                str(node.get("uuid") or "")
+                for node in plan.get("nodes", [])
+                if isinstance(node, Mapping)
+            },
+        )
         _add_boundary_jobs(
             snapshot=snapshot,
             plan=plan,
             jobs=prepared_jobs,
             resolved_input=resolved,
             workflow_io=validated,
+            output_bindings=output_bindings,
         )
     except TaskInputError:
         raise
@@ -190,6 +201,7 @@ def _add_boundary_jobs(
     jobs: list[dict[str, Any]],
     resolved_input: Mapping[str, Any],
     workflow_io: ValidatedWorkflowIO,
+    output_bindings: Mapping[str, Mapping[str, Any]],
 ) -> None:
     """为非空工作流输入/输出合同编译正式纯数据边界节点作业。
 
@@ -238,8 +250,8 @@ def _add_boundary_jobs(
     output_job: dict[str, Any] | None = None
     if output_descriptors:
         output_index = len(existing_nodes) + offset
-        output_bindings = {
-            name: dict(binding) for name, binding in workflow_io.output_bindings.items()
+        frozen_output_bindings = {
+            name: dict(binding) for name, binding in output_bindings.items()
         }
         output_node = {
             "uuid": output_node_uuid,
@@ -248,7 +260,7 @@ def _add_boundary_jobs(
             "param": {},
             "execution_policy": {},
             "action_resource_contract": {},
-            "output_bindings": output_bindings,
+            "output_bindings": frozen_output_bindings,
         }
         output_job = {
             "uuid": str(uuid4()),
@@ -261,7 +273,7 @@ def _add_boundary_jobs(
             "status": "pending",
             "return_info": {},
         }
-        for output_name, binding in output_bindings.items():
+        for output_name, binding in frozen_output_bindings.items():
             source_node_uuid = (
                 input_node_uuid
                 if binding["kind"] == "workflow_input"
@@ -690,6 +702,18 @@ def _freeze_site_selections(
             node_param.pop(parameter, None)
             if isinstance(job_param, dict):
                 job_param.pop(parameter, None)
+            selector_handle_uuid = str(raw_selector.get("handle_uuid") or "").strip()
+            input_bindings = node.get("input_bindings")
+            if not selector_handle_uuid:
+                raise TaskInputError("计划库位选择器缺少可冻结的输入连接点")
+            # 源码字面量库位没有工作流输入绑定，因此计划节点不会携带
+            # ``input_bindings``；它已由库存权威冻结成候选 UUID，无需再删除。
+            # 只有字段存在但形状损坏时才关闭失败，避免把损坏计划当成字面量。
+            if input_bindings is None:
+                continue
+            if not isinstance(input_bindings, dict):
+                raise TaskInputError("计划库位选择器输入绑定不是对象")
+            input_bindings.pop(selector_handle_uuid, None)
 
 
 def _incoming_edges(

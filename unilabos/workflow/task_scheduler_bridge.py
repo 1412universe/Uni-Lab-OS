@@ -533,9 +533,9 @@ class TaskSchedulerBridge:
     ) -> dict[str, Any]:
         """持久化取消请求并请求本地执行器安全停止设备作业。
 
-        参数：``task_uuid`` 是已提交任务身份；``command_uuid`` 是公开幂等控制命令
+        参数：``task_uuid`` 是已创建任务身份；``command_uuid`` 是公开幂等控制命令
         身份，直接调用时自动生成。返回取消受理后的任务/作业聚合。异常：桥关闭、
-        任务未提交或投影冲突时抛稳定错误。
+        任务既未进入物料准入也未提交调度器，或投影冲突时抛稳定错误。
 
         未发送作业同步取消；设备在途作业保持 ``cancel_requested`` 和执行锁，等待
         执行器受理及明确终态。取消请求成功不等于设备已经安全停止。
@@ -544,8 +544,6 @@ class TaskSchedulerBridge:
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         normalized_uuid = self._required_text(task_uuid, field="task_uuid")
-        if self._scheduler.workflow_snapshot(normalized_uuid) is None:
-            raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
         normalized_command_uuid = self._required_text(
             command_uuid or str(uuid4()),
             field="command_uuid",
@@ -555,6 +553,13 @@ class TaskSchedulerBridge:
         complete_deadline = now + timedelta(
             seconds=self._cancel_complete_timeout_seconds
         )
+        scheduler_snapshot = self._scheduler.workflow_snapshot(normalized_uuid)
+        admission = self._projection.get_material_admission(normalized_uuid)
+        admission_pending = normalized_uuid in self._admission_pending_tasks or (
+            admission is not None and admission.get("status") == "blocked"
+        )
+        if scheduler_snapshot is None and not admission_pending:
+            raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
         self._projection.project_cancel_requested(
             normalized_uuid,
             command_uuid=normalized_command_uuid,
@@ -565,7 +570,9 @@ class TaskSchedulerBridge:
         # 外部 Task Cancel 可能关闭当前最早的人工确认；立即重排唯一计时器，
         # 不让已关闭的 deadline 长时间占据唤醒槽。
         self._schedule_manual_confirmation_timeout()
-        if not self._scheduler.cancel_workflow(normalized_uuid):
+        if scheduler_snapshot is not None and not self._scheduler.cancel_workflow(
+            normalized_uuid
+        ):
             raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
         self._store.stop_debug(normalized_uuid)
         self._admission_pending_tasks.discard(normalized_uuid)
@@ -998,6 +1005,11 @@ class TaskSchedulerBridge:
         for job in jobs:
             if not isinstance(job, Mapping):
                 continue
+            uncertainty_reason = str(job.get("uncertainty_reason") or "").strip()
+            if not uncertainty_reason:
+                # 同一终态任务通常还包含 workflow_input、本地控制和此前已成功的
+                # 作业；这些作业从未签发物理 Claim，恢复时不得把它们误判为损坏。
+                continue
             job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
             claim = self._projection.get_execution_claim(job_uuid)
             if claim is None:
@@ -1010,11 +1022,7 @@ class TaskSchedulerBridge:
                 continue
             inventory.transition_dispatch_permit(
                 str(claim["claim_uuid"]),
-                target_state=(
-                    "uncertain"
-                    if str(job.get("uncertainty_reason") or "").strip()
-                    else "released"
-                ),
+                target_state="uncertain",
             )
 
     def _register_active_recovery_routes(self) -> None:

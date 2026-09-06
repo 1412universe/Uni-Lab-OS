@@ -19,6 +19,8 @@ import type {
   WorkflowTaskExecutionLockReleaseRequest,
   WorkflowTaskExecutionLockReleaseResult,
   WorkflowTaskExecutionLockSnapshot,
+  FailedMaterialTransferSettlementContext,
+  FailedMaterialTransferSettlementRequest,
   WorkflowTaskPriority,
   WorkflowStepState,
   ResourceTemplateRecord,
@@ -2342,6 +2344,61 @@ export async function forceReleaseWorkflowTaskExecutionLock(
         }
       : undefined,
   }
+}
+
+/**
+ * 读取失败转运作业等待人工核验的权威上下文。
+ * @param jobUuid 工作流节点作业（WorkflowNodeJob）的稳定身份。
+ * @param signal 可选的 HTTP 取消信号。
+ * @returns 只含原转运物料及来源/目标库位（Site）稳定身份的结算上下文。
+ * @throws 作业并非等待物料位置对账或持久字段不完整时抛出错误并关闭失败。
+ */
+export async function loadFailedMaterialTransferSettlementContext(
+  jobUuid: string,
+  signal?: AbortSignal,
+): Promise<FailedMaterialTransferSettlementContext> {
+  const job = await requestData<RawRecord>(
+    `/workflow-node-jobs/${encodeURIComponent(jobUuid)}`,
+    signal,
+  )
+  const expected = job.expected_change_set
+  if (
+    job.uncertainty_reason !== 'material_transfer_inventory_reconciliation_required'
+    || !expected
+    || typeof expected !== 'object'
+    || expected.kind !== 'material_transfer'
+    || !expected.material_uuid
+    || !expected.source_site_uuid
+    || !expected.target_site_uuid
+  ) {
+    throw new Error('该作业不是等待物料转运物理结算的失败作业')
+  }
+  return {
+    jobUuid: String(job.uuid || jobUuid),
+    materialUuid: String(expected.material_uuid),
+    sourceSiteUuid: String(expected.source_site_uuid),
+    targetSiteUuid: String(expected.target_site_uuid),
+  }
+}
+
+/**
+ * 提交操作员核验的失败转运实际位置。
+ * @param jobUuid 工作流节点作业（WorkflowNodeJob）的稳定身份。
+ * @param request 实际库位（Site）、父物料和审计原因。
+ * @returns 后端完成库存物理结算后的作业事实。
+ * @throws 身份、占用（Claim）、栅栏（Fence）或库存事实冲突时抛出错误。
+ */
+export async function settleFailedMaterialTransfer(
+  jobUuid: string,
+  request: FailedMaterialTransferSettlementRequest,
+): Promise<RawRecord> {
+  return postData<RawRecord>(
+    `/workflow-node-jobs/${encodeURIComponent(jobUuid)}/settle-material-transfer`,
+    {
+      actual_change_set: request.actualChangeSet,
+      reason: request.reason,
+    },
+  )
 }
 
 export function materialsWithTaskReferences(

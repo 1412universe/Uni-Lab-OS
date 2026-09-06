@@ -12,6 +12,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
 )
 from unilabos.app.scheduler.inventory.dispatch_admission import DispatchFence
 from unilabos.registry.action_resource_contract import TRANSFER_CONTRACT_FIELDS
+from unilabos.utils.tracing import span
 from unilabos.workflow.store import StoreConflict
 
 
@@ -119,27 +120,43 @@ class MaterialTransferSettlement:
         if not site_name and not site_uuid:
             raise StoreConflict("物料转移结算缺少目标库位名称或稳定 UUID")
         try:
-            return dict(
-                self._inventory.settle_material_transfer(
-                    MaterialTransferCommand(
-                        material_uuid=material_uuid,
-                        target_owner_material_uuid=parent_uuid,
-                        target_site_uuid=site_uuid,
-                        target_site_name=site_name,
-                        actor="station_scheduler.material_transfer",
-                        causation_id=(
-                            f"workflow-node-job:{job_uuid}:material-transfer"
-                        ),
-                        effect_uuid=effect_uuid,
-                        claim_uuid=claim_uuid,
-                        job_uuid=job_uuid,
-                        attempt=attempt,
-                        parameter_hash=parameter_hash,
-                        expected_change_set=dict(expected_change_set),
-                        fences=fences,
+            with span(
+                "inventory.material_transfer.settle",
+                kind="client",
+                attributes={
+                    "workflow.job.uuid": job_uuid,
+                    "workflow.task.uuid": str(
+                        job.get("workflow_task_uuid") or ""
+                    ),
+                    "inventory.claim.uuid": claim_uuid,
+                    "material.uuid": material_uuid,
+                    "inventory.target.owner.uuid": parent_uuid,
+                    "inventory.target.site.uuid": site_uuid,
+                    "inventory.target.site.name": site_name,
+                    "workflow.job.attempt": attempt,
+                },
+            ):
+                return dict(
+                    self._inventory.settle_material_transfer(
+                        MaterialTransferCommand(
+                            material_uuid=material_uuid,
+                            target_owner_material_uuid=parent_uuid,
+                            target_site_uuid=site_uuid,
+                            target_site_name=site_name,
+                            actor="station_scheduler.material_transfer",
+                            causation_id=(
+                                f"workflow-node-job:{job_uuid}:material-transfer"
+                            ),
+                            effect_uuid=effect_uuid,
+                            claim_uuid=claim_uuid,
+                            job_uuid=job_uuid,
+                            attempt=attempt,
+                            parameter_hash=parameter_hash,
+                            expected_change_set=dict(expected_change_set),
+                            fences=fences,
+                        )
                     )
                 )
-            )
         except StationResourceError as error:
             raise StoreConflict(error.message) from error
 

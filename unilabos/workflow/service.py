@@ -609,6 +609,7 @@ class WorkflowService:
         self._device_action_runs = DeviceActionRunService(
             store,
             material_resolver=material_resolver,
+            site_selection_resolver=site_selection_resolver,
         )
         self._material_resolver = material_resolver
         self._site_selection_resolver = site_selection_resolver
