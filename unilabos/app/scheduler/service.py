@@ -302,6 +302,13 @@ class EdgeScheduler:
         self._timeline: deque[dict[str, Any]] = deque(maxlen=timeline_capacity)
         # 实时监控总线（duck-typed emit(channel, type, data)）；None = 关闭
         self._monitor = monitor
+        self._material_monitor_listener_id: int | None = None
+        add_listener = getattr(monitor, "add_listener", None)
+        if callable(add_listener):
+            self._material_monitor_listener_id = add_listener(
+                self._on_material_changed,
+                {"material"},
+            )
         # 工作流执行历史（WorkflowHistoryStore，独立 SQLite）；None = 不落盘
         self._history = history
         # 容量裁决由标准 Task/Job 持久状态完成；调度器只公开同一组配置，禁止
@@ -410,6 +417,23 @@ class EdgeScheduler:
             self._monitor.emit(channel, event_type, data)
         except Exception:  # noqa: BLE001 - 监控故障不影响调度
             pass
+
+    def _on_material_changed(self, _event: Mapping[str, Any]) -> None:
+        """库存提交后异步唤醒等待任务，重新检查库位/物料前置条件。"""
+
+        try:
+            self._wake_reconcile()
+        except Exception:
+            logger.exception("[EdgeScheduler] material change reconcile failed")
+
+    def close(self) -> None:
+        """解除实时库存监听，供 Edge 生命周期关闭使用。"""
+
+        remove_listener = getattr(self._monitor, "remove_listener", None)
+        listener_id = self._material_monitor_listener_id
+        if callable(remove_listener) and listener_id is not None:
+            remove_listener(listener_id)
+        self._material_monitor_listener_id = None
 
     def _safe_history(self, method: str, *args: Any, **kwargs: Any) -> None:
         """写执行历史；持久化故障不影响调度。"""

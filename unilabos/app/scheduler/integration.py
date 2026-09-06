@@ -510,6 +510,9 @@ def shutdown_edge_services() -> None:
         if device_state is not None:
             device_state.close()
     if _scheduler is not None:
+        close = getattr(_scheduler, "close", None)
+        if callable(close):
+            close()
         history = getattr(_scheduler, "_history", None)
         if history is not None:
             history.close()

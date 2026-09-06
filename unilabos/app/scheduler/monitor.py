@@ -26,7 +26,7 @@ import queue
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Set, Tuple
 
 from unilabos.utils.tracing import current_trace_ids
 
@@ -40,6 +40,7 @@ class MonitorBus:
         self._lock = threading.Lock()
         self._history: Deque[Dict[str, Any]] = deque(maxlen=history)
         self._subs: Dict[int, Tuple["queue.Queue[Dict[str, Any]]", Optional[Set[str]]]] = {}
+        self._listeners: Dict[int, Tuple[Optional[Set[str]], Callable[[Dict[str, Any]], None]]] = {}
         self._seq = 0
         self._next_sub_id = 0
         self._subscriber_buffer = subscriber_buffer
@@ -69,6 +70,14 @@ class MonitorBus:
                         q.put_nowait(event)
                     except queue.Full:
                         pass  # 慢消费者丢事件，靠 seq 空洞 + snapshot 自愈
+                listeners = tuple(self._listeners.values())
+            for channels, listener in listeners:
+                if channels is not None and channel not in channels:
+                    continue
+                try:
+                    listener(event)
+                except Exception:
+                    pass
         except Exception:  # noqa: BLE001
             pass
 
@@ -100,6 +109,25 @@ class MonitorBus:
     def unsubscribe(self, sub_id: int) -> None:
         with self._lock:
             self._subs.pop(sub_id, None)
+
+    def add_listener(
+        self,
+        listener: Callable[[Dict[str, Any]], None],
+        channels: Optional[Set[str]] = None,
+    ) -> int:
+        """注册轻量事件监听器；监听器在发布锁外执行。"""
+
+        with self._lock:
+            self._next_sub_id += 1
+            listener_id = self._next_sub_id
+            self._listeners[listener_id] = (channels, listener)
+            return listener_id
+
+    def remove_listener(self, listener_id: int) -> None:
+        """移除事件监听器。"""
+
+        with self._lock:
+            self._listeners.pop(listener_id, None)
 
     def recent(self, channel: str, limit: int = 40) -> List[Dict[str, Any]]:
         """读取当前进程某通道的近期诊断记录。
