@@ -2054,6 +2054,7 @@ def _action_declaration(
         imports=imports,
         anchors=anchors,
         node_metadata=node_metadata,
+        input_names=input_names,
     )
     if material_source is not None:
         return material_source

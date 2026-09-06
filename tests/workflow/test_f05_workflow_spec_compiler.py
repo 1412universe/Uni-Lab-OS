@@ -395,3 +395,33 @@ def test_automatic_source_binds_every_ordered_implicit_passthrough_consumer() ->
     ]
     assert "plate" not in jobs[1]["param"]
     assert "plate" not in jobs[2]["param"]
+
+
+@pytest.mark.parametrize("frozen", [True, False])
+def test_runtime_input_does_not_restore_frozen_site_selector(frozen: bool) -> None:
+    """启动库位冻结后，规格编译不能重新注入显式库位；普通输入仍需绑定。"""
+    compiler, _ = _compiler_contract()
+    task, jobs = _task_snapshot()
+    task["input"] = {"return_site": "R1C2", "sample_id": "sample-test"}
+    node = next(n for n in task["execution_plan"]["nodes"] if n["uuid"] == FIRST_NODE_UUID)
+    node["inputs"] = [
+        {"handle_uuid": "site-input", "data_key": "target_site"},
+        {"handle_uuid": "sample-input", "data_key": "sample_id"},
+    ]
+    node["input_bindings"] = {
+        "site-input": {"parameter": "return_site"},
+        "sample-input": {"parameter": "sample_id"},
+    }
+    node["site_selectors"] = [{"parameter": "target_site", "handle_uuid": "site-input"}]
+    if frozen:
+        node["execution_policy"] = {
+            "target_site_group": [MATERIAL_UUID],
+            "target_site_selection": {"site_uuids": [MATERIAL_UUID], "requested_reference": "R1C2"},
+        }
+    compiled = next(n for n in compiler().compile(task, jobs).nodes if n.id == FIRST_NODE_UUID)
+    assert compiled.param.get("sample_id") == "sample-test"
+    if frozen:
+        assert "target_site" not in compiled.param
+        assert compiled.execution_policy["target_site_group"] == [MATERIAL_UUID]
+    else:
+        assert compiled.param["target_site"] == "R1C2"

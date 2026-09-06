@@ -82,6 +82,10 @@ def prepare_task_input(
             supplied,
             resource_resolver=resource_resolver,
         )
+        _bind_material_source_sites(
+            snapshot=snapshot, plan=plan, jobs=prepared_jobs,
+            resolved_input=resolved, resolver=site_selection_resolver,
+        )
         _bind_inventory_requirement_quantities(
             snapshot=snapshot,
             resolved_input=resolved,
@@ -392,6 +396,49 @@ def _resolve_resource_slot_values(
             for item in value
         ]
     return value
+
+
+def _bind_material_source_sites(
+    *, snapshot: dict[str, Any], plan: dict[str, Any], jobs: list[dict[str, Any]],
+    resolved_input: Mapping[str, Any], resolver: SiteSelectionResolver | None,
+) -> None:
+    """把启动库位冻结到来源准入需求；库存权威随后检查类型并原子预留物料。"""
+    plan_nodes = {node["uuid"]: node for node in plan["nodes"]}
+    jobs_by_node = {job["workflow_node_uuid"]: job for job in jobs}
+    for source in snapshot["nodes"]:
+        binding = (source.get("meta_data") or {}).get("unilab", {}).get("material_source_site_binding")
+        if binding is None or source["uuid"] not in plan_nodes:
+            continue
+        reference = resolved_input.get(binding["parameter"])
+        if not isinstance(reference, str) or not reference.strip():
+            raise TaskInputError(f"请选择来源库位：{binding['parameter']}")
+        if resolver is None:
+            raise TaskInputError("启动库位选择缺少库存权威解析器")
+        selector = source["param"]
+        try:
+            resolution = resolver({
+                "version": 1, "owner_material_uuid": selector["mount"]["uuid"],
+                "occupant_material_uuid": "", "group_key": "",
+                "exact_site_reference": reference, "strategy": "sort_order",
+            })
+            site_uuids = resolution["site_uuids"]
+            if not isinstance(site_uuids, list) or len(site_uuids) != 1:
+                raise ValueError("来源库位必须唯一")
+            site_uuid = validate_uuid(site_uuids[0])
+        except Exception as exc:
+            raise TaskInputError(f"来源库位解析失败：{binding['parameter']} / {reference}") from exc
+        allowed = selector.get("slot_range")
+        if allowed is not None and site_uuid not in allowed:
+            raise TaskInputError(f"来源库位不在工作流允许范围：{reference}")
+        node = plan_nodes[source["uuid"]]
+        requirements = node.get("material_requirements", [])
+        if len(requirements) != 1:
+            raise TaskInputError("启动库位来源必须有且只有一个物料需求")
+        requirements[0].update(site_uuid=site_uuid, slot_uuids=[])
+        # 应用图保持不变；任务快照与计划使用同一具体库位，供数量预留和来源准入消费。
+        for target in (selector, node["param"], jobs_by_node[source["uuid"]]["param"]):
+            target.update(site=site_uuid, slot_range=None)
+        source["meta_data"]["unilab"].pop("material_source_site_binding")
 
 
 def _bind_plan_inputs(

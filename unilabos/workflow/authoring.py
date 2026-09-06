@@ -227,8 +227,9 @@ def material_source(
     参数说明：``resource_template`` 是显式导入的资源模板
     （ResourceTemplate）符号；``mode`` 是 ``existing | create_new``；
     ``mount`` 是 ``resource_ref`` 声明；``material_uuid`` 是可选固定物料
-    （Material）身份；``site`` 是库位（Site）选择，``slot_range`` 是库位
-    （Slot）范围；``flow_role`` 是工作流局部物料流角色，
+    （Material）身份；``site`` 是固定库位 UUID，或直接引用字符串工作流输入，
+    后者在启动时按挂载物料解析库位名并冻结 UUID；``slot_range`` 是库位
+    （Slot）范围，也可限制启动库位参数的允许范围；``flow_role`` 是工作流局部物料流角色，
     ``custody_policy`` 是物料保管策略（MaterialCustodyPolicy）；旧调用缺省时
     显式迁移为 ``TASK_EXCLUSIVE``，保持升级前的安全占用语义。
     本标记没有返回值，被

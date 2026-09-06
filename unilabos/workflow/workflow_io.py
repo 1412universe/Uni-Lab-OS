@@ -68,6 +68,20 @@ def validate_workflow_io(
             item["name"]: item
             for item in input_contract.to_dict()["parameters"]
         }
+        for node_uuid, node in nodes.items():
+            metadata = _unilab_metadata(node_meta_data.get(node_uuid, {}), label="节点")
+            binding = metadata.get("material_source_site_binding")
+            if binding is None:
+                continue
+            if not isinstance(binding, Mapping) or set(binding) != {"parameter"}:
+                raise WorkflowIOValidationError("启动库位绑定必须只含 parameter")
+            parameter = binding["parameter"]
+            descriptor = input_parameters.get(parameter) if isinstance(parameter, str) else None
+            if descriptor is None or descriptor["schema"].get("type") != "string":
+                raise WorkflowIOValidationError("启动库位绑定必须引用字符串工作流输入")
+            if (node.type != "material_source" or node.param.get("mode") != "existing"
+                    or node.param.get("site") is not None or node.param.get("material_uuid") is not None):
+                raise WorkflowIOValidationError("启动库位绑定不能与固定物料或固定库位并存")
         input_bindings = _validate_input_bindings(
             nodes=nodes,
             handles=handles,

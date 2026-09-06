@@ -464,6 +464,16 @@ class WorkflowSpecCompiler:
                 for item in planned_inputs
                 if isinstance(item, Mapping)
             }
+            # 库位输入已经在 Task 创建时冻结为候选 UUID，不能再次从公共输入
+            # 注入显式选择器；否则返回原库位时会与 target_site_group 冲突。
+            policy = node.get("execution_policy") or {}
+            frozen_site_parameters = {
+                str(selector.get("parameter") or "")
+                for selector in node.get("site_selectors", [])
+                if isinstance(selector, Mapping)
+                and isinstance(policy.get("target_site_selection"), Mapping)
+                and policy.get("target_site_group")
+            }
             for handle_uuid, binding in raw_input_bindings.items():
                 if not isinstance(binding, Mapping):
                     raise WorkflowSpecCompilationError(
@@ -475,7 +485,8 @@ class WorkflowSpecCompiler:
                     raise WorkflowSpecCompilationError(
                         "invalid_execution_plan", f"工作流输入绑定无法解析：{node_uuid}"
                     )
-                resolved_planned_param[data_key] = deepcopy(task_input[parameter])
+                if data_key not in frozen_site_parameters:
+                    resolved_planned_param[data_key] = deepcopy(task_input[parameter])
             job_param = job.get("param", {}) if job is not None else {}
             if not isinstance(job_param, Mapping):
                 raise WorkflowSpecCompilationError(
