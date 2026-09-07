@@ -3203,6 +3203,10 @@ class WorkflowService:
                     )
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
+                # 公共创建会丢掉客户端提交的执行器绑定；导入图里的设备物料
+                # UUID 必须在生成 Python 前写回固定绑定，否则人工确认和设备
+                # 动作无法建成可运行的执行计划。
+                self._bind_imported_fixed_executors(source_graph)
                 # JSON 导入优先保留已展开实验操作为 ``workflow()`` 调用，这样
                 # 测试环境里已发布的子流程可以重新展开；没有展开端口时再摊平。
                 compilation, canonical = self._compile_imported_graph(
@@ -3688,6 +3692,38 @@ class WorkflowService:
             and str(edge.get("target_node_uuid")) not in invocation_uuids
         ]
         return result
+
+    @staticmethod
+    def _bind_imported_fixed_executors(graph: dict[str, Any]) -> None:
+        """按导入节点上的设备物料 UUID 写回固定执行器绑定。
+
+        参数：``graph`` 是即将生成 Python 的创作图，会原地补齐
+        ``meta_data.unilab.executor_binding``。返回：无。异常：物料身份不是规范
+        UUID 时跳过该节点，避免把部署业务 ID 写进 ``device()`` 后编译失败。
+        """
+
+        nodes = graph.get("nodes")
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            try:
+                device_id = validate_uuid(str(node.get("material_uuid")))
+            except (TypeError, ValueError):
+                continue
+            meta_data = node.get("meta_data")
+            if not isinstance(meta_data, dict):
+                meta_data = {}
+                node["meta_data"] = meta_data
+            unilab = meta_data.get("unilab")
+            if not isinstance(unilab, dict):
+                unilab = {}
+                meta_data["unilab"] = unilab
+            unilab["executor_binding"] = {
+                "mode": "fixed",
+                "device_id": device_id,
+            }
 
     @staticmethod
     def _authoring_graph_projection(graph: Mapping[str, Any]) -> dict[str, Any]:

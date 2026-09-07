@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -28,15 +29,19 @@ from tests.workflow.test_structured_condition_authoring import (
     _condition_engine,
     _condition_source,
 )
+from unilabos.app.scheduler.dispatch import RecordingDispatcher
+from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow import domain_source_target, source_publication
 from unilabos.workflow import publication_catalog
 from unilabos.workflow.authoring_engine import WorkflowAuthoringEngine
 from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.domain_source_target import DomainWorkflowSourceTarget
+from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.service import WorkflowConflict, WorkflowError, WorkflowService
 from unilabos.workflow.source_discovery import discover_editable_sources
 from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.workflow_spec_compiler import WorkflowSpecCompiler
 
 
 def _empty_domain_package(selected_root: Path) -> Path:
@@ -119,6 +124,42 @@ def _legacy_graph_payload(compiled, *, name: str) -> dict[str, Any]:
 _CONTROL_FLOW_IMPORT_FIXTURE = (
     Path(__file__).resolve().parent / "fixtures" / "control_flow_import_payload.json"
 )
+_IMPORTED_DEVICE_UUID = "51000000-0000-4000-8000-000000000091"
+_ACTION_CONTRACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "goal": {"type": "object", "additionalProperties": True},
+    },
+    "required": ["goal"],
+}
+
+
+def _imported_graph_can_run(imported: Mapping[str, Any]) -> dict[str, Any]:
+    """导入后的应用图必须能建成执行计划、编成调度规格并提交本地调度器。
+
+    参数：``imported`` 是 JSON 导入返回的完整图。返回：调度器首次提交摘要，
+    便于线性图继续把已派发作业标完成。异常/断言：缺固定执行器、动作合同或
+    控制区域不完整时，执行计划、规格编译或提交失败。
+    """
+
+    plan, jobs = ExecutionPlanBuilder().build(
+        imported,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+    spec = WorkflowSpecCompiler().compile(
+        {
+            "uuid": "61000000-0000-4000-8000-000000000091",
+            "workflow_uuid": imported["workflow"]["uuid"],
+            "workflow_snapshot": imported,
+            "execution_plan": plan,
+        },
+        jobs,
+    )
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    submitted = scheduler.submit_workflow(spec)
+    assert submitted["state"]
+    return submitted
 
 
 class _RecordingAuthoringEngine:
@@ -210,6 +251,12 @@ def _control_flow_import_catalog(
             }
         elif node_type in {"condition", "repeat_until"}:
             meta_data = {"unilab": {"framework_owner_only": True}}
+        elif node_type in {"device_action", "manual_confirm"}:
+            meta_data = {
+                "unilab": {
+                    "action_contract_schema": deepcopy(_ACTION_CONTRACT_SCHEMA),
+                }
+            }
         templates.append(
             {
                 "uuid": template_uuid,
@@ -741,6 +788,32 @@ def test_legacy_import_accepts_nested_composite_control_flow_json(
             assert edge["source_node_uuid"] in imported_nodes
             assert edge["target_node_uuid"] in imported_nodes
         assert engine.inline_flags[:2] == [False, True]
+        bound_nodes = [
+            node
+            for node in imported["nodes"]
+            if node["type"] in {"ILab", "manual_confirm"}
+        ]
+        assert bound_nodes
+        assert all(
+            ((node.get("meta_data") or {}).get("unilab") or {}).get(
+                "executor_binding"
+            )
+            == {
+                "mode": "fixed",
+                "device_id": node["material_uuid"],
+            }
+            for node in bound_nodes
+        )
+        _imported_graph_can_run(imported)
+        task = service.create_workflow_task(
+            workflow_uuid=imported["workflow"]["uuid"],
+            run_mode="normal",
+            target_node_uuid=None,
+            input_value={},
+            description=None,
+            meta_data={},
+        )
+        assert task["uuid"]
     except WorkflowError as error:
         raise AssertionError(f"{error.code}: {error.message}") from error
     finally:
@@ -1216,7 +1289,7 @@ def test_http_create_rejects_duplicate_authoring_function_name(
 def test_legacy_import_accepts_backend_string_template_schema(
     tmp_path: Path,
 ) -> None:
-    """活环境把动作模板 schema 存成 JSON 文本时，单节点导入不能报 3003。"""
+    """活环境文本 schema 的单动作 JSON 导入后必须能建成任务并派发。"""
 
     schema_text = json.dumps(
         {
@@ -1237,6 +1310,11 @@ def test_legacy_import_accepts_backend_string_template_schema(
         handles=[],
     )
     template["schema"] = schema_text
+    template["type"] = "UniLabJsonCommand"
+    template["node_type"] = "device_action"
+    template["meta_data"] = {
+        "unilab": {"action_contract_schema": deepcopy(_ACTION_CONTRACT_SCHEMA)}
+    }
     engine = WorkflowAuthoringEngine(
         catalog=AuthoringCatalogSnapshot.from_entities([template], handles)
     )
@@ -1262,16 +1340,33 @@ def test_legacy_import_accepts_backend_string_template_schema(
                     {
                         "uuid": "20000000-0000-4000-8000-000000000091",
                         "name": "noop",
-                        "type": "compute",
+                        "type": "ILab",
                         "workflow_node_template_uuid": template["uuid"],
                         "description": "单动作导入回归",
                         "param": {},
+                        "material_uuid": _IMPORTED_DEVICE_UUID,
                     }
                 ],
                 "edges": [],
             }
         )
-        assert imported["nodes"]
+        node = imported["nodes"][0]
+        assert node["material_uuid"] == _IMPORTED_DEVICE_UUID
+        assert node["meta_data"]["unilab"]["executor_binding"] == {
+            "mode": "fixed",
+            "device_id": _IMPORTED_DEVICE_UUID,
+        }
+        submitted = _imported_graph_can_run(imported)
+        assert submitted["dispatched"]
+        task = service.create_workflow_task(
+            workflow_uuid=imported["workflow"]["uuid"],
+            run_mode="normal",
+            target_node_uuid=None,
+            input_value={},
+            description=None,
+            meta_data={},
+        )
+        assert task["uuid"]
         assert imported["workflow"]["name"] == "单动作导入"
     finally:
         service.close()
