@@ -428,3 +428,37 @@ class TestMaterialMonitorWakeup:
                 return scheduler._wake_reconcile()
 
         assert _call_with_timeout(probe, timeout=2.0) == []
+
+    def test_inbound_during_in_flight_reconcile_is_not_dropped(self):
+        """重排已经做过等料检查后到达的补料，必须再跑一轮。"""
+
+        bus = MonitorBus()
+        scheduler, dispatcher, svc = _stack(stock=10.0, monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-monitor-dirty",
+            nodes=[_node("A", materials=[_req(lot="lot-1", qty=50.0)])],
+        )
+        result = _call_with_timeout(lambda: scheduler.submit_workflow(spec))
+        assert result["state"] == "waiting_for_material"
+
+        entered = threading.Event()
+        release = threading.Event()
+        rounds = {"count": 0}
+        original_impl = scheduler._reschedule_impl
+
+        def delaying_impl() -> list[dict[str, object]]:
+            dispatched = original_impl()
+            rounds["count"] += 1
+            if rounds["count"] == 1:
+                entered.set()
+                assert release.wait(timeout=2)
+            return dispatched
+
+        scheduler._reschedule_impl = delaying_impl  # type: ignore[method-assign]
+        bus.emit("material", "lot.inbound", {"lot_id": "lot-1"})
+        assert entered.wait(timeout=2)
+        svc.inbound_lot("tpl-w", 100.0, lot_id="lot-1")
+        release.set()
+        snapshot = _wait_state(scheduler, "wf-monitor-dirty", "running")
+        assert snapshot["state"] == "running"
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]

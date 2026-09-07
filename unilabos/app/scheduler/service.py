@@ -307,6 +307,7 @@ class EdgeScheduler:
         # 事件会先抢走派发，调用方等到的下一轮返回空 dispatched。
         self._reconcile_wakeup_lock = threading.Lock()
         self._pending_reconcile: Future[Any] | None = None
+        self._reconcile_generation = 0
         add_listener = getattr(monitor, "add_listener", None)
         if callable(add_listener):
             self._material_monitor_listener_id = add_listener(
@@ -1817,6 +1818,30 @@ class EdgeScheduler:
         owned = getattr(self._lock, "_is_owned", None)
         return bool(owned()) if callable(owned) else False
 
+    def _drain_pending_reconcile(self) -> list[dict[str, Any]]:
+        """连续重排直到本轮期间到达的物料唤醒都被消化。
+
+        参数：无。返回：最后一轮实际派发摘要。异常：``reschedule`` 失败原样
+        传播。合并唤醒时用代数记录后到的补料/下料；当前轮若已经做过等料
+        检查，代数变化后必须再跑一轮，否则等待中的工作流会继续卡住。
+        """
+
+        dispatched: list[dict[str, Any]] = []
+        with self._reconcile_wakeup_lock:
+            running = self._pending_reconcile
+        try:
+            while True:
+                with self._reconcile_wakeup_lock:
+                    seen_generation = self._reconcile_generation
+                dispatched = self.reschedule()
+                with self._reconcile_wakeup_lock:
+                    if seen_generation == self._reconcile_generation:
+                        return dispatched
+        finally:
+            with self._reconcile_wakeup_lock:
+                if self._pending_reconcile is running:
+                    self._pending_reconcile = None
+
     def _wake_reconcile(self, *, wait: bool = True) -> list[dict[str, Any]]:
         """只向 Scheduler 调度循环投递唤醒，不在设备回调栈执行重排。
 
@@ -1828,13 +1853,16 @@ class EdgeScheduler:
         with self._reconcile_wakeup_lock:
             pending = self._pending_reconcile
             if pending is None or pending.done():
+                self._reconcile_generation += 1
                 future = submit_with_context(
                     _RECONCILE_EXECUTOR,
                     _run_reconcile,
-                    self.reschedule,
+                    self._drain_pending_reconcile,
                 )
                 self._pending_reconcile = future
             else:
+                if not wait:
+                    self._reconcile_generation += 1
                 future = pending
         if (
             not wait
