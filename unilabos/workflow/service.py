@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
@@ -46,6 +47,8 @@ from unilabos.workflow.composite_contract_refresh import (
 )
 from unilabos.workflow.composite_invocation import (
     CompositeInvocationInvalid,
+    _remap_control_references,
+    _remap_nested_composite_metadata,
     expand_composite_invocation,
 )
 from unilabos.workflow.definition_edit import (
@@ -2950,6 +2953,17 @@ class WorkflowService:
                     ) from None
                 old_to_new[old_uuid] = node["uuid"]
                 nodes.append(node)
+            # JSON 导入会为每个节点重建身份；控制区域参数和嵌套组合元数据中
+            # 的节点引用也必须同步重映射，否则候选图校验会看到已不存在的旧 UUID。
+            for node in nodes:
+                node["param"] = _remap_control_references(
+                    node.get("param") or {},
+                    old_to_new,
+                )
+                node["meta_data"] = _remap_nested_composite_metadata(
+                    node.get("meta_data") or {},
+                    old_to_new,
+                )
             for index, source in enumerate(source_nodes):
                 parent_uuid = source.get("parent_uuid")
                 if parent_uuid is not None:
@@ -2997,6 +3011,39 @@ class WorkflowService:
                 meta_data = normalize_json_object(definition.get("meta_data"))
             except (TypeError, ValueError):
                 raise WorkflowDefinitionInvalid("meta_data 必须是 JSON 对象") from None
+            # ``unilab`` 下的输入/输出合同是可编辑的工作流语义，不能和其余
+            # 服务端私有元数据一起丢弃；导入后交给统一提交路径重新固化。
+            unilab_meta_data = meta_data.get("unilab")
+            input_contract = (
+                deepcopy(unilab_meta_data.get("input_contract"))
+                if isinstance(unilab_meta_data, Mapping)
+                and isinstance(unilab_meta_data.get("input_contract"), Mapping)
+                else {"version": 1, "parameters": []}
+            )
+            output_contract = (
+                deepcopy(unilab_meta_data.get("output_contract"))
+                if isinstance(unilab_meta_data, Mapping)
+                and isinstance(unilab_meta_data.get("output_contract"), Mapping)
+                else {"version": 1, "outputs": []}
+            )
+            output_bindings = (
+                deepcopy(unilab_meta_data.get("output_bindings"))
+                if isinstance(unilab_meta_data, Mapping)
+                and isinstance(unilab_meta_data.get("output_bindings"), Mapping)
+                else {}
+            )
+            if "version" not in input_contract:
+                input_contract["version"] = 1
+            if "parameters" not in input_contract:
+                input_contract["parameters"] = []
+            if "version" not in output_contract:
+                output_contract["version"] = 1
+            if "outputs" not in output_contract:
+                output_contract["outputs"] = []
+            output_bindings = _remap_control_references(
+                output_bindings,
+                old_to_new,
+            )
             try:
                 workflow_type = normalize_workflow_type(definition.get("workflow_type"))
             except (TypeError, ValueError):
@@ -3047,6 +3094,9 @@ class WorkflowService:
             nodes=nodes,
             edges=edges,
             workflow_type=workflow_type,
+            input_contract=input_contract,
+            output_contract=output_contract,
+            output_bindings=output_bindings,
         )
 
     def _commit_domain_workflow_creation(
@@ -3062,6 +3112,7 @@ class WorkflowService:
         workflow_type: str,
         input_contract: Mapping[str, Any] | None = None,
         output_contract: Mapping[str, Any] | None = None,
+        output_bindings: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """在工作流锁内把新定义规范化为首版领域 Python 源码。
 
@@ -3082,12 +3133,22 @@ class WorkflowService:
                         meta_data=meta_data,
                         tags=tags,
                     )
+                    # 首次写入完整图时也要让图校验看到输入/输出合同；否则带
+                    # workflow_input 或输出绑定的控制图会在尚未生成源码前被
+                    # 当成“合同缺失”拒绝。其余 ``unilab`` 字段仍由后续源码
+                    # 固化步骤统一生成，避免把调用方私有元数据直接写入权威。
+                    creation_meta_data = dict(validated_meta_data)
+                    creation_meta_data["unilab"] = {
+                        "input_contract": deepcopy(dict(input_contract or {})),
+                        "output_contract": deepcopy(dict(output_contract or {})),
+                        "output_bindings": deepcopy(dict(output_bindings or {})),
+                    }
                     created = self._definition_store.create_workflow_with_graph(
                         workflow_uuid=identity,
                         name=name,
                         tags=tags,
                         description=description,
-                        meta_data=validated_meta_data,
+                        meta_data=creation_meta_data,
                         nodes=[
                             WorkflowNodeWrite.model_validate(node) for node in nodes
                         ],
@@ -3097,14 +3158,22 @@ class WorkflowService:
                         workflow_type=workflow_type,
                     )
                 workflow_created = True
-            except (KeyError, TypeError, ValueError, ValidationError):
-                raise WorkflowError("invalid_input") from None
+            except (KeyError, TypeError, ValueError, ValidationError) as error:
+                detail = str(error).strip()
+                raise WorkflowError(
+                    "invalid_input",
+                    message=detail or None,
+                ) from None
             except StoreNotFound:
                 raise WorkflowError("not_found") from None
             except StoreAuthoringConflict as error:
                 raise WorkflowError(error.code) from None
-            except StoreConflict:
-                raise WorkflowError("invalid_input") from None
+            except StoreConflict as error:
+                detail = str(error).strip()
+                raise WorkflowError(
+                    "invalid_input",
+                    message=detail or None,
+                ) from None
 
             try:
                 source_meta_data = dict(created["workflow"].get("meta_data") or {})
@@ -3123,6 +3192,10 @@ class WorkflowService:
                 if isinstance(output_contract, Mapping):
                     source_meta_data["unilab"]["output_contract"] = deepcopy(
                         dict(output_contract)
+                    )
+                if isinstance(output_bindings, Mapping):
+                    source_meta_data["unilab"]["output_bindings"] = deepcopy(
+                        dict(output_bindings)
                     )
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
@@ -3482,12 +3555,24 @@ class WorkflowService:
 
         fields = ("workflow", "nodes", "edges", "node_templates", "handle_templates")
         try:
-            return {
+            projection = {
                 **{field: deepcopy(graph[field]) for field in fields},
                 "inventory_requirements": deepcopy(
                     graph.get("inventory_requirements", [])
                 ),
             }
+            # SQLite 旧投影把模板 schema 作为 JSON 文本保存，而创作目录快照
+            # 使用对象；在作者编译边界统一成对象，避免候选目录被误判为语义漂移。
+            for template in projection["node_templates"]:
+                if not isinstance(template, dict):
+                    continue
+                schema = template.get("schema")
+                if isinstance(schema, str):
+                    try:
+                        template["schema"] = json.loads(schema)
+                    except (TypeError, ValueError):
+                        pass
+            return projection
         except (KeyError, TypeError):
             raise WorkflowError("candidate_invalid") from None
 

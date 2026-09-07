@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -15,6 +16,14 @@ from tests.workflow.test_authoring_engine import (
     _engine,
     _source,
     _template,
+)
+from tests.workflow.test_repeat_until_authoring import (
+    _repeat_engine,
+    _repeat_source,
+)
+from tests.workflow.test_structured_condition_authoring import (
+    _condition_engine,
+    _condition_source,
 )
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow import domain_source_target, source_publication
@@ -72,6 +81,55 @@ def _service(
         service.activate_registered_sources_to_fixed_point()
     service.restore_published_workflow_contracts()
     return service, runtime_store, definition_store
+
+
+def _project_compiled_catalog(definitions: WorkflowStore, compiled) -> None:
+    """把编译产物中的节点/连接点模板写入进程内定义目录。"""
+
+    assert compiled.graph is not None
+    with definitions.transaction() as connection:
+        definitions._ensure_authoring_catalog_projection(
+            connection,
+            node_templates=compiled.graph["node_templates"],
+            handle_templates=compiled.graph["handle_templates"],
+            authority_id=compiled.template_catalog_fingerprint,
+            now="2026-08-28T00:00:00+00:00",
+        )
+
+
+def _legacy_graph_payload(compiled, *, name: str) -> dict[str, Any]:
+    """把编译图转成测试导出 JSON：保留 type、连线和创作元数据。"""
+
+    assert compiled.graph is not None
+    workflow = compiled.graph["workflow"]
+    return {
+        "workflow_name": name,
+        "tags": list(workflow.get("tags") or []),
+        "description": workflow.get("description"),
+        "meta_data": workflow.get("meta_data") or {},
+        "workflow_type": workflow.get("workflow_type") or "normal",
+        "nodes": list(compiled.graph["nodes"]),
+        "edges": list(compiled.graph["edges"]),
+    }
+
+
+def _empty_applied_graph() -> dict[str, Any]:
+    """返回编译器要求的空已应用图。"""
+
+    return {
+        "workflow": {
+            "uuid": WORKFLOW_UUID,
+            "name": "base",
+            "tags": [],
+            "description": None,
+            "meta_data": {},
+            "revision": 7,
+        },
+        "nodes": [],
+        "edges": [],
+        "node_templates": [],
+        "handle_templates": [],
+    }
 
 
 def test_python_import_and_api_edits_survive_restart_via_domain_source(
@@ -166,6 +224,144 @@ def test_python_import_and_api_edits_survive_restart_via_domain_source(
         assert reopened_definitions.count_rows("workflow") == 1
     finally:
         reopened.close()
+
+
+def test_legacy_import_remaps_control_region_references(
+    tmp_path: Path,
+) -> None:
+    """含循环控制节点的 JSON 导入必须重映射参数内的节点身份引用。"""
+
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    engine = _repeat_engine()
+    compiled = engine.compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=7,
+        python_source=_repeat_source(),
+        source_uri="package://demo_domain/workflows/repeat.py",
+        applied_graph=_empty_applied_graph(),
+    )
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+        engine=engine,
+    )
+    _project_compiled_catalog(definitions, compiled)
+    try:
+        imported = service.import_legacy_workflow(
+            payload=_legacy_graph_payload(compiled, name="导入循环流程")
+        )
+        imported_nodes = {node["uuid"]: node for node in imported["nodes"]}
+        assert imported_nodes
+        control = next(
+            node for node in imported_nodes.values() if node["type"] == "repeat_until"
+        )
+        body_uuids = set(control["param"]["node_uuids"])
+        assert body_uuids
+        assert body_uuids.issubset(imported_nodes)
+        assert all(
+            node["parent_uuid"] == control["uuid"]
+            for node in imported_nodes.values()
+            if node["uuid"] in body_uuids
+        )
+        assert control["param"]["next_carry"]["dose"]["node_uuid"] in body_uuids
+        assert imported["edges"]
+        imported_identities = set(imported_nodes)
+        for edge in imported["edges"]:
+            assert edge["source_node_uuid"] in imported_identities
+            assert edge["target_node_uuid"] in imported_identities
+            assert edge["source_handle_uuid"]
+            assert edge["target_handle_uuid"]
+    finally:
+        service.close()
+
+
+def test_legacy_import_remaps_condition_branch_references(
+    tmp_path: Path,
+) -> None:
+    """含条件控制节点的 JSON 导入必须重映射分支内的节点身份引用。"""
+
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    engine = _condition_engine()
+    compiled = engine.compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=7,
+        python_source=_condition_source(),
+        source_uri="package://demo_domain/workflows/condition.py",
+        applied_graph=_empty_applied_graph(),
+    )
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+        engine=engine,
+    )
+    _project_compiled_catalog(definitions, compiled)
+    try:
+        imported = service.import_legacy_workflow(
+            payload=_legacy_graph_payload(compiled, name="导入条件流程")
+        )
+        imported_nodes = {node["uuid"]: node for node in imported["nodes"]}
+        control = next(
+            node for node in imported_nodes.values() if node["type"] == "condition"
+        )
+        branch_uuids = {
+            node_uuid
+            for branch in control["param"]["branches"]
+            for node_uuid in branch["node_uuids"]
+        }
+        assert branch_uuids
+        assert branch_uuids.issubset(imported_nodes)
+        assert all(
+            node["parent_uuid"] == control["uuid"]
+            for node in imported_nodes.values()
+            if node["uuid"] in branch_uuids
+        )
+    finally:
+        service.close()
+
+
+def test_legacy_import_keeps_complete_data_edges(
+    tmp_path: Path,
+) -> None:
+    """带完整 Handle 连线的 JSON 导入必须重建节点身份并保留连线端点。"""
+
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    engine = _engine()
+    compiled = engine.compile(
+        workflow_uuid=WORKFLOW_UUID,
+        workflow_revision=7,
+        python_source=_source(),
+        source_uri="package://demo_domain/workflows/connected.py",
+        applied_graph=_empty_applied_graph(),
+    )
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    assert compiled.graph["edges"]
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+        engine=engine,
+    )
+    _project_compiled_catalog(definitions, compiled)
+    original_node_uuids = {node["uuid"] for node in compiled.graph["nodes"]}
+    try:
+        imported = service.import_legacy_workflow(
+            payload=_legacy_graph_payload(compiled, name="导入连线流程")
+        )
+        imported_nodes = {node["uuid"]: node for node in imported["nodes"]}
+        assert imported_nodes
+        assert original_node_uuids.isdisjoint(imported_nodes)
+        assert imported["edges"]
+        for edge in imported["edges"]:
+            assert edge["source_node_uuid"] in imported_nodes
+            assert edge["target_node_uuid"] in imported_nodes
+            assert edge["source_handle_uuid"]
+            assert edge["target_handle_uuid"]
+    finally:
+        service.close()
 
 
 def test_published_experiment_operation_survives_restart_in_domain_package(
@@ -611,10 +807,7 @@ def json_source():
                 "tags": ["json"],
                 "description": "导入后转换为 Python",
                 "meta_data": {"owner": "lab"},
-                "nodes": [
-                    {key: value for key, value in node.items() if key != "type"}
-                    for node in compiled.graph["nodes"]
-                ],
+                "nodes": list(compiled.graph["nodes"]),
                 "edges": compiled.graph["edges"],
             }
         )
