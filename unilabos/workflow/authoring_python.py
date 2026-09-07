@@ -736,7 +736,13 @@ def _append_group_source(
     node_uuid = str(node["uuid"])
     indent = "    " * indent_level
     start_line = len(lines) + 1
-    metadata_comment = _node_metadata_comment(node=node, action=action)
+    # 子工作流分组不是自定义展示节点；描述为空是合法的，不能套用普通节点
+    # 的“自定义展示必须包含描述”校验。描述存在时仍保留原有展示注释往返。
+    metadata_comment = (
+        _node_metadata_comment(node=node, action=action)
+        if isinstance(node.get("description"), str) and node["description"].strip()
+        else None
+    )
     if metadata_comment is not None:
         lines.append(f"{indent}{metadata_comment}")
     lines.append(f"{indent}{_node_anchor(node_uuid, node)}")
@@ -1995,11 +2001,14 @@ def _is_published_workflow(action: AuthoringCatalogAction) -> bool:
     template = action.template
     meta_data = template.get("meta_data")
     unilab = meta_data.get("unilab") if isinstance(meta_data, Mapping) else None
-    return (
-        template.get("type") == "workflow"
-        and template.get("node_type") == "workflow"
-        and isinstance(unilab, Mapping)
-        and isinstance(unilab.get("workflow_source"), Mapping)
+    if (
+        template.get("type") != "workflow"
+        or template.get("node_type") != "workflow"
+        or not isinstance(unilab, Mapping)
+    ):
+        return False
+    return isinstance(unilab.get("workflow_source"), Mapping) or isinstance(
+        unilab.get("workflow_contract"), Mapping
     )
 
 
