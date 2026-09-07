@@ -1,6 +1,6 @@
-# 其他产品入口
+# 产品入口与 Workbench
 
-Uni-Lab 代码库包含多种客户端和部署角色。本页用于说明它们各自能做什么；当前 `xiongyanfei` 的主要用户入口仍是内置 Console。
+Uni-Lab 代码库包含多种客户端和部署角色。本页用于说明它们各自能做什么；当前演示环境的主要用户入口仍是内置 Console。
 
 ## 内置 Console
 
@@ -36,6 +36,20 @@ Theia Workbench 是桌面/Workbench 产品，Activity Bar 包含：
 | 试剂库存 | CRUD + 历史 | 只读 |
 
 Local Profile 以 Python 源码/编译结果为权威；Backend Profile 以画布 Graph 为权威。切换 Profile 只影响之后的任务，不迁移已有任务，且未保存修改会阻止切换。
+
+### 本地安装与启动
+
+Workbench 是可选的开发入口，不是运行 Console 或 CLI 的前置。它要求 Node 20/22、pnpm `10.13.1`、有效领域 Workspace，以及同时含 Python 与 `unilab` 的环境。
+
+从克隆 `uni-lab-fe`、安装依赖到执行 `pnpm workbench` 的可验证命令，见[安装页的本地 Theia Workbench 分支](installation.md#可选分支安装并启动本地-theia-workbench)。服务器、TLS 和公网入口仍以[Kubernetes 部署与上线](deployment.md)为准。
+
+### Agent 与领域仓库生成器
+
+本地 Workbench 的 Activity Bar 提供“Agent”入口，环境管理器也能启动、停止和查看当前 Workspace Agent。打开所选 Editable Package 并启动 Agent 后，右侧面板会显示当前 Workspace 会话。
+
+Workbench 随应用打包一组托管 Skill。Agent 启动时会把它们播种到当前 Workspace 的 `.agents/skills/`；其中 `unilab-domain-repo-builder` 可辅助新建、迁移和诊断实验室领域仓库。用户修改过的 Skill 会保留，不会被更新静默覆盖。
+
+Agent 和领域仓库生成器都是可选开发能力；不用它们也能手写仓库并运行产品。它们不在当前公网 Console 中，也不代表生产验收。使用条件与操作步骤见[使用 AI 仓库生成器（实验性）](repository-builder-skill.md)。
 
 Workbench 的实验台只读展示逻辑站点占用，不是传感器事实；机器人点位当前不可用；Catalog 的新建、删除、变更日志和状态筛选被隐藏。旧 breakpoint debugger 与当前退役 Debug API 不兼容。
 
@@ -92,7 +106,11 @@ unilab doctor net|talker|listener|fake-device
 
 MCP 适合为 AI 提供当前工作区和运行状态，但当前没有工作流源码生成、写入、导入、发布或运行前预检工具。`wait_authoring` 只在 revision 增长或存在非空诊断时可靠返回，不能用它判断同一 revision 下的无诊断 candidate 已经生成；这时应读取 Authoring REST 状态。推荐的 AI 创作组合与安装命令见[用 AI 编写工作流](ai-workflow-authoring.md)。
 
-MCP 是由客户端拉起的本地命令型 Server，不是公网服务，也不是人类权限系统。`run_workflow` 会直接创建 Task，不能提交完整库存绑定和优先级字段，且它的 `operation_id` 不是创建幂等键；必须放在人工审查、发布和产品预检之后。重置仍需显式确认。`debug_workflow` 和带 `hold_uuid` 的旧调试命令受 HTTP 410 限制；请改用 `run_mode="step"` 的标准 Task 和普通 `step`/`resume`/`cancel` 命令。已注册的 `switch_workspace_authority` 当前会被 Workspace Host 以 `backend_mode_removed` 拒绝，不能当作可用能力。真机环境也不要用单组件 MCP stop 代替 `unilab workspace stop` 的完整排空流程。
+MCP 是由客户端拉起的本地命令型 Server，不是公网服务，也不是人类权限系统。`run_workflow` 会直接创建 Task，不能提交完整库存绑定和优先级字段，且它的 `operation_id` 不是创建幂等键；必须放在人工审查、发布和产品预检之后。重置仍需显式确认。
+
+`debug_workflow` 和带 `hold_uuid` 的旧调试命令受 HTTP 410 限制；请改用 `run_mode="step"` 的标准 Task 和普通 `step`/`resume`/`cancel` 命令。
+
+已注册的 `switch_workspace_authority` 当前会被 Workspace Host 以 `backend_mode_removed` 拒绝，不能当作可用能力。真机环境也不要用单组件 MCP stop 代替 `unilab workspace stop` 的完整排空流程。
 
 ## PLC-Sim 与 Modbus-Sim
 
@@ -111,5 +129,7 @@ Uni-Lab-Sim 仓库提供：
 - VS Code 扩展负责打开/高亮工作流和资源、地图选择、诊断与发布快照，不会启动或控制 Runtime。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>uni-lab-fe/packages/workbench-theia/src/browser/unilab-workbench-contribution.ts</code>（Workbench 入口）；<code>packages/services/src/capabilities.ts</code>（Profile 矩阵）；<code>apps/desktop/src/renderer/environment-manager.tsx</code> 与 <code>remote-facade.mjs</code>（远程共享）；<code>uni-lab-backend/frontend/src/App.tsx</code>（后台页面）；<code>Uni-Lab-OS/setup.py</code> 与 <code>unilabos/agent_tools/workflow.py</code>（CLI/MCP）。
+<p><strong>实现依据</strong>：<code>uni-lab-fe/packages/workbench-theia/src/browser/unilab-workbench-contribution.ts</code>（Workbench 入口）；<code>packages/workbench-session/src/{agent-sidecar,workspace-skills}.ts</code>（本地 Agent 与托管 Skill）。</p>
+<p><code>packages/services/src/capabilities.ts</code>（Profile 矩阵）；<code>apps/desktop/src/renderer/environment-manager.tsx</code> 与 <code>remote-facade.mjs</code>（远程共享）；<code>uni-lab-backend/frontend/src/App.tsx</code>（后台页面）。</p>
+<p><code>Uni-Lab-OS/setup.py</code> 与 <code>unilabos/agent_tools/workflow.py</code>（CLI/MCP）。</p>
 </div>

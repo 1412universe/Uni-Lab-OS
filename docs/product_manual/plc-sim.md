@@ -2,6 +2,8 @@
 
 PLC-Sim 用一组可写的 OPC UA 节点模拟 SZLab PLC，并由握手代理把设备命令推进为接受、完成、复位、超时或故障结果。完成本页后，你可以打开当前环境的 PLC-Sim、判断仿真链路是否就绪，并在自己的本地环境中把它接到 Uni-Lab OS。
 
+开始前先阅读[运行模式、安全与恢复](runtime-safety.md)。PLC-Sim 路径会使用真实 Driver 调用链；只有 Graph 的全部外部端点都确认指向隔离仿真服务时，才能切换到 `normal`。
+
 ## 当前环境入口
 
 <div class="entry-links">
@@ -175,5 +177,9 @@ PLC-Sim 对未登记或未建模的动作会以 `unsupported` 失败，不会伪
 - 工作流预检通过，任务输入和物料来源已经人工复核。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>PLC-Sim/PLC-Sim/gui/static/{index.html,simulation.js,variables.js}</code>（GUI 页面、Server/Agent 控制和变量监控）；<code>PLC-Sim/PLC-Sim/{server.py,szlab_handshake_agent.py,szlab_package_runtime.py}</code>（OPC UA 与 SZLab package mode）；<code>unilabos/workspace_host/{launch,host}.py</code>（本地 PLC-Sim 配置、启动顺序和 GUI API）；<code>Uni-Lab-SZLab/deployment/graphs/szlab-plc-sim-local.json</code>（本机仿真端点）；目标 Kubernetes 的 Deployment、Service、GUI 健康/状态接口与 OPC UA 连接实测。
+<strong>实现依据</strong>
+<p><code>PLC-Sim/PLC-Sim/gui/static/{index.html,simulation.js,variables.js}</code>（GUI 页面、Server/Agent 控制和变量监控）。</p>
+<p><code>PLC-Sim/PLC-Sim/{server.py,szlab_handshake_agent.py,szlab_package_runtime.py}</code>（OPC UA 与 SZLab package mode）。</p>
+<p><code>unilabos/workspace_host/{launch,host}.py</code>（本地 PLC-Sim 配置、启动顺序和 GUI API）；<code>Uni-Lab-SZLab/deployment/graphs/szlab-plc-sim-local.json</code>（本机仿真端点）。</p>
+<p>目标 Kubernetes 的 Deployment、Service、GUI 健康/状态接口与 OPC UA 连接实测。</p>
 </div>

@@ -1,6 +1,8 @@
 # 用 AI 编写工作流（推荐）
 
-本页假设实验室仓库已经能被 Uni-Lab OS 加载。若你还没有类似 SZLab 的 `pyproject.toml`、设备定义、Graph 和 `package.yaml`，先按[开发一个可加载的实验室仓库](lab-repository.md)完成一个设备、一个实例和一个工作流的最小闭环。
+本页假设实验室仓库已经能被 Uni-Lab OS 加载，而且你已完成[工作流基础](workflow-concepts.md)、[SZLab 手写教程](first-workflow.md)和[编排特性](workflow-features.md)。这些基础让你能够审查 AI 生成的 DSL，而不是直接相信生成结果。
+
+若你还没有类似 SZLab 的 `pyproject.toml`、设备定义、Graph 和 `package.yaml`，先按[开发一个可加载的实验室仓库](lab-repository.md)完成最小闭环。也可选择本地 Workbench 的[AI 仓库生成器](repository-builder-skill.md)辅助新建、迁移或诊断。
 
 日常工作流创作推荐交给能够读取当前 Uni-Lab OS 与实验室领域仓库的 AI 编码助手：让它先从 Catalog、设备驱动、资源模板和 SZLab 已登记流程中取证，再生成静态 Python DSL。人负责确认实验意图、审查证据、批准发布，并决定是否运行。
 
@@ -104,7 +106,11 @@ mkdir -p workflow_drafts
 旧流程中仍可能出现兼容装饰器或现场固定身份。创建新流程时，以本手册的现代 `@workflow` 语法和当前编译诊断为准；不要整文件复制，也不要照抄设备 ID、物料 UUID、site UUID、体积或安全阈值。
 
 :::{warning}
-`control_flow_*` 使用无硬件副作用软件探针，是学习控制语义的首选。单工位 legacy/debug 流程只适合核对动作名和参数，不能作为物料与安全架构。`single_sample_atomic_attachment_robot_atomic_task_b.py` 没有主流程同等的数量合同，不列为推荐模板；所有未被 `git ls-files` 返回的 `scheduler_composite_*` 文件都不能引用。`_select_sites.py` 虽已跟踪并登记，但当前仓库相关目录数量断言/迁移还需统一，因此只能参考片段，不能据此宣称集成检查已经通过。
+`control_flow_*` 使用无硬件副作用软件探针，是学习控制语义的首选。单工位 legacy/debug 流程只适合核对动作名和参数，不能作为物料与安全架构。
+
+`single_sample_atomic_attachment_robot_atomic_task_b.py` 没有主流程同等的数量合同，不列为推荐模板。所有未被 `git ls-files` 返回的 `scheduler_composite_*` 文件都不能引用。
+
+`_select_sites.py` 虽已跟踪并登记，但当前仓库相关目录数量断言和迁移还需统一。因此只能参考片段，不能据此宣称集成检查已经通过。
 :::
 
 AI 在写代码前至少要读取：
@@ -138,7 +144,7 @@ package.yaml > 已跟踪 SZLab 工作流 > 我的自然语言描述。发现冲�
 阶段 2 生成草稿：
 1. 仅在 workflow_drafts/<流程名>.py 写一个新定义，不改现有工作流，不改 package.yaml；
 2. 使用现代 @workflow、绝对 import、带类型的关键字专用输入和真实设备类；
-3. 每个动作和控制结构使用唯一且稳定的 UUID 字面量；动作只用命名参数；
+3. 每个动作、物料来源和持久控制结构使用唯一且稳定的 UUID 字面量；动作只用命名参数；
 4. 输出只引用输入、物料来源或动作结果；不得发明 action、返回字段、资源或 Python DSL marker；
 5. 条件、循环、并行、资源、物料和子工作流严格遵守当前编译器约束；
 6. 物理搬运优先使用驱动已提供的原子动作，不拆成独立 pick/place/库存记账；
@@ -160,6 +166,7 @@ package.yaml > 已跟踪 SZLab 工作流 > 我的自然语言描述。发现冲�
 导入前先逐项确认：
 
 - 工作流 UUID、每个节点 UUID 都是唯一的固定字符串，修改代码时不会重新生成；
+- 函数名和包内源码路径没有被当作排版随意改变；需要迁移身份时已同步检查 `package.yaml` 和引用方；
 - 文件只包含允许的 import、设备声明、可选输出 `TypedDict` 和一个工作流函数；
 - 所有设备类型、设备业务 ID、动作名、参数和结果字段都能定位到当前代码；
 - 输入有类型、单位、范围和合理默认值，危险参数没有宽松默认值；
@@ -168,6 +175,7 @@ package.yaml > 已跟踪 SZLab 工作流 > 我的自然语言描述。发现冲�
 - 物料模板、来源、保管策略、站点与数量单位经过现场负责人确认；
 - 没有硬编码从别的 SZLab 流程复制来的物料实例 UUID 或 site UUID；
 - 原子物理动作与唯一库存提交没有被 AI 拆成可分别调度的步骤；
+- 普通值的 fan-out 与 `ResourceSlot` 的物理线性已经区分；无序分样由真实 split/aliquot Action 产生新身份；
 - `check_source_presence`、`check_target_presence`、`check_gripper_payload` 等安全见证保持驱动默认值；任何关闭都有明确现场依据和审批人；
 - 没有 `manual_confirm()` 之类不存在的 Python 语法；需要人工确认时，把该动作设计为实验操作，并在实验操作画布包装已绑定的真实设备动作；
 - AI 没有顺手修改驱动、Graph、运行模式或无关文件。
@@ -202,6 +210,8 @@ python -m unilabos.app.main package inspect --path .
 
 同时在工作流详情确认：拓扑、输入输出合同、设备绑定、物料要求和 diagnostics 与需求一致。AI 草稿只是输入，产品保存的规范源码和编译图才是待发布候选。
 
+涉及并行、组合流程、物料链或画布断边时，还要把产品生成的规范 Python 再次编译，并确认第二张图与第一张图语义等价。若出现 round-trip diagnostic，应保留原草稿，只让 AI 根据诊断做最小修复；不要使用 magic comment、空 `pass` 或伪 Fork/Join 绕过。
+
 ### 修改已有工作流
 
 不要重复导入相同 UUID。先取得现有 authoring 修订和源码，让 AI 生成最小 diff，再通过 Local Authoring 的 draft → candidate → apply 链路提交；该链路使用 draft hash、工作流 revision 和 candidate hash 防止覆盖并发修改。应用后仍要重新运行本节的检查。
@@ -216,7 +226,7 @@ python -m unilabos.app.main package inspect --path .
 4. 工作流详情中的图、合同和材料依赖正确；
 5. 发布的是刚刚审查过的 revision。
 
-发布后按[工作流](workflows.md)执行零写入预检。第一次运行固定使用 `dry-run`；预检为 `runnable_now` 后，再由人创建 Task，并按[编写并运行第一个工作流](first-workflow.md)的方法检查每个 Job、回执和正式输出。
+发布后按[管理与运行工作流](workflows.md)执行零写入预检。第一次运行固定使用 `dry-run`；预检为 `runnable_now` 后，再由人创建 Task，并按[SZLab 手写教程](first-workflow.md)的方法检查每个 Job、回执和正式输出。
 
 `dry-run` 不构造设备驱动，因此只能证明编译、合同、调度和结果投影链路。需要验证 SZLab 仿真驱动时，下一阶段应明确选择隔离的 `*-sim-*` Graph，并让 Edge 以真实动作模式构造仿真 Driver；这与真机 Graph 必须物理隔离。仿真 Driver 通过仍不证明真机联锁和运动安全。
 
@@ -234,7 +244,9 @@ unilab-mcp --workspace "$LAB_ROOT/Uni-Lab-SZLab"
 
 在 AI 客户端中把命令配置为 `unilab-mcp`，参数使用 `--workspace` 和 SZLab 绝对路径。具体配置文件格式由 AI 客户端决定。它是由本地 MCP Client 拉起的命令型 Server，不是 Uni-Lab 自带的公网 MCP 服务；不要暴露 Workspace Host 端口或本地 token。
 
-MCP 适合让 AI 调用 `workspace_status`、`list_workflows`、`inspect_workflow`、`inspect_task` 和 `watch_task` 获取产品事实。开始时只授予读取和观察任务所需的能力。`wait_authoring` 只适合等待工作流 revision 增长或非空诊断；同一 revision 下产生 diagnostics 为空的有效 candidate 时，它可能超时，应读取 `/api/v1/workflows/{uuid}/authoring` 的最新状态。当前尤其要遵守五条边界：
+MCP 适合让 AI 调用 `workspace_status`、`list_workflows`、`inspect_workflow`、`inspect_task` 和 `watch_task` 获取产品事实。开始时只授予读取和观察任务所需的能力。
+
+`wait_authoring` 只适合等待工作流 revision 增长或非空诊断。同一 revision 下产生无诊断的有效 candidate 时，它可能超时；这时应读取 `/api/v1/workflows/{uuid}/authoring` 的最新状态。当前尤其要遵守六条边界：
 
 - MCP 没有工作流源码生成、写入、导入、发布或运行前预检工具，生成仍由代码助手完成，写入仍走产品 Authoring/导入链路；
 - `run_workflow` 会直接创建 Task，而且不能提交完整的库存绑定和优先级字段；涉及物料绑定时使用 Console/HTTP API。它只能在人工明确批准且产品预检通过后调用；
@@ -258,12 +270,16 @@ MCP 适合让 AI 调用 `workspace_status`、`list_workflows`、`inspect_workflo
 
 这样后续维护者可以分清“AI 建议了什么”“产品验证了什么”“人批准了什么”和“设备实际执行了什么”。
 
-## 下一课
+## 后续日常使用
 
-- 亲手完成[编写并运行第一个工作流](first-workflow.md)，学会读懂和排查 AI 生成的 DSL；
+- 每次生成前让 AI 重新扫描当前 Catalog、驱动和相似流程，不复用过期动作记忆；
 - 用[工作流编排特性](workflow-features.md)作为提示词约束与代码审查手册；
-- 用[工作流](workflows.md)完成发布、预检、Task 和修订管理。
+- 用[管理与运行工作流](workflows.md)完成发布、预检、Task 和修订管理。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>unilabos/workflow/authoring.py</code>、<code>authoring_ast.py</code> 与 <code>python_workflow_import.py</code>（静态 DSL 和导入边界）；<code>unilabos/workflow/domain_source_target.py</code> 与 <code>service.py</code>（领域源码、清单登记及 draft/candidate/apply）；<code>unilabos/app/workflow_authoring_transform.py</code>（纯编译/生成/校验接口）；<code>unilabos/agent_tools/workflow.py</code> 与 <code>setup.py</code>（MCP 工具和可选依赖）；<code>Uni-Lab-SZLab/package.yaml</code>、<code>scripts/check-package.sh</code>、已跟踪的 <code>szlab_poly_studio/workflows/</code> 与对应设备/资源源码（SZLab 参考实现）。
+<strong>实现依据</strong>
+<p><code>unilabos/workflow/authoring.py</code>、<code>authoring_ast.py</code> 与 <code>python_workflow_import.py</code>（静态 DSL 和导入边界）。</p>
+<p><code>unilabos/workflow/domain_source_target.py</code> 与 <code>service.py</code>（领域源码、清单登记及 draft/candidate/apply）。</p>
+<p><code>unilabos/app/workflow_authoring_transform.py</code>（纯编译/生成/校验接口）；<code>unilabos/agent_tools/workflow.py</code> 与 <code>setup.py</code>（MCP 工具和可选依赖）。</p>
+<p><code>Uni-Lab-SZLab/package.yaml</code>、<code>scripts/check-package.sh</code>、已跟踪的 <code>szlab_poly_studio/workflows/</code> 与对应设备/资源源码（SZLab 参考实现）。</p>
 </div>

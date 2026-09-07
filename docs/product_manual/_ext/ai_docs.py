@@ -11,51 +11,58 @@ from typing import Any
 
 _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
-        "开始使用",
+        "认识与快速体验",
         (
             "index",
             "overview",
-            "installation",
-            "environment",
-            "quickstart",
             "console",
+            "quickstart",
         ),
     ),
     (
-        "工作流创作与运行",
+        "安装与实验室开发",
         (
-            "lab-repository",
+            "installation",
+            "environment",
             "workflow-concepts",
-            "ai-workflow-authoring",
+            "lab-repository",
+            "devices",
+            "interfaces",
+            "repository-builder-skill",
+        ),
+    ),
+    (
+        "工作流创作",
+        (
             "first-workflow",
+            "materials",
+            "reagents",
             "workflow-features",
-            "workflows",
             "operations",
+            "ai-workflow-authoring",
+        ),
+    ),
+    (
+        "部署与运行",
+        (
+            "runtime-safety",
+            "plc-sim",
+            "deployment",
+            "workflows",
             "tasks",
         ),
     ),
     (
-        "实验室资源与 SZLab",
+        "SZLab 场景",
         (
-            "materials",
-            "reagents",
-            "devices",
-            "plc-sim",
             "szlab",
         ),
     ),
     (
-        "安全与故障排查",
+        "排障与参考",
         (
-            "runtime-safety",
             "troubleshooting",
-        ),
-    ),
-    (
-        "参考",
-        (
             "capability-matrix",
-            "interfaces",
             "api-reference",
             "evidence",
         ),
@@ -71,6 +78,7 @@ _DESCRIPTIONS: dict[str, str] = {
     "quickstart": "在已部署演示环境中运行一个安全的现有工作流。",
     "console": "浏览 Console 页面，并了解各入口的当前功能和限制。",
     "lab-repository": "从零建立实验室领域仓库，定义设备、Graph 和工作流，并让 Backend 与 Edge 加载。",
+    "repository-builder-skill": "在本地 Workbench 中使用实验性 Agent Skill 新建、迁移或诊断领域仓库，并完成人工验收。",
     "workflow-concepts": "静态 DSL、DAG、Workflow/Node/Task/Job、设备选择器、合同和修订。",
     "ai-workflow-authoring": "推荐的代码取证型 AI 创作流程、提示词、人工审查和安全关卡。",
     "first-workflow": "创建、导入、发布、预检并 dry-run 一个最小 SZLab 控制流工作流。",
@@ -84,6 +92,7 @@ _DESCRIPTIONS: dict[str, str] = {
     "plc-sim": "打开 PLC-Sim Web GUI，核对 OPC UA、SZLab 握手代理和 Edge 会话，并配置本地仿真。",
     "szlab": "SZLab 部署、工位、已登记工作流、示例和已知边界。",
     "runtime-safety": "dry-run 与真实动作、develop 与 product 模式、联锁和恢复规则。",
+    "deployment": "把已验收的 Workspace、Backend、Edge 与 Console 部署到 Kubernetes，并验证、升级或回滚。",
     "troubleshooting": "按症状排查安装、创作、调度、Edge、物料和任务问题。",
     "capability-matrix": "以代码与目标环境验证为依据的产品能力状态。",
     "interfaces": "Console、Workbench、CLI、MCP、Backend 和仿真器的精确能力边界。",
@@ -224,7 +233,7 @@ def _write_machine_docs(app: Any, exception: Exception | None) -> None:
         "",
         "> Uni-Lab OS 的代码事实型产品手册：帮助新用户安装产品、用 AI 或手工编写工作流、理解编排特性，并安全地预检和运行任务。",
         "",
-        "优先阅读“开始使用”和“工作流创作与运行”。代码实现与文档冲突时，以手册标注的当前源码事实和目标部署检查为准。",
+        "从零使用时，按“安装与实验室开发”“工作流创作”“部署与运行”的顺序阅读；SZLab 部署需先准备 PLC-Sim。代码实现与文档冲突时，以手册标注的当前源码事实和目标部署检查为准。",
         "",
     ]
     listed: set[str] = set()
@@ -243,18 +252,24 @@ def _write_machine_docs(app: Any, exception: Exception | None) -> None:
         index_lines.append("")
 
     extras = [name for name in ordered_docs if name in sources and name not in listed]
-    index_lines.extend(("## Optional", ""))
-    for docname in extras:
-        title = _title(sources[docname], docname)
-        index_lines.append(
-            f"- [{title}]({_absolute_url(app, f'{docname}.md')}): "
-            f"{_DESCRIPTIONS.get(docname, '其他产品说明书页面。')}"
+    if extras:
+        index_lines.extend(("## 其他页面", ""))
+        for docname in extras:
+            title = _title(sources[docname], docname)
+            index_lines.append(
+                f"- [{title}]({_absolute_url(app, f'{docname}.md')}): "
+                f"{_DESCRIPTIONS.get(docname, '其他产品说明书页面。')}"
+            )
+        index_lines.append("")
+    index_lines.extend(
+        (
+            "## 完整内容",
+            "",
+            f"- [整本说明书]({_absolute_url(app, 'llms-full.txt')}): "
+            "按推荐阅读顺序合并的全部说明书页面。",
+            "",
         )
-    index_lines.append(
-        f"- [整本说明书]({_absolute_url(app, 'llms-full.txt')}): "
-        "按推荐阅读顺序合并的全部说明书页面。"
     )
-    index_lines.append("")
     (output_root / "llms.txt").write_text("\n".join(index_lines), encoding="utf-8")
 
     full_lines = [

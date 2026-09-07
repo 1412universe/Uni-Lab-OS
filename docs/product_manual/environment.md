@@ -34,12 +34,18 @@ mamba create -n unilabos \
 ### 环境自检
 
 ```bash
-python -c "import unilabos, rclpy; print(unilabos.__version__); print('rclpy: OK')"
+python -c "import sys, unilabos; print('python =', sys.executable); print('unilabos =', unilabos.__file__); print('version =', unilabos.__version__)"
+python -m pip show unilabos
+python -c "import rclpy; print('rclpy: OK')"
 python -c "import networkx, yaml, fastapi, uvicorn, multipart; print('核心依赖：OK')"
 ros2 interface list | grep unilabos_msgs
 ros2 interface show unilabos_msgs/action/StrSingleInput
 python -m pip check
 ```
+
+以第一条命令显示的 Python 解释器和 `unilabos.__file__` 为准，不要根据相邻源码目录、终端提示符或记忆判断当前运行的是哪套 OS。后续的安装、检查、Workspace 启动和测试都应使用同一个 `python`。
+
+`pip show` 中的 `Location` 或 `Editable project location` 应指向预期安装来源，`Version` 应与导入后的 `unilabos.__version__` 一致。两者不一致表示包元数据与源码已漂移，应先重装或重建环境，再继续排查领域仓库。
 
 不要使用旧文档中的 `DeviceCmd` 做接口验收；当前消息包存在并被动作通道使用的是 `StrSingleInput` 等接口。
 
@@ -180,5 +186,8 @@ unilab workspace logs --workspace "$LAB_ROOT/Uni-Lab-SZLab" --component edge --j
 状态中应能区分 Backend 与 Edge 的 `phase`、动态地址、generation 和能力。不要把“Backend Health 正常”解释成“设备可以运行”；只有 Edge 已连接并登记设备后，设备 Job 才具备执行权威。
 
 <div class="evidence">
-<strong>参考与实现依据</strong>：<a href="https://github.com/deepmodeling/Uni-Lab-OS#quick-start">deepmodeling/Uni-Lab-OS README</a>（三类 Conda 环境与 Python 版本）；当前 <code>.conda/{base,environment,full}/recipe.yaml</code>（环境内容）；<code>unilabos/config/config.py</code>（配置默认值与环境变量覆盖）；<code>unilabos/workspace_host/{model,launch,host}.py</code>（环境文件、字段、双进程与模式）；<code>Uni-Lab-SZLab/deployment/local_config.py</code>、<code>deployment/graphs/</code> 与 <code>package.yaml</code>（SZLab 实例）。发生差异时，以本手册标注的当前代码事实为准。
+<strong>参考与实现依据</strong>
+<p><a href="https://github.com/deepmodeling/Uni-Lab-OS#quick-start">deepmodeling/Uni-Lab-OS README</a>（Conda 环境）；当前 <code>.conda/{base,environment,full}/recipe.yaml</code> 与 <code>unilabos/__init__.py</code>（环境内容和源码版本）。</p>
+<p><code>unilabos/config/config.py</code>（配置与环境变量）；<code>unilabos/workspace_host/{model,launch,host}.py</code>（环境文件和双进程模式）。</p>
+<p><code>Uni-Lab-SZLab/deployment/local_config.py</code>、<code>deployment/graphs/</code> 与 <code>package.yaml</code>（SZLab 实例）。发生差异时，以当前解释器实际导入的代码为准。</p>
 </div>

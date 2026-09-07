@@ -70,5 +70,8 @@
 | 现场在位证明 | <span class="status status-unavailable">不属于本功能</span> | 必须以设备传感器和现场检查为准。 |
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>frontend/src/pages/MaterialsPage.tsx</code>（搜索、创建、放置、卸载和导出）；<code>frontend/src/components/MaterialHierarchyTree.tsx</code>（层级展示）；<code>unilabos/app/scheduler/inventory/backend_api.py</code>（模板、材料图、站点和修订约束）；<code>unilabos/app/scheduler/inventory/content_api.py</code>（样品与内容物）；<code>unilabos/workflow/inventory_resource_plan.py</code>（任务资源计划）。
+<strong>实现依据</strong>
+<p><code>frontend/src/pages/MaterialsPage.tsx</code>（搜索、创建、放置、卸载和导出）；<code>frontend/src/components/MaterialHierarchyTree.tsx</code>（层级展示）。</p>
+<p><code>unilabos/app/scheduler/inventory/backend_api.py</code>（模板、材料图、站点和修订约束）；<code>unilabos/app/scheduler/inventory/content_api.py</code>（样品与内容物）。</p>
+<p><code>unilabos/workflow/inventory_resource_plan.py</code>（任务资源计划）。</p>
 </div>

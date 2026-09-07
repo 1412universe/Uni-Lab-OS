@@ -1,16 +1,17 @@
 # Uni-Lab OS 产品说明书部署
 
-本目录只构建 `docs/product_manual/`，并将静态站点部署到 Kubernetes 的
-`xiongyanfei` 命名空间。它不会修改 Uni-Lab OS Runtime、Edge、PLC-Sim 或 SigNoZ。
+本目录只构建 `docs/product_manual/`，并将静态站点部署到指定的 Kubernetes
+命名空间。它不会修改 Uni-Lab OS Runtime、Edge、PLC-Sim 或 SigNoZ。
 
 ## 构建
 
 在 `Uni-Lab-OS` 仓库根目录运行：
 
 ```bash
+export DOCS_DEPLOY_DIR="deploy/product-manual"
 nerdctl -n k8s.io build \
-  -f deploy/kubernetes-xiongyanfei/docs/docs.Dockerfile \
-  -t unilabos-docs:product-manual-20260907-v10 .
+  -f "$DOCS_DEPLOY_DIR/docs.Dockerfile" \
+  -t unilabos-docs:product-manual-20260907-v14 .
 ```
 
 该集群为单节点，Deployment 从本机 containerd 的 `k8s.io` namespace 读取镜像，
@@ -19,9 +20,11 @@ nerdctl -n k8s.io build \
 ## 部署
 
 ```bash
-kubectl apply -f deploy/kubernetes-xiongyanfei/docs/unilabos-docs.yaml
+export TARGET_NAMESPACE="unilabos-demo"
+kubectl -n "$TARGET_NAMESPACE" apply \
+  -f "$DOCS_DEPLOY_DIR/unilabos-docs.yaml"
 kubectl rollout status deployment/unilabos-docs \
-  -n xiongyanfei --timeout=5m
+  -n "$TARGET_NAMESPACE" --timeout=5m
 ```
 
 公网地址为 `http://115.190.137.109:30184/`。
@@ -35,7 +38,7 @@ kubectl rollout status deployment/unilabos-docs \
 若需要回滚，使用：
 
 ```bash
-kubectl rollout undo deployment/unilabos-docs -n xiongyanfei
+kubectl rollout undo deployment/unilabos-docs -n "$TARGET_NAMESPACE"
 ```
 
 当前入口是明文 HTTP NodePort，仅适合授权演示。生产环境应在该 Service 前增加 TLS、

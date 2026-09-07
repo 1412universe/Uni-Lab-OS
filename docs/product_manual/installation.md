@@ -193,7 +193,7 @@ curl -fsS "$BACKEND_URL/api/v1/edge/readiness"
 - Edge Readiness 返回 `connected: true`，设备数大于 0；
 - 浏览器打开 `BACKEND_URL/console/` 后，页面不显示断线快照或演示数据。
 
-如果要开发自己的实验室领域包，接下来进入[开发一个可加载的实验室仓库](lab-repository.md)；如果只在 SZLab 中编写流程，则进入[先理解工作流](workflow-concepts.md)，然后按[用 AI 编写工作流（推荐）](ai-workflow-authoring.md)生成和验证流程。为了具备人工审查与排障能力，再完成[手写并运行第一个工作流](first-workflow.md)。
+如果要开发自己的实验室领域包，接下来进入[工作流基础](workflow-concepts.md)和[实验室仓库接入](lab-repository.md)。如果只在 SZLab 中编写流程，则先完成[手写教程](first-workflow.md)与[编排特性](workflow-features.md)，之后日常使用[AI 辅助方式](ai-workflow-authoring.md)。
 
 ## 9. 安全停止
 
@@ -207,6 +207,50 @@ unilab workspace stop \
 ```
 
 统一停止会先让 Scheduler 排空，不再派发新 Job，等待已派发结果收敛，再依次停止 Edge 和 Backend。不要通过删除 `.unilabos`、直接杀进程或重建任务来代替排空。
+
+## 可选分支：安装并启动本地 Theia Workbench
+
+Theia Workbench 是可选的开发客户端，不是 Console、CLI 或工作流运行的安装前置。只有需要 IDE、环境管理或本地 Agent 时才进入本节；集群和公网发布仍按[Kubernetes 部署与上线](deployment.md)操作。
+
+开始前应完成本页的 OS 与 SZLab 安装，并先停止同一 Workspace 的已有会话。本页前面安装的 Node.js `22.13.0` 可直接复用；Workbench README 支持的 Node 主版本是 20 或 22。
+
+所选 Conda 环境还必须同时包含可执行的 Python 和 `unilab` 命令。
+
+克隆正式前端仓库，并按仓库锁定的 pnpm `10.13.1` 安装依赖：
+
+```bash
+cd "$LAB_ROOT"
+git clone https://github.com/Uni-Lab-OS/uni-lab-fe.git
+cd "$LAB_ROOT/uni-lab-fe"
+corepack enable
+pnpm install
+test "$(pnpm --version)" = "10.13.1"
+```
+
+激活前面安装 OS 的环境，再从前端仓库启动正式 Theia 入口：
+
+```bash
+mamba activate unilabos
+cd "$LAB_ROOT/uni-lab-fe"
+
+THEIA_WORKSPACE="$LAB_ROOT/Uni-Lab-SZLab" \
+UNILAB_OS_PROJECT="$LAB_ROOT/Uni-Lab-OS" \
+UNILAB_PYTHON_ENV="$CONDA_PREFIX" \
+THEIA_PORT=3100 \
+pnpm workbench
+```
+
+`THEIA_WORKSPACE` 必须是含 `deployment/local_config.py` 的领域仓库根目录。启动器会校验 Python 环境中的 Python 与 `unilab`，并让终端、Python 扩展和托管 OS 使用同一环境。
+
+另开终端执行下面的检查，再打开浏览器：
+
+```bash
+curl -fsS http://127.0.0.1:3100/ >/dev/null
+```
+
+访问 `http://127.0.0.1:3100` 后，应看到设备、物料、工作流和环境管理等入口。`pnpm workbench` 在前台运行；结束时按 `Ctrl+C`，由启动器清理它管理的进程。
+
+只使用 Workbench 而不需要 Agent 时，可在启动命令中设置 `UNILAB_AGENT_ENABLED=0`。若要使用 AI 仓库生成器，还需 AionUi `2.1.52+` 的本地 Agent 载荷；非默认位置用 `UNILAB_AIONUI_APP` 指定，然后进入[使用 AI 仓库生成器（实验性）](repository-builder-skill.md)。
 
 ## 安装失败时先看这里
 
@@ -222,5 +266,9 @@ unilab workspace stop \
 更多处理方法见[故障排查](troubleshooting.md)。
 
 <div class="evidence">
-<strong>实现依据</strong>：<a href="https://github.com/deepmodeling/Uni-Lab-OS#quick-start">上游 README Quick Start</a>、当前 <code>README.md</code> 与 <code>setup.py</code>（环境类型、Python 版本、包版本和安装入口）；<code>.conda/environment/recipe.yaml</code>（ROS 开发环境）；<code>scripts/dev_install.py</code>（editable install 与依赖安装）；<code>frontend/package.json</code>、<code>frontend/vite.config.ts</code> 与 <code>unilabos/app/web/console.py</code>（Node 要求、构建输出和 Console 挂载）；<code>unilabos/workspace_host/launch.py</code>（Backend/Edge 双进程与 dry-run）；<code>Uni-Lab-SZLab/pyproject.toml</code>、<code>scripts/check-package.sh</code>（SZLab 安装和检查）。
+<strong>实现依据</strong>
+<p><a href="https://github.com/deepmodeling/Uni-Lab-OS#quick-start">上游 README Quick Start</a>、当前 <code>README.md</code> 与 <code>setup.py</code>（环境类型、Python 版本、包版本和安装入口）。</p>
+<p><code>.conda/environment/recipe.yaml</code>（ROS 开发环境）；<code>scripts/dev_install.py</code>（editable install 与依赖安装）。</p>
+<p><code>frontend/package.json</code>、<code>frontend/vite.config.ts</code> 与 <code>unilabos/app/web/console.py</code>（Node 要求、构建输出和 Console 挂载）。</p>
+<p><code>unilabos/workspace_host/launch.py</code>（Backend/Edge 双进程与 dry-run）；<code>Uni-Lab-SZLab/pyproject.toml</code>、<code>scripts/check-package.sh</code>（SZLab 安装和检查）。</p>
 </div>

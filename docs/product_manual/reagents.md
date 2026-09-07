@@ -76,5 +76,8 @@ SMILES 当前是文本字段，不提供结构绘图编辑器。3D 结构读取�
 | 文件批量导入 | <span class="status status-limited">API 可用</span> | 当前 Console 无入口。 |
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>frontend/src/pages/ReagentsPage.tsx</code>（目录、库存、分装和历史 UI）；<code>unilabos/app/scheduler/inventory/reagent_api.py</code>（CRUD、文件格式、5 MiB/500 行限制）；<code>unilabos/app/scheduler/inventory/reagent_contract.py</code>（试剂合同）；<code>unilabos/app/scheduler/inventory/dispatch_admission.py</code>（任务预留与派发准入）。
+<strong>实现依据</strong>
+<p><code>frontend/src/pages/ReagentsPage.tsx</code>（目录、库存、分装和历史 UI）；<code>unilabos/app/scheduler/inventory/reagent_api.py</code>（CRUD、文件格式、5 MiB/500 行限制）。</p>
+<p><code>unilabos/app/scheduler/inventory/reagent_contract.py</code>（试剂合同）。</p>
+<p><code>unilabos/app/scheduler/inventory/dispatch_admission.py</code>（任务预留与派发准入）。</p>
 </div>

@@ -90,7 +90,7 @@ result = selector.action_name(
 - 读取 `previous.output` 会建立真实数据边；
 - 未知动作、缺参数或类型不兼容按失败关闭处理。
 
-同一输出可以供多个后继读取；后继只有在所有数据和控制前提满足后才进入可调度集合。
+普通标量或结构化结果可以供多个后继读取；后继只有在所有数据和控制前提满足后才进入可调度集合。`ResourceSlot` 另有物理线性约束：可沿严格有序的动作链连续使用，但不能同时流向多个彼此无先后的物理消费者。
 
 ## 展示分组 `group`
 
@@ -109,9 +109,7 @@ with group(name="Preparation"):
 
 ## 条件 `if / elif / else`
 
-SZLab 的无硬件副作用示例：
-
-下面的 parallel 片段用于说明结构；设备和动作名应替换为当前 Catalog 中的真实定义。SZLab 的已登记流程使用同一结构表达“拍照”和“样品瓶开盖”的并行机会。
+下面是 SZLab 已登记的无硬件副作用条件示例：
 
 ```python
 # unilab:node_uuid=07880b05-d9a4-4290-8614-00554cac071a
@@ -180,6 +178,8 @@ with repeat_until(max_iterations=10, carry={"iteration": 1}) as loop:
 
 ## 并行 `parallel`
 
+下面的 `beaker` 和 `sample_bottle` 是两件不同的 `ResourceSlot`；不要把同一物料同时送给两个无序物理分支。
+
 ```python
 from unilabos.workflow.authoring import group, parallel
 
@@ -188,12 +188,12 @@ with parallel():
     # unilab:node_uuid=<分支 A group UUID>
     with group(name="拍照"):
         # unilab:node_uuid=<拍照动作 UUID>
-        image = camera.capture(sample=sample)
+        image = camera.capture(sample=beaker)
 
     # unilab:node_uuid=<分支 B group UUID>
     with group(name="开盖"):
         # unilab:node_uuid=<开盖动作 UUID>
-        opened = robot.open_cap(sample=sample)
+        opened = robot.open_cap(sample=sample_bottle)
 
 # unilab:node_uuid=<汇合动作 UUID>
 joined = analyser.consume(
@@ -204,7 +204,7 @@ joined = analyser.consume(
 
 结构要求：`parallel()` 不接受参数，直接子项只能是至少两个 group。分支不能读取同级分支的中间结果；离开 parallel 后才能汇合。
 
-编译器不会制造虚假的 fork/join 设备节点。并行只说明 DAG 允许同时就绪，不保证物理同时执行：如果两个分支绑定同一台设备、同一工位或同一结构化资源，Scheduler 的锁仍会把它们串行化。SZLab 的真实单样品流程用它表达“拍照”和“样品瓶开盖”的并行机会。
+编译器不会制造虚假的 fork/join 设备节点。并行只说明 DAG 允许同时就绪，不保证物理同时执行：如果两个分支绑定同一台设备、同一工位或同一结构化资源，Scheduler 的锁仍会把它们串行化。SZLab 的真实单样品流程用它表达“烧杯拍照”和“另一只样品瓶开盖”的并行机会。
 
 ## 结构化资源区间 `resources`
 
@@ -221,11 +221,37 @@ with resources("sample_preparation_region"):
 
 `resources(...)` 声明整个区间共同持有的调度资源。别名必须是非空、唯一的字符串字面量；动态变量会被拒绝。它可以嵌套，但不会产生可执行节点。根工作流也可以在装饰器元数据中声明结构化资源。
 
+这是通用资源锁语义，不识别具体业务动作。`resources("resource_a", "resource_b")`
+中的参数是资源别名集合；设备、物料、Site、区域或工站互斥量只要在冻结计划中绑定为
+规范 `lock_key`，都会走同一套申请、等待、Fence 和释放流程。
+
+运行时由**每个 Job 在自己的 pre-dispatch 阶段**复验资源，而不是由前一个 Job
+替后继申请动作锁。请求分为两部分：区间内已经连续持有的公共资源（preheld），以及
+当前 Job 才需要的新增资源。新增资源必须全有或全无地取得；若其中任一资源冲突，
+当前 Job 保持等待，公共区间资源仍不释放。
+
+只有新 Job 的 Permit 已经持久化后，系统才把公共资源从上一 Claim 交接给当前 Claim。
+因此，其他 Task 不能在区间中插入任何会使用相交资源的 Job；资源完全不相交的 Task
+仍可并行执行。
+
+搬运只是一个应用例子：一段“移动来源库位 → 搬运 → 移动目标库位”若要求机械臂、
+来源库位和目标库位在三步之间都不被其他 Task 使用，就应把三者的别名一起声明为
+同一 `resources(...)` 区间的公共资源；若要求工站内任何作业都不能插入，则应声明
+一个所有相关 Task 都会申请的工站级互斥资源，而不是在运行时写死搬运流程的特殊规则。
+
+区间一旦开始，preheld 必须能对应到同一 Task 的活动前驱 Claim；若重启恢复时交接
+凭据缺失、前驱 Claim 已释放或 Fence 无法连续证明，运行时会失败关闭，绝不会把该
+资源悄悄当作“新增资源”重新申请后继续执行。
+
+时序图中的“后继作业继承占用，整组申请新增资源”更准确的表述是：
+“后继 Job 在自身 pre-dispatch 复验完整资源集，复用区间内已持有资源，并原子取得
+本 Job 的新增资源”。这里的“继承”只描述连续所有权，不表示前驱替后继申请资源。
+
 它和 group 的区别：group 管展示，resources 管锁；需要二者时应分别表达。
 
 ## 物料来源 `material_source`
 
-物料来源把“这件实验输入从哪里来”写进工作流：
+物料来源把“这件实验输入从哪里来”写进工作流。下面假设 `source_site` 是该工作流的字符串输入；固定库位也可以直接使用当前 Graph/Catalog 中的真实 Site UUID：
 
 ```python
 from unilabos.workflow.authoring import (
@@ -242,7 +268,7 @@ source_solvent = material_source(
     mode="existing",
     mount=resource_ref("s10_liquid_reagent"),
     material_uuid=None,
-    site="S101",
+    site=source_site,
     slot_range=None,
     flow_role=MaterialFlowRole.REAGENT,
     custody_policy=MaterialCustodyPolicy.SHARED_SOURCE,
@@ -251,10 +277,14 @@ source_solvent = material_source(
 
 - `mode="existing"` 选择现有资源；`create_new` 按模板建立新资源；
 - `resource_ref("s10_liquid_reagent")` 使用部署资源业务 ID，由库存权威解析实例；
+- `site` 可以是 Graph/Catalog 中的稳定 Site UUID，也可以是字符串工作流输入；动态形式只适用于 `mode="existing"` 且 `material_uuid=None`，会在创建 Task 时于指定 mount 下解析并冻结；
+- `slot_range` 可以列出允许的稳定 Site UUID；它不能与固定 `site` 同时使用，但可限制动态 `site` 输入的解析结果；
 - `PRIMARY_SAMPLE`、`REAGENT`、`CONSUMABLE` 表达流程角色；
 - `TASK_EXCLUSIVE` 表示 Task 独占保管，`SHARED_SOURCE` 适合受数量预留保护的共享来源。
 
-不要在源码中硬猜当前库存实例 UUID；稳定部署身份交给 `resource_ref`，本次具体材料交给输入绑定和库存权威。
+不要在源码中硬猜当前库存实例 UUID；稳定部署身份交给 `resource_ref`，本次具体材料交给输入绑定和库存权威。物料 UUID、资源模板 UUID 与 Site UUID 是三种身份，不能互换。
+
+同一 `ResourceSlot` 可以被多个严格有序的动作连续处理，因为每个后继都位于前一个后继之后。若两个物理消费者彼此无依赖，编译器会以 `material_flow_fan_out` 拒绝；真正分样应先调用受支持的 split/aliquot Action，产生不同子物料身份。
 
 ## 动态库位 `site_group`
 
@@ -355,7 +385,15 @@ moved = s_z_lab_标准物料转运(
 )
 ```
 
-编译器不会真的 import 并运行子模块，而是从已发布目录解析合同。每次调用有独立 invocation 身份；父图冻结子合同 UUID 和摘要。未发布、合同损坏、pin 过期或普通 `normal` 工作流被当作子流程时都会失败关闭。
+编译器不会真的 import 并运行子模块，而是从目录解析合同。每次调用有独立 invocation 身份；父图冻结子合同 UUID 和摘要。合同损坏、pin 过期或普通 `normal` 工作流被当作子流程时都会失败关闭。
+
+在可编辑的 `develop` Workspace 冷启动中，系统会按依赖从子到父应用已登记源码，直到目录达到固定点；无需人为逐个打开子流程。产品发布、画布插入和产品运行仍要求子流程是已发布的 `experiment_operation`。
+
+## 图编辑与源码往返
+
+Python 是人维护的来源，画布图是它的投影。保存复杂编辑时，系统必须完成“Python → AST → 图 → Python → 图”的语义固定点：两张图等价，Workflow/节点身份、类型 Handle、物料身份与支持的标题说明保持不变，再次生成不继续漂移。
+
+不要用 `# unilab:parallelize`、空 `pass` 或伪造的 Fork/Join 节点保存拓扑。不是所有 DAG 都能由当前结构化语言表达；遇到不可表达的断边或交叉依赖时，应保留原编辑并根据诊断恢复依赖或重构源码，不能把差异藏进注释。
 
 ## 常见错误写法
 
@@ -369,6 +407,7 @@ moved = s_z_lab_标准物料转运(
 | 循环外读取 `decision` | 每轮结果身份不稳定 | 把输出写入允许的资源或重构流程 |
 | 用 group 期待加锁 | group 只控制展示 | 使用 `resources(...)` |
 | 用 parallel 保证同时动作 | 资源锁仍可串行 | 把它理解为并行机会 |
+| 用 magic comment 或空 `pass` 保存断边 | 不是规范拓扑 | 用真实 `group`/`parallel`，不可表达时按诊断重构 |
 | `manual_confirm()` | 当前没有这种 Python marker | 在实验操作画布包装真实动作 |
 | 调用未发布子操作 | 没有可冻结合同 | 先发布 `experiment_operation` |
 
@@ -385,8 +424,12 @@ moved = s_z_lab_标准物料转运(
 - 条件、循环、并行和资源区间满足本页结构限制；
 - 物料来源、保管策略、站点和数量单位与现场一致；
 - 子工作流已发布，父流程重新编译并发布；
+- 复杂画布编辑已达到 Python→图→Python→图语义固定点，没有 magic comment、空块或伪节点；
 - 先在 `dry-run` 编译、预检和运行，再进入真机验收。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>unilabos/workflow/authoring.py</code>、<code>authoring_ast.py</code> 与 <code>registry/annotation_schema.py</code>（全部静态语法与类型）；<code>workflow/manual_confirmation.py</code> 和 Scheduler manual-confirmation 测试（人工确认）；<code>workflow/service.py</code>（子工作流发布合同）；<code>Uni-Lab-SZLab/szlab_poly_studio/workflows/control_flow_{condition,repeat}.py</code>、<code>material_transfer.py</code> 与 <code>single_sample_atomic_attachment_robot_atomic.py</code>（当前真实示例）。
+<strong>实现依据</strong>
+<p><code>unilabos/workflow/authoring.py</code>、<code>authoring_ast.py</code> 与 <code>registry/annotation_schema.py</code>（全部静态语法与类型）。</p>
+<p><code>workflow/manual_confirmation.py</code> 和 Scheduler manual-confirmation 测试（人工确认）；<code>workflow/service.py</code>（子工作流发布合同）。</p>
+<p><code>Uni-Lab-SZLab/szlab_poly_studio/workflows/control_flow_{condition,repeat}.py</code>、<code>material_transfer.py</code> 与 <code>single_sample_atomic_attachment_robot_atomic.py</code>（当前真实示例）。</p>
 </div>

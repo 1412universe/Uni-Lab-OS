@@ -1,8 +1,10 @@
-# 工作流
+# 管理与运行工作流
 
 工作流面向一次完整实验目标。用户从已发布修订准备输入，先执行零写入预检，再创建普通或单步任务。
 
-第一次创作请先完成[先理解工作流](workflow-concepts.md)和[用 AI 编写工作流（推荐）](ai-workflow-authoring.md)，再用[手写并运行第一个工作流](first-workflow.md)建立审查和排障能力；本页重点解释已经进入产品目录后的管理与运行。
+本页解释已经进入产品目录的工作流怎样发布、预检和运行。第一次创作应先完成[工作流基础](workflow-concepts.md)、[SZLab 手写教程](first-workflow.md)和[编排特性](workflow-features.md)，之后日常创作推荐使用[AI 辅助方式](ai-workflow-authoring.md)。
+
+开始实际运行前，还应准备[物料](materials.md)与[试剂](reagents.md)，发布被引用的[可复用实验操作](operations.md)，并理解[运行模式、安全与恢复](runtime-safety.md)。
 
 ## 两种创作入口
 

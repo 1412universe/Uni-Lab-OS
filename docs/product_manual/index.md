@@ -3,7 +3,7 @@
 Uni-Lab OS 把实验室中的设备、物料、试剂和实验流程组织在同一套运行系统中。你可以在控制台中准备实验资源、选择并发布工作流、提交任务，并在多个实验共享设备和工位时观察调度、处理异常和追踪结果。
 
 <div class="manual-meta">
-适用环境：xiongyanfei / SZLab 演示环境　·　手册版本：2026.09.07　·　事实基线：Uni-Lab-OS f2295f7c2de4，Uni-Lab-SZLab f0958f5b2d1b
+适用环境：SZLab 演示环境　·　手册版本：2026.09.07　·　事实基线：Uni-Lab-OS f2295f7c2de4，Uni-Lab-SZLab f0958f5b2d1b
 </div>
 
 <div class="entry-links">
@@ -19,26 +19,31 @@ Uni-Lab OS 把实验室中的设备、物料、试剂和实验流程组织在同
 
 ## 从哪里开始
 
-- 从零开发自己的实验室：依次完成[安装并启动本地产品](installation.md) → [环境与运行配置](environment.md) → [开发一个可加载的实验室仓库](lab-repository.md) → [先理解工作流](workflow-concepts.md) → [用 AI 编写工作流（推荐）](ai-workflow-authoring.md) → [手写并运行第一个工作流](first-workflow.md) → [工作流编排特性](workflow-features.md)。
-- 只体验现有环境：先读[认识产品](overview.md)，再按[首次运行一个安全工作流](quickstart.md)完成闭环。
-- 实验操作员：重点阅读[物料](materials.md)、[试剂](reagents.md)、[工作流](workflows.md)和[任务与并行调度](tasks.md)。
-- SZLab 用户：先用[PLC-Sim 仿真器](plc-sim.md)确认设备协议链路，再在[SZLab 场景指南](szlab.md)中查看当前已发布工作流和工位能力。
-- 管理与排障：阅读[运行模式、安全与恢复](runtime-safety.md)、[故障排查](troubleshooting.md)和[能力状态表](capability-matrix.md)。
+- **体验已有部署（支线）**：先读[认识产品](overview.md)和[使用 Console](console.md)，再按[体验已部署的安全工作流](quickstart.md)操作当前授权环境。这条支线不安装产品，也不会建立自己的实验室仓库。
+- **从零建立实验室（主线）**：依次完成[安装并启动本地产品](installation.md) → [环境与运行配置](environment.md) → [先理解工作流](workflow-concepts.md) → [开发一个可加载的实验室仓库](lab-repository.md) → [设备与动作](devices.md)。
+- **可选 AI 建仓**：先了解[产品入口与 Workbench](interfaces.md)，再使用[AI 仓库生成器（实验性）](repository-builder-skill.md)。它是建仓辅助分支，不替代领域仓库合同、人工审查或四道验证门。
+- **学习并创作工作流**：先[手写并运行第一个工作流（SZLab 教学）](first-workflow.md)，再学习[物料](materials.md)、[试剂](reagents.md)、[工作流编排特性](workflow-features.md)和[可复用实验操作](operations.md)，最后按[用 AI 编写工作流（推荐）](ai-workflow-authoring.md)创作后续流程。
+- **部署并运行**：先阅读[运行模式、安全与恢复](runtime-safety.md)。SZLab 仿真部署还要先准备[PLC-Sim](plc-sim.md)，其他实验室可以跳过；然后完成[Kubernetes 部署与上线](deployment.md)，再进入[管理与运行工作流](workflows.md)和[任务与并行调度](tasks.md)。
+- **进入 SZLab 联调**：运行环境上线后，按[SZLab 场景指南](szlab.md)准备资源、运行已发布流程并解释结果。
+- **管理与排障**：使用[故障排查](troubleshooting.md)、[能力状态表](capability-matrix.md)、[API 使用参考](api-reference.md)和[事实依据与版本](evidence.md)。
 
 ## 新手学习路线
 
 <ol class="learning-path">
   <li><strong>安装</strong><span>建立 Python 3.11 + ROS 环境，安装 OS/SZLab，并编译 Console。</span></li>
   <li><strong>配置</strong><span>分清 Conda 环境、Workspace、Graph、运行模式与本地配置。</span></li>
-  <li><strong>建仓</strong><span>定义包身份、设备、Graph 和工作流清单，让 Backend 与 Edge 加载。</span></li>
   <li><strong>建模</strong><span>理解 Workflow、Node、Task、Job、修订和发布合同。</span></li>
-  <li><strong>AI 创作</strong><span>让 AI 先扫描当前 Catalog、驱动与 SZLab 参考流程，再生成静态 DSL。</span></li>
-  <li><strong>读懂</strong><span>亲手完成一个最小流程，能够审查和排查 AI 生成的代码。</span></li>
-  <li><strong>运行</strong><span>发布、零写入预检、创建 Task，并核对 Job 与输出。</span></li>
-  <li><strong>进阶</strong><span>掌握条件、循环、并行、资源、物料、人工确认与子工作流。</span></li>
+  <li><strong>建仓</strong><span>定义包身份、设备、Graph 和工作流清单，让 Backend 与 Edge 加载。</span></li>
+  <li><strong>可选 AI 建仓</strong><span>在本地 Workbench 中让 Agent 辅助生成或迁移领域仓库，再由人完成验证门。</span></li>
+  <li><strong>手写闭环</strong><span>亲手完成最小流程的导入、发布、预检和 dry-run Task，具备审查能力。</span></li>
+  <li><strong>准备资源</strong><span>理解物料、库位、试剂身份、库存和数量预留，再编排物料流程。</span></li>
+  <li><strong>进阶编排</strong><span>掌握条件、循环、并行、资源区间、人工确认与子工作流。</span></li>
+  <li><strong>AI 创作</strong><span>让 AI 扫描当前 Catalog、驱动、资源和 SZLab 参考流程，再生成静态 DSL。</span></li>
+  <li><strong>安全部署</strong><span>核对运行模式、镜像、Workspace、Graph、Secret、网络和回滚，再部署上线。</span></li>
+  <li><strong>运行验收</strong><span>发布、零写入预检、创建 Task，并核对 Job、资源等待、输出和 Trace。</span></li>
 </ol>
 
-整个基础学习路径固定使用 `dry-run + develop`。完成后可以按[PLC-Sim 仿真器](plc-sim.md)进入“真实 Driver + 模拟 PLC”的隔离联调；两者都不代表可以切换到真机，真实设备仍需单独完成连接、联锁、急停、物料和恢复验收。
+部署前的基础学习路径固定使用 `dry-run + develop`。完成后可以按[PLC-Sim 仿真器](plc-sim.md)进入“真实 Driver + 模拟 PLC”的隔离联调。两者都不代表可以切换到真机；真实设备仍需单独完成连接、联锁、急停、物料和恢复验收。
 
 ## 本手册如何描述能力
 
@@ -55,38 +60,48 @@ Uni-Lab OS 把实验室中的设备、物料、试剂和实验流程组织在同
 “源码已定义”不等于“当前线上已发布”，而“仿真通过”也不等于“真机已完成安全验收”。各页会明确说明这些边界。
 
 ```{toctree}
-:caption: 开始使用
+:caption: 认识与快速体验
 :maxdepth: 2
 
 overview
+console
+quickstart
+```
+
+```{toctree}
+:caption: 安装与实验室开发
+:maxdepth: 2
+
 installation
 environment
-quickstart
-console
-```
-
-```{toctree}
-:caption: 编写工作流
-:maxdepth: 2
-
-lab-repository
 workflow-concepts
-ai-workflow-authoring
-first-workflow
-workflow-features
-workflows
-operations
-tasks
+lab-repository
+devices
+interfaces
+repository-builder-skill
 ```
 
 ```{toctree}
-:caption: 功能指南
+:caption: 工作流创作
 :maxdepth: 2
 
+first-workflow
 materials
 reagents
-devices
+workflow-features
+operations
+ai-workflow-authoring
+```
+
+```{toctree}
+:caption: 部署与运行
+:maxdepth: 2
+
+runtime-safety
 plc-sim
+deployment
+workflows
+tasks
 ```
 
 ```{toctree}
@@ -97,13 +112,11 @@ szlab
 ```
 
 ```{toctree}
-:caption: 运行与参考
+:caption: 排障与参考
 :maxdepth: 2
 
-runtime-safety
 troubleshooting
 capability-matrix
-interfaces
 api-reference
 evidence
 ```

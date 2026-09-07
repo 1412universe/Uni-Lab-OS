@@ -4,7 +4,7 @@
 
 完成标准是：
 
-- `package inspect` 识别到包命名空间、1 个设备和 1 个工作流；
+- `package inspect` 识别到包命名空间和 1 个设备，并生成 Catalog；
 - Registry 导入检查为 `1/1 全部通过`；
 - Workspace 的 Backend 与 Edge 都进入 `ready`；
 - `workflowProgress` 显示 `loaded: 1, total: 1`；
@@ -42,7 +42,7 @@ deployment/graphs/*.json ───► 本次设备/资源实例、拓扑、连�
 
 ## 最小目录结构
 
-先创建以下结构。仓库外层名称可以自定；本例的 Python 导入包必须叫 `demo_lab`。
+先创建以下结构。仓库外层名称可以自定；本例的 Python 导入包必须叫 `demo_lab`，并且必须直接位于 Workspace 根目录。
 
 ```text
 Demo-Lab/
@@ -64,19 +64,41 @@ Demo-Lab/
         └── local.json                     # 本次激活的物理图
 ```
 
-真实实验室通常继续增加：
+:::{warning}
+当前 Workspace 只接受根目录下的扁平 import package，即 `<workspace>/demo_lab/__init__.py`。`<workspace>/src/demo_lab/` 不在当前扫描和导入合同内，会被判定为缺少规范 Python 包；不要同时维护 flat 与 `src/` 两套布局。
+:::
+
+面向长期维护的仓库可按需要扩展为：
 
 ```text
-demo_lab/
-├── common/             # 通信网关、日志、共享协议
-├── resources/          # @resource 物料、容器、仓库和 Deck
-└── devices/<id>/models # 设备所属的 shape / Xacro / mesh
-tests/                  # Catalog、Driver、Workflow、Graph 和仿真测试
-scripts/                # inspect、build、启动和部署脚本
-docs/                   # 协议、联锁、恢复和验收记录
+Demo-Lab/
+├── README.md                            # 安装、启动、联锁和恢复入口
+├── .gitignore
+├── .github/workflows/check_registry.yml # 无硬件 CI
+├── pyproject.toml
+├── package.yaml
+├── demo_lab/
+│   ├── __init__.py
+│   ├── common/                          # 共享协议、日志、网关
+│   ├── config/
+│   │   └── address_tables/              # 现场批准的 CSV/JSON/YAML 地址表
+│   ├── resources/                       # @resource、仓库和 Site 定义
+│   ├── devices/<id>/
+│   │   ├── device.py                    # 公开 Device/Action 合同
+│   │   ├── transport.py                 # Serial/HTTP/OPC UA 适配
+│   │   ├── simulator.py                 # 可选的同合同模拟实现
+│   │   └── assets/                      # 设备本地表和模型
+│   ├── workflows/                       # 叶子与组合工作流
+│   └── assets/                          # 公共图标和二维/三维模型
+├── deployment/graphs/                   # 各环境的实例与端点
+├── tests/                               # Catalog、Action、资源、工作流和模拟器
+├── scripts/                             # inspect、build、启动和部署脚本
+└── docs/                                # 协议、联锁、恢复和验收记录
 ```
 
-`devices/`、`resources/` 是 SZLab 推荐的领域组织方式，不是魔法注册目录。现代 Package Catalog 会递归静态扫描规范 import package 中的全部 `.py`，从直接导入的官方装饰器发现设备和资源；`workflows/` 中的文件则还必须进入 `package.yaml` 白名单。
+只创建本次切片真正需要的目录，不要用空目录模拟完成度。只有启动器或 CI 确实读取 `requirements.txt` 时才保留它，并避免与 `pyproject.toml` 重复声明不同版本的依赖。
+
+`devices/`、`resources/` 是 SZLab 推荐的领域组织方式，不是魔法注册目录。Package Catalog 会递归静态扫描规范 import package 中的 `.py`；工作流源码还必须进入 `package.yaml` 白名单。
 
 ## 1. 固定包身份
 
@@ -95,7 +117,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-runtime = ["unilabos>=0.11.4"]
+runtime = ["unilabos"]
 dev = ["build>=1.2", "pytest>=8", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
@@ -130,7 +152,9 @@ demo_lab = [
 
 以上身份必须一致。不要手工发明另一套 namespace，也不要保留类似旧 Profile 的第二套设备发现配置。
 
-`[tool.unilabos.startup]` 是可选的包自描述元数据。当前 `workspace start` 仍以显式参数、`.unilabos/environment.local.json` 和固定的 `deployment/local_config.py` 为准，不要依赖这里的 Graph/配置值完成首次启动。也不要在领域包中固定 `app_bridges`：Workspace Host 会分别为 Backend 和 Edge 设置 `fastapi` 与 `edge_control`。真实 Driver 的第三方库应写入 `dependencies` 并固定兼容范围；账号、密码和 token 不得写进这里或 Git。
+`runtime` 只声明该仓库需要 Uni-Lab OS，不替代部署环境的版本锁。先按[环境与运行配置](environment.md)确认实际解释器、源码位置和版本，再让环境锁文件或镜像选择经过验证的 OS 版本。
+
+`[tool.unilabos.startup]` 是可选的包自描述元数据。首次启动仍应显式给出 Workspace 和 Graph；不要在领域包中固定 `app_bridges`。真实 Driver 的第三方库应写入 `dependencies` 并固定兼容范围，凭证不得写进项目文件或 Git。
 
 ## 2. 声明允许加载的工作流
 
@@ -178,7 +202,7 @@ class SetTemperatureResult(TypedDict):
 
 @device(
     id="demo_heater",
-    display_name="演示加热器",
+    displayname="演示加热器",
     category=["heater"],
     description="用于学习实验室仓库加载方式的无硬件设备",
     metadata={"transport": "in_process", "hardware_side_effects": False},
@@ -207,6 +231,12 @@ class DemoHeater:
         target_temperature: float,
         duration_seconds: float = 1.0,
     ) -> SetTemperatureResult:
+        """设置目标温度。
+
+        Args:
+            target_temperature[目标温度]: 摄氏温度，范围为 0 到 200。
+            duration_seconds[持续时间]: 模拟持续时间，单位为秒。
+        """
         if not 0.0 <= target_temperature <= 200.0:
             raise ValueError("target_temperature 必须在 0 到 200 之间")
         if duration_seconds < 0.0:
@@ -226,13 +256,16 @@ class DemoHeater:
 - `@device.id` 只允许英文、数字和下划线；`category` 必填；
 - Uni-Lab OS 会静态读取 `@device`、`@action`、类型注解和文档，不靠导入 `__init__.py` 触发注册；
 - 装饰器必须用官方名称直接导入和调用；不要改成别名，也不要写成 `decorators.device(...)`，否则静态扫描可能无法识别；
-- Graph 的 `config` 会作为构造参数传给 Driver，字段名必须与 `__init__` 对齐；
-- `@action` 参数和 `TypedDict` 结果会形成 Console 表单、Job 参数和结果 Schema；
+- Graph 的 `config` 会作为构造参数传给 Driver，字段名必须与 `__init__` 的显式命名参数对齐；
+- 不要用一个通用 `config` 字典或 `**kwargs` 吞掉未知字段；显式参数让 Graph 与构造合同便于审查，并让拼写错误在 Driver 构造时尽早失败；
+- `@action` 参数和具名结果会形成 Console 表单、Job 参数和结果 Schema；
 - 状态属性使用 `@topic_config()`，不应把只读辅助方法误暴露为动作；
 - 所有给用户调用的公开方法都显式加 `@action()`；公共辅助方法优先以下划线开头，必须公开时用 `@not_action`；
 - 返回值应可 JSON 序列化，并明确表达成功、失败和业务结果。
 
 真正的设备 Driver 还必须实现有限超时、连接/断连、设备忙与未知结果处理、日志脱敏和幂等策略。不要在 import 或装饰器求值阶段连接硬件；只允许 Graph 选中的 Driver 在运行激活阶段建立连接。
+
+Action 的具名结果可使用普通 `TypedDict` 或受支持的 frozen dataclass。Workflow 若声明具名结果类型，只接受一个普通 `TypedDict`；也可不声明结果记录并使用 `workflow_output(...)`，但不能把 Action 的 dataclass 写法直接复制过来。
 
 ## 4. 用 Graph 建立设备实例
 
@@ -319,7 +352,11 @@ device("heater_1") ────► 固定绑定 Graph 实例
 node_uuid 注释 ─────────► 节点跨保存、画布和修订的稳定身份
 ```
 
-工作流是静态 DSL，不要运行 `python demo_lab/workflows/heat_sample.py`。每个源文件只能有一个 Workflow 函数；模块级只放 docstring、绝对 import、带类型的设备选择器、可选结果 `TypedDict` 和该函数，不使用相对/星号导入。所有公开输入都必须是带类型的 keyword-only 参数，不能有普通位置参数、`*args` 或 `**kwargs`。动作调用必须赋给简单变量，只使用命名参数；所有动作、条件、循环、分组和子工作流调用前都需要紧邻的唯一节点 UUID。更多语法见[先理解工作流](workflow-concepts.md)和[工作流编排特性](workflow-features.md)。
+工作流是静态 DSL，不要运行 `python demo_lab/workflows/heat_sample.py`。每个源文件只能有一个 Workflow 函数；模块级只放允许的 docstring、绝对 import、带类型的设备选择器、可选结果 `TypedDict` 和该函数。
+
+所有公开输入都必须是带类型的 keyword-only 参数，不能有普通位置参数、`*args` 或 `**kwargs`。动作调用必须赋给简单变量并只使用命名参数；各节点前都需要紧邻的唯一节点 UUID。
+
+需要正式结果记录时，Workflow 只能声明一个普通 `TypedDict` 并返回匹配字段的字典；也可以不声明结果记录，改用 `workflow_output(...)`。它与前一节允许 frozen dataclass 的 Action 结果合同不同。完整限制见[先理解工作流](workflow-concepts.md)和[工作流编排特性](workflow-features.md)。
 
 ## 6. 提供 Workspace 本地配置
 
@@ -343,11 +380,13 @@ Workspace Host 当前固定读取这个路径。`ak`、`sk` 在本地控制面�
 ```bash
 LAB_ROOT="/absolute/path/to/labs"
 cd "$LAB_ROOT/Demo-Lab"
-python -m pip install -e . --no-deps
+python -m pip install -e '.[dev]'
 python -m pip check
 ```
 
-Workspace 会把仓库根加入自己的 `PYTHONPATH`，所以 editable install 不是发现设备的第二套机制；这里执行它是为了验证 Python packaging。真实 Driver 的依赖仍必须预先安装在同一个 Uni-Lab OS 环境中。
+这是新仓库的默认安装方式：它会安装领域运行依赖和测试工具，并验证 editable packaging。只有镜像或 Conda 环境已经用同一份锁文件提供全部依赖时，才可使用 `--no-deps`；使用后仍必须执行 `pip check`。
+
+Workspace 会把仓库根加入自己的 `PYTHONPATH`，因此 editable install 不是第二套设备发现机制。它用于验证 Python packaging，运行时仍只扫描 Workspace 根下的规范 import package。
 
 ### 门 1：静态编译完整 Catalog
 
@@ -364,7 +403,7 @@ class_namespace : community.demo_lab
 设备数          : 1 (demo_heater)
 ```
 
-这个步骤只做受限静态编译，不执行作者 Driver。包内任意 Python 语法错误、重复设备 ID、非法装饰器字段、清单错误或 UUID 不一致都会让整个 Catalog 失败，不会留下“部分可用”状态。
+这个步骤会受限地静态编译 Catalog，并写出归档和检查产物，不执行作者 Driver。它可发现编译器覆盖的语法、身份、装饰器和清单问题，但输出摘要不等于 Registry 导入、Driver 构造、工作流运行或真机验收。
 
 ### 门 2：验证 Registry 能导入类型
 
@@ -440,7 +479,7 @@ unilab workspace logs \
   --json
 ```
 
-从状态结果取得 Backend 的 loopback `address`，在后面加 `/console/` 打开 Console。进入“工作流”，找到“演示：加热样品”，检查并发布当前修订，执行零写入预检后再创建 Task。完整界面流程见[手写并运行第一个工作流](first-workflow.md)。
+从状态结果取得 Backend 的 loopback `address`，在后面加 `/console/` 打开 Console。进入“工作流”，找到“演示：加热样品”，检查并发布当前修订，执行零写入预检后再创建 Task。界面操作可参考[SZLab 手写教程](first-workflow.md)，但设备类和实例应使用本仓库定义。
 
 结束时统一停止：
 
@@ -472,6 +511,20 @@ unilab workspace start \
 随后在 `/api/v1/online-devices` 或 Console 中确认 `heater_1` 在线，再运行已发布的示例工作流。这样才覆盖 Driver import、构造器和真实 action 调用。完成后立即执行 `workspace stop`。
 
 不要把这一步直接套到物理设备 Graph。对于 PLC、机械臂、泵、相机等 Driver，必须先改用隔离模拟器，或完成现场连接、联锁、急停、物料、超时与未知结果恢复验收。
+
+### 面向长期维护的 CI 与验收
+
+把前四道门放进 `.github/workflows/check_registry.yml`，并从干净 checkout 开始。CI 至少执行 editable 安装、`pip check`、`package inspect`、上面的现代 `--workspace` Registry 检查和 `pytest -q`，且继续检查 Registry 输出中的错误文本。
+
+测试应覆盖以下分层合同：
+
+- 比较生成的 Device、Action、Resource 和 Site Schema，防止字段、单位或稳定 ID 漂移；
+- 验证工作流执行 Python → graph → 规范化 Python → graph 后语义固定，不只比较格式；
+- 从空状态加载组合工作流，证明子工作流先于父工作流解析，反复扫描最终达到同一固定点；
+- 让模拟器执行代表性 Action、最短叶子工作流和关键故障注入；普通 CI 不连接实验室硬件；
+- 在 Theia Workbench 验收选择 Workspace、启动 OS、编辑/保存、发布、预检、运行、停止、日志和图状态。
+
+物理验收必须独立记录 Graph、地址表和固件版本，以及连接、联锁、急停、超时、取消和未知结果恢复的现场见证。模拟器、dry-run 或 Workbench 界面通过，都不能替代这份证据。
 
 ## 从最小仓库扩展到 SZLab 规模
 
@@ -512,6 +565,14 @@ Graph 中只有 PLC 节点保存 `url`、节点表路径和自动连接选项；
 
 涉及器皿、耗材、库位或物料流时，再增加 `@resource` 模板；实际资源实例、父子关系和挂载位置仍由 Graph 给出。动作之间用带 `AllowedResourceTemplates` 的 `ResourceSlot` 传递物料，不要只传字符串 ID。详见[资源、物料与库存](materials.md)。
 
+### 让真实设备与模拟器保持同一合同
+
+真实实现和模拟实现可以使用不同 transport，但面向 Registry 和 Workflow 的公开合同必须一致：Action 名称、参数类型与默认值、具名结果 Schema、状态 topic 名称和含义都不能漂移。同一工作流与 Workbench 表单应能复用，不需要改写设备动作符号。
+
+模拟器应提供确定性的状态推进、时延以及可控的超时和故障注入，且不得调用真实传输。`dry-run` 只是模拟动作回执，不会构造模拟 Driver；需要验证 Driver 或协议时，应在隔离 Graph 中用 `normal` 连接对应模拟器。
+
+使用当前 OS 已实现的 Graph、构造参数或领域内 transport 选择方式。现行公共合同没有通用的 `device_pair.yaml` 或 `--sim_engine` 入口，不要根据规划文档自行创建这些文件或参数。
+
 ## 部署时怎样让 Backend 和 Edge 都能加载
 
 本地开发由 Workspace Host 给两个子进程加入同一个仓库根。容器或 Kubernetes 部署则必须显式交付相同内容：
@@ -535,7 +596,7 @@ SZLab 当前部署镜像就是把 OS 源码以及 SZLab 的 `pyproject.toml`、`
 2. 扫描 Graph 中实际实例化的 class/id，以及对应 @device/@action 的参数和结果类型；
 3. 找到 Uni-Lab-SZLab 中结构最相近的工作流，仅借鉴写法，不复制设备 ID；
 4. 使用 unilabos.workflow.authoring 静态 DSL，保留明确的 @workflow UUID；
-5. 为每个动作、条件、循环、分组或子工作流调用生成稳定且唯一的 node_uuid；
+5. 为每个动作、物料来源、条件、循环、分组或子工作流调用生成稳定且唯一的 node_uuid；
 6. 只使用命名参数，不发明设备、动作、结果字段、资源或 API；
 7. 同步更新 package.yaml，并先运行 package inspect 和 dry-run 验证；
 8. 不切换 normal，不连接真机，不发布或运行，直到我人工审查。
@@ -549,7 +610,7 @@ AI 生成后，人必须核对 Graph 端点、设备实例、动作参数单位�
 
 | 现象 | 代码合同中的常见原因 | 修复 |
 | --- | --- | --- |
-| 缺少规范 Python 包 | `project.name` 规范化结果与包目录不同，或缺少 `__init__.py` | 统一 distribution、import package 和 `package.yaml` 身份 |
+| 缺少规范 Python 包 | 包放在 `src/`、规范名与目录不同，或缺少 `__init__.py` | 把规范 import package 直接放在 Workspace 根，并统一身份 |
 | `invalid_manifest` | `package.yaml` 多字段、缺字段、`workflows: null`、重复键或路径越界 | 使用本页的封闭结构；空包写 `workflows: []` |
 | 工作流没有出现 | 源码未列入 `package.yaml`，或 UUID 与装饰器不一致 | 同步清单、路径和 UUID，然后重启/重新加载 |
 | `python_syntax_error` | import package 内任一 Python 文件语法损坏 | 修复全部诊断；系统不会发布部分 Catalog |
@@ -569,10 +630,17 @@ AI 生成后，人必须核对 Graph 端点、设备实例、动作参数单位�
 - [ ] Graph 实例 ID 稳定，Workflow 绑定的是实例而不是类型；
 - [ ] Driver 依赖已声明，凭证未进入源码、Graph 或日志；
 - [ ] `package inspect`、Registry check 和 `package build` 全部通过；
+- [ ] Action Schema 与真实/模拟合同一致，工作流 round-trip 达到语义固定点；
+- [ ] 组合工作流从空状态按 child-first 固定点完整加载；
 - [ ] `dry-run + develop` 下 Backend/Edge Ready，工作流全部 loaded；
-- [ ] 发布前完成预检；切换 `normal` 前另做真机或模拟器安全验收；
+- [ ] Workbench 的编辑、保存、发布、预检、运行和停止链路已验收；
+- [ ] 切换 `normal` 前另做隔离模拟器或真机安全验收；
 - [ ] 容器中的 Backend/Edge 使用同一包、Catalog 和 Graph 代次。
 
 <div class="evidence">
-<strong>实现依据与实测</strong>：<code>unilabos/package_manager/workspace_runtime/discovery.py</code>（工作区身份、扫描根、默认文件与边界）；<code>package_catalog/project_metadata.py</code> 与 <code>compilers/python/compiler.py</code>（项目元数据和完整静态 Catalog）；<code>unilabos/workflow/source_manifest.py</code>（封闭工作流清单）；<code>unilabos/registry/{decorators,ast_registry_scanner,registry}.py</code>（设备、资源、动作与社区命名空间）；<code>unilabos/workflow/authoring_ast.py</code>（Workflow 静态 DSL）；<code>unilabos/resources/graphio.py</code> 与 <code>unilabos/package_manager/driver_runtime/</code>（Graph 和有限 Driver 激活）；<code>unilabos/workspace_host/{cli,launch}.py</code>（Backend/Edge 生命周期）；<code>Uni-Lab-SZLab/{pyproject.toml,package.yaml,szlab_poly_studio,deployment,tests}</code>（实际实验室仓库）。本页完整最小样例已在当前源码上通过 package inspect、Registry 1/1 校验、wheel 自审计、Workspace dry-run 启停与无硬件 Driver 的 normal 激活；Backend/Edge 均 Ready，工作流加载 1/1，`heater_1` 已由 Edge 上线。
+<strong>实现依据与实测</strong>
+<p><code>workspace_runtime/discovery.py</code>（根目录 flat package 与边界）；<code>package_catalog/project_metadata.py</code> 和 Python compiler（项目身份与静态 Catalog）；<code>workflow/source_manifest.py</code>（封闭清单）。</p>
+<p><code>registry/{decorators,ast_registry_scanner,registry}.py</code>（Device、Resource 与 Action）；<code>workflow/authoring_ast.py</code>、<code>authoring_engine.py</code> 和 <code>service.py</code>（DSL、round-trip 与 child-first 固定点）。</p>
+<p><code>resources/graphio.py</code>、<code>package_manager/driver_runtime/</code> 和 <code>workspace_host/{cli,launch}.py</code>（Graph、Driver 激活与双进程）；SZLab 仓库用于实例对照。</p>
+<p>本页最小样例已在当前源码通过 inspect、Registry 1/1、wheel 自审计、dry-run 启停和无硬件 Driver 的 normal 激活；Backend/Edge Ready，工作流加载 1/1，<code>heater_1</code> 已上线。</p>
 </div>

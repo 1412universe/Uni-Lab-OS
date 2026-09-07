@@ -8,6 +8,80 @@
 
 设备开发者如果要创建自己的领域包，应先完成[开发一个可加载的实验室仓库](lab-repository.md)：该教程说明 `@device`、Graph `class`、实例 `id` 和 Workflow 选择器之间的真实加载关系。
 
+## Driver 作者合同
+
+新 Driver 应把公开边界写成显式合同。下面展示一个最小设备类型；完整 Package、Graph 和工作流示例见[开发一个可加载的实验室仓库](lab-repository.md)。
+
+```python
+from typing import TypedDict
+
+from unilabos.registry.decorators import action, device, not_action, topic_config
+from unilabos.utils.decorator import subscribe
+
+
+class RunResult(TypedDict):
+    success: bool
+    message: str
+
+
+@device(id="example_station", category=["example"], displayname="示例工作站")
+class ExampleStation:
+    def __init__(self, endpoint: str = "sim://local") -> None:
+        self.endpoint = endpoint
+        self._upstream_status = "unknown"
+
+    @action(displayname="运行", description="执行一次设备操作")
+    def run(self, target: float = 1.0) -> RunResult:
+        """执行一次设备操作。
+
+        Args:
+            target[目标值]: 经过设备合同校验的业务目标值。
+        """
+        return {"success": True, "message": "completed"}
+
+    @action(always_free=True, displayname="读取健康状态")
+    def read_health(self) -> RunResult:
+        """只读取状态，不发送命令或改变物料。"""
+        return {"success": True, "message": "ready"}
+
+    @property
+    @topic_config(period=1.0)
+    def status(self) -> str:
+        return "idle"
+
+    @subscribe(device_id="upstream_1", status_name="status")
+    def on_upstream_status(self, value) -> None:
+        self._upstream_status = value
+
+    @not_action
+    def connect(self) -> None:
+        """公开生命周期方法，但不进入 Action Catalog。"""
+        ...
+
+    def _send_command(self) -> None:
+        ...
+```
+
+所有业务操作都应显式使用 `@action()`。旧 Registry 直扫路径仍含未装饰公开方法的 `auto-*` 兼容投影，但现代 Package Catalog 不保证把它作为可用 Action；内部辅助方法使用 `_private`，必须公开的辅助或生命周期方法使用 `@not_action`。
+
+`@action(always_free=True)` 会绕过同设备的普通排队，只能用于无副作用的轻量读取。发送命令、改变设备状态、移动物料、占用工位或依赖互斥顺序的动作都不能标记为 `always_free`。
+
+源码顺序必须是 `@property` 在上、`@topic_config(...)` 在下。Python 会先执行靠近函数的 `@topic_config`，再由 `@property` 包装；顺序反过来会让 topic 元数据无法按当前合同附着。
+
+`@subscribe` 当前从 `unilabos.utils.decorator` 导入，只订阅其他设备状态。本设备状态直接读取属性。若让 ROS 图自动识别消息类型，回调参数不要添加 `int`、`str` 等内置类型注解，以免它被误当作 ROS 消息类型。
+
+Action 参数文档使用 `name[Title]: description`，如 `target[目标值]: ...`。默认值只写在函数签名中；类型、默认值、标题和描述会共同形成表单与 Job 合同。
+
+Driver 构造器也应使用与 Graph `config` 对齐的显式命名参数，不要用通用 `config` 或 `**kwargs` 静默吞掉拼写错误。Action 具名结果、Workflow 输出和完整加载边界见[领域仓库教程](lab-repository.md)。
+
+## 真实设备与模拟器
+
+真实 Driver 与模拟实现可以更换 transport，但必须保持相同的 Action 名称、参数类型与默认值、具名结果 Schema，以及状态 topic 的名称和语义。这样同一工作流和 Workbench 表单才能在两种环境复用。
+
+模拟器应有确定性的状态推进，并支持受控时延、超时和故障注入；模拟路径不得连接真实设备。`dry-run` 只生成模拟动作回执，不构造 Driver。要验证 PLC-Sim 等协议模拟器，应使用隔离 Graph 和 `normal`，具体步骤见[PLC-Sim 仿真器](plc-sim.md)。
+
+模拟实现如何被选择，应以当前 OS 和领域仓库实际支持的 Graph/构造参数为准。现行公共接口没有通用 `device_pair.yaml` 或 `--sim_engine`，不要自行发明这些文件或启动参数。
+
 ## 当前在线节点
 
 目标环境实测 Edge 已连接并报告 10 个在线节点：
@@ -72,5 +146,8 @@ PLC-Sim 可以模拟 OPC UA 命令、动作过程、传感器变化、延时、�
 当前环境的 Web GUI、Server/Agent 检查、在线变量观察和本地接入步骤见[PLC-Sim 仿真器](plc-sim.md)。
 
 <div class="evidence">
-<strong>实现依据</strong>：目标环境 <code>/api/v1/online-devices</code> 实测；<code>Uni-Lab-SZLab/szlab_poly_studio/devices/</code>（设备实现）；<code>common/plc_gateway.py</code>（PLC 调用路径）；<code>common/action_logging.py</code>（动作日志与脱敏）；<code>devices/szlab_mixer_robot/standard_gateway.py</code>（幂等 journal 与 UNKNOWN 恢复）；<code>PLC-Sim/README.md</code> 与 <code>PLC-Sim/PLC-Sim/</code>（协议仿真边界）。
+<strong>实现依据</strong>
+<p><code>unilabos/registry/decorators.py</code>（Action、topic、非 Action 与排队元数据）；<code>unilabos/utils/decorator.py</code>（跨设备 subscribe）；<code>ast_registry_scanner.py</code>（静态发现边界）。</p>
+<p>目标环境 <code>/api/v1/online-devices</code> 实测；<code>Uni-Lab-SZLab/szlab_poly_studio/devices/</code>、<code>common/plc_gateway.py</code> 与 <code>common/action_logging.py</code>（SZLab 实现）。</p>
+<p><code>devices/szlab_mixer_robot/standard_gateway.py</code>（幂等 journal 与 UNKNOWN 恢复）；<code>PLC-Sim/README.md</code> 与 <code>PLC-Sim/PLC-Sim/</code>（协议仿真边界）。</p>
 </div>

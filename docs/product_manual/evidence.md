@@ -10,9 +10,10 @@
 | deepmodeling/Uni-Lab-OS README | 2026-09-07 在线读取 | `unilabos` / `unilabos-env` / `unilabos-full` 环境分类和 Python 3.11.14 基线；启动细节由当前产品代码复核。 |
 | Uni-Lab-SZLab | `f0958f5b2d1ba0b145993778c2e1d22519819fba`，并区分未提交实验文件 | 设备、资源、Graph、动作、工艺工作流和真机边界。 |
 | uni-lab-fe | 当前工作树 | Theia Workbench 入口与 Profile 能力矩阵。 |
+| unilab-domain-repo-builder | 当前工作树，并核对 Workbench 内置副本 | 本地领域仓库 Agent 的操作合同；`evals` 只作为评测定义，不作为通过证据。 |
 | uni-lab-backend | 当前工作树 | Go Backend 管理后台、Scheduler 和安全边界。 |
 | PLC-Sim | `ff71ba2772af3e994f32fb7b6b2a9021afc2616b` | OPC UA/Modbus 仿真能力和边界。 |
-| 目标 Kubernetes | `xiongyanfei`，2026-09-07 实测 | 当前镜像、模式、工作流、在线设备、Service 和公网入口。 |
+| 目标 Kubernetes | 当前演示命名空间，2026-09-07 实测 | 当前镜像、模式、工作流、在线设备、Service 和公网入口；公开手册不记录人员命名信息。 |
 
 参考站点 [Automata Topics](https://docs.automata.tech/topics) 只用于信息架构和阅读样式：左侧分组目录、中心正文、右侧页内目录，以及“Getting started / Topics / Concepts / Tutorials / Reference”式内容分层；不作为 Uni-Lab 功能事实来源。
 
@@ -54,8 +55,10 @@
 | SZLab 工作流 | `Uni-Lab-SZLab/package.yaml`、`szlab_poly_studio/workflows/` |
 | SZLab 设备 | `Uni-Lab-SZLab/szlab_poly_studio/devices/`、`common/plc_gateway.py` |
 | 实验室仓库加载合同 | `unilabos/package_manager/`、`unilabos/registry/`、`unilabos/workflow/source_manifest.py`、`workspace_host/launch.py` |
+| Kubernetes 部署与上线 | 仓库随附的 `szlab-local-debug/` 部署样例、`Uni-Lab-SZLab/deployment/kubernetes-docker-desktop/edge-namespace/stack.yaml` |
 | 活动实验室布局 | `Uni-Lab-SZLab/deployment/graphs/szlab-local-debug.json` |
-| Workbench 能力 | `uni-lab-fe/packages/services/src/capabilities.ts` 与 Workbench contributions |
+| Workbench 能力 | `uni-lab-fe/packages/services/src/capabilities.ts`、`packages/workbench-theia/src/browser/` 与 `packages/workbench-session/src/{agent-sidecar,workspace-skills}.ts` |
+| Workbench 托管 Skill | `uni-lab-fe/apps/workbench/resources/workspace-skills/manifest.json`、`unilab-domain-repo-builder/` |
 | Go Backend | `uni-lab-backend/internal/`、`uni-lab-backend/frontend/src/` |
 | PLC 仿真 | `PLC-Sim/PLC-Sim/`、`PLC-Sim/Modbus-Sim/` |
 
@@ -67,7 +70,7 @@ SZLab README 仍写 13 个工作流；较早测试和迁移清单使用 23；当
 
 ### 多套界面
 
-Uni-Lab OS 内置 Console、Go Backend 管理后台、Theia Workbench 和旧任务台原型有不同导航与能力。主操作步骤只使用当前部署的内置 Console；其他入口放在[其他产品入口](interfaces.md)。
+Uni-Lab OS 内置 Console、Go Backend 管理后台、Theia Workbench 和旧任务台原型有不同导航与能力。主操作步骤只使用当前部署的内置 Console；其他入口放在[产品入口与 Workbench](interfaces.md)。
 
 ### Debug 与 step
 

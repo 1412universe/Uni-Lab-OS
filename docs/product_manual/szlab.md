@@ -2,6 +2,8 @@
 
 SZLab 是当前环境加载的聚合物实验室设备包。它把 S04–S09 工艺站、机械臂、PLC、物料模板、仓库布局和实验工作流注册到 Uni-Lab OS。
 
+运行任何 SZLab 流程前，先完成[运行模式、安全与恢复](runtime-safety.md)和[PLC-Sim 仿真器](plc-sim.md)中的前置检查。共享演示环境经过真实 Driver 调用链，但当前 PLC 端点仍是模拟器；这不代表真机已经验收。
+
 ## 当前环境范围
 
 | 项目 | 当前事实 |
@@ -130,5 +132,9 @@ S07 驱动可以把称量采样写入 `samples.csv` 和 `balance_curves.svg`。�
 设备包默认面向离线/测试联调。真机上线至少要逐项完成 IP 与 NodeId、账号、只读映射、握手校准、机器人点位、传感器语义、库位映射、容量、超时、取消、断线、急停和 UNKNOWN 对账验收，并按单站、跨站、完整流程逐级放行。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>Uni-Lab-SZLab/package.yaml</code>（Catalog 工作流）；<code>szlab_poly_studio/workflows/</code>（23 个当前发布定义及未上线候选）；<code>single_sample_atomic_attachment_robot_atomic.py</code> 与 <code>..._task_b.py</code>（A/B 主流程和资源通道）；<code>deployment/graphs/szlab-local-debug.json</code>（活动设备与 PLC 连接）；<code>docs/HARDWARE_BRINGUP.md</code>（真机验收边界）；目标环境工作流、Readiness 与在线设备 API 实测。
+<strong>实现依据</strong>
+<p><code>Uni-Lab-SZLab/package.yaml</code>（Catalog 工作流）；<code>szlab_poly_studio/workflows/</code>（23 个当前发布定义及未上线候选）。</p>
+<p><code>single_sample_atomic_attachment_robot_atomic.py</code> 与 <code>..._task_b.py</code>（A/B 主流程和资源通道）。</p>
+<p><code>deployment/graphs/szlab-local-debug.json</code>（活动设备与 PLC 连接）；<code>docs/HARDWARE_BRINGUP.md</code>（真机验收边界）。</p>
+<p>目标环境工作流、Readiness 与在线设备 API 实测。</p>
 </div>

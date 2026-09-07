@@ -89,6 +89,12 @@ Trace 系统采用 fail-open：可观测性服务故障不应直接阻止工艺�
 
 本次部署只公开静态说明书 NodePort，没有改变 Runtime、Edge 或 PLC-Sim 的现有网络策略。
 
+完成安全边界检查后，按[Kubernetes 部署与上线](deployment.md)准备镜像、Workspace、Graph、Secret、持久卷、业务 Readiness、入口和回滚。
+
 <div class="evidence">
-<strong>实现依据</strong>：<code>frontend/src/components/StartupModeDialog.tsx</code> 与 <code>AppShell.tsx</code>（模式门禁）；<code>unilabos/workflow/execution_plan.py</code>、<code>execution_lock_lease.py</code> 与 <code>task_runtime_projection.py</code>（冻结、锁和恢复）；<code>Uni-Lab-SZLab/devices/szlab_mixer_robot/standard_gateway.py</code>（UNKNOWN）；<code>deployment/kubernetes-docker-desktop/edge-namespace/stack.yaml</code>（drain/termination）；<code>uni-lab-backend/internal/web/router.go</code>（服务中间件边界）。
+<strong>实现依据</strong>
+<p><code>frontend/src/components/StartupModeDialog.tsx</code> 与 <code>AppShell.tsx</code>（模式门禁）。</p>
+<p><code>unilabos/workflow/execution_plan.py</code>、<code>execution_lock_lease.py</code> 与 <code>task_runtime_projection.py</code>（冻结、锁和恢复）。</p>
+<p><code>Uni-Lab-SZLab/devices/szlab_mixer_robot/standard_gateway.py</code>（UNKNOWN）；<code>deployment/kubernetes-docker-desktop/edge-namespace/stack.yaml</code>（drain/termination）。</p>
+<p><code>uni-lab-backend/internal/web/router.go</code>（服务中间件边界）。</p>
 </div>

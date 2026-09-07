@@ -1,4 +1,4 @@
-# 实验室操作
+# 可复用实验操作
 
 实验室操作是可复用的局部工艺，例如“标准物料转运”“开盖后移液”或“一次搅拌”。它可以独立维护、发布为不可变合同，再被完整工作流作为一个子节点引用。
 
@@ -87,5 +87,8 @@
 当前环境中的“SZLab 标准物料转运”是一个 `experiment_operation`。它接收资源、源/目标仓库、设备和站点，在标准取放成功后由 Host 唯一一次提交物料归属。SZLab 的多个上层流程复用该合同，以避免在不同工作流中复制转运和记账语义。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>frontend/src/pages/OperationsPage.tsx</code>（画布、导入、合同、控制节点、保存和发布）；<code>frontend/src/components/ActionParameterEditor.tsx</code>、<code>ControlParameterEditor.tsx</code> 与 <code>CompositeWorkflowParameterEditor.tsx</code>（参数来源）；<code>Uni-Lab-SZLab/szlab_poly_studio/workflows/material_transfer.py</code>（标准物料转运合同）。
+<strong>实现依据</strong>
+<p><code>frontend/src/pages/OperationsPage.tsx</code>（画布、导入、合同、控制节点、保存和发布）。</p>
+<p><code>frontend/src/components/ActionParameterEditor.tsx</code>、<code>ControlParameterEditor.tsx</code> 与 <code>CompositeWorkflowParameterEditor.tsx</code>（参数来源）。</p>
+<p><code>Uni-Lab-SZLab/szlab_poly_studio/workflows/material_transfer.py</code>（标准物料转运合同）。</p>
 </div>

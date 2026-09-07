@@ -1,6 +1,8 @@
-# 手写并运行第一个工作流
+# 手写并运行第一个工作流（SZLab 教学）
 
-本教程会创建一个全新的普通工作流，把布尔输入交给 SZLab 控制流软件探针，再把观察值作为正式输出。你会亲手完成：写源码、导入、看诊断、发布、预检、创建 Task 和查看结果。
+本教程使用 SZLab 的无硬件副作用软件探针，创建一个全新的普通工作流。你会亲手完成写源码、导入、诊断、发布、预检、创建 Task 和查看结果。
+
+本页依赖已经加载的 SZLab 包和 `szlab_control_flow_probe`，不是任意新建实验室仓库的通用下一步。开发自己的仓库时，先完成[实验室仓库接入](lab-repository.md)，再用本仓库中已登记的设备类型和动作替换示例探针。
 
 日常工作流推荐按[用 AI 编写工作流](ai-workflow-authoring.md)的方式生成；本教程保留手写过程，是为了让你能够读懂、审查和排查 AI 产出的静态 DSL。无论源码由谁写，后面的产品编译、人工发布、预检和运行步骤完全相同。
 
@@ -201,10 +203,15 @@ Python 导入是“创建新定义”，不是覆盖已有 UUID。需要长期�
 
 ## 下一课
 
-- 用[工作流编排特性](workflow-features.md)把这个单动作流程扩展成条件、循环与并行流程；
-- 用[工作流](workflows.md)学习修订、发布、预检和组合合同；
-- 用[任务与并行调度](tasks.md)学习单步、等待资源、暂停、取消和恢复。
+- 先在[物料管理](materials.md)和[试剂管理](reagents.md)中理解工作流绑定的运行资源；
+- 用[工作流编排特性](workflow-features.md)把单动作流程扩展成条件、循环与并行流程；
+- 用[可复用实验操作](operations.md)学习子流程创作和发布；
+- 后续日常创作按[用 AI 编写工作流（推荐）](ai-workflow-authoring.md)完成；
+- 上线前完成[运行安全](runtime-safety.md)和[Kubernetes 部署](deployment.md)，再管理工作流和任务。
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>Uni-Lab-SZLab/szlab_poly_studio/devices/control_flow_probe/device.py</code>（无硬件副作用设备与动作合同）；<code>unilabos/workflow/python_workflow_import.py</code>、<code>unilabos/workflow/service.py</code>（安全导入与原子落盘）；<code>frontend/src/pages/WorkflowsPage.tsx</code>（导入、发布、预检和创建任务）；<code>unilabos/ros/nodes/presets/host_node.py</code>（模拟动作结果）；<code>unilabos/app/workflow_api.py</code>（发布、预检和 Task API）。
+<strong>实现依据</strong>
+<p><code>Uni-Lab-SZLab/szlab_poly_studio/devices/control_flow_probe/device.py</code>（无硬件副作用设备与动作合同）。</p>
+<p><code>unilabos/workflow/python_workflow_import.py</code>、<code>unilabos/workflow/service.py</code>（安全导入与原子落盘）；<code>frontend/src/pages/WorkflowsPage.tsx</code>（导入、发布、预检和创建任务）。</p>
+<p><code>unilabos/ros/nodes/presets/host_node.py</code>（模拟动作结果）；<code>unilabos/app/workflow_api.py</code>（发布、预检和 Task API）。</p>
 </div>

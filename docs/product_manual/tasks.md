@@ -98,5 +98,8 @@ SZLab 本地短 trace 可能在跨线程 PLC 调用时显示 `-`，它不等同�
 :::
 
 <div class="evidence">
-<strong>实现依据</strong>：<code>frontend/src/pages/TasksPage.tsx</code>（矩阵、详情、确认、控制、锁、结算、干预和 Trace）；<code>unilabos/workflow/task_runtime_projection.py</code>（任务投影）；<code>unilabos/workflow/execution_lock_lease.py</code>（执行锁）；<code>unilabos/workflow/task_scheduler_bridge.py</code>（调度衔接）；<code>Uni-Lab-SZLab/common/action_logging.py</code>（动作日志）。
+<strong>实现依据</strong>
+<p><code>frontend/src/pages/TasksPage.tsx</code>（矩阵、详情、确认、控制、锁、结算、干预和 Trace）。</p>
+<p><code>unilabos/workflow/task_runtime_projection.py</code>（任务投影）；<code>unilabos/workflow/execution_lock_lease.py</code>（执行锁）。</p>
+<p><code>unilabos/workflow/task_scheduler_bridge.py</code>（调度衔接）；<code>Uni-Lab-SZLab/common/action_logging.py</code>（动作日志）。</p>
 </div>

@@ -22,7 +22,7 @@ RUN sphinx-build -W --keep-going -b html \
 
 FROM nginx:1.27-alpine
 
-COPY deploy/kubernetes-xiongyanfei/docs/nginx.conf /etc/nginx/nginx.conf
+COPY deploy/product-manual/nginx.conf /etc/nginx/nginx.conf
 COPY --from=builder --chown=101:101 /tmp/unilabos-manual-html /usr/share/nginx/html
 
 USER 101:101

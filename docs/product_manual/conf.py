@@ -23,7 +23,7 @@ source_suffix = {
 
 master_doc = "index"
 language = "zh_CN"
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "._*"]
 
 myst_enable_extensions = [
     "colon_fence",
