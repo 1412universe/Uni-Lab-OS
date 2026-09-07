@@ -303,6 +303,10 @@ class EdgeScheduler:
         # 实时监控总线（duck-typed emit(channel, type, data)）；None = 关闭
         self._monitor = monitor
         self._material_monitor_listener_id: int | None = None
+        # 物料监听与 submit/finish 必须共用同一轮重排 Future，否则预留/结算
+        # 事件会先抢走派发，调用方等到的下一轮返回空 dispatched。
+        self._reconcile_wakeup_lock = threading.Lock()
+        self._pending_reconcile: Future[Any] | None = None
         add_listener = getattr(monitor, "add_listener", None)
         if callable(add_listener):
             self._material_monitor_listener_id = add_listener(
@@ -423,14 +427,9 @@ class EdgeScheduler:
 
         try:
             # 库存事件可能正由任务完成/结算线程发布，而该线程仍持有调度锁。
-            # 这里只投递到唯一重排线程，绝不调用 ``Future.result`` 同步等待，
-            # 否则重排线程会反过来等待同一把锁，导致完成回调死锁。
-            future = submit_with_context(
-                _RECONCILE_EXECUTOR,
-                _run_reconcile,
-                self.reschedule,
-            )
-            future.add_done_callback(_log_background_reconcile_failure)
+            # 只投递、不等待；与 submit/finish 的 ``_wake_reconcile`` 合并到
+            # 同一 Future，避免调用方等到空派发，也避免同步等待死锁。
+            self._wake_reconcile(wait=False)
         except Exception:
             logger.exception("[EdgeScheduler] material change reconcile failed")
 
@@ -1812,19 +1811,36 @@ class EdgeScheduler:
 
     # ── 重排核心 ─────────────────────────────────────────────
 
-    def _wake_reconcile(self) -> list[dict[str, Any]]:
+    def _owns_scheduler_lock(self) -> bool:
+        """当前线程是否已经持有调度锁。"""
+
+        owned = getattr(self._lock, "_is_owned", None)
+        return bool(owned()) if callable(owned) else False
+
+    def _wake_reconcile(self, *, wait: bool = True) -> list[dict[str, Any]]:
         """只向 Scheduler 调度循环投递唤醒，不在设备回调栈执行重排。
 
         普通完成回调同步等待这一轮结果以保持现有 API 返回形状；若执行器在调度
-        循环线程内同步回调，则只排队并立即返回，避免单线程循环自等待死锁。
+        循环线程内同步回调，或当前线程已持有调度锁，则只排队并立即返回，避免
+        单线程循环自等待、以及“持锁等待重排线程再等同一把锁”的死锁。
         """
 
-        future = submit_with_context(
-            _RECONCILE_EXECUTOR,
-            _run_reconcile,
-            self.reschedule,
-        )
-        if bool(getattr(_RECONCILE_THREAD, "active", False)):
+        with self._reconcile_wakeup_lock:
+            pending = self._pending_reconcile
+            if pending is None or pending.done():
+                future = submit_with_context(
+                    _RECONCILE_EXECUTOR,
+                    _run_reconcile,
+                    self.reschedule,
+                )
+                self._pending_reconcile = future
+            else:
+                future = pending
+        if (
+            not wait
+            or bool(getattr(_RECONCILE_THREAD, "active", False))
+            or self._owns_scheduler_lock()
+        ):
             future.add_done_callback(_log_background_reconcile_failure)
             return []
         return future.result()
