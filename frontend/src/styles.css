@@ -1395,3 +1395,25 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 @media (max-width: 650px) {
   .reagent-catalog-list .reagent-catalog-actions button { min-height: 40px; }
 }
+
+/* 容器先确认额定规格，再录入数量；数量单位不会改写容器规格。 */
+.reagent-capacity-section { background: var(--surface-soft); }
+.capacity-rated { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.capacity-rated > span { color: var(--muted); font-size: 12px; }
+.capacity-rated > strong { color: var(--ink); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; }
+.capacity-conversion-note, .quantity-unit-hint { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.capacity-field input:disabled { color: var(--muted); background: var(--surface-soft); cursor: not-allowed; }
+.reagent-form .form-field > label, .dispense-form .form-field > label { color: var(--ink); font-size: 12px; font-weight: 600; }
+.reagent-form > .form-error { color: var(--red); }
+.dispense-form .dispense-row { grid-template-columns: 30px minmax(0, 1fr) 44px; align-items: start; }
+.dispense-form .dispense-row-index { grid-column: 1; grid-row: 1; align-self: center; }
+.dispense-form .dispense-container-field { grid-column: 2; grid-row: 1; }
+.dispense-form .dispense-remove { grid-column: 3; grid-row: 1; align-self: end; }
+.dispense-form .dispense-row-capacity { grid-column: 2 / -1; grid-row: 2; }
+.dispense-form .dispense-quantity-field { grid-column: 2 / -1; grid-row: 3; }
+.dispense-form .dispense-row > .form-error { grid-column: 2 / -1; }
+.dispense-form .reagent-capacity-section > .form-error { grid-column: auto; margin-top: 0; }
+@media (max-width: 600px) {
+  .dispense-form .dispense-row-capacity, .dispense-form .dispense-quantity-field { grid-column: 1 / -1; }
+  .capacity-rated { flex-wrap: wrap; gap: 4px 12px; }
+}

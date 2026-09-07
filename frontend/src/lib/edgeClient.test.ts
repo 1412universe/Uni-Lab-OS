@@ -1714,6 +1714,21 @@ describe('updateReagent / deleteReagent', () => {
     })
   })
 
+  it.each([
+    { name: '省略浓度字段以保留原值', patch: {}, expected: {} },
+    { name: '显式 null 清空浓度及单位', patch: { concentrationValue: null, concentrationUnit: null }, expected: { concentration_value: null, concentration_unit: null } },
+    { name: '发送新浓度及单位', patch: { concentrationValue: 95, concentrationUnit: '%' }, expected: { concentration_value: 95, concentration_unit: '%' } },
+    { name: '保留零浓度', patch: { concentrationValue: 0, concentrationUnit: 'mol/L' }, expected: { concentration_value: 0, concentration_unit: 'mol/L' } },
+    { name: '单独更新浓度而不重写单位', patch: { concentrationValue: 10 }, expected: { concentration_value: 10 } },
+    { name: '单独更新单位而不重写浓度', patch: { concentrationUnit: 'mmol/L' }, expected: { concentration_unit: 'mmol/L' } },
+  ])('$name', async ({ patch, expected }) => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0, data: { uuid: 'rg-1', revision: 3 } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await updateReagent({ uuid: 'rg-1', quantity: 45, quantityUnit: 'mL', expectedRevision: 2, ...patch })
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as Record<string, unknown>
+    expect(Object.fromEntries(Object.entries(body).filter(([key]) => key.startsWith('concentration_')))).toEqual(expected)
+  })
+
   it('issues a DELETE for the reagent record', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ code: 0 }))
     vi.stubGlobal('fetch', fetchMock)

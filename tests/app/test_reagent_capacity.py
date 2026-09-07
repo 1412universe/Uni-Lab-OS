@@ -27,12 +27,12 @@ def scene(tmp_path):
     app = FastAPI()
     install_backend_resource_api(app, BackendResourceService(store))
     with TestClient(app) as client:
-        info = client.post("/api/v1/reagent-infos", json={"name": "容量测试试剂", "physical_state": "solid"}).json()["data"]["uuid"]
+        info = client.post("/api/v1/reagent-infos", json={"name": "容量测试试剂", "physical_state": "liquid"}).json()["data"]["uuid"]
         yield client, store, info
     store.close()
 
 
-def container(scene, *, capacity=None, rated=None):
+def container(scene, *, capacity=None, rated={"max_volume_ul": 100000}):
     client, _, _ = scene
     template = {"id": str(uuid4()), "category": ["container"], "registry_type": "resource"}
     if rated is not None:
@@ -67,7 +67,9 @@ def test_volume_boundary_and_unit_conversion(scene, quantity, unit, accepted):
 
 
 def test_powder_loading_mass_is_per_container_not_inferred_from_volume(scene):
-    bottle = container(scene, rated={"max_volume_ul": 300000})
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid", "density_g_per_ml": 10})
+    bottle = container(scene, rated={"max_volume_ul": 300000, "max_mass_g": 30})
     capacity = {"max_mass_g": 20}
     assert create(scene, bottle, 20001, "mg", container_capacity=capacity)["code"] == 1000
     first = create(scene, bottle, 0.02, "kg", container_capacity=capacity)
@@ -75,7 +77,8 @@ def test_powder_loading_mass_is_per_container_not_inferred_from_volume(scene):
     assert first["data"]["maximum_capacity"] == {"max_volume_ul": 300000, "max_mass_g": 20}
     assert "loading_limits" not in first["data"]["meta_data"]
     other = container(scene, rated={"max_volume_ul": 300000})
-    assert create(scene, other, 50000, "g")["code"] == 0
+    assert create(scene, other, 50000, "g")["code"] == 1000
+    assert create(scene, other, 20, "g", container_capacity=capacity)["code"] == 0
 
 
 @pytest.mark.parametrize("limits", [
@@ -89,11 +92,13 @@ def test_invalid_or_incompatible_limits_reject_registration(scene, limits):
     assert scene[1].query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 0
 
 
-def test_unconfigured_legacy_records_remain_usable_and_plr_capacity_is_honored(scene):
+def test_unconfigured_new_records_need_manual_limit_and_existing_plr_capacity_is_honored(scene):
     client, store, _ = scene
-    material = container(scene)
-    assert create(scene, material, 10000, "mmol")["code"] == 0
-    legacy = container(scene)
+    material = container(scene, rated=None)
+    assert create(scene, material, 10000, "mmol")["code"] == 1000
+    assert create(scene, material, 50)["code"] == 1000
+    assert create(scene, material, 50, container_capacity={"max_volume_ul": 100000})["code"] == 0
+    legacy = container(scene, rated=None)
     with store.transaction() as conn:
         conn.execute("UPDATE material SET data=? WHERE uuid=?", (json.dumps({"max_volume": 10000}), legacy["uuid"]))
     assert create(scene, legacy, 11)["code"] == 1000
@@ -128,8 +133,9 @@ def test_limit_only_edits_preserve_lineage_and_record_before_after(scene):
 
 
 def test_material_capacity_update_checks_stock_and_preserves_omitted_limits(scene):
-    client, _, _ = scene
-    material = container(scene, capacity={"max_mass_g": 10}, rated={"max_volume_ul": 100000})
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid"})
+    material = container(scene, capacity={"max_mass_g": 10}, rated={"max_volume_ul": 100000, "max_mass_g": 20})
     create(scene, material, 8, "g")
     path = f"/api/v1/materials/{material['uuid']}"
     assert client.put(path, json={"config": {"capacity": {"max_mass_g": 5}}}).json()["code"] == 1000
@@ -138,7 +144,7 @@ def test_material_capacity_update_checks_stock_and_preserves_omitted_limits(scen
     legacy_edit = client.put(path, json={"config": {"category": "powder"}}).json()["data"]
     assert legacy_edit["config"]["capacity"] == {"max_mass_g": 10}
     clear = client.put(path, json={"config": {"capacity": None}}).json()["data"]
-    assert clear["capacity"] == {"max_volume_ul": 100000}
+    assert clear["capacity"] == {"max_volume_ul": 100000, "max_mass_g": 20}
 
 
 def test_inline_and_registration_capacity_updates_are_atomic(scene):
@@ -164,11 +170,17 @@ def test_inline_and_registration_capacity_updates_are_atomic(scene):
 
 
 @pytest.mark.parametrize("kind", ["json", "csv", "xlsx"])
-def test_batch_import_limit_failure_rolls_back_prior_rows(scene, kind):
+@pytest.mark.parametrize("unit", ["mL", "g"])
+@pytest.mark.parametrize("has_rating", [True, False])
+def test_batch_import_limit_failure_rolls_back_prior_rows(scene, kind, unit, has_rating):
     client, store, info = scene
-    bottles = [container(scene), container(scene)]
-    rows = [{"material_uuid": bottle["uuid"], "reagent_info_uuid": info, "quantity": quantity, "quantity_unit": "mL",
-             "container_capacity": {"max_volume_ul": 80000}, "meta_data": {"batch": "A"}}
+    if unit == "g":
+        client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    rated = {"max_volume_ul": 100000} if has_rating else None
+    bottles = [container(scene, rated=rated), container(scene, rated=rated)]
+    limit = {"max_volume_ul": 80000} if unit == "mL" else {"max_mass_g": 80}
+    rows = [{"material_uuid": bottle["uuid"], "reagent_info_uuid": info, "quantity": quantity, "quantity_unit": unit,
+             "container_capacity": limit, "meta_data": {"batch": "A"}}
             for bottle, quantity in zip(bottles, [70, 81])]
     if kind == "json":
         result = client.post("/api/v1/reagents/batch", json={"items": rows}).json()
@@ -191,12 +203,12 @@ def test_batch_import_limit_failure_rolls_back_prior_rows(scene, kind):
     assert result["code"] == 1000, result
     assert store.query_one("SELECT COUNT(*) AS n FROM reagent")["n"] == 0
     assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 0
-    assert client.get(f"/api/v1/materials/{bottles[0]['uuid']}").json()["data"]["capacity"] == {}
+    assert client.get(f"/api/v1/materials/{bottles[0]['uuid']}").json()["data"]["capacity"] == (rated or {})
 
 
 def test_dispense_enforces_each_target_atomically_and_does_not_copy_source_limits(scene):
     client, store, _ = scene
-    source = create(scene, container(scene), 200, meta_data={"loading_limits": {"max_volume_ul": 300000}})["data"]
+    source = create(scene, container(scene, rated={"max_volume_ul": 300000}), 200, meta_data={"loading_limits": {"max_volume_ul": 300000}})["data"]
     targets = [container(scene, rated={"max_volume_ul": 100000}) for _ in range(2)]
     service = InventoryService(store)
     command = {"command_id": str(uuid4()), "type": "reagent.dispense", "actor": "test", "payload": {
@@ -301,7 +313,7 @@ def test_combined_maximum_edit_failure_rolls_back_all_changes(scene, failure):
     assert store.query_one("SELECT COUNT(*) AS n FROM sync_outbox WHERE aggregate_type='reagent'")["n"] == 1
 
 
-@pytest.mark.parametrize("rated", [None, {"max_volume_ul": 100000}])
+@pytest.mark.parametrize("rated", [{"max_volume_ul": 100000}, {"max_volume_ul": 150000}])
 def test_maximum_only_edit_and_clear_record_effective_before_after(scene, rated):
     client, _, _ = scene
     material = container(scene, rated=rated)
@@ -422,3 +434,300 @@ def test_active_claim_blocks_maximum_edits_from_reagent_and_material(scene):
     }).json()
     assert result["code"] == 6011, result
     assert client.get(f"/api/v1/reagents/{reagent['uuid']}").json()["data"] == reagent
+
+
+@pytest.mark.parametrize("quantity,maximum,accepted", [
+    (100, None, True), (100.01, None, False), (200, 200, False),
+    (50, 200, False), (80, 80, True), (81, 80, False),
+])
+def test_liquid_mass_and_manual_maximum_both_respect_rated_volume(scene, quantity, maximum, accepted):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    material = container(scene)
+    extra = {} if maximum is None else {"container_capacity": {"max_mass_g": maximum}}
+    result = create(scene, material, quantity, "g", **extra)
+    assert (result["code"] == 0) is accepted, result
+    after = client.get(f"/api/v1/materials/{material['uuid']}").json()["data"]
+    assert after["rated_capacity"] == {"max_volume_ul": 100000}
+    if not accepted:
+        assert after["config"] == material["config"]
+        assert after["revision"] == material["revision"]
+        assert store.query_one("SELECT COUNT(*) AS n FROM reagent")["n"] == 0
+        assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 0
+
+
+@pytest.mark.parametrize("unit", ["µL", "μL", "uL"])
+def test_liquid_density_conversion_accepts_all_microliter_aliases(scene, unit):
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    material = container(scene, rated={"max_mass_g": 100})
+    assert create(scene, material, 100001, unit)["code"] == 1000
+    assert create(scene, material, 100000, unit)["code"] == 0
+
+
+@pytest.mark.parametrize("density", [None, float("inf")])
+@pytest.mark.parametrize("rated", [{"max_volume_ul": 100000}, {"max_mass_g": 100}])
+def test_liquid_mass_needs_eligible_density_even_with_a_mass_rating(scene, density, rated):
+    _, store, info = scene
+    # 旧目录可能没有通过当前 DTO 校验；库存入口仍须防御无效密度。
+    with store.transaction() as conn:
+        conn.execute("UPDATE reagent_info SET density_g_per_ml=? WHERE uuid=?", (density, info))
+    material = container(scene, rated=rated)
+    result = create(scene, material, 1, "g")
+    assert result["code"] == 1000
+    assert "密度" in result["error"]["msg"]
+
+
+def test_liquid_checks_all_rated_and_user_dimensions(scene):
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 2})
+    material = container(scene, rated={"max_volume_ul": 100000, "max_mass_g": 80})
+    assert create(scene, material, 41, "mL")["code"] == 1000
+    assert create(scene, material, 30, "mL", container_capacity={"max_volume_ul": 50000})["code"] == 1000
+    assert create(scene, material, 31, "mL", container_capacity={"max_mass_g": 60})["code"] == 1000
+    assert create(scene, material, 30, "mL", container_capacity={"max_mass_g": 60})["code"] == 0
+
+
+@pytest.mark.parametrize("state", ["unknown", "other", "gas", "solid"])
+def test_new_intake_cannot_pick_volume_to_evade_phase_policy(scene, state):
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": state})
+    result = create(scene, container(scene, rated={"max_volume_ul": 100000, "max_mass_g": 100}), 10)
+    assert result["code"] == 1000
+
+
+@pytest.mark.parametrize("endpoint", ["reagent", "material"])
+def test_capacity_edit_checks_actual_stock_and_custom_limit_using_bottle_density(scene, endpoint):
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    material = container(scene)
+    reagent = create(scene, material, 80, "g")["data"]
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 10})
+    path = f"/api/v1/reagents/{reagent['uuid']}" if endpoint == "reagent" else f"/api/v1/materials/{material['uuid']}"
+    for maximum in [200, 70]:
+        payload = {"quantity": 80, "quantity_unit": "g", "container_capacity": {"max_mass_g": maximum}} if endpoint == "reagent" else {"config": {"capacity": {"max_mass_g": maximum}}}
+        assert client.put(path, json=payload).json()["code"] == 1000
+    payload = {"quantity": 80, "quantity_unit": "g", "container_capacity": {"max_mass_g": 90}} if endpoint == "reagent" else {"config": {"capacity": {"max_mass_g": 90}}}
+    assert client.put(path, json=payload).json()["code"] == 0
+    saved = client.get(f"/api/v1/reagents/{reagent['uuid']}").json()["data"]
+    assert saved["density_g_per_ml"] == 1
+    assert saved["quantity"] == 80
+
+
+def test_liquid_mass_rejects_concentration_on_create_and_edit(scene):
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    material = container(scene)
+    assert create(scene, material, 50, "g", concentration_value=10, concentration_unit="%")["code"] == 1000
+    reagent = create(scene, material, 50, "g")["data"]
+    path = f"/api/v1/reagents/{reagent['uuid']}"
+    assert client.put(path, json={"quantity": 40, "quantity_unit": "g", "concentration_value": 10,
+                                  "concentration_unit": "%"}).json()["code"] == 1000
+    assert client.get(path).json()["data"]["quantity"] == 50
+
+
+@pytest.mark.parametrize("phase,unit", [("unknown", "mmol"), ("solid", "mL"), ("liquid", "g")])
+def test_legacy_records_can_reduce_or_keep_without_creating_new_capacity_proof(scene, phase, unit):
+    client, store, _ = scene
+    material = container(scene)
+    reagent = create(scene, material)["data"]
+    # 模拟升级前留下的无额定规格、旧单位库存，不经新入库入口制造旧数据。
+    with store.transaction() as conn:
+        conn.execute("UPDATE reagent SET physical_state=?,quantity_unit=?,quantity=200 WHERE uuid=?", (phase, unit, reagent["uuid"]))
+        conn.execute("UPDATE resource_template SET meta_data='{}' WHERE uuid=?", (material["resource_template_uuid"],))
+    path = f"/api/v1/reagents/{reagent['uuid']}"
+    for quantity in [200, 180]:
+        assert client.put(path, json={"quantity": quantity, "quantity_unit": unit,
+                                      "meta_data": {"note": "保留旧台账"}}).json()["code"] == 0
+    base = {"quantity": 180, "quantity_unit": unit}
+    for changes in [{"quantity": 181}, {"container_capacity": {}},
+                    {"container_capacity": {"max_mass_g": 300}},
+                    {"meta_data": {"loading_limits": {"max_mass_g": 300}}},
+                    {"concentration_value": 1, "concentration_unit": "%"}]:
+        assert client.put(path, json={**base, **changes}).json()["code"] == 1000
+    material_path = f"/api/v1/materials/{material['uuid']}"
+    assert client.put(material_path, json={"config": {"note": "兼容普通配置"}}).json()["code"] == 0
+    assert client.put(material_path, json={"config": {"capacity": {}}}).json()["code"] == 1000
+    saved = client.get(path).json()["data"]
+    assert saved["quantity"] == 180
+    assert saved["quantity_unit"] == unit
+    assert saved["meta_data"]["note"] == "保留旧台账"
+
+
+def test_inline_liquid_mass_uses_resolved_identity_and_rolls_back_bad_limit(scene):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    material = container(scene)
+    before = store.query_one("SELECT COUNT(*) AS n FROM material")["n"]
+    payload = {"resource_template_uuid": material["resource_template_uuid"], "name": "内联称重",
+               "config": {"capacity": {"max_mass_g": 200}},
+               "reagent": {"reagent_info_uuid": info, "quantity": 50, "quantity_unit": "g"}}
+    assert client.post("/api/v1/materials", json=payload).json()["code"] == 1000
+    assert store.query_one("SELECT COUNT(*) AS n FROM material")["n"] == before
+    payload["config"]["capacity"]["max_mass_g"] = 80
+    assert client.post("/api/v1/materials", json=payload).json()["code"] == 0
+
+
+def test_dispense_inherits_source_density_and_state_and_preserves_rated_target(scene):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": 1})
+    source = create(scene, container(scene), 80, "g")["data"]
+    target = container(scene, rated={"max_volume_ul": 50000})
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid", "density_g_per_ml": 10})
+    service = InventoryService(store)
+    payload = {"source_reagent_uuid": source["uuid"], "quantity_unit": "g", "expected_revision": 1,
+               "targets": [{"material_uuid": target["uuid"], "quantity": 40,
+                            "container_capacity": {"max_mass_g": 200}}]}
+    command = {"command_id": str(uuid4()), "type": "reagent.dispense", "actor": "test", "payload": payload}
+    assert execute_command(service, command)["status"] != "completed"
+    assert client.get(f"/api/v1/reagents/{source['uuid']}").json()["data"]["quantity"] == 80
+    assert client.get(f"/api/v1/materials/{target['uuid']}").json()["data"]["config"] == target["config"]
+    payload["targets"][0]["container_capacity"] = {"max_mass_g": 50}
+    command["command_id"] = str(uuid4())
+    assert execute_command(service, command)["status"] == "completed"
+    target_reagent = next(item for item in client.get("/api/v1/reagents").json()["data"]["items"]
+                          if item["material_uuid"] == target["uuid"])
+    assert target_reagent["physical_state"] == "liquid"
+    assert target_reagent["density_g_per_ml"] == 1
+    assert target_reagent["density_source"] == "dictionary"
+    assert target_reagent["rated_capacity"] == {"max_volume_ul": 50000}
+
+
+def test_legacy_concentrated_bottle_reduction_preserves_omitted_context(scene):
+    client, store, _ = scene
+    material = container(scene)
+    reagent = create(scene, material, concentration_value=95, concentration_unit="%")["data"]
+    with store.transaction() as conn:
+        conn.execute("UPDATE resource_template SET meta_data='{}' WHERE uuid=?", (material["resource_template_uuid"],))
+    path = f"/api/v1/reagents/{reagent['uuid']}"
+    reduced = client.put(path, json={"quantity": 40, "quantity_unit": "mL"}).json()["data"]
+    assert reduced["concentration_value"] == 95
+    assert reduced["concentration_unit"] == "%"
+    assert client.put(path, json={"quantity": 30, "quantity_unit": "mL", "concentration_value": None,
+                                  "concentration_unit": None}).json()["code"] == 1000
+    assert client.get(path).json()["data"]["quantity"] == 40
+
+
+def test_legacy_volume_source_change_still_validates_existing_stock(scene):
+    client, _, _ = scene
+    material = container(scene)
+    create(scene, material)
+    path = f"/api/v1/materials/{material['uuid']}"
+    before = client.get(path).json()["data"]
+    assert client.put(path, json={"config": {"max_volume": 10000}}).json()["code"] == 1000
+    assert client.get(path).json()["data"] == before
+
+
+@pytest.mark.parametrize("source", ["config", "loading_limits"])
+def test_solid_read_distinguishes_geometric_rating_from_unverifiable_manual_volume(scene, source):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid"})
+    material = container(scene, rated={"max_volume_ul": 100000, "max_mass_g": 20})
+    reagent = create(scene, material, 10, "g")["data"]
+    assert reagent["configured_capacity"] == {}
+    assert reagent["rated_capacity"] == {"max_volume_ul": 100000, "max_mass_g": 20}
+    manual_volume = {"max_volume_ul": 50000}
+    with store.transaction() as conn:
+        if source == "config":
+            conn.execute("UPDATE material SET config=? WHERE uuid=?",
+                         (json.dumps({**material["config"], "capacity": manual_volume}), material["uuid"]))
+        else:
+            conn.execute("UPDATE reagent SET meta_data=? WHERE uuid=?",
+                         (json.dumps({"loading_limits": manual_volume}), reagent["uuid"]))
+    path = f"/api/v1/reagents/{reagent['uuid']}"
+    item = client.get(path).json()["data"]
+    assert item["configured_capacity"] == (manual_volume if source == "config" else {})
+    listed = client.get("/api/v1/reagents").json()["data"]["items"][0]
+    assert listed["configured_capacity"] == item["configured_capacity"]
+    assert client.put(path, json={"quantity": 11, "quantity_unit": "g"}).json()["code"] == 1000
+    fixed = client.put(path, json={"quantity": 11, "quantity_unit": "g",
+                                   "container_capacity": {"max_mass_g": 15}}).json()["data"]
+    assert fixed["configured_capacity"] == {"max_mass_g": 15}
+    assert "loading_limits" not in fixed["meta_data"]
+
+
+@pytest.mark.parametrize("limit_source", ["request", "config", "loading_limits"])
+def test_powder_300ml_bottle_accepts_manual_50g_and_rejects_overflow(scene, limit_source):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid", "density_g_per_ml": 10})
+    rating = {"max_volume_ul": 300000}
+    maximum = {"max_mass_g": 50}
+    material = container(scene, rated=rating, capacity=maximum if limit_source == "config" else None)
+    extra = {"container_capacity": maximum} if limit_source == "request" else (
+        {"meta_data": {"loading_limits": maximum}} if limit_source == "loading_limits" else {})
+    if limit_source != "config":
+        missing = create(scene, material, 1, "g")
+        assert missing["code"] == 1000
+        assert "手动设置" in missing["error"]["msg"]
+    assert create(scene, material, 51, "g", **extra)["code"] == 1000
+    unchanged = client.get(f"/api/v1/materials/{material['uuid']}").json()["data"]
+    assert unchanged["config"] == material["config"]
+    assert unchanged["revision"] == material["revision"]
+    assert store.query_one("SELECT COUNT(*) AS n FROM reagent")["n"] == 0
+    saved = create(scene, material, 50, "g", **extra)["data"]
+    assert saved["maximum_capacity"]["max_mass_g"] == 50
+    assert saved["rated_capacity"] == rating
+
+
+@pytest.mark.parametrize("unit,density", [("mL", None), ("g", 1)])
+@pytest.mark.parametrize("stored", [True, False])
+def test_unrated_liquid_manual_capacity_enforces_boundary_and_rolls_back(scene, unit, density, stored):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"density_g_per_ml": density})
+    maximum = {"max_volume_ul": 50000} if unit == "mL" else {"max_mass_g": 50}
+    material = container(scene, rated=None, capacity=maximum if stored else None)
+    extra = {} if stored else {"container_capacity": maximum}
+    assert create(scene, material, 51, unit, **extra)["code"] == 1000
+    unchanged = client.get(f"/api/v1/materials/{material['uuid']}").json()["data"]
+    assert unchanged["config"] == material["config"]
+    assert unchanged["revision"] == material["revision"]
+    assert store.query_one("SELECT COUNT(*) AS n FROM reagent")["n"] == 0
+    assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 0
+    saved = create(scene, material, 50, unit, **extra)["data"]
+    assert saved["rated_capacity"] == {}
+    assert saved["configured_capacity"] == maximum
+
+
+def test_manual_fallback_never_relaxes_existing_mass_or_unconvertible_liquid_limits(scene):
+    client, _, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid"})
+    powder = container(scene, rated={"max_volume_ul": 300000, "max_mass_g": 40})
+    assert create(scene, powder, 10, "g", container_capacity={"max_mass_g": 50})["code"] == 1000
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "liquid", "density_g_per_ml": None})
+    liquid = container(scene, rated={"max_mass_g": 100})
+    assert create(scene, liquid, 10, "mL", container_capacity={"max_volume_ul": 50000})["code"] == 1000
+    no_rating = container(scene, rated=None)
+    assert create(scene, no_rating, 10, "g", container_capacity={"max_mass_g": 50})["code"] == 1000
+
+
+def test_unrated_manual_limit_cannot_be_cleared_while_stock_has_no_other_limit(scene):
+    client, _, _ = scene
+    material = container(scene, rated=None, capacity={"max_volume_ul": 50000})
+    reagent = create(scene, material, 50)["data"]
+    reagent_path = f"/api/v1/reagents/{reagent['uuid']}"
+    material_path = f"/api/v1/materials/{material['uuid']}"
+    assert client.put(reagent_path, json={"quantity": 40, "quantity_unit": "mL", "container_capacity": {}}).json()["code"] == 1000
+    assert client.put(material_path, json={"config": {"capacity": {}}}).json()["code"] == 1000
+    saved = client.put(reagent_path, json={"quantity": 40, "quantity_unit": "mL",
+                                         "container_capacity": {"max_volume_ul": 40000}}).json()["data"]
+    assert saved["quantity"] == 40
+    assert saved["configured_capacity"] == {"max_volume_ul": 40000}
+
+
+def test_powder_dispense_uses_target_manual_mass_limit_without_deriving_from_volume(scene):
+    client, store, info = scene
+    client.put(f"/api/v1/reagent-infos/{info}", json={"physical_state": "solid"})
+    source = create(scene, container(scene, rated={"max_mass_g": 100}), 60, "g")["data"]
+    target = container(scene, rated={"max_volume_ul": 300000})
+    payload = {"source_reagent_uuid": source["uuid"], "quantity_unit": "g", "expected_revision": 1,
+               "targets": [{"material_uuid": target["uuid"], "quantity": 51,
+                            "container_capacity": {"max_mass_g": 50}}]}
+    command = {"command_id": str(uuid4()), "type": "reagent.dispense", "actor": "test", "payload": payload}
+    service = InventoryService(store)
+    assert execute_command(service, command)["status"] != "completed"
+    assert client.get(f"/api/v1/reagents/{source['uuid']}").json()["data"]["quantity"] == 60
+    assert client.get(f"/api/v1/materials/{target['uuid']}").json()["data"]["config"] == target["config"]
+    payload["targets"][0]["quantity"] = 50
+    command["command_id"] = str(uuid4())
+    assert execute_command(service, command)["status"] == "completed"
+    assert client.get(f"/api/v1/reagents/{source['uuid']}").json()["data"]["quantity"] == 10

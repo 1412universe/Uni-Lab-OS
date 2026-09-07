@@ -352,6 +352,7 @@ export interface CompoundLookupResult {
 }
 
 export interface ReagentRecord {
+  configuredCapacity?: CapacityLimits
   maximumCapacity?: CapacityLimits
   ratedCapacity?: CapacityLimits
   materialRevision?: number

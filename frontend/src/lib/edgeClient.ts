@@ -1158,6 +1158,7 @@ export async function lookupCompoundByCas(cas: string, signal?: AbortSignal): Pr
 export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[]> {
   const page = await requestAllPages<RawRecord>('/reagents', signal)
   return page.items.map((raw) => ({
+    configuredCapacity: raw.configured_capacity,
     maximumCapacity: raw.maximum_capacity ?? stricterCapacity(raw.container_capacity, raw.meta_data?.loading_limits),
     ratedCapacity: raw.rated_capacity,
     materialRevision: raw.material_revision == null ? undefined : Number(raw.material_revision),
@@ -1193,14 +1194,15 @@ export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[
 
 export async function updateReagent(payload: {
   uuid: string; quantity: number; quantityUnit: string; expectedRevision: number;
-  concentrationValue?: number; concentrationUnit?: string; description?: string;
+  concentrationValue?: number | null; concentrationUnit?: string | null; description?: string;
   containerCapacity?: CapacityLimits; expectedMaterialRevision?: number
   /** 保留已有扩展字段。 */
   metaData?: Record<string, unknown>; source?: string
 }) {
   return writeData<RawRecord>('PUT', `/reagents/${encodeURIComponent(payload.uuid)}`, {
     quantity: payload.quantity, quantity_unit: payload.quantityUnit, expected_revision: payload.expectedRevision,
-    ...(payload.concentrationValue == null || !payload.concentrationUnit ? {} : { concentration_value: payload.concentrationValue, concentration_unit: payload.concentrationUnit }),
+    ...(payload.concentrationValue === undefined ? {} : { concentration_value: payload.concentrationValue }),
+    ...(payload.concentrationUnit === undefined ? {} : { concentration_unit: payload.concentrationUnit }),
     description: payload.description || undefined,
     source: payload.source || 'frontend:os-console',
     meta_data: payload.metaData || {},

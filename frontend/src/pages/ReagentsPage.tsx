@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, BookOpen, FlaskConical, History, PackagePlus, Pencil, Plus, Search, Trash2 } from 'lucide-react'
-import { CapacityField } from '../components/CapacityFields'
+import { ReagentCapacityFields } from '../components/CapacityFields'
 import { ChemicalStructurePreview } from '../components/ChemicalStructurePreview'
 import { CatalogDetails, InventoryDetails } from '../components/ReagentDetails'
-import { capacityText, capacityValue, convertMaximum, maximumError, parseMaximum, stricterCapacity, type MaximumFields } from '../lib/capacity'
+import { SearchableContainerSelect } from '../components/SearchableContainerSelect'
+import { capacityText, configuredCapacity, convertMaximum, defaultQuantityUnit, maximumError, parseMaximum, quantityUnitError, quantityUnits, stricterCapacity, type MaximumFields, type QuantityContext } from '../lib/capacity'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { createReagent, createReagentInfo, deleteReagent, deleteReagentInfo, dispenseReagent, updateReagent, updateReagentInfo, loadReagentHistory, loadReagentInfos, loadReagents, loadResourceTemplates, lookupCompoundByCas } from '../lib/edgeClient'
 import type { CompoundLookupResult, MaterialRecord, ReagentHistoryRecord, ReagentInfoRecord, ReagentRecord, ResourceTemplateRecord } from '../types'
@@ -22,6 +23,30 @@ type CustomParameter = { id: number; name: string; value: string }
 type DispenseRow = { id: number; materialUuid: string; quantity: string } & MaximumFields
 type EditForm = { quantity: string; concentrationValue: string; concentrationUnit: string; description: string } & MaximumFields
 export type RegisterFields = { materialUuid: string; reagentInfoUuid: string; quantity: string; quantityUnit: string; concentrationValue: string; concentrationUnit: string; description: string } & MaximumFields
+
+function registrationContext(form: RegisterFields, info?: ReagentInfoRecord, container?: MaterialRecord): QuantityContext {
+  return { physicalState: info?.physicalState, densityGPerMl: info?.densityGPerMl, concentrationValue: numberOrUndefined(form.concentrationValue), configuredCapacity: configuredCapacity(container?.config?.capacity) }
+}
+
+function dispenseContext(source: ReagentRecord, container?: MaterialRecord): QuantityContext {
+  return { physicalState: source.physicalState, densityGPerMl: source.densityGPerMl, concentrationValue: source.concentrationValue, configuredCapacity: configuredCapacity(container?.config?.capacity) }
+}
+
+function concentrationError(value: string, unit: string): string {
+  if (!value.trim()) return ''
+  if (!Number.isFinite(Number(value)) || Number(value) < 0) return '浓度须为非负的有限数值。'
+  return unit.trim() ? '' : '填写浓度时，请同时填写浓度单位。'
+}
+
+function legacyEditQuantity(target: ReagentRecord, form: EditForm): number | undefined {
+  const concentrationUnchanged = numberOrUndefined(form.concentrationValue) === target.concentrationValue
+    && (form.concentrationValue.trim() ? textOrUndefined(form.concentrationUnit) || '' : '') === (target.concentrationUnit || '')
+  return concentrationUnchanged ? target.quantity : undefined
+}
+
+function containerOptions(containers: MaterialRecord[]) {
+  return containers.map((item) => ({ value: item.uuid, label: item.name, description: item.currentLocation.label }))
+}
 
 const containerTagLabels: Record<string, string> = {
   liquid_reagent: '液体试剂瓶',
@@ -235,9 +260,13 @@ export function ReagentsPage({ materials, connected, onNotify, onRefresh }: { ma
   }
 
   async function saveRegistration() {
-    if (!connected) return
+    if (!connected || saving) return
     const quantity = Number(registerForm.quantity)
     if (!registerForm.materialUuid || !registerForm.reagentInfoUuid || !Number.isFinite(quantity) || quantity <= 0 || !registerForm.quantityUnit) return
+    const container = containers.find((item) => item.uuid === registerForm.materialUuid)
+    const context = registrationContext(registerForm, infosQuery.data?.find((item) => item.uuid === registerForm.reagentInfoUuid), container)
+    const error = concentrationError(registerForm.concentrationValue, registerForm.concentrationUnit) || maximumError(quantity, registerForm.quantityUnit, container?.capacity, container?.ratedCapacity, registerForm.maximum, context)
+    if (!container || error) { onNotify(error || '请选择可用的试剂容器'); return }
     setSaving(true)
     try {
       await createReagent({ materialUuid: registerForm.materialUuid, reagentInfoUuid: registerForm.reagentInfoUuid, quantity, quantityUnit: registerForm.quantityUnit, concentrationValue: registerForm.concentrationValue ? Number(registerForm.concentrationValue) : undefined, concentrationUnit: registerForm.concentrationValue ? registerForm.concentrationUnit : undefined, description: textOrUndefined(registerForm.description), containerCapacity: registerForm.maximum === undefined ? undefined : parseMaximum(registerForm.maximum, registerForm.quantityUnit), expectedMaterialRevision: materials.find((item) => item.uuid === registerForm.materialUuid)?.revision })
@@ -254,14 +283,18 @@ export function ReagentsPage({ materials, connected, onNotify, onRefresh }: { ma
   }
 
   async function saveEdit() {
-    if (!editTarget) return
+    if (!connected || saving || !editTarget) return
     const quantity = Number(editForm.quantity)
     if (!Number.isFinite(quantity) || quantity < 0) return
+    const currentMaximum = editTarget.maximumCapacity ?? stricterCapacity(editTarget.containerCapacity, editTarget.loadingLimits)
+    const context = { ...editTarget, concentrationValue: numberOrUndefined(editForm.concentrationValue) }
+    const error = concentrationError(editForm.concentrationValue, editForm.concentrationUnit) || maximumError(quantity, editTarget.quantityUnit || '', currentMaximum, editTarget.ratedCapacity, editForm.maximum, context, legacyEditQuantity(editTarget, editForm))
+    if (error) { onNotify(error); return }
     setSaving(true)
     try {
       await updateReagent({
         uuid: editTarget.uuid, quantity, quantityUnit: editTarget.quantityUnit || 'mL', expectedRevision: editTarget.revision,
-        concentrationValue: numberOrUndefined(editForm.concentrationValue), concentrationUnit: textOrUndefined(editForm.concentrationUnit),
+        concentrationValue: numberOrUndefined(editForm.concentrationValue) ?? null, concentrationUnit: editForm.concentrationValue.trim() ? textOrUndefined(editForm.concentrationUnit) ?? null : null,
         description: textOrUndefined(editForm.description), metaData: editTarget.metaData,
         containerCapacity: editForm.maximum === undefined ? undefined : parseMaximum(editForm.maximum, editTarget.quantityUnit || 'mL'),
         expectedMaterialRevision: editTarget.materialRevision ?? materials.find((item) => item.uuid === editTarget.materialUuid)?.revision,
@@ -296,9 +329,14 @@ export function ReagentsPage({ materials, connected, onNotify, onRefresh }: { ma
   }
 
   async function saveDispense() {
-    if (!dispenseSource) return
+    if (!connected || saving || !dispenseSource) return
     const summary = summariseDispense(dispenseRows, dispenseSource.quantity ?? 0)
     if (!summary.ready) return
+    for (const row of dispenseRows) {
+      const container = containers.find((item) => item.uuid === row.materialUuid)
+      const error = maximumError(Number(row.quantity), dispenseSource.quantityUnit || '', container?.capacity, container?.ratedCapacity, row.maximum, dispenseContext(dispenseSource, container))
+      if (!container || error) { onNotify(error || '请选择可用的目标容器'); return }
+    }
     setSaving(true)
     try {
       const result = await dispenseReagent({
@@ -388,23 +426,33 @@ export function RegisterForm({ form, setForm, infos, containers, templates, filt
     if (form.materialUuid && !filterContainersByTag(containers, templateTags, tag).some((item) => item.uuid === form.materialUuid)) setForm({ ...form, materialUuid: '', maximum: undefined })
   }
   const container = containers.find((item) => item.uuid === form.materialUuid)
-  const error = maximumError(Number(form.quantity), form.quantityUnit, container?.capacity, container?.ratedCapacity, form.maximum)
+  const info = infos.find((item) => item.uuid === form.reagentInfoUuid)
+  const context = registrationContext(form, info, container)
+  const units = quantityUnits(context)
+  const error = concentrationError(form.concentrationValue, form.concentrationUnit) || maximumError(Number(form.quantity), form.quantityUnit, container?.capacity, container?.ratedCapacity, form.maximum, context)
+  const changeUnit = (quantityUnit: string) => {
+    if (quantityUnitError(quantityUnit, context)) return
+    setForm({ ...form, quantityUnit, quantity: convertMaximum(form.quantity, form.quantityUnit, quantityUnit, context) ?? '', maximum: convertMaximum(form.maximum, form.quantityUnit, quantityUnit, context) })
+  }
   return <div className="dialog-content reagent-form">
-    <label className="form-field wide"><span>试剂目录 *</span><select value={form.reagentInfoUuid} onChange={(e) => setForm({ ...form, reagentInfoUuid: e.target.value })}><option value="">选择试剂目录项</option>{infos.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.cas || '无 CAS'}</option>)}</select></label>
+    <label className="form-field wide"><span>试剂目录 *</span><select value={form.reagentInfoUuid} disabled={saving} onChange={(e) => {
+      const next = infos.find((item) => item.uuid === e.target.value)
+      setForm({ ...form, reagentInfoUuid: e.target.value, quantityUnit: defaultQuantityUnit(next), quantity: '', maximum: undefined })
+    }}><option value="">选择试剂目录项</option>{infos.map((item) => <option key={item.uuid} value={item.uuid}>{item.name} · {item.cas || '无 CAS'}</option>)}</select></label>
     <div className="reagent-container-picker wide">
       <ContainerTagFilter tags={filterTags} selectedTag={selectedTag} containers={containers} templateTags={templateTags} onChange={changeTag} />
-      <label className="form-field"><span>试剂容器 *</span><select aria-label="试剂容器" value={form.materialUuid} onChange={(e) => setForm({ ...form, materialUuid: e.target.value, maximum: undefined })}><option value="">{taggedContainers.length ? '选择未登记试剂的容器' : '该类型暂无可用容器'}</option>{taggedContainers.map((item) => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}</select></label>
+      <div className="form-field"><label htmlFor="register-reagent-container">试剂容器 *</label><SearchableContainerSelect id="register-reagent-container" label="试剂容器" value={form.materialUuid} options={containerOptions(taggedContainers)} placeholder={taggedContainers.length ? '选择未登记试剂的容器' : '该类型暂无可用容器'} disabled={saving} onChange={(materialUuid) => setForm({ ...form, materialUuid, maximum: undefined })} /></div>
     </div>
-    <label className="form-field"><span>数量 *</span><input type="number" min="0" step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label>
-    <label className="form-field"><span>单位 *</span><select value={form.quantityUnit} onChange={(e) => setForm({ ...form, quantityUnit: e.target.value, maximum: convertMaximum(form.maximum, form.quantityUnit, e.target.value) })}>{['mL', 'L', 'g', 'mg', 'μL', 'mmol'].map((unit) => <option key={unit}>{unit}</option>)}</select></label>
-    <div className="capacity-section wide">
-      <CapacityField value={form.maximum ?? capacityValue(container?.capacity, form.quantityUnit)} unit={form.quantityUnit} defaultValue={capacityValue(container?.ratedCapacity, form.quantityUnit)} onChange={(maximum) => setForm({ ...form, maximum })} />
-      {error ? <small className="form-error" role="alert">{error}</small> : null}
-    </div>
+    {container ? <ReagentCapacityFields className="wide" maximum={form.maximum} unit={form.quantityUnit} current={container.capacity} rated={container.ratedCapacity} context={context} disabled={saving} onChange={(maximum) => setForm({ ...form, maximum })} error={info ? error : undefined} /> : null}
+    {info && !container && quantityUnitError(form.quantityUnit, context) ? <small className="form-error wide" role="alert">{quantityUnitError(form.quantityUnit, context)}</small> : null}
+    <label className="form-field"><span>数量 *</span><input type="number" min="0" step="any" value={form.quantity} disabled={saving} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label>
+    <label className="form-field"><span>单位 *</span><select value={form.quantityUnit} disabled={saving || !units.length} onChange={(e) => changeUnit(e.target.value)}>{!units.includes(form.quantityUnit) ? <option value={form.quantityUnit} disabled>{form.quantityUnit}（当前不可用）</option> : null}{units.map((unit) => <option key={unit}>{unit}</option>)}</select></label>
+    {info?.physicalState === 'liquid' ? <small className="quantity-unit-hint wide">液体默认按体积计量；密度有效且未填写浓度时，可换算为质量。</small> : null}
+    {info?.physicalState === 'solid' ? <small className="quantity-unit-hint wide">固体按质量计量，实际数量不得超过最大装料量。</small> : null}
     <label className="form-field"><span>浓度</span><input type="number" min="0" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label>
     <label className="form-field"><span>浓度单位</span><select value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })}>{['%', 'mol/L', 'mmol/L', 'mg/mL'].map((unit) => <option key={unit}>{unit}</option>)}</select></label>
     <label className="form-field wide"><span>说明</span><input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></label>
-    <Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || Boolean(error) || !form.materialUuid || !form.reagentInfoUuid || !Number.isFinite(Number(form.quantity)) || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button>
+    <Button tone="primary" icon={<PackagePlus size={15} />} disabled={saving || Boolean(error) || !container || !info || !Number.isFinite(Number(form.quantity)) || !(Number(form.quantity) > 0)} onClick={onSave}>确认录入</Button>
   </div>
 }
 
@@ -414,16 +462,19 @@ export function EditReagentForm({ target, form, setForm, saving, onSave }: { tar
   const quantityValid = form.quantity.trim() !== '' && Number.isFinite(quantity) && quantity >= 0
   const belowReserved = quantityValid && quantity < reserved
   const currentMaximum = target.maximumCapacity ?? stricterCapacity(target.containerCapacity, target.loadingLimits)
-  const limitError = maximumError(quantity, target.quantityUnit || '', currentMaximum, target.ratedCapacity, form.maximum)
+  const context = { ...target, concentrationValue: numberOrUndefined(form.concentrationValue) }
+  const strictError = maximumError(quantity, target.quantityUnit || '', currentMaximum, target.ratedCapacity, form.maximum, context)
+  const limitError = concentrationError(form.concentrationValue, form.concentrationUnit) || maximumError(quantity, target.quantityUnit || '', currentMaximum, target.ratedCapacity, form.maximum, context, legacyEditQuantity(target, form))
   return <div className="reagent-edit-form">
     <div className="reagent-edit-target"><strong>{target.name}</strong><small>{target.containerName || target.materialUuid} · 当前 {target.quantity ?? '—'} {target.quantityUnit || ''}{reserved > 0 ? ` · 预留中 ${reserved} ${target.quantityUnit || ''}` : ''}</small></div>
+    <ReagentCapacityFields maximum={form.maximum} unit={target.quantityUnit || ''} current={currentMaximum} rated={target.ratedCapacity} context={context} disabled={saving} onChange={(maximum) => setForm({ ...form, maximum })} error={limitError} />
+    {strictError && !limitError ? <small className="quantity-unit-hint">现有记录可按原单位减少数量；加量或修改上限前，需要补齐物态和容量规格。</small> : null}
     <div className="form-grid">
       <label className="form-field"><span>数量（{target.quantityUnit || '单位不变'}）*</span><input aria-label="数量" type="number" min={0} step="any" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></label>
       <label className="form-field"><span>浓度值</span><input aria-label="浓度值" type="number" step="any" value={form.concentrationValue} onChange={(e) => setForm({ ...form, concentrationValue: e.target.value })} /></label>
       <label className="form-field"><span>浓度单位</span><input aria-label="浓度单位" value={form.concentrationUnit} onChange={(e) => setForm({ ...form, concentrationUnit: e.target.value })} placeholder="如 %、mol/L" /></label>
       <label className="form-field wide"><span>说明</span><input aria-label="说明" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="为什么改：盘点、称重复核、录错更正…" /></label>
     </div>
-    <div className="capacity-section"><CapacityField value={form.maximum ?? capacityValue(currentMaximum, target.quantityUnit || '')} unit={target.quantityUnit || ''} defaultValue={capacityValue(target.ratedCapacity, target.quantityUnit || '')} onChange={(maximum) => setForm({ ...form, maximum })} />{limitError ? <small className="form-error" role="alert">{limitError}</small> : null}</div>
     {belowReserved ? <small className="form-error">数量不能低于任务预留量 {reserved} {target.quantityUnit || ''}。</small> : null}
     <small className="reagent-edit-hint">单位不可改；数量和最大装料量的变化会记入操作历史（增加记“录入 / 补充”，减少记“调整”）。分装血缘保持不变。</small>
     <Button tone="primary" icon={<Pencil size={15} />} disabled={saving || !quantityValid || belowReserved || Boolean(limitError)} onClick={onSave}>保存修改</Button>
@@ -437,7 +488,7 @@ export function DispenseForm({ source, rows, setRows, containers, templates, fil
   const summary = summariseDispense(rows, available)
   const capacityErrors = rows.map((row) => {
     const container = containers.find((item) => item.uuid === row.materialUuid)
-    return maximumError(Number(row.quantity), unit, container?.capacity, container?.ratedCapacity, row.maximum)
+    return maximumError(Number(row.quantity), unit, container?.capacity, container?.ratedCapacity, row.maximum, dispenseContext(source, container))
   })
   const chosen = new Set(rows.map((row) => row.materialUuid).filter(Boolean))
   const templateTags = useMemo(() => new Map(templates.map((template) => [template.uuid, new Set(template.tags || [])])), [templates])
@@ -447,7 +498,7 @@ export function DispenseForm({ source, rows, setRows, containers, templates, fil
   const addRow = () => setRows((current) => [...current, { id: (current.at(-1)?.id || 0) + 1, materialUuid: '', quantity: '' }])
   const update = (id: number, patch: Partial<DispenseRow>) => setRows((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   const remove = (id: number) => setRows((current) => (current.length > 1 ? current.filter((row) => row.id !== id) : current))
-  return <form className="dialog-content dispense-form" onSubmit={(event) => { event.preventDefault(); onSave() }}>
+  return <form className="dialog-content dispense-form" onSubmit={(event) => { event.preventDefault(); if (!saving && summary.ready && !capacityErrors.some(Boolean)) onSave() }}>
     <section className="dispense-source" aria-label="分装源瓶">
       <span className="dispense-source-icon"><FlaskConical size={20} /></span>
       <div><small>源瓶</small><strong>{source.name}</strong><span>{source.containerName || source.materialUuid}</span></div>
@@ -466,10 +517,10 @@ export function DispenseForm({ source, rows, setRows, containers, templates, fil
           const options = containers.filter((item) => item.uuid === row.materialUuid || (taggedContainers.includes(item) && !chosen.has(item.uuid)))
           return <article key={row.id} className={`dispense-row${duplicate ? ' dispense-row-invalid' : ''}`}>
             <span className="dispense-row-index">{String(index + 1).padStart(2, '0')}</span>
-            <label className="form-field dispense-container-field"><span>目标容器 *</span><select aria-label={`目标容器 ${index + 1}`} value={row.materialUuid} onChange={(e) => update(row.id, { materialUuid: e.target.value, maximum: undefined })}><option value="">{taggedContainers.length ? '选择空容器' : '该类型暂无空容器'}</option>{options.map((item) => <option key={item.uuid} value={item.uuid}>{item.name}</option>)}</select></label>
+            <div className="form-field dispense-container-field"><label htmlFor={`dispense-container-${row.id}`}>目标容器 *</label><SearchableContainerSelect id={`dispense-container-${row.id}`} label={`目标容器 ${index + 1}`} value={row.materialUuid} options={containerOptions(options)} placeholder={taggedContainers.length ? '选择空容器' : '该类型暂无空容器'} disabled={saving} onChange={(materialUuid) => update(row.id, { materialUuid, maximum: undefined })} /></div>
+            {container ? <div className="dispense-row-capacity"><ReagentCapacityFields label={`目标 ${index + 1} 最大装料量`} maximum={row.maximum} unit={unit} current={container.capacity} rated={container.ratedCapacity} context={source} disabled={saving} onChange={(maximum) => update(row.id, { maximum })} error={capacityErrors[index]} /></div> : null}
             <label className="form-field dispense-quantity-field"><span>分装量 *</span><div><input aria-label={`分装量 ${index + 1}`} type="number" min="0" step="any" value={row.quantity} onChange={(e) => update(row.id, { quantity: e.target.value })} /><em>{unit}</em></div></label>
             <button type="button" className="dispense-remove" aria-label={`移除目标 ${index + 1}`} title="移除目标容器" disabled={rows.length <= 1} onClick={() => remove(row.id)}><Trash2 size={16} /></button>
-            <div className="dispense-row-capacity"><CapacityField label={`目标 ${index + 1} 最大装料量`} value={row.maximum ?? capacityValue(container?.capacity, unit)} unit={unit} defaultValue={capacityValue(container?.ratedCapacity, unit)} onChange={(maximum) => update(row.id, { maximum })} />{capacityErrors[index] ? <small className="form-error" role="alert">{capacityErrors[index]}</small> : null}</div>
             {duplicate ? <small className="form-error">该容器已被选择，请更换一个空容器。</small> : null}
           </article>
         })}
@@ -579,7 +630,7 @@ function InventoryTable({ items, materials, hasCatalog, onHistory, onDetails, on
               <button className="reagent-detail-link" aria-label={`查看试剂详情 ${item.name} ${item.uuid}`} onClick={() => onDetails(item)}>查看详情</button>
             </span>
             <span>
-              <strong>{item.quantity ?? '—'} {item.quantityUnit || ''}</strong><small>上限：{capacityText(item.maximumCapacity ?? stricterCapacity(item.containerCapacity, item.loadingLimits), item.quantityUnit)}</small>
+              <strong>{item.quantity ?? '—'} {item.quantityUnit || ''}</strong><small>上限：{capacityText(item.maximumCapacity ?? stricterCapacity(item.containerCapacity, item.loadingLimits), item.quantityUnit, item)}</small>
               <small className={reservedHere > 0 ? 'reagent-reserved' : undefined}>{available > 0 ? (reservedHere > 0 ? `预留中 ${formatQuantity(reservedHere)} ${item.quantityUnit || ''}` : '可用') : '已空'}</small>
             </span>
             <span>{item.concentrationValue == null ? '—' : `${item.concentrationValue} ${item.concentrationUnit || ''}`}<small>{physicalStateLabels[item.physicalState as ReagentInfoRecord['physicalState']] || '未知'}</small>{item.densityGPerMl != null ? <small>{item.densityGPerMl} g/mL</small> : null}</span>

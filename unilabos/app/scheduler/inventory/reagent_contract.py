@@ -478,6 +478,7 @@ class BackendReagentService:
         values: Dict[str, Any],
         *,
         record_history: bool = True,
+        source_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """复用调用方事务创建试剂，并返回试剂与化学身份快照。
 
@@ -520,12 +521,6 @@ class BackendReagentService:
             )
 
             ensure_container_empty(conn, material_uuid)
-            meta_data = reagent_metadata(values)
-            if values.get("container_capacity") is not None:
-                self._set_container_capacity(conn, material_uuid, values, now)
-                meta_data.pop(LOADING_LIMITS_KEY, None)
-            capacity = material_capacity(conn, material_uuid)["capacity"]
-            validate_quantity(quantity, unit, capacity, normalize_capacity(meta_data.get(LOADING_LIMITS_KEY)))
             if cas:
                 cas = normalize_cas(cas)
                 info = conn.execute(
@@ -542,6 +537,17 @@ class BackendReagentService:
                 raise BackendContractError(
                     RESOURCE_NOT_FOUND, "reagent identity is not registered"
                 )
+            # 新瓶使用目录快照；分装保留源瓶物性，不能被之后的目录纠错重解释。
+            physical = dict(source_snapshot) if source_snapshot is not None else dict(info)
+            context = {**physical, "concentration_value": concentration}
+            meta_data = reagent_metadata(values)
+            if values.get("container_capacity") is not None:
+                self._set_container_capacity(conn, material_uuid, values, now, reagent_context=context)
+                meta_data.pop(LOADING_LIMITS_KEY, None)
+            projection = material_capacity(conn, material_uuid)
+            validate_quantity(quantity, unit, normalize_capacity(meta_data.get(LOADING_LIMITS_KEY)),
+                              rated_capacity=projection["rated_capacity"],
+                              configured_capacity=projection["configured_capacity"], context=context)
             conn.execute(
                 """INSERT INTO reagent(uuid,create_time,update_time,description,meta_data,
                 material_uuid,reagent_info_uuid,concentration_value,concentration_unit,
@@ -551,8 +557,9 @@ class BackendReagentService:
                     identity, now, now, _optional_text(values.get("description")),
                     _dump(meta_data), material_uuid, info["uuid"],
                     concentration, concentration_unit, quantity, unit, 1,
-                    info["physical_state"], info["density_g_per_ml"],
-                    "dictionary" if info["density_g_per_ml"] is not None else None,
+                    physical["physical_state"], physical["density_g_per_ml"],
+                    (physical.get("density_source") if source_snapshot is not None else
+                     "dictionary" if physical["density_g_per_ml"] is not None else None),
                 ),
             )
             # 分装等复合操作自行写带 causation_id 的台账，跳过默认的 add 历史。
@@ -700,6 +707,7 @@ class BackendReagentService:
                     },
                 },
                 record_history=False,
+                source_snapshot=source,
             )
             created.append(snapshot["reagent"])
 
@@ -907,6 +915,7 @@ class BackendReagentService:
                 )
                 projection = material_capacity(conn, str(item["material_uuid"]))
                 item["container_capacity"] = projection["capacity"]
+                item["configured_capacity"] = projection["configured_capacity"]
                 item["maximum_capacity"] = maximum_capacity(projection["capacity"], item["meta_data"])
                 item["rated_capacity"] = projection["rated_capacity"]
                 item["material_revision"] = projection["material_revision"]
@@ -929,6 +938,7 @@ class BackendReagentService:
     def _set_container_capacity(
         self, conn: sqlite3.Connection, material_uuid: str, values: Dict[str, Any],
         now: str, *, updating_reagent_uuid: Optional[str] = None,
+        reagent_context: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """在数量写事务中保存唯一最大装料量，保留容器的其他配置。"""
         material = conn.execute(
@@ -942,7 +952,7 @@ class BackendReagentService:
         previous_config = _json(material["config"], {})
         config = {**previous_config, CAPACITY_KEY: normalize_capacity(values["container_capacity"])}
         validate_material_config(conn, material_uuid, config, replace_loading_limits=True,
-                                 updating_reagent_uuid=updating_reagent_uuid)
+                                 updating_reagent_uuid=updating_reagent_uuid, reagent_context=reagent_context)
         conn.execute("UPDATE material SET config=?,update_time=? WHERE uuid=?",
                      (_dump(config), now, material_uuid))
         conn.execute(
@@ -991,7 +1001,10 @@ class BackendReagentService:
         unit = str(values.get("quantity_unit") or "").strip()
         if unit.lower() != str(current["quantity_unit"]).lower():
             raise BackendContractError(INVALID_PARAMETER, "quantity_unit is immutable")
-        concentration, concentration_unit = self._concentration(values)
+        concentration, concentration_unit = self._concentration({
+            "concentration_value": current["concentration_value"],
+            "concentration_unit": current["concentration_unit"], **values,
+        })
         revision = int(current["revision"]) + 1
         now = _now()
         # 公共人工更新增加余量记 add，其余变化记 adjust；consume 只留给可信
@@ -1000,6 +1013,12 @@ class BackendReagentService:
         delta = quantity - float(current["quantity"])
         meta_data = reagent_metadata(values, current["meta_data"])
         previous_limits = normalize_capacity(current["meta_data"].get(LOADING_LIMITS_KEY))
+        # 旧瓶可原单位减量或编辑非容量信息；加量、上限和浓度变更须满足新规则。
+        context_changed = (concentration != current["concentration_value"]
+                           or concentration_unit != current["concentration_unit"])
+        strict = (quantity > float(current["quantity"]) or values.get("container_capacity") is not None
+                  or normalize_capacity(meta_data.get(LOADING_LIMITS_KEY)) != previous_limits or context_changed)
+        context = {**current, "concentration_value": concentration}
         with self.store.transaction() as conn:
             try:
                 assert_inventory_mutation_unclaimed(
@@ -1014,11 +1033,15 @@ class BackendReagentService:
             capacity_changed = False
             if values.get("container_capacity") is not None:
                 capacity_changed = self._set_container_capacity(
-                    conn, current["material_uuid"], values, now, updating_reagent_uuid=identity)
+                    conn, current["material_uuid"], values, now, updating_reagent_uuid=identity,
+                    reagent_context=context)
                 meta_data.pop(LOADING_LIMITS_KEY, None)
-            capacity = material_capacity(conn, current["material_uuid"])["capacity"]
+            projection = material_capacity(conn, current["material_uuid"])
+            capacity = projection["capacity"]
             limits = normalize_capacity(meta_data.get(LOADING_LIMITS_KEY))
-            validate_quantity(quantity, unit, capacity, limits)
+            if strict:
+                validate_quantity(quantity, unit, limits, rated_capacity=projection["rated_capacity"],
+                                  configured_capacity=projection["configured_capacity"], context=context)
             current_maximum = maximum_capacity(capacity, meta_data)
             try:
                 assert_workflow_quantity_mutation_allowed(

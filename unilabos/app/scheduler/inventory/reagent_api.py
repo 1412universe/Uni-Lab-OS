@@ -697,7 +697,7 @@ def create_reagent_router(service: BackendReagentService) -> APIRouter:
         return call(
             service.update_reagent,
             str(reagent_uuid),
-            body.model_dump(mode="json"),
+            body.model_dump(mode="json", exclude_unset=True),
         )
 
     @router.delete("/reagents/{reagent_uuid}")

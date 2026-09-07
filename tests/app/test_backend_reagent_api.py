@@ -32,6 +32,7 @@ def _container_template(client: TestClient) -> str:
                     "display_name": "本地试剂瓶",
                     "registry_type": "material",
                     "category": ["container"],
+                    "metadata": {"capacity": {"max_volume_ul": 1000000}},
                     "model": {},
                     "class": {},
                     "handles": [],

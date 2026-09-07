@@ -568,7 +568,8 @@ class BackendResourceService:
                     "VALUES (?,?)",
                     (material_uuid, template_uuid),
                 )
-                validate_material_config(conn, material_uuid, values.get("config") or {})
+                if inline_reagent is None:
+                    validate_material_config(conn, material_uuid, values.get("config") or {})
                 if values.get("relative_position") is not None:
                     self._upsert_relative_position(
                         conn, material_uuid, values["relative_position"]
@@ -807,7 +808,9 @@ class BackendResourceService:
                 if config != previous_config or capacity_specified:
                     assert_inventory_mutation_unclaimed(conn, material_uuids=(material_uuid,))
                     validate_material_config(conn, material_uuid, config,
-                                             replace_loading_limits=capacity_specified)
+                                             replace_loading_limits=capacity_specified,
+                                             validate_stock=(capacity_specified or
+                                                             config.get("max_volume") != previous_config.get("max_volume")))
                 conn.execute(
                     """
                     UPDATE material SET parent_uuid=?,barcode=?,name=?,description=?,
