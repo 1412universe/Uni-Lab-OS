@@ -347,10 +347,13 @@ class AdjustCommand(InventoryCommandBase):
 
 
 class ReagentDispenseTargetPayload(WireModel):
-    """一个分装目标：空容器与分入的数量。"""
+    """一个分装目标：空容器、分入数量与可选最大装料量。"""
 
     material_uuid: NonEmptyString
     quantity: PositiveQuantity
+    loading_limits: Optional[JsonObject] = None  # 兼容旧客户端，显式最大装料量优先。
+    container_capacity: Optional[JsonObject] = None
+    expected_material_revision: Optional[PositiveInt] = None
 
 
 class ReagentDispensePayload(WireModel):

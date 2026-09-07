@@ -1314,3 +1314,84 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .reagent-edit-target { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; border-radius: 10px; background: var(--panel-soft); }
 .reagent-edit-target small { color: var(--muted); }
 .reagent-edit-hint { color: var(--muted); font-size: 11px; }
+
+/* 容器规格和装料上限沿用现有表单的间距与提示色。 */
+.capacity-section { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line, #dce3eb); border-radius: 10px; }
+.material-write-dialog { display: flex; flex-direction: column; max-height: calc(100dvh - 48px); }
+.material-write-dialog > header { flex-shrink: 0; }
+.material-write-dialog > .dialog-content, .material-write-dialog > .reagent-edit-form { min-height: 0; overflow-y: auto; }
+.capacity-section .form-error { color: #b42318; }
+.capacity-section > small, .capacity-field > small { color: var(--muted, #65748a); line-height: 1.5; }
+.capacity-field { display: grid; gap: 8px; }
+.dispense-row-capacity { grid-column: 2 / -1; display: grid; gap: 8px; }
+@media (max-width: 600px) { .dispense-row-capacity { grid-column: 1 / -1; } }
+
+/* 目录操作始终可见；结构预览使用本地绘制的矢量图。 */
+.identity-table > header, .identity-table > article { grid-template-columns: minmax(240px,1.5fr) minmax(110px,.6fr) minmax(110px,.6fr) 90px 150px; }
+.identity-table .reagent-catalog-actions { position: sticky; right: 0; display: flex; justify-content: flex-end; gap: 8px; padding: 5px 0 5px 10px; background: var(--panel); }
+.reagent-catalog-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 32px; padding: 6px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: var(--primary); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.reagent-catalog-actions button:hover:not(:disabled) { background: var(--panel-soft); }
+.reagent-catalog-actions button.danger { color: #b42318; }
+.reagent-catalog-actions button:disabled { cursor: not-allowed; opacity: .5; }
+.reagent-structure > .chemical-structure-canvas { display: grid; place-items: center; min-height: 180px; padding: 14px; background: #fff; border: 1px solid var(--line); overflow: hidden; }
+.chemical-structure-canvas svg { max-width: 100%; max-height: 260px; }
+.reagent-structure:not([data-state="ready"]) .chemical-structure-canvas svg { display: none; }
+.reagent-structure[data-state="empty"] > .chemical-structure-canvas, .reagent-structure[data-state="error"] > .chemical-structure-canvas { min-height: 80px; }
+.reagent-structure[data-state="error"] .chemical-structure-canvas small { color: #b42318; }
+.chemical-structure-formula { display: block; margin-top: 7px; }
+@media (max-width: 900px) { .identity-table > header > span:last-child { position: sticky; right: 0; padding: 5px 0 5px 10px; background: var(--panel-soft); } }
+
+/* 常用字段留在列表，详情完整呈现化学身份及容器快照。 */
+.reagent-name-link, .reagent-detail-link { padding: 0; border: 0; background: transparent; color: var(--primary); cursor: pointer; text-align: left; font: inherit; }
+.reagent-name-link { font-weight: 700; }
+.reagent-detail-link { width: fit-content; font-size: 11px; text-decoration: underline; text-underline-offset: 3px; }
+.reagent-name-link:hover, .reagent-detail-link:hover { color: var(--action-blue, #155eef); }
+.identity-table .reagent-catalog-actions { display: grid; grid-template-columns: repeat(2, max-content); justify-content: end; }
+.reagent-catalog-actions > .reagent-detail-link { grid-column: 1 / -1; justify-self: end; min-height: 24px; border: 0; padding: 0; font-size: 11px; }
+.identity-table > article > span { min-width: 0; }
+.identity-table > article > span:nth-child(3), .identity-table > article > span:nth-child(4), .reagent-bottle > span:nth-child(3) { display: flex; flex-direction: column; gap: 4px; }
+.reagent-aliases { overflow-wrap: anywhere; }
+.reagent-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.reagent-details-dialog { width: min(800px, calc(100vw - 32px)); }
+.reagent-details-content { display: grid; gap: 20px; }
+.reagent-detail-section h3 { margin: 0 0 12px; font-size: 13px; color: var(--text); }
+.reagent-detail-section + .reagent-detail-section { border-top: 1px solid var(--line); padding-top: 18px; }
+.reagent-detail-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; margin: 0; }
+.reagent-detail-fields > .wide { grid-column: 1 / -1; }
+.reagent-detail-fields > div { min-width: 0; }
+.reagent-detail-fields dt { margin-bottom: 5px; color: var(--muted); font-size: 11px; }
+.reagent-detail-fields dd { margin: 0; color: var(--text); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; white-space: pre-wrap; }
+.reagent-detail-fields code { font-size: 11px; white-space: pre-wrap; }
+.reagent-detail-missing { color: var(--muted); font-size: 12px; }
+.reagent-detail-aliases, .reagent-detail-values { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
+.reagent-detail-metadata { display: grid; gap: 10px; margin: 0; padding: 10px 12px; border-left: 2px solid var(--line); background: var(--panel-soft); }
+@media (max-width: 600px) { .reagent-detail-fields { grid-template-columns: minmax(0, 1fr); } }
+
+/* 目录统一使用顶部表头；所有行共享等宽列，缺值不改变字段位置。 */
+.reagent-catalog-list { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; border-top: 1px solid var(--line); }
+.reagent-catalog-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.reagent-catalog-table th, .reagent-catalog-table td { padding: 16px 10px; text-align: center; vertical-align: middle; overflow-wrap: anywhere; }
+.reagent-catalog-table th { padding-block: 13px; background: var(--surface-soft); color: var(--muted); border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 600; line-height: 1.5; }
+.reagent-catalog-table td { color: var(--ink); font-size: 13px; line-height: 1.6; font-variant-numeric: tabular-nums; }
+.reagent-catalog-table tbody tr + tr { border-top: 1px solid var(--line); }
+.reagent-catalog-table td > code { font-size: 11px; white-space: pre-wrap; }
+.reagent-catalog-table td[data-field="description"] { white-space: pre-wrap; }
+.reagent-catalog-table td[data-field="updated"] { color: var(--muted); font-size: 11px; }
+.catalog-record-identity { display: flex; flex-direction: column; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.catalog-record-identity .reagent-name-link { color: var(--ink); font-size: 14px; line-height: 1.45; text-align: center; }
+.catalog-record-identity .reagent-name-link:hover { color: var(--blue); }
+.catalog-english-name { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.catalog-record-identity .reagent-aliases { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.reagent-catalog-table .chemical-structure-compact { max-width: 220px; margin-inline: auto; }
+.reagent-structure.chemical-structure-compact > .chemical-structure-canvas { height: 92px; min-height: 92px; padding: 4px; border: 0; background: transparent; }
+.chemical-structure-compact .chemical-structure-canvas svg { max-height: 84px; max-width: 100%; }
+.chemical-structure-compact .chemical-structure-canvas small { font-size: 11px; line-height: 1.5; }
+.reagent-catalog-list .reagent-catalog-actions { display: grid; grid-template-columns: repeat(2, max-content); justify-content: center; align-items: center; gap: 7px 6px; }
+.reagent-catalog-list .reagent-catalog-actions button { padding-inline: 6px; color: var(--ink); background: var(--surface); font-size: 11px; }
+.reagent-catalog-list .reagent-catalog-actions button:hover:not(:disabled) { color: var(--blue); background: var(--blue-soft); }
+.reagent-catalog-list .reagent-catalog-actions button.danger { color: var(--red); }
+.reagent-catalog-list .reagent-catalog-actions button.danger:hover:not(:disabled) { background: var(--red-soft); }
+.reagent-catalog-list .reagent-catalog-actions .reagent-detail-link { grid-column: 1 / -1; justify-self: center; color: var(--blue); background: transparent; }
+@media (max-width: 650px) {
+  .reagent-catalog-list .reagent-catalog-actions button { min-height: 40px; }
+}

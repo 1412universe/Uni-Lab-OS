@@ -236,7 +236,15 @@ export type MaterialCurrentLocation =
   | { kind: 'structural'; label: string; siteCount: number }
   | { kind: 'unresolved'; label: string; siteUuid?: string }
 
+export interface CapacityLimits {
+  max_volume_ul?: number
+  max_mass_g?: number
+}
+
 export interface MaterialRecord {
+  config?: Record<string, unknown>
+  capacity?: CapacityLimits
+  ratedCapacity?: CapacityLimits
   uuid: string
   name: string
   category: string
@@ -326,6 +334,7 @@ export interface ReagentInfoRecord {
   physicalState: 'solid' | 'liquid' | 'gas' | 'other' | 'unknown'
   description?: string
   metadata?: Record<string, unknown>
+  createdAt?: string
   updatedAt: string
 }
 
@@ -343,33 +352,53 @@ export interface CompoundLookupResult {
 }
 
 export interface ReagentRecord {
+  maximumCapacity?: CapacityLimits
+  ratedCapacity?: CapacityLimits
+  materialRevision?: number
+  containerCapacity?: CapacityLimits
+  loadingLimits?: CapacityLimits
   uuid: string
   materialUuid: string
   reagentInfoUuid: string
   name: string
+  nameEn?: string
+  aliases?: string[]
   cas?: string
   molecularFormula?: string
+  smiles?: string
+  inchiKey?: string
+  molecularWeight?: number
   physicalState: string
   quantity?: number
   quantityUnit?: string
   concentrationValue?: number
   concentrationUnit?: string
   densityGPerMl?: number
+  /** 入库时保存的密度来源，与目录当前参考密度分开。 */
+  densitySource?: string
   containerName?: string
   containerBarcode?: string
   /** 未结束任务对该瓶的活动预留量，与 quantity 同单位。 */
   activeWorkflowReservedQuantity?: number
   description?: string
-  /** 后端整体覆盖 meta_data；编辑时必须原样带回，否则血缘会丢。 */
+  /** 扩展元数据；后端合并未指定键，保留已有分装血缘。 */
   metaData?: Record<string, unknown>
+  /** 仅在实例元数据明确提供时显示；操作请求的 source 保存在历史台账。 */
+  source?: string
   /** 由分装产生时指向源瓶试剂；手工录入的瓶子为空。 */
   sourceReagentUuid?: string
   dispenseCommandId?: string
   revision: number
+  createdAt?: string
   updatedAt: string
 }
 
 export interface ReagentHistoryRecord {
+  maximumCapacity?: CapacityLimits
+  previousMaximumCapacity?: CapacityLimits
+  loadingLimits?: CapacityLimits
+  previousLoadingLimits?: CapacityLimits
+  containerCapacity?: CapacityLimits
   uuid: string
   materialUuid: string
   reagentUuid: string

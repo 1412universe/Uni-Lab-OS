@@ -10,6 +10,16 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from unilabos.app.scheduler.inventory.capacity import (
+    CAPACITY_KEY,
+    LOADING_LIMITS_KEY,
+    material_capacity,
+    maximum_capacity,
+    normalize_capacity,
+    reagent_metadata,
+    validate_quantity,
+    validate_material_config,
+)
 from unilabos.app.scheduler.inventory.backend_contract import (
     INVALID_PARAMETER,
     MATERIAL_NOT_FOUND,
@@ -510,6 +520,12 @@ class BackendReagentService:
             )
 
             ensure_container_empty(conn, material_uuid)
+            meta_data = reagent_metadata(values)
+            if values.get("container_capacity") is not None:
+                self._set_container_capacity(conn, material_uuid, values, now)
+                meta_data.pop(LOADING_LIMITS_KEY, None)
+            capacity = material_capacity(conn, material_uuid)["capacity"]
+            validate_quantity(quantity, unit, capacity, normalize_capacity(meta_data.get(LOADING_LIMITS_KEY)))
             if cas:
                 cas = normalize_cas(cas)
                 info = conn.execute(
@@ -533,7 +549,7 @@ class BackendReagentService:
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     identity, now, now, _optional_text(values.get("description")),
-                    _dump(values.get("meta_data") or {}), material_uuid, info["uuid"],
+                    _dump(meta_data), material_uuid, info["uuid"],
                     concentration, concentration_unit, quantity, unit, 1,
                     info["physical_state"], info["density_g_per_ml"],
                     "dictionary" if info["density_g_per_ml"] is not None else None,
@@ -593,7 +609,7 @@ class BackendReagentService:
             raise BackendContractError(INVALID_PARAMETER, "quantity_unit is required")
         if not targets:
             raise BackendContractError(INVALID_PARAMETER, "targets must not be empty")
-        normalized: List[tuple[str, float]] = []
+        normalized: List[tuple[str, float, Dict[str, Any]]] = []
         seen: set[str] = set()
         for index, target in enumerate(targets):
             material_uuid = str((target or {}).get("material_uuid") or "").strip()
@@ -614,8 +630,8 @@ class BackendReagentService:
                 raise BackendContractError(
                     INVALID_PARAMETER, f"targets[{index}].quantity must be positive"
                 )
-            normalized.append((material_uuid, quantity))
-        total = sum(quantity for _, quantity in normalized)
+            normalized.append((material_uuid, quantity, target))
+        total = sum(quantity for _, quantity, _ in normalized)
 
         source = conn.execute(
             "SELECT * FROM reagent WHERE uuid=? AND deleted_at IS NULL",
@@ -668,14 +684,17 @@ class BackendReagentService:
             "description": source.get("description"),
         }
         created: List[Dict[str, Any]] = []
-        for material_uuid, quantity in normalized:
+        for material_uuid, quantity, target in normalized:
             snapshot = self.create_reagent_in_transaction(
                 conn,
                 {
                     **inherited,
                     "material_uuid": material_uuid,
                     "quantity": quantity,
+                    "container_capacity": target.get("container_capacity"),
+                    "expected_material_revision": target.get("expected_material_revision"),
                     "meta_data": {
+                        LOADING_LIMITS_KEY: normalize_capacity(target.get(LOADING_LIMITS_KEY)),
                         "source_reagent_uuid": source_reagent_uuid,
                         "dispense_command_id": command_id,
                     },
@@ -772,6 +791,7 @@ class BackendReagentService:
         ).fetchone()
         if reagent is None:
             raise BackendContractError(RESOURCE_NOT_FOUND, "reagent does not exist")
+        capacity = material_capacity(conn, material_uuid)["capacity"]
         payload = {
             "changes": {
                 "result": {
@@ -782,6 +802,9 @@ class BackendReagentService:
                     "physical_state": reagent["physical_state"],
                     "density_g_per_ml": reagent["density_g_per_ml"],
                     "revision": reagent["revision"],
+                    LOADING_LIMITS_KEY: normalize_capacity(_json(reagent["meta_data"], {}).get(LOADING_LIMITS_KEY)),
+                    "container_capacity": capacity,
+                    "maximum_capacity": maximum_capacity(capacity, reagent["meta_data"]),
                 }
             },
             "extension": {**_json(reagent["meta_data"], {}), **extra},
@@ -882,6 +905,11 @@ class BackendReagentService:
                     inventory_type="reagent",
                     inventory_uuid=str(item["uuid"]),
                 )
+                projection = material_capacity(conn, str(item["material_uuid"]))
+                item["container_capacity"] = projection["capacity"]
+                item["maximum_capacity"] = maximum_capacity(projection["capacity"], item["meta_data"])
+                item["rated_capacity"] = projection["rated_capacity"]
+                item["material_revision"] = projection["material_revision"]
 
     def get_reagent(self, identity: str) -> Dict[str, Any]:
         """读取一个活动试剂详情；不存在时返回资源未找到。"""
@@ -897,6 +925,60 @@ class BackendReagentService:
         item = _reagent_row(row)
         self._annotate_active_reservations([item])
         return item
+
+    def _set_container_capacity(
+        self, conn: sqlite3.Connection, material_uuid: str, values: Dict[str, Any],
+        now: str, *, updating_reagent_uuid: Optional[str] = None,
+    ) -> bool:
+        """在数量写事务中保存唯一最大装料量，保留容器的其他配置。"""
+        material = conn.execute(
+            "SELECT m.config,i.aggregate_version FROM material m "
+            "JOIN material_inventory i ON i.material_uuid=m.uuid WHERE m.uuid=?",
+            (material_uuid,),
+        ).fetchone()
+        expected = values.get("expected_material_revision")
+        if expected is not None and int(expected) != int(material["aggregate_version"]):
+            raise BackendContractError(RESOURCE_DATA_CONFLICT, "Material revision has changed")
+        previous_config = _json(material["config"], {})
+        config = {**previous_config, CAPACITY_KEY: normalize_capacity(values["container_capacity"])}
+        validate_material_config(conn, material_uuid, config, replace_loading_limits=True,
+                                 updating_reagent_uuid=updating_reagent_uuid)
+        conn.execute("UPDATE material SET config=?,update_time=? WHERE uuid=?",
+                     (_dump(config), now, material_uuid))
+        conn.execute(
+            "UPDATE material_inventory SET aggregate_version=aggregate_version+1 WHERE material_uuid=?",
+            (material_uuid,),
+        )
+        return normalize_capacity(previous_config.get(CAPACITY_KEY)) != config[CAPACITY_KEY]
+
+    def record_material_capacity_change(
+        self, conn: sqlite3.Connection, material_uuid: str, previous_capacity: Dict[str, float],
+        *, replace_loading_limits: bool, configuration_changed: bool,
+    ) -> None:
+        """物料详情保存上限时，同事务折叠旧限制并记录试剂的前后有效值。"""
+        capacity = material_capacity(conn, material_uuid)["capacity"]
+        for reagent in conn.execute(
+            "SELECT * FROM reagent WHERE material_uuid=? AND deleted_at IS NULL", (material_uuid,),
+        ).fetchall():
+            metadata = _json(reagent["meta_data"], {})
+            previous_limits = normalize_capacity(metadata.get(LOADING_LIMITS_KEY))
+            previous_maximum = maximum_capacity(previous_capacity, metadata)
+            if replace_loading_limits:
+                metadata.pop(LOADING_LIMITS_KEY, None)
+            current_maximum = maximum_capacity(capacity, metadata)
+            if (not configuration_changed and previous_maximum == current_maximum
+                    and metadata == _json(reagent["meta_data"], {})):
+                continue
+            now, revision = _now(), int(reagent["revision"]) + 1
+            conn.execute("UPDATE reagent SET meta_data=?,revision=?,update_time=? WHERE uuid=?",
+                         (_dump(metadata), revision, now, reagent["uuid"]))
+            self._append_history(
+                conn, material_uuid=material_uuid, reagent_uuid=reagent["uuid"],
+                event_type="adjust", quantity_delta=0, quantity_unit=reagent["quantity_unit"],
+                revision=revision, values={"_previous_loading_limits": previous_limits,
+                                          "_previous_maximum_capacity": previous_maximum},
+                recorded_at=now,
+            )
 
     def update_reagent(self, identity: str, values: Dict[str, Any]) -> Dict[str, Any]:
         """以期望修订更新余量；单位与化学身份保持不可变，并原子追加台账。"""
@@ -916,6 +998,8 @@ class BackendReagentService:
         # 工作流结算入口，不能由普通编辑请求伪造。
         event = "add" if quantity > float(current["quantity"]) else "adjust"
         delta = quantity - float(current["quantity"])
+        meta_data = reagent_metadata(values, current["meta_data"])
+        previous_limits = normalize_capacity(current["meta_data"].get(LOADING_LIMITS_KEY))
         with self.store.transaction() as conn:
             try:
                 assert_inventory_mutation_unclaimed(
@@ -925,6 +1009,17 @@ class BackendReagentService:
                 raise BackendContractError(
                     RESOURCE_DATA_CONFLICT, str(error)
                 ) from error
+            previous_capacity = material_capacity(conn, current["material_uuid"])["capacity"]
+            previous_maximum = maximum_capacity(previous_capacity, current["meta_data"])
+            capacity_changed = False
+            if values.get("container_capacity") is not None:
+                capacity_changed = self._set_container_capacity(
+                    conn, current["material_uuid"], values, now, updating_reagent_uuid=identity)
+                meta_data.pop(LOADING_LIMITS_KEY, None)
+            capacity = material_capacity(conn, current["material_uuid"])["capacity"]
+            limits = normalize_capacity(meta_data.get(LOADING_LIMITS_KEY))
+            validate_quantity(quantity, unit, capacity, limits)
+            current_maximum = maximum_capacity(capacity, meta_data)
             try:
                 assert_workflow_quantity_mutation_allowed(
                     conn,
@@ -944,13 +1039,13 @@ class BackendReagentService:
                 WHERE uuid=? AND deleted_at IS NULL AND revision=?""",
                 (
                     now, _optional_text(values.get("description")),
-                    _dump(values.get("meta_data") or {}), concentration,
+                    _dump(meta_data), concentration,
                     concentration_unit, quantity, revision, identity, current["revision"],
                 ),
             )
             if cursor.rowcount != 1:
                 raise BackendContractError(RESOURCE_DATA_CONFLICT, "reagent revision has changed")
-            if delta != 0:
+            if delta != 0 or limits != previous_limits or current_maximum != previous_maximum or capacity_changed:
                 self._append_history(
                     conn,
                     material_uuid=current["material_uuid"],
@@ -959,7 +1054,8 @@ class BackendReagentService:
                     quantity_delta=delta,
                     quantity_unit=current["quantity_unit"],
                     revision=revision,
-                    values=values,
+                    values={**values, "_previous_loading_limits": previous_limits,
+                            "_previous_maximum_capacity": previous_maximum},
                     recorded_at=now,
                 )
         return self.get_reagent(identity)
@@ -1086,6 +1182,7 @@ class BackendReagentService:
         extension = _json(reagent["meta_data"], {})
         if values.get("source"):
             extension = {**extension, "source": values["source"]}
+        capacity = material_capacity(conn, material_uuid)["capacity"]
         result = {
             "quantity": reagent["quantity"],
             "quantity_unit": reagent["quantity_unit"],
@@ -1094,6 +1191,9 @@ class BackendReagentService:
             "physical_state": reagent["physical_state"],
             "density_g_per_ml": reagent["density_g_per_ml"],
             "revision": reagent["revision"],
+            LOADING_LIMITS_KEY: normalize_capacity(extension.get(LOADING_LIMITS_KEY)),
+            "container_capacity": capacity,
+            "maximum_capacity": maximum_capacity(capacity, reagent["meta_data"]),
         }
         occurred_at = _milliseconds(observed)
         entry_uuid = new_event_id(occurred_at)
@@ -1111,6 +1211,10 @@ class BackendReagentService:
             "quantity_unit": quantity_unit,
             "revision": revision,
         }
+        if "_previous_loading_limits" in values:
+            payload["changes"]["previous"] = {LOADING_LIMITS_KEY: values["_previous_loading_limits"]}
+        if "_previous_maximum_capacity" in values:
+            payload["changes"].setdefault("previous", {})["maximum_capacity"] = values["_previous_maximum_capacity"]
         InventoryStore.tx_append_inventory_event(
             conn,
             entry_uuid=entry_uuid,

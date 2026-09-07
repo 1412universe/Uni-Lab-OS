@@ -1,4 +1,6 @@
+import { stricterCapacity } from './capacity'
 import type {
+  CapacityLimits,
   ContractField,
   EdgeSnapshot,
   MaterialCurrentLocation,
@@ -982,6 +984,9 @@ export function adaptMaterial(
   const structure = materialStructure(raw)
   const relative = raw.relative_position || {}
   return {
+    config: raw.config && typeof raw.config === 'object' ? raw.config : {},
+    capacity: raw.capacity,
+    ratedCapacity: raw.rated_capacity,
     uuid: String(raw.uuid),
     name: String(raw.name || raw.uuid),
     category: String(raw.config?.category || raw.config?.rendering?.kind || 'material'),
@@ -1021,6 +1026,12 @@ export async function instantiateMaterial(payload: { resourceTemplateUuid: strin
     barcode: payload.barcode,
     description: payload.description || undefined,
     ...(payload.siteUuid ? { site_placement: { action: 'place', site_uuid: payload.siteUuid } } : {}),
+  })
+}
+
+export async function updateMaterialCapacity(material: MaterialRecord, capacity: CapacityLimits | null) {
+  return writeData<RawRecord>('PUT', `/materials/${encodeURIComponent(material.uuid)}`, {
+    config: { ...material.config, capacity }, expected_revision: material.revision,
   })
 }
 
@@ -1121,8 +1132,9 @@ export async function loadReagentInfos(signal?: AbortSignal): Promise<ReagentInf
     densityGPerMl: raw.density_g_per_ml == null ? undefined : Number(raw.density_g_per_ml),
     physicalState: ['solid', 'liquid', 'gas', 'other'].includes(raw.physical_state) ? raw.physical_state : 'unknown',
     description: raw.description ? String(raw.description) : undefined,
-    metadata: raw.meta_data && typeof raw.meta_data === 'object' ? { ...raw.meta_data } : undefined,
-    updatedAt: timeLabel(raw.update_time),
+    metadata: raw.meta_data && typeof raw.meta_data === 'object' && !Array.isArray(raw.meta_data) ? { ...raw.meta_data } : undefined,
+    createdAt: raw.create_time == null ? undefined : String(raw.create_time),
+    updatedAt: raw.update_time == null ? '' : String(raw.update_time),
   }))
 }
 
@@ -1146,29 +1158,44 @@ export async function lookupCompoundByCas(cas: string, signal?: AbortSignal): Pr
 export async function loadReagents(signal?: AbortSignal): Promise<ReagentRecord[]> {
   const page = await requestAllPages<RawRecord>('/reagents', signal)
   return page.items.map((raw) => ({
+    maximumCapacity: raw.maximum_capacity ?? stricterCapacity(raw.container_capacity, raw.meta_data?.loading_limits),
+    ratedCapacity: raw.rated_capacity,
+    materialRevision: raw.material_revision == null ? undefined : Number(raw.material_revision),
+    containerCapacity: raw.container_capacity,
+    loadingLimits: raw.meta_data?.loading_limits,
     uuid: String(raw.uuid), materialUuid: String(raw.material_uuid), reagentInfoUuid: String(raw.reagent_info_uuid),
-    name: String(raw.name || raw.reagent_info_uuid), cas: raw.cas ? String(raw.cas) : undefined,
+    name: String(raw.name || raw.reagent_info_uuid), nameEn: raw.name_en ? String(raw.name_en) : undefined,
+    aliases: Array.isArray(raw.aliases) ? raw.aliases.map(String) : [],
+    cas: raw.cas ? String(raw.cas) : undefined,
     molecularFormula: raw.molecular_formula ? String(raw.molecular_formula) : undefined,
+    smiles: raw.smiles ? String(raw.smiles) : undefined,
+    inchiKey: raw.inchi_key ? String(raw.inchi_key) : undefined,
+    molecularWeight: raw.molecular_weight == null ? undefined : Number(raw.molecular_weight),
     physicalState: String(raw.physical_state || 'unknown'), quantity: raw.quantity == null ? undefined : Number(raw.quantity),
     quantityUnit: raw.quantity_unit ? String(raw.quantity_unit) : undefined,
     concentrationValue: raw.concentration_value == null ? undefined : Number(raw.concentration_value),
     concentrationUnit: raw.concentration_unit ? String(raw.concentration_unit) : undefined,
     densityGPerMl: raw.density_g_per_ml == null ? undefined : Number(raw.density_g_per_ml),
+    densitySource: typeof raw.density_source === 'string' && raw.density_source ? raw.density_source : undefined,
     containerName: raw.container_name ? String(raw.container_name) : undefined,
     containerBarcode: raw.container_barcode ? String(raw.container_barcode) : undefined,
     activeWorkflowReservedQuantity: raw.active_workflow_reserved_quantity === undefined || raw.active_workflow_reserved_quantity === null ? undefined : Number(raw.active_workflow_reserved_quantity),
     sourceReagentUuid: typeof raw.meta_data?.source_reagent_uuid === 'string' ? raw.meta_data.source_reagent_uuid : undefined,
     dispenseCommandId: typeof raw.meta_data?.dispense_command_id === 'string' ? raw.meta_data.dispense_command_id : undefined,
     description: raw.description ? String(raw.description) : undefined,
-    metaData: raw.meta_data && typeof raw.meta_data === 'object' ? (raw.meta_data as Record<string, unknown>) : {},
-    revision: Number(raw.revision || 1), updatedAt: timeLabel(raw.update_time),
+    metaData: raw.meta_data && typeof raw.meta_data === 'object' && !Array.isArray(raw.meta_data) ? { ...raw.meta_data } : {},
+    source: typeof raw.meta_data?.source === 'string' ? raw.meta_data.source : undefined,
+    revision: Number(raw.revision || 1),
+    createdAt: raw.create_time == null ? undefined : String(raw.create_time),
+    updatedAt: raw.update_time == null ? '' : String(raw.update_time),
   }))
 }
 
 export async function updateReagent(payload: {
   uuid: string; quantity: number; quantityUnit: string; expectedRevision: number;
   concentrationValue?: number; concentrationUnit?: string; description?: string;
-  /** 原记录的 meta_data；PUT 是整体覆盖，不带回就会抹掉分装血缘。 */
+  containerCapacity?: CapacityLimits; expectedMaterialRevision?: number
+  /** 保留已有扩展字段。 */
   metaData?: Record<string, unknown>; source?: string
 }) {
   return writeData<RawRecord>('PUT', `/reagents/${encodeURIComponent(payload.uuid)}`, {
@@ -1177,6 +1204,7 @@ export async function updateReagent(payload: {
     description: payload.description || undefined,
     source: payload.source || 'frontend:os-console',
     meta_data: payload.metaData || {},
+    ...(payload.containerCapacity === undefined ? {} : { container_capacity: payload.containerCapacity, expected_material_revision: payload.expectedMaterialRevision }),
   })
 }
 
@@ -1202,6 +1230,11 @@ export async function loadReagentHistory(materialUuid: string, signal?: AbortSig
       recordedAt: String(raw.recorded_at || ''),
       resultQuantity: result.quantity == null ? undefined : Number(result.quantity),
       resultQuantityUnit: result.quantity_unit ? String(result.quantity_unit) : undefined,
+      maximumCapacity: result.maximum_capacity ?? (result.container_capacity !== undefined || result.loading_limits !== undefined || extension.loading_limits !== undefined ? stricterCapacity(result.container_capacity, result.loading_limits ?? extension.loading_limits) : undefined),
+      previousMaximumCapacity: changes.previous?.maximum_capacity ?? (changes.previous?.container_capacity !== undefined || changes.previous?.loading_limits !== undefined ? stricterCapacity(changes.previous.container_capacity ?? result.container_capacity, changes.previous.loading_limits) : undefined),
+      loadingLimits: result.loading_limits ?? extension.loading_limits,
+      previousLoadingLimits: changes.previous?.loading_limits,
+      containerCapacity: result.container_capacity,
       source: extension.source ? String(extension.source) : undefined,
       workflowTaskUuid: raw.workflow_task_uuid ? String(raw.workflow_task_uuid) : undefined,
       workflowNodeJobUuid: raw.workflow_node_job_uuid ? String(raw.workflow_node_job_uuid) : undefined,
@@ -1213,17 +1246,30 @@ export async function loadReagentHistory(materialUuid: string, signal?: AbortSig
   })
 }
 
-export async function createReagentInfo(payload: {
-  name: string; nameEn?: string; aliases?: string[]; cas?: string; molecularFormula?: string;
-  smiles?: string; inchiKey?: string; molecularWeight?: number; densityGPerMl?: number;
-  physicalState: ReagentInfoRecord['physicalState']; description?: string; metadata?: Record<string, unknown>
-}) {
+type ReagentInfoInput = {
+  name: string; nameEn?: string | null; aliases?: string[]; cas?: string; molecularFormula?: string | null;
+  smiles?: string | null; inchiKey?: string | null; molecularWeight?: number | null; densityGPerMl?: number | null;
+  physicalState: ReagentInfoRecord['physicalState']; description?: string | null; metadata?: Record<string, unknown>
+}
+
+export async function createReagentInfo(payload: ReagentInfoInput) {
   return writeData<RawRecord>('POST', '/reagent-infos', {
     name: payload.name, name_en: payload.nameEn || undefined, aliases: payload.aliases || [], cas: payload.cas || '',
     molecular_formula: payload.molecularFormula || undefined, smiles: payload.smiles || undefined,
     inchi_key: payload.inchiKey || undefined, molecular_weight: payload.molecularWeight,
     density_g_per_ml: payload.densityGPerMl, physical_state: payload.physicalState,
     description: payload.description || undefined, meta_data: payload.metadata || {},
+  })
+}
+
+export async function updateReagentInfo(reagentInfoUuid: string, payload: ReagentInfoInput) {
+  // 更新保留 null，以便明确清空可选字段；undefined 字段仍交由后端保持原值。
+  return writeData<RawRecord>('PUT', `/reagent-infos/${encodeURIComponent(reagentInfoUuid)}`, {
+    name: payload.name, name_en: payload.nameEn, aliases: payload.aliases, cas: payload.cas,
+    molecular_formula: payload.molecularFormula, smiles: payload.smiles,
+    inchi_key: payload.inchiKey, molecular_weight: payload.molecularWeight,
+    density_g_per_ml: payload.densityGPerMl, physical_state: payload.physicalState,
+    description: payload.description, meta_data: payload.metadata,
   })
 }
 
@@ -1234,13 +1280,16 @@ export async function deleteReagentInfo(reagentInfoUuid: string) {
 export async function createReagent(payload: {
   materialUuid: string; reagentInfoUuid: string; quantity: number; quantityUnit: string;
   concentrationValue?: number; concentrationUnit?: string; source?: string; description?: string
+  containerCapacity?: CapacityLimits; expectedMaterialRevision?: number
 }) {
   return writeData<RawRecord>('POST', '/reagents', {
     material_uuid: payload.materialUuid, reagent_info_uuid: payload.reagentInfoUuid,
     quantity: payload.quantity, quantity_unit: payload.quantityUnit,
     physical_state: 'unknown',
     ...(payload.concentrationValue == null || !payload.concentrationUnit ? {} : { concentration_value: payload.concentrationValue, concentration_unit: payload.concentrationUnit }),
-    source: payload.source || 'frontend:os-console', description: payload.description || undefined, meta_data: {},
+    source: payload.source || 'frontend:os-console', description: payload.description || undefined,
+    meta_data: {},
+    ...(payload.containerCapacity === undefined ? {} : { container_capacity: payload.containerCapacity, expected_material_revision: payload.expectedMaterialRevision }),
   })
 }
 
@@ -1273,7 +1322,7 @@ async function postInventoryCommand(command: Record<string, unknown>): Promise<R
 
 export async function dispenseReagent(payload: {
   commandId: string; sourceReagentUuid: string; expectedRevision?: number; quantityUnit: string;
-  targets: Array<{ materialUuid: string; quantity: number }>; reason?: string
+  targets: Array<{ materialUuid: string; quantity: number; containerCapacity?: CapacityLimits; expectedMaterialRevision?: number }>; reason?: string
 }): Promise<ReagentDispenseResult> {
   const response = await postInventoryCommand({
     command_id: payload.commandId,
@@ -1283,7 +1332,7 @@ export async function dispenseReagent(payload: {
       source_reagent_uuid: payload.sourceReagentUuid,
       ...(payload.expectedRevision == null ? {} : { expected_revision: payload.expectedRevision }),
       quantity_unit: payload.quantityUnit,
-      targets: payload.targets.map((target) => ({ material_uuid: target.materialUuid, quantity: target.quantity })),
+      targets: payload.targets.map((target) => ({ material_uuid: target.materialUuid, quantity: target.quantity, ...(target.containerCapacity === undefined ? {} : { container_capacity: target.containerCapacity, expected_material_revision: target.expectedMaterialRevision }) })),
       reason: payload.reason || '分装',
     },
   })

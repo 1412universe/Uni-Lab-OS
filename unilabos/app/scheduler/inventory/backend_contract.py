@@ -13,6 +13,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from unilabos.app.scheduler.inventory.capacity import (
+    CAPACITY_KEY,
+    capacity_projection,
+    material_capacity,
+    normalize_capacity,
+    validate_material_config,
+)
 from unilabos.app.scheduler.inventory.dispatch_admission import (
     InventoryMutationConflict,
     assert_inventory_mutation_unclaimed,
@@ -235,6 +242,11 @@ class BackendResourceService:
                             "resource template source_uri must use package://",
                         )
                     meta_data = dict(existing_meta)
+                    metadata = resource.get("metadata") or {}
+                    if not isinstance(metadata, dict):
+                        raise BackendContractError(TEMPLATE_DEFINITION_INVALID, "metadata 须为 JSON 对象")
+                    if CAPACITY_KEY in metadata:
+                        meta_data[CAPACITY_KEY] = normalize_capacity(metadata[CAPACITY_KEY])
                     if source_uri:
                         meta_data["unilab"] = {
                             **_json(meta_data.get("unilab"), {}),
@@ -556,6 +568,7 @@ class BackendResourceService:
                     "VALUES (?,?)",
                     (material_uuid, template_uuid),
                 )
+                validate_material_config(conn, material_uuid, values.get("config") or {})
                 if values.get("relative_position") is not None:
                     self._upsert_relative_position(
                         conn, material_uuid, values["relative_position"]
@@ -624,7 +637,9 @@ class BackendResourceService:
             f"SELECT COUNT(*) AS count FROM material WHERE {predicate}", tuple(values)
         )
         rows = self.store.query_all(
-            f"SELECT * FROM material WHERE {predicate} "
+            "SELECT material.*,(SELECT meta_data FROM resource_template "
+            "WHERE uuid=material.resource_template_uuid AND deleted_at IS NULL) "
+            f"AS capacity_template_meta FROM material WHERE {predicate} "
             "ORDER BY create_time DESC,uuid DESC LIMIT ? OFFSET ?",
             (*values, page_size, (page - 1) * page_size),
         )
@@ -643,7 +658,9 @@ class BackendResourceService:
         """
 
         row = self.store.query_one(
-            "SELECT material.*,material_inventory.aggregate_version "
+            "SELECT material.*,material_inventory.aggregate_version,"
+            "(SELECT meta_data FROM resource_template WHERE uuid=material.resource_template_uuid "
+            "AND deleted_at IS NULL) AS capacity_template_meta "
             "FROM material JOIN material_inventory "
             "ON material_inventory.material_uuid=material.uuid "
             "WHERE material.uuid=? AND material.deleted_at IS NULL",
@@ -774,6 +791,23 @@ class BackendResourceService:
                     and values.get("config") is not None
                     else _json(current["config"], {})
                 )
+                # 旧客户端整体提交 config 时，不应无意清除新版本维护的上限。
+                previous_config = _json(current["config"], {})
+                capacity_specified = (
+                    "config" in specified and isinstance(values.get("config"), dict)
+                    and CAPACITY_KEY in values["config"]
+                )
+                if capacity_specified:
+                    config = {**previous_config, **config,
+                              CAPACITY_KEY: normalize_capacity(config[CAPACITY_KEY])}
+                for key in (CAPACITY_KEY, "max_volume"):
+                    if key in previous_config and key not in config:
+                        config = {**config, key: previous_config[key]}
+                previous_capacity = material_capacity(conn, material_uuid)["capacity"]
+                if config != previous_config or capacity_specified:
+                    assert_inventory_mutation_unclaimed(conn, material_uuids=(material_uuid,))
+                    validate_material_config(conn, material_uuid, config,
+                                             replace_loading_limits=capacity_specified)
                 conn.execute(
                     """
                     UPDATE material SET parent_uuid=?,barcode=?,name=?,description=?,
@@ -791,6 +825,14 @@ class BackendResourceService:
                         material_uuid,
                     ),
                 )
+                if config != previous_config or capacity_specified:
+                    from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
+
+                    BackendReagentService(self.store, edge_id=self.edge_id, lab_id=self.lab_id).record_material_capacity_change(
+                        conn, material_uuid, previous_capacity, replace_loading_limits=capacity_specified,
+                        configuration_changed=(normalize_capacity(previous_config.get(CAPACITY_KEY))
+                                               != normalize_capacity(config.get(CAPACITY_KEY))),
+                    )
                 if values.get("_relative_position_specified"):
                     if values.get("relative_position") is None:
                         conn.execute(
@@ -892,7 +934,8 @@ class BackendResourceService:
     def material_graph(self) -> Dict[str, Any]:
         materials = self.store.query_all(
             "SELECT material.*,material_inventory.aggregate_version,"
-            "resource_template.resource_type AS template_resource_type "
+            "resource_template.resource_type AS template_resource_type,"
+            "resource_template.meta_data AS capacity_template_meta "
             "FROM material "
             "JOIN material_inventory ON material_inventory.material_uuid=material.uuid "
             "LEFT JOIN resource_template ON resource_template.uuid=material.resource_template_uuid "
@@ -1382,6 +1425,9 @@ class BackendResourceService:
         )
         if "aggregate_version" in row:
             result["revision"] = int(row["aggregate_version"])
+        result.update(capacity_projection(
+            row.get("config"), row.get("data"), row.get("capacity_template_meta")
+        ))
         return result
 
     @classmethod
