@@ -1,0 +1,104 @@
+# API 使用参考
+
+API 是 Console、Workbench 和自动化工具背后的产品能力入口。日常实验优先使用 Console；批量导入、设备单动作、调度运维和系统集成再使用 API。
+
+## 入口
+
+| 入口 | 地址 |
+| --- | --- |
+| Swagger | [http://115.190.137.109:30183/api/docs](http://115.190.137.109:30183/api/docs) |
+| OpenAPI JSON | [http://115.190.137.109:30183/api/openapi.json](http://115.190.137.109:30183/api/openapi.json) |
+| Console | [http://115.190.137.109:30183/console/](http://115.190.137.109:30183/console/) |
+
+:::{warning}
+当前演示 API 没有通用用户认证。不要把公网地址、真实 UUID 或示例请求直接用于生产自动化。生产集成必须经过受控网关、HTTPS、身份认证和最小权限授权。
+:::
+
+## 调用约定
+
+### 同时检查 HTTP 与业务码
+
+健康接口直接返回状态对象；多数业务接口返回 envelope。部分业务错误仍可能使用 HTTP 200，因此客户端必须同时检查：
+
+- HTTP 状态；
+- 响应 envelope 中的业务 `code`；
+- `data` 或 `error.msg`；
+- 对异步恢复操作，是否返回 HTTP 202。
+
+### 写操作使用幂等身份
+
+库存命令、任务命令和人工恢复可能要求 `Idempotency-Key`、命令 UUID 或 resolution UUID。同一次逻辑操作重试时必须复用原身份；生成新身份可能创建第二次业务操作。
+
+### 更新使用期望修订
+
+物料、试剂、工作流草稿和恢复操作会使用 `expected_revision`、claim/fencing 或其他比较并交换字段。发生冲突时重新读取最新对象再决定，不要改大修订号或移除约束。
+
+### SSE 是变化通知
+
+`/api/v1/events` 和 `/api/v1/monitor/events` 提供 Server-Sent Events。任务事件用于提示客户端重新读取 REST 权威状态，不应把单条事件当作完整任务快照。断线重连时按接口支持使用 `Last-Event-ID`；任务事件最多保留最近 500 条。
+
+## 只读健康检查
+
+```bash
+curl -fsS http://115.190.137.109:30183/api/v1/health
+curl -fsS http://115.190.137.109:30183/api/v1/readiness
+curl -fsS http://115.190.137.109:30183/api/v1/edge/readiness
+curl -fsS http://115.190.137.109:30183/api/v1/online-devices
+```
+
+这些接口适合监控连通性，不代表具体设备已经满足物理安全条件。
+
+## 功能分组
+
+下表列出当前部署 OpenAPI 中的主要产品域。具体方法、字段和响应以 Swagger 为准。
+
+| 产品域 | 代表路径 | 用途 |
+| --- | --- | --- |
+| 健康与模式 | `/api/v1/health`、`/readiness`、`/startup-mode` | 服务就绪、工作流加载进度和 develop/product 模式。 |
+| Edge 与在线设备 | `/api/v1/edge/readiness`、`/edge/sessions`、`/online-devices` | Edge 连接、设备注册和在线节点。 |
+| 设备与动作 | `/api/v1/devices`、`/actions`、`/device-action-runs` | 设备目录、动作 schema 和标准单动作 Task。 |
+| 设备状态 | `/api/v1/device-state`、`/device-state/history` | 当前设备状态、上报与历史。 |
+| 物料与模板 | `/api/v1/materials`、`/materials/graph`、`/resource-templates` | 物料实例、关系图、模板、站点和历史。 |
+| 实验室布局 | `/api/v1/lab/layout`、`/lab/placements`、`/lab/zones` | 布局、放置、区域、装配与仓库视图。 |
+| 样品与内容物 | `/api/v1/samples`、`/current-substances`、`/inventory/contents` | 样品、当前物质和容器内容物。 |
+| 试剂身份 | `/api/v1/reagent-infos`、`/compounds/{cas}` | 试剂目录、批量/文件导入和 CAS 查询。 |
+| 试剂库存 | `/api/v1/reagents`、`/inventory/commands`、`/reagent-history/{id}` | 库存 CRUD、原子分装、历史、预留和消耗。 |
+| 工作流创作 | `/api/v1/workflows`、`/authoring/*`、`/workflow-nodes`、`/workflow-edges` | 定义、导入、编译、Graph、节点、连线和草稿 CAS。 |
+| 发布与组合 | `/api/v1/workflows/{id}/publications`、`/composite-invocations` | 不可变发布合同和子工作流调用。 |
+| 运行前检查 | `/api/v1/workflows/{id}/run-preflight` | 零写入检查输入、设备、资源和库存。 |
+| 任务 | `/api/v1/workflow-tasks`、`/{id}/jobs`、`/{id}/commands` | 创建、查询、控制任务和查看冻结 Job。 |
+| 人工确认与恢复 | `/manual-confirmation`、`/resolve-uncertain`、`/settle-material-transfer` | 确认、未知结果和物料转移结算。 |
+| 执行锁 | `/workflow-tasks/{id}/execution-locks`、`/force-release` | 查看和受审计强制释放锁。 |
+| 工作流干预 | `/api/v1/workflow-interventions`、`/{id}/decisions` | 查询开放干预并提交合法选项。 |
+| 调度运维 | `/api/v1/reschedule`、`/scheduler/drain`、`/timeline` | 重算、排空/恢复和 Job 时间线。 |
+| 监控与历史 | `/api/v1/monitor/snapshot`、`/monitor/events`、`/history/jobs` | 调度快照、SSE 和历史。 |
+| Workspace | `/api/v1/workspace/package-mounts`、`/file-browser` | 包挂载和受控文件浏览。 |
+
+## 退役接口
+
+以下三个路径仍出现在 OpenAPI 中，但固定返回 HTTP 410：
+
+```text
+/api/v1/debug/workflow-tasks
+/api/v1/debug/workflow-tasks/{task_uuid}
+/api/v1/debug/workflow-tasks/{task_uuid}/commands
+```
+
+新集成应创建标准 `mode=step` 的 workflow Task，并使用标准 task commands。
+
+## 接口集成检查表
+
+在写入生产数据前确认：
+
+- 已经过 TLS 和身份认证网关；
+- 使用调用方自己的最小权限凭证；
+- 记录幂等键、对象 UUID 和期望修订；
+- 对业务 `code`、HTTP 202、409/冲突和 5xx 分别处理；
+- 只对网络错误和允许重放的操作重试；
+- SSE 断线后重新读取 REST 状态；
+- 写日志时脱敏 Token、Authorization、密码和访问密钥；
+- 恢复类接口需要现场确认和审计原因。
+
+<div class="evidence">
+<strong>实现依据</strong>：目标环境 <code>/api/openapi.json</code> 实测；<code>unilabos/app/workflow_api.py</code>（工作流、任务、恢复和退役 Debug）；<code>unilabos/app/scheduler/inventory/*_api.py</code>（物料与试剂）；<code>unilabos/app/web/openapi_docs.py</code>（接口文档）；<code>unilabos/client/http.py</code>（客户端重试语义）。
+</div>
