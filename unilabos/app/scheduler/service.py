@@ -1819,11 +1819,13 @@ class EdgeScheduler:
         return bool(owned()) if callable(owned) else False
 
     def _drain_pending_reconcile(self) -> list[dict[str, Any]]:
-        """连续重排直到本轮期间到达的物料唤醒都被消化。
+        """连续重排直到本轮期间到达的物料唤醒和后到提交都被消化。
 
-        参数：无。返回：最后一轮实际派发摘要。异常：``reschedule`` 失败原样
-        传播。合并唤醒时用代数记录后到的补料/下料；当前轮若已经做过等料
-        检查，代数变化后必须再跑一轮，否则等待中的工作流会继续卡住。
+        参数：无。返回：本 Future 内各轮派发摘要的累加。异常：``reschedule``
+        失败原样传播。合并唤醒时用代数记录后到的补料、下料和 submit/finish；
+        当前轮若已经查过空队列或已经派发过，代数变化后必须再跑一轮，并把
+        各轮派发累加回去，否则调用方会拿到空 ``dispatched``，工作流看起来
+        已经提交却不再往下走。
         """
 
         dispatched: list[dict[str, Any]] = []
@@ -1833,7 +1835,7 @@ class EdgeScheduler:
             while True:
                 with self._reconcile_wakeup_lock:
                     seen_generation = self._reconcile_generation
-                dispatched = self.reschedule()
+                dispatched.extend(self.reschedule())
                 with self._reconcile_wakeup_lock:
                     if seen_generation == self._reconcile_generation:
                         return dispatched
@@ -1848,6 +1850,8 @@ class EdgeScheduler:
         普通完成回调同步等待这一轮结果以保持现有 API 返回形状；若执行器在调度
         循环线程内同步回调，或当前线程已持有调度锁，则只排队并立即返回，避免
         单线程循环自等待、以及“持锁等待重排线程再等同一把锁”的死锁。
+        并进在途 Future 时无论是否等待都要推进代数：submit/finish 可能登记在
+        “已经查过空队列”的旧轮之后，只等待不标脏会把派发结果丢掉。
         """
 
         with self._reconcile_wakeup_lock:
@@ -1861,8 +1865,7 @@ class EdgeScheduler:
                 )
                 self._pending_reconcile = future
             else:
-                if not wait:
-                    self._reconcile_generation += 1
+                self._reconcile_generation += 1
                 future = pending
         if (
             not wait

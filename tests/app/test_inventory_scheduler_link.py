@@ -429,6 +429,46 @@ class TestMaterialMonitorWakeup:
 
         assert _call_with_timeout(probe, timeout=2.0) == []
 
+    def test_submit_does_not_join_stale_empty_reconcile(self):
+        """无物料提交不得并进已经查过空队列的在途重排。
+
+        生产里物料总线先唤醒一轮空重排后，用户再点运行；若 submit 并进该轮
+        且不标脏，登记后的工作流不会再被派发，看起来像整条流程不通。
+        """
+
+        bus = MonitorBus()
+        scheduler, dispatcher, _svc = _stack(monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-stale-submit",
+            nodes=[_node("A")],
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        rounds = {"count": 0}
+        original_reschedule = scheduler.reschedule
+
+        def delaying_reschedule() -> list[dict[str, object]]:
+            dispatched = original_reschedule()
+            rounds["count"] += 1
+            if rounds["count"] == 1:
+                entered.set()
+                assert release.wait(timeout=2)
+            return dispatched
+
+        scheduler.reschedule = delaying_reschedule  # type: ignore[method-assign]
+        bus.emit("material", "lot.inbound", {"lot_id": "lot-1"})
+        assert entered.wait(timeout=2)
+
+        def release_after_submit_joins() -> None:
+            time.sleep(0.05)
+            release.set()
+
+        threading.Thread(target=release_after_submit_joins, daemon=True).start()
+        result = _call_with_timeout(lambda: scheduler.submit_workflow(spec), timeout=3.0)
+        assert result["state"] == "running"
+        assert [item["node_id"] for item in result["dispatched"]] == ["A"]
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
+
     def test_inbound_during_in_flight_reconcile_is_not_dropped(self):
         """重排已经做过等料检查后到达的补料，必须再跑一轮。"""
 
