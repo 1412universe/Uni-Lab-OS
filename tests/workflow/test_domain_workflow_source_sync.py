@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 import yaml
@@ -14,6 +16,7 @@ from tests.workflow.test_authoring_engine import (
     PREPARE_NODE_UUID,
     WORKFLOW_UUID,
     _engine,
+    _handle,
     _source,
     _template,
 )
@@ -111,6 +114,325 @@ def _legacy_graph_payload(compiled, *, name: str) -> dict[str, Any]:
         "nodes": list(compiled.graph["nodes"]),
         "edges": list(compiled.graph["edges"]),
     }
+
+
+_CONTROL_FLOW_IMPORT_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "control_flow_import_payload.json"
+)
+
+
+def _control_flow_import_catalog(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按导出 JSON 的模板 UUID 和连线 Handle 构造最小可导入目录。
+
+    参数：``payload`` 是含条件、循环和组合调用的完整导出图。返回：节点模板与
+    连接点模板，供导入时按模板派生 type 并校验 Handle。异常：节点缺少模板
+    UUID 时由断言暴露。
+    """
+
+    nodes = payload["nodes"]
+    template_by_node = {
+        str(node["uuid"]): str(node["workflow_node_template_uuid"])
+        for node in nodes
+    }
+    specs: dict[str, tuple[str, str, str, str]] = {}
+    for node in nodes:
+        template_uuid = str(node["workflow_node_template_uuid"])
+        node_type = str(node["type"])
+        action_name = str(node.get("action_name") or node["name"])
+        if node_type == "ILab":
+            specs[template_uuid] = (
+                action_name,
+                "device_action",
+                "lab.devices:Reactor",
+                "UniLabJsonCommand",
+            )
+        elif node_type == "workflow":
+            symbol = f"operation_{template_uuid.replace('-', '')[:8]}"
+            specs[template_uuid] = (
+                symbol,
+                "workflow",
+                f"demo_domain.workflows.sample:{symbol}",
+                "workflow",
+            )
+        elif node_type == "condition":
+            specs[template_uuid] = (
+                "condition",
+                "condition",
+                "unilabos.workflow.authoring:condition",
+                "condition",
+            )
+        elif node_type == "repeat_until":
+            specs[template_uuid] = (
+                "repeat_until",
+                "repeat_until",
+                "unilabos.workflow.authoring:repeat_until",
+                "repeat_until",
+            )
+        elif node_type == "manual_confirm":
+            specs[template_uuid] = (
+                action_name,
+                "manual_confirm",
+                "lab.devices:Reactor",
+                "UniLabJsonCommand",
+            )
+        else:
+            raise AssertionError(f"未覆盖的导出节点类型 {node_type}")
+
+    templates: list[dict[str, Any]] = []
+    for template_uuid, (name, node_type, class_id, type_name) in specs.items():
+        meta_data: dict[str, Any] = {"owner": "test"}
+        if node_type == "workflow":
+            meta_data = {
+                "unilab": {
+                    "workflow_source": {
+                        "kind": "package",
+                        "module": "demo_domain.workflows.sample",
+                        "symbol": name,
+                    }
+                }
+            }
+        elif node_type in {"condition", "repeat_until"}:
+            meta_data = {"unilab": {"framework_owner_only": True}}
+        templates.append(
+            {
+                "uuid": template_uuid,
+                "resource_template_uuid": "31000000-0000-4000-8000-000000000001",
+                "name": name,
+                "display_name": name,
+                "class": class_id,
+                "description": name,
+                "meta_data": meta_data,
+                "goal": {},
+                "goal_default": {},
+                "feedback": {},
+                "result": {},
+                "schema": None,
+                "type": type_name,
+                "node_type": node_type,
+                "icon": None,
+                "header": None,
+                "footer": None,
+            }
+        )
+
+    handles: list[dict[str, Any]] = []
+    seen_handles: set[str] = set()
+    seen_named_handles: set[tuple[str, str, str]] = set()
+
+    def _add_named_handle(
+        template_uuid: str,
+        *,
+        key: str,
+        io_type: str,
+        value_type: str,
+        data_source: str = "executor",
+    ) -> None:
+        slot = (template_uuid, key, io_type)
+        if slot in seen_named_handles:
+            return
+        seen_named_handles.add(slot)
+        handle_uuid = str(uuid5(NAMESPACE_URL, f"{template_uuid}:{io_type}:{key}"))
+        if handle_uuid in seen_handles:
+            return
+        seen_handles.add(handle_uuid)
+        handles.append(
+            _handle(
+                handle_uuid,
+                node_template_uuid=template_uuid,
+                key=key,
+                io_type=io_type,
+                value_type=value_type,
+                data_source=data_source,
+            )
+        )
+
+    for template_uuid, (_name, node_type, _class_id, _type_name) in specs.items():
+        if node_type in {"device_action", "manual_confirm"}:
+            _add_named_handle(
+                template_uuid,
+                key="ready",
+                io_type="source",
+                value_type="object",
+                data_source="dependency",
+            )
+            _add_named_handle(
+                template_uuid,
+                key="ready",
+                io_type="target",
+                value_type="object",
+                data_source="dependency",
+            )
+
+    def _add_handle(
+        handle_uuid: str,
+        *,
+        template_uuid: str,
+        io_type: str,
+        key: str,
+    ) -> None:
+        if handle_uuid in seen_handles:
+            return
+        seen_handles.add(handle_uuid)
+        handles.append(
+            _handle(
+                handle_uuid,
+                node_template_uuid=template_uuid,
+                key=f"{key}_{handle_uuid[:8]}",
+                io_type=io_type,
+                value_type="object",
+                data_source="dependency",
+            )
+        )
+
+    def _condition_field_names(value: Any) -> list[str]:
+        names: list[str] = []
+        if isinstance(value, Mapping):
+            if "name" in value and isinstance(value.get("field"), Mapping):
+                names.append(str(value["name"]))
+            for child in value.values():
+                names.extend(_condition_field_names(child))
+        elif isinstance(value, list):
+            for child in value:
+                names.extend(_condition_field_names(child))
+        return names
+
+    for edge in payload["edges"]:
+        _add_handle(
+            str(edge["source_handle_uuid"]),
+            template_uuid=template_by_node[str(edge["source_node_uuid"])],
+            io_type="source",
+            key="source_port",
+        )
+        _add_handle(
+            str(edge["target_handle_uuid"]),
+            template_uuid=template_by_node[str(edge["target_node_uuid"])],
+            io_type="target",
+            key="target_port",
+        )
+    for node in nodes:
+        template_uuid = template_by_node[str(node["uuid"])]
+        unilab = ((node.get("meta_data") or {}).get("unilab") or {})
+        for binding_field, io_type in (
+            ("carry_bindings", "target"),
+            ("input_bindings", "target"),
+        ):
+            raw_bindings = unilab.get(binding_field) or {}
+            if not isinstance(raw_bindings, Mapping):
+                continue
+            for handle_uuid in raw_bindings:
+                _add_handle(
+                    str(handle_uuid),
+                    template_uuid=template_uuid,
+                    io_type=io_type,
+                    key=binding_field,
+                )
+        composite = unilab.get("composite") or {}
+        if not isinstance(composite, Mapping):
+            continue
+        for mapping_field, default_io in (
+            ("target_mappings", "target"),
+            ("source_mappings", "source"),
+        ):
+            raw_mappings = composite.get(mapping_field) or {}
+            if not isinstance(raw_mappings, Mapping):
+                continue
+            for handle_uuid, targets in raw_mappings.items():
+                _add_handle(
+                    str(handle_uuid),
+                    template_uuid=template_uuid,
+                    io_type=default_io,
+                    key=mapping_field,
+                )
+                for target in targets if isinstance(targets, list) else [targets]:
+                    if not isinstance(target, Mapping):
+                        continue
+                    nested_node = str(target.get("workflow_node_uuid") or "")
+                    nested_handle = target.get("target_handle_uuid") or target.get(
+                        "source_handle_uuid"
+                    )
+                    if nested_node in template_by_node and nested_handle:
+                        io_type = (
+                            "source"
+                            if target.get("source_handle_uuid")
+                            else "target"
+                        )
+                        _add_handle(
+                            str(nested_handle),
+                            template_uuid=template_by_node[nested_node],
+                            io_type=io_type,
+                            key="composite_boundary",
+                        )
+        structural = composite.get("structural_mappings") or {}
+        if isinstance(structural, Mapping):
+            for group_name, io_type in (
+                ("completion_sources", "source"),
+                ("entry_targets", "target"),
+            ):
+                field = (
+                    "source_handle_uuid"
+                    if io_type == "source"
+                    else "target_handle_uuid"
+                )
+                for item in structural.get(group_name) or []:
+                    if not isinstance(item, Mapping):
+                        continue
+                    nested_node = str(item.get("workflow_node_uuid") or "")
+                    nested_handle = item.get(field)
+                    if nested_node in template_by_node and nested_handle:
+                        _add_handle(
+                            str(nested_handle),
+                            template_uuid=template_by_node[nested_node],
+                            io_type=io_type,
+                            key=group_name,
+                        )
+    for node in nodes:
+        params = node.get("param") or {}
+        if not isinstance(params, Mapping):
+            continue
+        bindings = params.get("bindings") if isinstance(params, Mapping) else None
+        bound_templates: list[str] = []
+        if isinstance(bindings, Mapping):
+            for binding in bindings.values():
+                if not isinstance(binding, Mapping):
+                    continue
+                source_uuid = str(binding.get("node_uuid") or "")
+                if source_uuid in template_by_node:
+                    bound_templates.append(template_by_node[source_uuid])
+        if str(node.get("type")) == "repeat_until":
+            next_carry = params.get("next_carry") or {}
+            if isinstance(next_carry, Mapping):
+                for binding in next_carry.values():
+                    if not isinstance(binding, Mapping):
+                        continue
+                    source_uuid = str(binding.get("node_uuid") or "")
+                    path = binding.get("result_path") or []
+                    if source_uuid in template_by_node and path:
+                        _add_named_handle(
+                            template_by_node[source_uuid],
+                            key=str(path[0]),
+                            io_type="source",
+                            value_type="integer",
+                        )
+            for field_name in _condition_field_names(params.get("until")):
+                for source_template in bound_templates:
+                    _add_named_handle(
+                        source_template,
+                        key=field_name,
+                        io_type="source",
+                        value_type="boolean",
+                    )
+        if str(node.get("type")) == "condition":
+            for field_name in _condition_field_names(params):
+                for source_template in bound_templates:
+                    _add_named_handle(
+                        source_template,
+                        key=field_name,
+                        io_type="source",
+                        value_type="boolean",
+                    )
+    return templates, handles
 
 
 def _empty_applied_graph() -> dict[str, Any]:
@@ -362,6 +684,139 @@ def test_legacy_import_keeps_complete_data_edges(
             assert edge["target_handle_uuid"]
     finally:
         service.close()
+
+
+def test_legacy_import_accepts_nested_composite_control_flow_json(
+    tmp_path: Path,
+) -> None:
+    """含嵌套实验操作、条件、循环和完整连线的导出 JSON 必须能导入。"""
+
+    payload = json.loads(_CONTROL_FLOW_IMPORT_FIXTURE.read_text(encoding="utf-8"))
+    templates, handles = _control_flow_import_catalog(payload)
+    engine = WorkflowAuthoringEngine(
+        catalog=AuthoringCatalogSnapshot.from_entities(templates, handles)
+    )
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+        engine=engine,
+    )
+
+    class _CatalogProjection:
+        graph = {"node_templates": templates, "handle_templates": handles}
+        template_catalog_fingerprint = engine.template_catalog_fingerprint
+
+    _project_compiled_catalog(definitions, _CatalogProjection)
+    client = TestClient(create_workflow_app(service))
+    try:
+        response = client.post("/api/v1/workflows/import", json=payload)
+        body = response.json()
+        assert response.status_code == 201, body
+        assert body["code"] == 0, body
+        imported = body["data"]
+        imported_nodes = {node["uuid"]: node for node in imported["nodes"]}
+        assert any(node["type"] == "condition" for node in imported["nodes"])
+        assert any(node["type"] == "repeat_until" for node in imported["nodes"])
+        assert imported["edges"]
+        for edge in imported["edges"]:
+            assert edge["source_node_uuid"] in imported_nodes
+            assert edge["target_node_uuid"] in imported_nodes
+    except WorkflowError as error:
+        raise AssertionError(f"{error.code}: {error.message}") from error
+    finally:
+        service.close()
+
+
+def test_legacy_import_uniquifies_inlined_composite_result_names(
+    tmp_path: Path,
+) -> None:
+    """内联导入时，跨组合重复的作者结果变量必须改成唯一 Python 名后仍能编译。"""
+
+    payload = json.loads(_CONTROL_FLOW_IMPORT_FIXTURE.read_text(encoding="utf-8"))
+    for node in payload["nodes"]:
+        unilab = ((node.get("meta_data") or {}).get("unilab") or {})
+        if unilab.get("authoring_result_name") in {
+            "true_branch",
+            "false_after_confirmation",
+            "stirred",
+        }:
+            unilab["authoring_result_name"] = "observed"
+    templates, handles = _control_flow_import_catalog(payload)
+    engine = WorkflowAuthoringEngine(
+        catalog=AuthoringCatalogSnapshot.from_entities(templates, handles)
+    )
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+        engine=engine,
+    )
+
+    class _CatalogProjection:
+        graph = {"node_templates": templates, "handle_templates": handles}
+        template_catalog_fingerprint = engine.template_catalog_fingerprint
+
+    _project_compiled_catalog(definitions, _CatalogProjection)
+    try:
+        imported = service.import_legacy_workflow(payload=payload)
+        result_names = [
+            ((node.get("meta_data") or {}).get("unilab") or {}).get(
+                "authoring_result_name"
+            )
+            for node in imported["nodes"]
+            if node["type"] not in {"condition", "repeat_until", "workflow"}
+        ]
+        assigned = [name for name in result_names if isinstance(name, str)]
+        assert assigned
+        assert len(assigned) == len(set(assigned))
+        assert any(node["type"] == "condition" for node in imported["nodes"])
+        assert any(node["type"] == "repeat_until" for node in imported["nodes"])
+    finally:
+        service.close()
+
+
+def test_applied_graph_keeps_unexpanded_workflow_calls() -> None:
+    """重编译前只去掉已展开组合调用，未展开的 ``workflow()`` 节点必须保留。"""
+
+    graph = {
+        "workflow": {"uuid": "00000000-0000-4000-8000-000000000001"},
+        "nodes": [
+            {"uuid": "unexpanded", "type": "workflow", "parent_uuid": None},
+            {"uuid": "expanded", "type": "workflow", "parent_uuid": None},
+            {
+                "uuid": "child",
+                "type": "ILab",
+                "parent_uuid": "expanded",
+            },
+        ],
+        "edges": [
+            {
+                "source_node_uuid": "unexpanded",
+                "target_node_uuid": "expanded",
+                "source_handle_uuid": "src",
+                "target_handle_uuid": "dst",
+            },
+            {
+                "source_node_uuid": "expanded",
+                "target_node_uuid": "child",
+                "source_handle_uuid": "ready",
+                "target_handle_uuid": "ready",
+            },
+        ],
+    }
+    result = WorkflowService._applied_graph_without_inlined_composite_parents(graph)
+    nodes = {node["uuid"]: node for node in result["nodes"]}
+    assert "unexpanded" in nodes
+    assert "expanded" not in nodes
+    assert nodes["child"]["parent_uuid"] is None
+    assert all(
+        edge["source_node_uuid"] != "expanded"
+        and edge["target_node_uuid"] != "expanded"
+        for edge in result["edges"]
+    )
 
 
 def test_published_experiment_operation_survives_restart_in_domain_package(

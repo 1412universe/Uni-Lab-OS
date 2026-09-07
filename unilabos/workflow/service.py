@@ -3097,6 +3097,7 @@ class WorkflowService:
             input_contract=input_contract,
             output_contract=output_contract,
             output_bindings=output_bindings,
+            inline_expanded_composites=True,
         )
 
     def _commit_domain_workflow_creation(
@@ -3113,13 +3114,15 @@ class WorkflowService:
         input_contract: Mapping[str, Any] | None = None,
         output_contract: Mapping[str, Any] | None = None,
         output_bindings: Mapping[str, Any] | None = None,
+        inline_expanded_composites: bool = False,
     ) -> dict[str, Any]:
         """在工作流锁内把新定义规范化为首版领域 Python 源码。
 
         参数：``registration`` 固定目标领域包身份和类型目录；其余字段是已规范
-        的根字段、可为空的节点、连线与工作流类型。返回：已发布到领域包并应用
-        的首版完整图。异常：类别引用、模板、编译、来源发布或内存定义提交失败
-        时回滚本次定义、源码和清单，既有领域包内容不受影响。
+        的根字段、可为空的节点、连线与工作流类型；``inline_expanded_composites``
+        只给 JSON 导入使用，把已展开组合写成可独立编译的内部控制流。返回：已
+        发布到领域包并应用的首版完整图。异常：类别引用、模板、编译、来源发布
+        或内存定义提交失败时回滚本次定义、源码和清单，既有领域包内容不受影响。
         """
 
         identity = registration.workflow_uuid
@@ -3206,6 +3209,7 @@ class WorkflowService:
                             workflow_revision=int(created["workflow"]["revision"]),
                             graph=source_graph,
                             source_uri=registration.source_uri,
+                            inline_expanded_composites=inline_expanded_composites,
                         )
                     )
                 except Exception:
@@ -3226,6 +3230,13 @@ class WorkflowService:
 
                 # 接口创建或旧 JSON 图先经过公共图校验，再以生成的规范 Python
                 # 重编译；重新创建首版图以带齐作者源码映射，同时保持 revision=1。
+                compile_applied_graph = source_graph
+                if inline_expanded_composites:
+                    compile_applied_graph = (
+                        self._applied_graph_without_inlined_composite_parents(
+                            source_graph
+                        )
+                    )
                 try:
                     canonical = CandidateCompilation.model_validate(
                         self.compiler.compile(
@@ -3233,7 +3244,7 @@ class WorkflowService:
                             workflow_revision=1,
                             python_source=compilation.normalized_python_source,
                             source_uri=registration.source_uri,
-                            applied_graph=source_graph,
+                            applied_graph=compile_applied_graph,
                         )
                     )
                 except Exception:
@@ -3548,6 +3559,52 @@ class WorkflowService:
             "relative_path": registration.relative_path,
             "source_uri": registration.source_uri,
         }
+
+    @staticmethod
+    def _applied_graph_without_inlined_composite_parents(
+        graph: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """去掉已内联组合调用节点，避免重编译后留下悬挂的 ``parent_uuid``。
+
+        参数：``graph`` 是 JSON 导入后、生成内联 Python 前的完整候选图。返回：
+        删除已展开的 ``type=workflow`` 组合调用及其相关连线，并把其子节点提升
+        为顶层；未展开的 ``workflow()`` 调用节点会保留。供编译器按源码结构重
+        建父子关系。异常：无。
+        """
+
+        result = deepcopy(dict(graph))
+        nodes = list(result.get("nodes") or [])
+        parent_ids = {
+            str(node.get("uuid"))
+            for node in nodes
+            if isinstance(node, Mapping) and str(node.get("type") or "") == "workflow"
+        }
+        child_parents = {
+            str(node.get("parent_uuid"))
+            for node in nodes
+            if isinstance(node, Mapping) and isinstance(node.get("parent_uuid"), str)
+        }
+        invocation_uuids = parent_ids & child_parents
+        lifted: list[dict[str, Any]] = []
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            node_uuid = str(node.get("uuid"))
+            if node_uuid in invocation_uuids:
+                continue
+            lifted_node = dict(node)
+            if lifted_node.get("parent_uuid") in invocation_uuids:
+                lifted_node["parent_uuid"] = None
+            lifted.append(lifted_node)
+        result["nodes"] = lifted
+        result["edges"] = [
+            dict(edge)
+            for edge in result.get("edges") or []
+            if isinstance(edge, Mapping)
+            and str(edge.get("source_node_uuid")) not in invocation_uuids
+            and str(edge.get("target_node_uuid")) not in invocation_uuids
+        ]
+        return result
 
     @staticmethod
     def _authoring_graph_projection(graph: Mapping[str, Any]) -> dict[str, Any]:

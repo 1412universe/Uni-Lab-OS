@@ -312,6 +312,7 @@ class AuthoringKernel(Protocol):
         workflow_revision: int,
         graph: dict[str, Any],
         source_uri: str,
+        inline_expanded_composites: bool = False,
     ) -> CandidateCompilation:
         """把候选图确定性生成规范 Python 源码。"""
 

@@ -193,13 +193,15 @@ class StoreAuthoringConflict(StoreConflict):
 
 
 # JSON 导入和公共 Graph PUT 创建新节点时允许穿过保留元数据保护的创作语义。
-# 执行器绑定、组合展开等系统事实不在此列。
+# 执行器绑定仍由服务端维护；组合展开元数据必须随导出图导入，否则嵌套
+# 条件/循环的边界映射和必填 Handle 会在图校验阶段失败。
 _PUBLIC_CREATE_UNILAB_OBJECT_FIELDS = frozenset(
     {
         "input_bindings",
         "carry_bindings",
         "resource_refs",
         "site_group_bindings",
+        "composite",
     }
 )
 _PUBLIC_CREATE_UNILAB_SCALAR_FIELDS = frozenset(
@@ -888,8 +890,8 @@ class WorkflowStore:
         ``node_templates``/``handle_templates`` 是 AST 编译候选实际引用的目录子集，
         与工作流图在同一事务内校验或投影；``trusted_authoring_graph`` 只允许 AST
         编译器生成的图保留系统创作元数据；普通复制和旧版导入仍禁止提交
-        执行器绑定、组合展开等保留 ``meta_data.unilab`` 字段，但可写入输入绑定、
-        循环 carry 和控制区域等创作语义。
+        执行器绑定，但可写入输入绑定、循环 carry、控制区域和组合调用边界等
+        创作语义。
         返回修订为 1 的完整图；任何身份、模板或图语义错误都会回滚工作流主记录，
         因此复制/导入不会留下空壳工作流。
         """
@@ -1527,8 +1529,8 @@ class WorkflowStore:
         """事务性保存完整工作流图并返回最新投影。
 
         参数说明：`revision` 是乐观并发版本；`nodes/edges` 是完整替换集合；
-        `protect_reserved_metadata` 保护服务端元数据；
-        `validate_workflow_io_contract` 决定是否启用严格公共输入/输出合同。
+        `protect_reserved_metadata` 保护服务端元数据，但 JSON 导入可写入组合
+        调用边界；`validate_workflow_io_contract` 决定是否启用严格公共输入/输出合同。
         """
 
         with self.transaction() as conn:
@@ -2085,8 +2087,8 @@ class WorkflowStore:
         节点原有的 JSON；``enabled`` 为真表示公共 Graph 接口。返回：公开字段与
         已有系统元数据合并后的对象。异常：非法 JSON 由上层统一转换。公共调用只
         接受非负整数 ``authoring_source_order`` 作为新节点的创建顺序，并允许
-        输入绑定、循环 carry 和控制区域等创作语义穿过保护边界；执行器绑定、
-        组合展开等系统事实仍由服务端保留，避免客户端伪造目录事实。
+        输入绑定、循环 carry、控制区域和组合调用边界等创作语义穿过保护边界；
+        执行器绑定仍由服务端保留，避免客户端伪造目录事实。
         """
 
         result = dict(submitted)
@@ -2109,8 +2111,8 @@ class WorkflowStore:
             result["unilab"] = protected_unilab
             return result
         # 完整 Graph PUT / JSON 导入会一次性提交新控制节点。允许输入绑定、
-        # 循环 carry、条件/循环区域标记等创作语义穿过保护边界，否则导入后
-        # 无法生成规范 Python；执行器绑定、组合调用等系统事实仍不可由客户端写入。
+        # 循环 carry、条件/循环区域标记和组合调用边界等创作语义穿过保护边界，
+        # 否则导入后无法生成规范 Python；执行器绑定仍不可由客户端写入。
         if isinstance(submitted_unilab, Mapping):
             public_unilab = _public_create_unilab(submitted_unilab)
             if public_unilab:

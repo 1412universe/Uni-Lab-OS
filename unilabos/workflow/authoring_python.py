@@ -42,11 +42,14 @@ def render_authoring_python(
     graph: Mapping[str, Any],
     catalog: AuthoringCatalogSnapshot,
     function_docstring: str | None = None,
+    inline_expanded_composites: bool = False,
 ) -> RenderedAuthoringSource:
     """把完整候选图渲染为规范作者 Python。
 
     参数说明：``graph`` 是后端五集合候选图，``catalog`` 是同一编译事务目录
-    快照；``function_docstring`` 是可信 AST 提取并清理的可选工作流函数文档。
+    快照；``function_docstring`` 是可信 AST 提取并清理的可选工作流函数文档；
+    ``inline_expanded_composites`` 为真时把已展开的组合调用写成内部条件/循环
+    源码，供 JSON 导入在没有已发布子流程目录时仍能规范化。
     返回可回编译的规范源码和 UTF-16 源码映射。身份或目录投影不一致时
     抛出 ``AuthoringGraphError``；函数文档非字符串时也失败关闭；物料图违反物料流线性
     （MaterialFlowLinearity）或资源模板兼容（ResourceTemplate Compatibility）
@@ -89,18 +92,39 @@ def render_authoring_python(
         and edge.get("target_node_uuid") in node_by_uuid
     ]
     ordered_nodes = _authoring_ordered_nodes(node_by_uuid, visible_edges)
-    device_symbols, device_imports = _device_symbols(ordered_nodes, catalog_by_node)
-    published_workflow_imports = {
-        tuple(str(action.template["class"]).rsplit(":", 1))
-        for node in ordered_nodes
-        for action in [catalog_by_node[str(node["uuid"])]]
-        if _is_published_workflow(action)
-    }
+    if inline_expanded_composites:
+        inline_nodes = [
+            node
+            for node_uuid, node in all_nodes.items()
+            if not _is_published_workflow(all_catalog[node_uuid])
+        ]
+        device_symbols, device_imports = _device_symbols(inline_nodes, all_catalog)
+        published_workflow_imports = {
+            tuple(str(action.template["class"]).rsplit(":", 1))
+            for node_uuid, action in all_catalog.items()
+            if _is_published_workflow(action)
+            and not _expanded_composite_children(node_uuid, all_nodes)
+        }
+        material_scan_nodes = inline_nodes
+    else:
+        device_symbols, device_imports = _device_symbols(ordered_nodes, catalog_by_node)
+        published_workflow_imports = {
+            tuple(str(action.template["class"]).rsplit(":", 1))
+            for node in ordered_nodes
+            for action in [catalog_by_node[str(node["uuid"])]]
+            if _is_published_workflow(action)
+        }
+        material_scan_nodes = ordered_nodes
     # ``material_sources`` 冻结每个物料来源节点的 import 与调用表达式。
     material_sources: dict[str, RenderedMaterialSource] = {}
-    for node in ordered_nodes:
+    for node in material_scan_nodes:
         node_uuid = str(node["uuid"])
-        if not _is_material_source(catalog_by_node[node_uuid]):
+        action = (
+            all_catalog[node_uuid]
+            if inline_expanded_composites
+            else catalog_by_node[node_uuid]
+        )
+        if not _is_material_source(action):
             continue
         try:
             material_sources[node_uuid] = render_material_source_call(
@@ -190,18 +214,24 @@ def render_authoring_python(
         lines.append("from unilabos.registry.annotations import JSONValue")
     if needs_resource_slot:
         lines.append("from unilabos.registry.placeholder_type import ResourceSlot")
+    control_scan_nodes = (
+        list(all_nodes.values()) if inline_expanded_composites else ordered_nodes
+    )
+    control_scan_catalog = all_catalog if inline_expanded_composites else catalog_by_node
     group_nodes = [
-        node for node in ordered_nodes if _is_group(catalog_by_node[str(node["uuid"])])
+        node
+        for node in control_scan_nodes
+        if _is_group(control_scan_catalog[str(node["uuid"])])
     ]
     condition_nodes = [
         node
-        for node in ordered_nodes
-        if _is_condition(catalog_by_node[str(node["uuid"])])
+        for node in control_scan_nodes
+        if _is_condition(control_scan_catalog[str(node["uuid"])])
     ]
     repeat_nodes = [
         node
-        for node in ordered_nodes
-        if _is_repeat_until(catalog_by_node[str(node["uuid"])])
+        for node in control_scan_nodes
+        if _is_repeat_until(control_scan_catalog[str(node["uuid"])])
     ]
     marker_imports = "device, workflow"
     if group_nodes:
@@ -219,14 +249,18 @@ def render_authoring_python(
     elif any(
         isinstance((node.get("meta_data") or {}).get("unilab"), Mapping)
         and bool((node.get("meta_data") or {})["unilab"].get("resource_refs"))
-        for node in ordered_nodes
+        for node in (
+            all_nodes.values() if inline_expanded_composites else ordered_nodes
+        )
     ):
         # 普通动作也可用 ``resource_ref``；只有真实节点元数据声明时才生成 import。
         marker_imports += ", resource_ref"
     if any(
         isinstance((node.get("meta_data") or {}).get("unilab"), Mapping)
         and bool((node.get("meta_data") or {})["unilab"].get("site_group_bindings"))
-        for node in ordered_nodes
+        for node in (
+            all_nodes.values() if inline_expanded_composites else ordered_nodes
+        )
     ):
         marker_imports += ", site_group"
     if not explicit_output_bindings:
@@ -302,13 +336,31 @@ def render_authoring_python(
     if function_docstring is not None:
         _append_function_docstring(lines=lines, docstring=function_docstring)
 
+    render_nodes = all_nodes if inline_expanded_composites else node_by_uuid
+    render_catalog = all_catalog if inline_expanded_composites else catalog_by_node
+    inlined_invocations = (
+        _inlined_composite_uuids(all_nodes, all_catalog)
+        if inline_expanded_composites
+        else set()
+    )
+    incoming_edges = (
+        _rewrite_inlined_composite_edges(
+            edges if inline_expanded_composites else visible_edges,
+            inlined_invocations=inlined_invocations,
+            all_nodes=all_nodes,
+            catalog_by_node=render_catalog,
+        )
+        if inline_expanded_composites
+        else list(visible_edges)
+    )
     incoming = _incoming_bindings(
-        visible_edges,
-        catalog_by_node=catalog_by_node,
+        incoming_edges,
+        catalog_by_node=render_catalog,
     )
     source_map: list[dict[str, Any]] = []
     # Python 动作结果变量承载节点间数据依赖，必须唯一且不能被节点展示标题改写。
     result_names: set[str] = set()
+    result_name_by_uuid: dict[str, str] = {}
     if (
         not ordered_nodes
         and not explicit_output_bindings
@@ -327,6 +379,27 @@ def render_authoring_python(
         if node_uuid in rendered_node_uuids or isinstance(node.get("parent_uuid"), str):
             continue
         action = catalog_by_node[node_uuid]
+        if (
+            inline_expanded_composites
+            and _is_published_workflow(action)
+            and _expanded_composite_children(node_uuid, all_nodes)
+        ):
+            _append_expanded_composite_source(
+                node=node,
+                indent_level=1,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                all_nodes=all_nodes,
+                all_catalog=all_catalog,
+                device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
+            )
+            rendered_node_uuids.add(node_uuid)
+            continue
         if _is_condition(action):
             _append_condition_source(
                 node=node,
@@ -336,9 +409,11 @@ def render_authoring_python(
                 result_names=result_names,
                 material_sources=material_sources,
                 incoming=incoming,
-                node_by_uuid=node_by_uuid,
-                catalog_by_node=catalog_by_node,
+                node_by_uuid=render_nodes,
+                catalog_by_node=render_catalog,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
             rendered_node_uuids.add(node_uuid)
             rendered_node_uuids.update(
@@ -359,9 +434,11 @@ def render_authoring_python(
                 result_names=result_names,
                 material_sources=material_sources,
                 incoming=incoming,
-                node_by_uuid=node_by_uuid,
-                catalog_by_node=catalog_by_node,
+                node_by_uuid=render_nodes,
+                catalog_by_node=render_catalog,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
             rendered_node_uuids.add(node_uuid)
             rendered_node_uuids.update(
@@ -377,9 +454,11 @@ def render_authoring_python(
                 result_names=result_names,
                 material_sources=material_sources,
                 incoming=incoming,
-                node_by_uuid=node_by_uuid,
-                catalog_by_node=catalog_by_node,
+                node_by_uuid=render_nodes,
+                catalog_by_node=render_catalog,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
             rendered_node_uuids.add(node_uuid)
             continue
@@ -403,7 +482,7 @@ def render_authoring_python(
                     indent_level=2,
                     lines=lines,
                     source_map=source_map,
-                    action=catalog_by_node[str(group_node["uuid"])],
+                    action=render_catalog[str(group_node["uuid"])],
                 )
                 rendered_node_uuids.add(str(group_node["uuid"]))
                 for child in children_by_parent[str(group_node["uuid"])]:
@@ -415,9 +494,11 @@ def render_authoring_python(
                         result_names=result_names,
                         material_sources=material_sources,
                         incoming=incoming,
-                        node_by_uuid=node_by_uuid,
-                        catalog_by_node=catalog_by_node,
+                        node_by_uuid=render_nodes,
+                        catalog_by_node=render_catalog,
                         device_symbols=device_symbols,
+                        inline_expanded_composites=inline_expanded_composites,
+                        result_name_by_uuid=result_name_by_uuid,
                     )
                     rendered_node_uuids.add(str(child["uuid"]))
             continue
@@ -438,9 +519,11 @@ def render_authoring_python(
                 result_names=result_names,
                 material_sources=material_sources,
                 incoming=incoming,
-                node_by_uuid=node_by_uuid,
-                catalog_by_node=catalog_by_node,
+                node_by_uuid=render_nodes,
+                catalog_by_node=render_catalog,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
             rendered_node_uuids.add(str(child["uuid"]))
     _append_quantity_requirement_sources(
@@ -448,12 +531,15 @@ def render_authoring_python(
         requirements=inventory_requirements,
         node_by_uuid=node_by_uuid,
         material_sources=material_sources,
+        result_name_by_uuid=result_name_by_uuid,
     )
     if explicit_output_bindings:
         # 输出绑定字典由编译器按作者声明顺序建立；保留该顺序才能让输出合同
         # 在 Python→图→Python 往返中达到固定点。
+        output_nodes = all_nodes if inline_expanded_composites else node_by_uuid
+        output_catalog = all_catalog if inline_expanded_composites else catalog_by_node
         rendered_outputs = [
-            f"{name}={_render_output_binding(binding, node_by_uuid, catalog_by_node)}"
+            f"{name}={_render_output_binding(binding, output_nodes, output_catalog, result_name_by_uuid=result_name_by_uuid, inlined_invocations=inlined_invocations)}"
             for name, binding in explicit_output_bindings.items()
         ]
         rendered_values = ", ".join(
@@ -479,6 +565,7 @@ def _append_quantity_requirement_sources(
     requirements: list[Any],
     node_by_uuid: Mapping[str, dict[str, Any]],
     material_sources: Mapping[str, RenderedMaterialSource],
+    result_name_by_uuid: Mapping[str, str] | None = None,
 ) -> None:
     """在工作流返回前生成不参与 DAG 执行的数量需求标记。"""
 
@@ -527,8 +614,14 @@ def _append_quantity_requirement_sources(
             quantity_expression = repr(binding.get("value"))
         else:
             raise AuthoringGraphError("candidate_invalid", "数量需求绑定类型无效")
-        source_name = _node_result_name(node_by_uuid[source_uuid])
-        consume_name = _node_result_name(node_by_uuid[consume_uuid])
+        source_name = _python_result_name(
+            node_by_uuid[source_uuid],
+            result_name_by_uuid,
+        )
+        consume_name = _python_result_name(
+            node_by_uuid[consume_uuid],
+            result_name_by_uuid,
+        )
         requirement_key = requirement.get("requirement_key")
         quantity_unit = requirement.get("quantity_unit")
         scale = unilab.get("quantity_scale", 1.0)
@@ -675,25 +768,51 @@ def _append_action_source(
     node_by_uuid: Mapping[str, dict[str, Any]],
     catalog_by_node: Mapping[str, AuthoringCatalogAction],
     device_symbols: Mapping[tuple[str, str | None], str],
+    inline_expanded_composites: bool = False,
+    result_name_by_uuid: dict[str, str] | None = None,
 ) -> None:
     """按给定展示缩进追加一个物料来源或普通动作节点源码。
 
     参数说明：``node`` 是待生成节点；``indent_level`` 控制顶层/分组/并行分支
     缩进；``lines``、``source_map``、``result_names`` 是原位收集器；其余映射分别
-    提供物料来源调用、候选边、节点/目录索引和设备选择器名。返回：无。异常：
-    重复结果名、连接点身份或参数来源不可信时抛出 ``AuthoringGraphError``。
+    提供物料来源调用、候选边、节点/目录索引和设备选择器名；内联已展开组合时
+    ``inline_expanded_composites`` 把嵌套 ``workflow`` 写成子树源码。返回：无。
+    异常：重复结果名、连接点身份或参数来源不可信时抛出 ``AuthoringGraphError``。
     """
 
     node_uuid = str(node["uuid"])
     action = catalog_by_node[node_uuid]
+    if (
+        inline_expanded_composites
+        and _is_published_workflow(action)
+        and _expanded_composite_children(node_uuid, node_by_uuid)
+    ):
+        _append_expanded_composite_source(
+            node=node,
+            indent_level=indent_level,
+            lines=lines,
+            source_map=source_map,
+            result_names=result_names,
+            material_sources=material_sources,
+            incoming=incoming,
+            all_nodes=node_by_uuid,
+            all_catalog=catalog_by_node,
+            device_symbols=device_symbols,
+            inline_expanded_composites=inline_expanded_composites,
+            result_name_by_uuid=result_name_by_uuid,
+        )
+        return
     if _is_group(action) or _is_condition(action) or _is_repeat_until(action):
         raise AuthoringGraphError("candidate_invalid", "控制或展示节点不能作为动作生成")
     indent = "    " * indent_level
     start_line = len(lines) + 1
-    result_name = _node_result_name(node)
-    if result_name in result_names:
-        raise AuthoringGraphError("candidate_invalid", "节点作者结果变量重复")
-    result_names.add(result_name)
+    allocated_names = result_name_by_uuid if result_name_by_uuid is not None else {}
+    result_name = _allocate_result_name(
+        node,
+        result_names=result_names,
+        result_name_by_uuid=allocated_names,
+        uniquify=inline_expanded_composites,
+    )
     metadata_comment = _node_metadata_comment(node=node, action=action)
     if metadata_comment is not None:
         lines.append(f"{indent}{metadata_comment}")
@@ -707,6 +826,7 @@ def _append_action_source(
             incoming=incoming,
             node_by_uuid=node_by_uuid,
             catalog_by_node=catalog_by_node,
+            result_name_by_uuid=allocated_names,
         )
         class_identity = action.template.get("class")
         if not isinstance(class_identity, str) or class_identity.count(":") != 1:
@@ -722,6 +842,7 @@ def _append_action_source(
             incoming=incoming,
             node_by_uuid=node_by_uuid,
             catalog_by_node=catalog_by_node,
+            result_name_by_uuid=allocated_names,
         )
         selector_key = _selector_key(node, action)
         call = (
@@ -741,6 +862,435 @@ def _append_action_source(
     )
 
 
+def _inlined_composite_uuids(
+    nodes: Mapping[str, Mapping[str, Any]],
+    catalog_by_node: Mapping[str, AuthoringCatalogAction],
+) -> set[str]:
+    """返回已展开、应内联而不是保留 ``workflow()`` 调用的组合节点 UUID。"""
+
+    return {
+        node_uuid
+        for node_uuid, action in catalog_by_node.items()
+        if _is_published_workflow(action)
+        and _expanded_composite_children(node_uuid, nodes)
+    }
+
+
+def _node_composite(node: Mapping[str, Any]) -> Mapping[str, Any]:
+    """读取节点上的组合边界映射；没有合法对象时返回空映射。"""
+
+    metadata = node.get("meta_data")
+    unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+    composite = unilab.get("composite") if isinstance(unilab, Mapping) else None
+    return composite if isinstance(composite, Mapping) else {}
+
+
+def _catalog_handle(
+    action: AuthoringCatalogAction | None,
+    handle_uuid: str,
+) -> Mapping[str, Any] | None:
+    """按 UUID 取出目录连接点；缺失时返回 ``None``。"""
+
+    if action is None:
+        return None
+    return next(
+        (item for item in action.handles if str(item["uuid"]) == handle_uuid),
+        None,
+    )
+
+
+def _is_data_parameter_handle(
+    action: AuthoringCatalogAction | None,
+    handle_uuid: str,
+) -> bool:
+    """判断连接点是否会进入动作参数渲染，而不是 ready 等结构依赖。"""
+
+    handle = _catalog_handle(action, handle_uuid)
+    if handle is None:
+        return False
+    return (
+        handle.get("handle_key") != "ready"
+        and str(handle.get("data_source") or "executor").lower()
+        in {"executor", "goal"}
+    )
+
+
+def _remap_inlined_source(
+    node: Mapping[str, Any],
+    handle_uuid: str,
+) -> tuple[str, str] | None:
+    """把内联组合调用的输出连接点投影到唯一内部来源节点。"""
+
+    mapping = _node_composite(node).get("source_mappings")
+    item = mapping.get(handle_uuid) if isinstance(mapping, Mapping) else None
+    if not isinstance(item, Mapping) or item.get("kind") != "node_output":
+        return None
+    child_uuid = item.get("workflow_node_uuid")
+    child_handle = item.get("source_handle_uuid")
+    if not isinstance(child_uuid, str) or not isinstance(child_handle, str):
+        return None
+    return (child_uuid, child_handle)
+
+
+def _remap_inlined_targets(
+    node: Mapping[str, Any],
+    handle_uuid: str,
+) -> list[tuple[str, str]]:
+    """把内联组合调用的输入连接点投影到内部目标节点。"""
+
+    mapping = _node_composite(node).get("target_mappings")
+    raw = mapping.get(handle_uuid) if isinstance(mapping, Mapping) else None
+    if not isinstance(raw, list):
+        return []
+    targets: list[tuple[str, str]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        child_uuid = item.get("workflow_node_uuid")
+        child_handle = item.get("target_handle_uuid")
+        if isinstance(child_uuid, str) and isinstance(child_handle, str):
+            targets.append((child_uuid, child_handle))
+    return targets
+
+
+def _rewrite_inlined_composite_edges(
+    edges: list[Any],
+    *,
+    inlined_invocations: set[str],
+    all_nodes: Mapping[str, Mapping[str, Any]],
+    catalog_by_node: Mapping[str, AuthoringCatalogAction],
+) -> list[dict[str, Any]]:
+    """把穿过已展开组合边界的数据边改写到内部节点，结构依赖边则丢弃。
+
+    参数：``edges`` 是导入图中的候选边，``inlined_invocations`` 是将被写成内联
+    源码的组合调用，其余映射提供节点和目录。返回：端点已投影到内部动作的边。
+    异常：数据边无法唯一投影时抛出 ``AuthoringGraphError``。
+    """
+
+    rewritten: list[dict[str, Any]] = []
+    for edge in edges:
+        if not isinstance(edge, Mapping):
+            raise AuthoringGraphError("candidate_invalid", "候选边必须是对象")
+        source_uuid = str(edge.get("source_node_uuid"))
+        source_handle = str(edge.get("source_handle_uuid"))
+        target_uuid = str(edge.get("target_node_uuid"))
+        target_handle = str(edge.get("target_handle_uuid"))
+        if source_uuid in inlined_invocations:
+            remapped = _remap_inlined_source(all_nodes[source_uuid], source_handle)
+            if remapped is None:
+                if _is_data_parameter_handle(
+                    catalog_by_node.get(source_uuid),
+                    source_handle,
+                ):
+                    raise AuthoringGraphError(
+                        "candidate_invalid",
+                        "内联组合输出无法唯一投影到内部节点",
+                    )
+                continue
+            source_uuid, source_handle = remapped
+        if target_uuid in inlined_invocations:
+            targets = _remap_inlined_targets(all_nodes[target_uuid], target_handle)
+            if not targets:
+                if _is_data_parameter_handle(
+                    catalog_by_node.get(target_uuid),
+                    target_handle,
+                ):
+                    raise AuthoringGraphError(
+                        "candidate_invalid",
+                        "内联组合入参无法投影到内部节点",
+                    )
+                continue
+            for child_uuid, child_handle in targets:
+                rewritten.append(
+                    {
+                        **dict(edge),
+                        "source_node_uuid": source_uuid,
+                        "source_handle_uuid": source_handle,
+                        "target_node_uuid": child_uuid,
+                        "target_handle_uuid": child_handle,
+                    }
+                )
+            continue
+        rewritten.append(
+            {
+                **dict(edge),
+                "source_node_uuid": source_uuid,
+                "source_handle_uuid": source_handle,
+            }
+        )
+    return rewritten
+
+
+def _allocate_result_name(
+    node: Mapping[str, Any],
+    *,
+    result_names: set[str],
+    result_name_by_uuid: dict[str, str],
+    uniquify: bool,
+) -> str:
+    """分配节点 Python 结果变量；内联组合时允许为冲突名追加稳定后缀。"""
+
+    node_uuid = str(node["uuid"])
+    existing = result_name_by_uuid.get(node_uuid)
+    if existing is not None:
+        return existing
+    name = _node_result_name(node)
+    if name in result_names:
+        if not uniquify:
+            raise AuthoringGraphError("candidate_invalid", "节点作者结果变量重复")
+        suffix = node_uuid.replace("-", "")[:8]
+        candidate = _safe_identifier(f"{name}_{suffix}", fallback="result")
+        extra = 2
+        while candidate in result_names:
+            candidate = _safe_identifier(
+                f"{name}_{suffix}_{extra}",
+                fallback="result",
+            )
+            extra += 1
+        name = candidate
+    result_names.add(name)
+    result_name_by_uuid[node_uuid] = name
+    return name
+
+
+def _python_result_name(
+    node: Mapping[str, Any],
+    result_name_by_uuid: Mapping[str, str] | None,
+) -> str:
+    """读取已分配或原始的节点结果变量名。"""
+
+    node_uuid = str(node["uuid"])
+    if result_name_by_uuid and node_uuid in result_name_by_uuid:
+        return result_name_by_uuid[node_uuid]
+    return _node_result_name(node)
+
+
+def _binding_var_names(
+    params: Mapping[str, Any] | None,
+    *,
+    node_by_uuid: Mapping[str, dict[str, Any]],
+    result_name_by_uuid: Mapping[str, str] | None,
+) -> dict[str, str]:
+    """把控制区域 bindings 的逻辑名映射到实际 Python 结果变量。"""
+
+    if not isinstance(params, Mapping):
+        return {}
+    bindings = params.get("bindings")
+    if not isinstance(bindings, Mapping):
+        return {}
+    names: dict[str, str] = {}
+    for key, binding in bindings.items():
+        if not isinstance(binding, Mapping) or binding.get("kind") != "node_result":
+            continue
+        source_uuid = str(binding.get("node_uuid") or "")
+        source = node_by_uuid.get(source_uuid)
+        if source is None:
+            continue
+        names[str(key)] = _python_result_name(source, result_name_by_uuid)
+    return names
+
+
+def _expanded_composite_children(
+    parent_uuid: str,
+    nodes: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """返回已展开组合调用的直接子节点，并按作者源码顺序排列。
+
+    参数：``parent_uuid`` 是组合调用节点身份，``nodes`` 是完整候选节点索引。
+    返回：直接子节点列表；没有展开子图时为空。异常：子节点缺少合法源码顺序时
+    抛出 ``AuthoringGraphError``。
+    """
+
+    children = [
+        dict(node)
+        for node in nodes.values()
+        if node.get("parent_uuid") == parent_uuid
+    ]
+    return sorted(children, key=_composite_child_source_order)
+
+
+def _composite_child_source_order(node: Mapping[str, Any]) -> int:
+    """读取组合子树内节点的作者源码顺序。"""
+
+    unilab = (node.get("meta_data") or {}).get("unilab", {})
+    value = (
+        unilab.get("authoring_source_order") if isinstance(unilab, Mapping) else None
+    )
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AuthoringGraphError(
+            "candidate_invalid",
+            "已展开组合子节点缺少作者源码顺序",
+        )
+    return value
+
+
+def _append_expanded_composite_source(
+    *,
+    node: Mapping[str, Any],
+    indent_level: int,
+    lines: list[str],
+    source_map: list[dict[str, Any]],
+    result_names: set[str],
+    material_sources: Mapping[str, RenderedMaterialSource],
+    incoming: Mapping[tuple[str, str], tuple[str, str]],
+    all_nodes: Mapping[str, dict[str, Any]],
+    all_catalog: Mapping[str, AuthoringCatalogAction],
+    device_symbols: Mapping[tuple[str, str | None], str],
+    inline_expanded_composites: bool = False,
+    result_name_by_uuid: dict[str, str] | None = None,
+) -> None:
+    """把已展开组合调用写成内部条件、循环或动作源码，而不是 ``workflow()``。
+
+    参数：``node`` 是带完整子图的组合调用；其余收集器与目录映射与普通节点生成
+    相同。返回：无。异常：子树缺少节点、顺序或控制结构非法时抛出
+    ``AuthoringGraphError``。
+    """
+
+    children = _expanded_composite_children(str(node["uuid"]), all_nodes)
+    if not children:
+        raise AuthoringGraphError(
+            "candidate_invalid",
+            "已展开的组合调用缺少可内联的子节点",
+        )
+    rendered_parallel_scopes: set[str] = set()
+    for child in children:
+        child_uuid = str(child["uuid"])
+        child_action = all_catalog[child_uuid]
+        if _is_published_workflow(child_action) and _expanded_composite_children(
+            child_uuid, all_nodes
+        ):
+            _append_expanded_composite_source(
+                node=child,
+                indent_level=indent_level,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                all_nodes=all_nodes,
+                all_catalog=all_catalog,
+                device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
+            )
+            continue
+        if _is_condition(child_action):
+            _append_condition_source(
+                node=child,
+                indent_level=indent_level,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=all_nodes,
+                catalog_by_node=all_catalog,
+                device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
+            )
+            continue
+        if _is_repeat_until(child_action):
+            _append_repeat_until_source(
+                node=child,
+                indent_level=indent_level,
+                lines=lines,
+                source_map=source_map,
+                result_names=result_names,
+                material_sources=material_sources,
+                incoming=incoming,
+                node_by_uuid=all_nodes,
+                catalog_by_node=all_catalog,
+                device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
+            )
+            continue
+        if _is_group(child_action):
+            scope = _parallel_scope(child)
+            if scope is not None:
+                if scope in rendered_parallel_scopes:
+                    continue
+                rendered_parallel_scopes.add(scope)
+                indent = "    " * indent_level
+                lines.append(f"{indent}with parallel():")
+                scope_groups = sorted(
+                    (
+                        candidate
+                        for candidate in all_nodes.values()
+                        if candidate.get("parent_uuid") == node.get("uuid")
+                        and _is_group(all_catalog[str(candidate["uuid"])])
+                        and _parallel_scope(candidate) == scope
+                    ),
+                    key=_parallel_order,
+                )
+                for group_node in scope_groups:
+                    _append_group_source(
+                        node=group_node,
+                        indent_level=indent_level + 1,
+                        lines=lines,
+                        source_map=source_map,
+                        action=all_catalog[str(group_node["uuid"])],
+                    )
+                    for grouped_child in all_nodes.values():
+                        if grouped_child.get("parent_uuid") != str(group_node["uuid"]):
+                            continue
+                        _append_action_source(
+                            node=grouped_child,
+                            indent_level=indent_level + 2,
+                            lines=lines,
+                            source_map=source_map,
+                            result_names=result_names,
+                            material_sources=material_sources,
+                            incoming=incoming,
+                            node_by_uuid=all_nodes,
+                            catalog_by_node=all_catalog,
+                            device_symbols=device_symbols,
+                            inline_expanded_composites=inline_expanded_composites,
+                            result_name_by_uuid=result_name_by_uuid,
+                        )
+                continue
+            _append_group_source(
+                node=child,
+                indent_level=indent_level,
+                lines=lines,
+                source_map=source_map,
+                action=child_action,
+            )
+            for grouped_child in all_nodes.values():
+                if grouped_child.get("parent_uuid") != child_uuid:
+                    continue
+                _append_action_source(
+                    node=grouped_child,
+                    indent_level=indent_level + 1,
+                    lines=lines,
+                    source_map=source_map,
+                    result_names=result_names,
+                    material_sources=material_sources,
+                    incoming=incoming,
+                    node_by_uuid=all_nodes,
+                    catalog_by_node=all_catalog,
+                    device_symbols=device_symbols,
+                    inline_expanded_composites=inline_expanded_composites,
+                    result_name_by_uuid=result_name_by_uuid,
+                )
+            continue
+        _append_action_source(
+            node=child,
+            indent_level=indent_level,
+            lines=lines,
+            source_map=source_map,
+            result_names=result_names,
+            material_sources=material_sources,
+            incoming=incoming,
+            node_by_uuid=all_nodes,
+            catalog_by_node=all_catalog,
+            device_symbols=device_symbols,
+            inline_expanded_composites=inline_expanded_composites,
+            result_name_by_uuid=result_name_by_uuid,
+        )
+
+
 def _append_condition_source(
     *,
     node: Mapping[str, Any],
@@ -753,6 +1303,8 @@ def _append_condition_source(
     node_by_uuid: Mapping[str, dict[str, Any]],
     catalog_by_node: Mapping[str, AuthoringCatalogAction],
     device_symbols: Mapping[tuple[str, str | None], str],
+    inline_expanded_composites: bool = False,
+    result_name_by_uuid: dict[str, str] | None = None,
 ) -> None:
     """把条件区域及其直接动作分支确定性写回原生 Python。"""
 
@@ -782,15 +1334,20 @@ def _append_condition_source(
             raise AuthoringGraphError("candidate_invalid", "条件分支必须是对象")
         label = branch.get("label")
         condition = branch.get("condition")
+        var_names = _binding_var_names(
+            params if isinstance(params, Mapping) else None,
+            node_by_uuid=node_by_uuid,
+            result_name_by_uuid=result_name_by_uuid,
+        )
         if index == 0 and label == "if" and isinstance(condition, Mapping):
             header = (
                 "if "
-                f"{_render_condition_expression(condition, node_by_uuid=node_by_uuid)}:"
+                f"{_render_condition_expression(condition, node_by_uuid=node_by_uuid, var_names=var_names)}:"
             )
         elif label == f"elif{index - 1}" and isinstance(condition, Mapping):
             header = (
                 "elif "
-                f"{_render_condition_expression(condition, node_by_uuid=node_by_uuid)}:"
+                f"{_render_condition_expression(condition, node_by_uuid=node_by_uuid, var_names=var_names)}:"
             )
         elif index == len(branches) - 1 and label == "else" and condition is None:
             header = "else:"
@@ -824,6 +1381,8 @@ def _append_condition_source(
                     node_by_uuid=node_by_uuid,
                     catalog_by_node=catalog_by_node,
                     device_symbols=device_symbols,
+                    inline_expanded_composites=inline_expanded_composites,
+                    result_name_by_uuid=result_name_by_uuid,
                 )
             elif _is_repeat_until(child_action):
                 _append_repeat_until_source(
@@ -837,6 +1396,8 @@ def _append_condition_source(
                     node_by_uuid=node_by_uuid,
                     catalog_by_node=catalog_by_node,
                     device_symbols=device_symbols,
+                    inline_expanded_composites=inline_expanded_composites,
+                    result_name_by_uuid=result_name_by_uuid,
                 )
             else:
                 _append_action_source(
@@ -850,6 +1411,8 @@ def _append_condition_source(
                     node_by_uuid=node_by_uuid,
                     catalog_by_node=catalog_by_node,
                     device_symbols=device_symbols,
+                    inline_expanded_composites=inline_expanded_composites,
+                    result_name_by_uuid=result_name_by_uuid,
                 )
 
 
@@ -865,6 +1428,8 @@ def _append_repeat_until_source(
     node_by_uuid: Mapping[str, dict[str, Any]],
     catalog_by_node: Mapping[str, AuthoringCatalogAction],
     device_symbols: Mapping[tuple[str, str | None], str],
+    inline_expanded_composites: bool = False,
+    result_name_by_uuid: dict[str, str] | None = None,
 ) -> None:
     """把冻结 RepeatUntil 区域确定性写回 carry/next Python 语法。"""
 
@@ -904,7 +1469,7 @@ def _append_repeat_until_source(
     lines.append(f"{indent}    max_iterations={maximum},")
     carry_parts = [
         f"{json.dumps(str(name), ensure_ascii=False)}: "
-        f"{_render_repeat_binding(binding, node_by_uuid=node_by_uuid)}"
+        f"{_render_repeat_binding(binding, node_by_uuid=node_by_uuid, result_name_by_uuid=result_name_by_uuid)}"
         for name, binding in initial_carry.items()
     ]
     lines.append(f"{indent}    carry={{{', '.join(carry_parts)}}},")
@@ -984,6 +1549,8 @@ def _append_repeat_until_source(
                         node_by_uuid=node_by_uuid,
                         catalog_by_node=catalog_by_node,
                         device_symbols=device_symbols,
+                        inline_expanded_composites=inline_expanded_composites,
+                        result_name_by_uuid=result_name_by_uuid,
                     )
         elif _is_condition(child_action):
             _append_condition_source(
@@ -997,6 +1564,8 @@ def _append_repeat_until_source(
                 node_by_uuid=node_by_uuid,
                 catalog_by_node=catalog_by_node,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
         elif _is_repeat_until(child_action):
             _append_repeat_until_source(
@@ -1010,6 +1579,8 @@ def _append_repeat_until_source(
                 node_by_uuid=node_by_uuid,
                 catalog_by_node=catalog_by_node,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
         else:
             _append_action_source(
@@ -1023,15 +1594,17 @@ def _append_repeat_until_source(
                 node_by_uuid=node_by_uuid,
                 catalog_by_node=catalog_by_node,
                 device_symbols=device_symbols,
+                inline_expanded_composites=inline_expanded_composites,
+                result_name_by_uuid=result_name_by_uuid,
             )
     next_parts = [
-        f"{name}={_render_repeat_binding(binding, node_by_uuid=node_by_uuid)}"
+        f"{name}={_render_repeat_binding(binding, node_by_uuid=node_by_uuid, result_name_by_uuid=result_name_by_uuid)}"
         for name, binding in next_carry.items()
     ]
     lines.append(f"{child_indent}{loop_variable}.next({', '.join(next_parts)})")
     lines.append(
         f"{child_indent}until("
-        f"{_render_condition_expression(until_expression, node_by_uuid=node_by_uuid)})"
+        f"{_render_condition_expression(until_expression, node_by_uuid=node_by_uuid, var_names=_binding_var_names(params, node_by_uuid=node_by_uuid, result_name_by_uuid=result_name_by_uuid))})"
     )
 
 
@@ -1039,6 +1612,7 @@ def _render_repeat_binding(
     value: Any,
     *,
     node_by_uuid: Mapping[str, dict[str, Any]],
+    result_name_by_uuid: Mapping[str, str] | None = None,
 ) -> str:
     """渲染冻结的初始或下一轮 carry 来源。"""
 
@@ -1054,7 +1628,7 @@ def _render_repeat_binding(
         path = value.get("result_path")
         if source is None or not isinstance(path, list) or not path:
             raise AuthoringGraphError("candidate_invalid", "循环节点结果来源无效")
-        expression = _node_result_name(source)
+        expression = _python_result_name(source, result_name_by_uuid)
         for part in path:
             expression += f".{_safe_identifier(str(part), fallback='invalid')}"
         return expression
@@ -1080,13 +1654,17 @@ def _render_condition_expression(
     value: Mapping[str, Any],
     *,
     node_by_uuid: Mapping[str, dict[str, Any]] | None = None,
+    var_names: Mapping[str, str] | None = None,
 ) -> str:
     """把封闭结构化表达式无损渲染为 Python 条件表达式。"""
 
     if set(value) == {"lit"}:
         return repr(value["lit"])
     if set(value) == {"var"}:
-        return _safe_identifier(str(value["var"]), fallback="invalid")
+        raw = str(value["var"])
+        if var_names and raw in var_names:
+            return var_names[raw]
+        return _safe_identifier(raw, fallback="invalid")
     if set(value) == {"carry", "control_region_uuid"} and node_by_uuid is not None:
         region = node_by_uuid.get(str(value["control_region_uuid"]))
         params = region.get("param") if isinstance(region, Mapping) else None
@@ -1099,7 +1677,7 @@ def _render_condition_expression(
     if set(value) == {"field", "name"} and isinstance(value["field"], Mapping):
         name = _safe_identifier(str(value["name"]), fallback="invalid")
         return (
-            f"{_render_condition_expression(value['field'], node_by_uuid=node_by_uuid)}"
+            f"{_render_condition_expression(value['field'], node_by_uuid=node_by_uuid, var_names=var_names)}"
             f".{name}"
         )
     if (
@@ -1108,8 +1686,8 @@ def _render_condition_expression(
         and isinstance(value["key"], Mapping)
     ):
         return (
-            f"{_render_condition_expression(value['index'], node_by_uuid=node_by_uuid)}"
-            f"[{_render_condition_expression(value['key'], node_by_uuid=node_by_uuid)}]"
+            f"{_render_condition_expression(value['index'], node_by_uuid=node_by_uuid, var_names=var_names)}"
+            f"[{_render_condition_expression(value['key'], node_by_uuid=node_by_uuid, var_names=var_names)}]"
         )
     if (
         set(value) == {"binop", "left", "right"}
@@ -1135,19 +1713,19 @@ def _render_condition_expression(
         }:
             raise AuthoringGraphError("candidate_invalid", "条件二元运算符无效")
         return (
-            f"({_render_condition_expression(value['left'], node_by_uuid=node_by_uuid)} "
+            f"({_render_condition_expression(value['left'], node_by_uuid=node_by_uuid, var_names=var_names)} "
             f"{operator_name} "
-            f"{_render_condition_expression(value['right'], node_by_uuid=node_by_uuid)})"
+            f"{_render_condition_expression(value['right'], node_by_uuid=node_by_uuid, var_names=var_names)})"
         )
     if set(value) == {"unop", "operand"} and isinstance(value["operand"], Mapping):
         operator_name = str(value["unop"])
         if operator_name == "not":
             return (
                 "not "
-                f"{_render_condition_expression(value['operand'], node_by_uuid=node_by_uuid)}"
+                f"{_render_condition_expression(value['operand'], node_by_uuid=node_by_uuid, var_names=var_names)}"
             )
         if operator_name == "neg":
-            return f"-{_render_condition_expression(value['operand'], node_by_uuid=node_by_uuid)}"
+            return f"-{_render_condition_expression(value['operand'], node_by_uuid=node_by_uuid, var_names=var_names)}"
         raise AuthoringGraphError("candidate_invalid", "条件一元运算符无效")
     if set(value) == {"call", "args"} and isinstance(value["args"], list):
         name = str(value["call"])
@@ -1156,7 +1734,11 @@ def _render_condition_expression(
         if any(not isinstance(argument, Mapping) for argument in value["args"]):
             raise AuthoringGraphError("candidate_invalid", "条件函数参数无效")
         arguments = ", ".join(
-            _render_condition_expression(argument, node_by_uuid=node_by_uuid)
+            _render_condition_expression(
+                argument,
+                node_by_uuid=node_by_uuid,
+                var_names=var_names,
+            )
             for argument in value["args"]
         )
         return f"{name}({arguments})"
@@ -1796,6 +2378,7 @@ def _render_action_arguments(
     incoming: Mapping[tuple[str, str], tuple[str, str]],
     node_by_uuid: Mapping[str, dict[str, Any]],
     catalog_by_node: Mapping[str, AuthoringCatalogAction],
+    result_name_by_uuid: Mapping[str, str] | None = None,
 ) -> list[str]:
     """渲染一个动作（Action）调用的确定性命名参数。
 
@@ -1952,7 +2535,7 @@ def _render_action_arguments(
                 )
             # ``source_name`` 是源节点冻结的作者结果变量；只有物料来源
             # （MaterialSource）唯一输出直接引用变量本身，普通动作引用具名结果。
-            source_name = _node_result_name(source_node)
+            source_name = _python_result_name(source_node, result_name_by_uuid)
             expression = (
                 source_name
                 if _is_material_source(source_action)
@@ -1972,11 +2555,15 @@ def _render_output_binding(
     binding: Any,
     node_by_uuid: Mapping[str, dict[str, Any]],
     catalog_by_node: Mapping[str, AuthoringCatalogAction],
+    *,
+    result_name_by_uuid: Mapping[str, str] | None = None,
+    inlined_invocations: set[str] | None = None,
 ) -> str:
     """渲染一个工作流输出表达式。
 
     参数说明：``binding`` 是保留元数据中的输出绑定，另两个索引解析节点结果；
-    返回 Python 表达式，非法身份失败关闭。
+    ``result_name_by_uuid`` 是内联去重后的实际变量名；``inlined_invocations``
+    把组合调用输出投影到内部完成来源。返回 Python 表达式，非法身份失败关闭。
     """
 
     if not isinstance(binding, Mapping):
@@ -1990,6 +2577,14 @@ def _render_output_binding(
         raise AuthoringGraphError("candidate_invalid", "未知工作流输出绑定类型")
     node_uuid = validate_uuid(binding.get("workflow_node_uuid"))
     handle_uuid = validate_uuid(binding.get("source_handle_uuid"))
+    if inlined_invocations and node_uuid in inlined_invocations:
+        remapped = _remap_inlined_source(node_by_uuid[node_uuid], handle_uuid)
+        if remapped is None:
+            raise AuthoringGraphError(
+                "candidate_invalid",
+                "内联组合输出无法唯一投影到内部节点",
+            )
+        node_uuid, handle_uuid = remapped
     node = node_by_uuid[node_uuid]
     action = catalog_by_node[node_uuid]
     handle = next(
@@ -1998,7 +2593,7 @@ def _render_output_binding(
     )
     if handle is None or handle.get("io_type") != "source":
         raise AuthoringGraphError("candidate_invalid", "工作流输出连接点无效")
-    result_name = _node_result_name(node)
+    result_name = _python_result_name(node, result_name_by_uuid)
     if _is_material_source(action) and handle.get("handle_key") == "material":
         return result_name
     return f"{result_name}.{handle['handle_key']}"
