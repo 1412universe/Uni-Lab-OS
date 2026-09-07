@@ -996,3 +996,28 @@ def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
         assert authority.store.job(payload["job_id"])["status"] == "unknown"
     finally:
         authority.stop()
+
+
+def test_fail_restarted_jobs_clears_unknown_busy_key(tmp_path: Path) -> None:
+    """工作流已失败后，Edge 账本须把 unknown 作业收成 failed 并释放忙碌键。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    try:
+        authority.dispatch(payload)
+        command = authority.store.pending_commands()[0]
+        authority.store.acknowledge_command(command["message_uuid"])
+        authority.store.mark_disconnected_jobs_unknown()
+        assert authority.store.job(payload["job_id"])["status"] == "unknown"
+        assert authority.busy_device_action_keys() == {
+            f"/devices/{payload['device_id']}/{payload['action']}"
+        }
+
+        failed = authority.fail_restarted_jobs((payload["job_id"],))
+
+        assert failed == [payload["job_id"]]
+        assert authority.store.job(payload["job_id"])["status"] == "failed"
+        assert authority.busy_device_action_keys() == set()
+        assert authority.fail_restarted_jobs((payload["job_id"],)) == []
+    finally:
+        authority.stop()

@@ -112,9 +112,17 @@ class CallbackDispatcher:
 class RecordingDispatcher:
     def __init__(self) -> None:
         self.dispatched: List[DispatchPayload] = []
+        self.failed_restarted_jobs: List[str] = []
 
     def dispatch(self, payload: DispatchPayload) -> None:
         self.dispatched.append(payload)
+
+    def fail_restarted_jobs(self, job_uuids: tuple[str, ...] | list[str]) -> list[str]:
+        """记录工作流失败后要求 Edge 账本收口的重启作业。"""
+
+        recorded = [str(job_uuid) for job_uuid in job_uuids]
+        self.failed_restarted_jobs.extend(recorded)
+        return recorded
 
     def cancel(
         self,

@@ -786,6 +786,19 @@ class EdgeScheduler:
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
 
+    def fail_restarted_jobs(self, job_uuids: Sequence[str]) -> list[str]:
+        """工作流已失败并释放锁后，把 Edge 账本中的重启占用收成 failed。
+
+        参数：``job_uuids`` 是工作流侧已经失败的作业。返回：执行器实际收口的
+        作业身份；没有 Edge 账本能力时为空列表。异常：执行器收口故障原样传播。
+        """
+
+        method = getattr(self._dispatcher, "fail_restarted_jobs", None)
+        if not callable(method):
+            return []
+        failed = method(tuple(str(job_uuid) for job_uuid in job_uuids))
+        return list(failed or [])
+
     def replay_persisted_edge_projections(
         self,
         *,

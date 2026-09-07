@@ -110,6 +110,12 @@ def test_manual_confirmation_reject_uses_task_cancel_without_device_dispatch(
     assert decided_job["error_info"][0]["code"] == "manual_confirmation_rejected"
     assert core_runtime.dispatcher.dispatched == []
     assert core_runtime.dispatcher.cancel_requests == []
+    assert core_runtime.inventory_store.query_all(
+        "SELECT state FROM station_execution_claim"
+    ) == [{"state": "released"}]
+    assert core_runtime.inventory_store.query_all(
+        "SELECT DISTINCT state FROM station_execution_lock_lease"
+    ) == [{"state": "released"}]
 
 
 def test_external_task_cancel_closes_confirmation_and_releases_resources(
