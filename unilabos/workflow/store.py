@@ -192,6 +192,55 @@ class StoreAuthoringConflict(StoreConflict):
         self.code = code
 
 
+# JSON 导入和公共 Graph PUT 创建新节点时允许穿过保留元数据保护的创作语义。
+# 执行器绑定仍由服务端维护；组合展开元数据必须随导出图导入，否则嵌套
+# 条件/循环的边界映射和必填 Handle 会在图校验阶段失败。
+_PUBLIC_CREATE_UNILAB_OBJECT_FIELDS = frozenset(
+    {
+        "input_bindings",
+        "carry_bindings",
+        "resource_refs",
+        "site_group_bindings",
+        "composite",
+    }
+)
+_PUBLIC_CREATE_UNILAB_SCALAR_FIELDS = frozenset(
+    {
+        "control_region_kind",
+        "authoring_result_name",
+        "presentation_group",
+        "parallel_scope",
+        "parallel_order",
+    }
+)
+
+
+def _public_create_unilab(submitted_unilab: Mapping[str, Any]) -> Dict[str, Any]:
+    """从新节点提交中取出允许写入的创作语义 ``unilab`` 字段。
+
+    参数：``submitted_unilab`` 是调用方提交的节点 ``meta_data.unilab``。
+    返回：可写入权威图的公开子集；没有合法字段时为空对象。异常：无。
+    """
+
+    public_unilab: Dict[str, Any] = {}
+    for field in _PUBLIC_CREATE_UNILAB_OBJECT_FIELDS:
+        value = submitted_unilab.get(field)
+        if isinstance(value, Mapping):
+            public_unilab[field] = deepcopy(dict(value))
+    for field in _PUBLIC_CREATE_UNILAB_SCALAR_FIELDS:
+        if field not in submitted_unilab:
+            continue
+        public_unilab[field] = deepcopy(submitted_unilab[field])
+    source_order = submitted_unilab.get("authoring_source_order")
+    if (
+        isinstance(source_order, int)
+        and not isinstance(source_order, bool)
+        and source_order >= 0
+    ):
+        public_unilab["authoring_source_order"] = source_order
+    return public_unilab
+
+
 class TemplateSnapshotProvider(Protocol):
     """提供最近一次完整设备与动作内存目录的窄接口。"""
 
@@ -840,8 +889,9 @@ class WorkflowStore:
         已使用新身份重建引用；
         ``node_templates``/``handle_templates`` 是 AST 编译候选实际引用的目录子集，
         与工作流图在同一事务内校验或投影；``trusted_authoring_graph`` 只允许 AST
-        编译器生成的图保留系统创作元数据，普通复制和旧版导入仍禁止提交
-        ``meta_data.unilab``。
+        编译器生成的图保留系统创作元数据；普通复制和旧版导入仍禁止提交
+        执行器绑定，但可写入输入绑定、循环 carry、控制区域和组合调用边界等
+        创作语义。
         返回修订为 1 的完整图；任何身份、模板或图语义错误都会回滚工作流主记录，
         因此复制/导入不会留下空壳工作流。
         """
@@ -1479,8 +1529,8 @@ class WorkflowStore:
         """事务性保存完整工作流图并返回最新投影。
 
         参数说明：`revision` 是乐观并发版本；`nodes/edges` 是完整替换集合；
-        `protect_reserved_metadata` 保护服务端元数据；
-        `validate_workflow_io_contract` 决定是否启用严格公共输入/输出合同。
+        `protect_reserved_metadata` 保护服务端元数据，但 JSON 导入可写入组合
+        调用边界；`validate_workflow_io_contract` 决定是否启用严格公共输入/输出合同。
         """
 
         with self.transaction() as conn:
@@ -2036,8 +2086,9 @@ class WorkflowStore:
         参数：``submitted`` 是调用方提交的节点元数据，``existing_json`` 是同一
         节点原有的 JSON；``enabled`` 为真表示公共 Graph 接口。返回：公开字段与
         已有系统元数据合并后的对象。异常：非法 JSON 由上层统一转换。公共调用只
-        接受非负整数 ``authoring_source_order`` 作为新节点的创建顺序，其余
-        ``unilab`` 字段仍由服务端保留，避免客户端伪造执行绑定或目录事实。
+        接受非负整数 ``authoring_source_order`` 作为新节点的创建顺序，并允许
+        输入绑定、循环 carry、控制区域和组合调用边界等创作语义穿过保护边界；
+        执行器绑定仍由服务端保留，避免客户端伪造目录事实。
         """
 
         result = dict(submitted)
@@ -2059,22 +2110,13 @@ class WorkflowStore:
                     protected_unilab["input_bindings"] = deepcopy(input_bindings)
             result["unilab"] = protected_unilab
             return result
-        # 完整 Graph PUT 由前端一次性提交新控制节点，公共接口不能依赖逐节点
-        # POST 的服务端顺序分配。只允许这一项创建顺序穿过保护边界；执行器绑定、
-        # 组合调用等系统事实仍不可由客户端写入。
+        # 完整 Graph PUT / JSON 导入会一次性提交新控制节点。允许输入绑定、
+        # 循环 carry、条件/循环区域标记和组合调用边界等创作语义穿过保护边界，
+        # 否则导入后无法生成规范 Python；执行器绑定仍不可由客户端写入。
         if isinstance(submitted_unilab, Mapping):
-            input_bindings = submitted_unilab.get("input_bindings")
-            if isinstance(input_bindings, Mapping):
-                result["unilab"] = {
-                    "input_bindings": deepcopy(dict(input_bindings)),
-                }
-            source_order = submitted_unilab.get("authoring_source_order")
-            if (
-                isinstance(source_order, int)
-                and not isinstance(source_order, bool)
-                and source_order >= 0
-            ):
-                result.setdefault("unilab", {})["authoring_source_order"] = source_order
+            public_unilab = _public_create_unilab(submitted_unilab)
+            if public_unilab:
+                result["unilab"] = public_unilab
         return result
 
     @staticmethod
@@ -4296,6 +4338,15 @@ class WorkflowStore:
             for key, value in candidate.items()
             if key not in ignored and value is not None
         }
+        # 模板 schema 在 SQLite 中以文本列存储，而创作目录快照携带 JSON
+        # 对象；比较前按同一 JSON 语义解码，避免仅因表示形态不同拒绝候选。
+        for semantic in (persisted_semantic, candidate_semantic):
+            schema = semantic.get("schema")
+            if isinstance(schema, str):
+                try:
+                    semantic["schema"] = _load(schema, schema)
+                except (TypeError, ValueError):
+                    pass
         return _json(persisted_semantic) == _json(candidate_semantic)
 
     @staticmethod

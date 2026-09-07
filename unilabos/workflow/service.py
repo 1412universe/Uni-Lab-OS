@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
@@ -11,7 +12,6 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from copy import deepcopy
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -39,7 +39,6 @@ from unilabos.workflow.candidate_validation import (
 )
 from unilabos.workflow.catalog_dependent_authoring_refresh import (
     CatalogAuthoringGenerationTracker,
-    refresh_catalog_dependent_authoring,
 )
 from unilabos.workflow.composite_contract_refresh import (
     CompositeContractRefreshPending,
@@ -48,6 +47,8 @@ from unilabos.workflow.composite_contract_refresh import (
 )
 from unilabos.workflow.composite_invocation import (
     CompositeInvocationInvalid,
+    _remap_control_references,
+    _remap_nested_composite_metadata,
     expand_composite_invocation,
 )
 from unilabos.workflow.definition_edit import (
@@ -2952,6 +2953,17 @@ class WorkflowService:
                     ) from None
                 old_to_new[old_uuid] = node["uuid"]
                 nodes.append(node)
+            # JSON 导入会为每个节点重建身份；控制区域参数和嵌套组合元数据中
+            # 的节点引用也必须同步重映射，否则候选图校验会看到已不存在的旧 UUID。
+            for node in nodes:
+                node["param"] = _remap_control_references(
+                    node.get("param") or {},
+                    old_to_new,
+                )
+                node["meta_data"] = _remap_nested_composite_metadata(
+                    node.get("meta_data") or {},
+                    old_to_new,
+                )
             for index, source in enumerate(source_nodes):
                 parent_uuid = source.get("parent_uuid")
                 if parent_uuid is not None:
@@ -2999,6 +3011,39 @@ class WorkflowService:
                 meta_data = normalize_json_object(definition.get("meta_data"))
             except (TypeError, ValueError):
                 raise WorkflowDefinitionInvalid("meta_data 必须是 JSON 对象") from None
+            # ``unilab`` 下的输入/输出合同是可编辑的工作流语义，不能和其余
+            # 服务端私有元数据一起丢弃；导入后交给统一提交路径重新固化。
+            unilab_meta_data = meta_data.get("unilab")
+            input_contract = (
+                deepcopy(unilab_meta_data.get("input_contract"))
+                if isinstance(unilab_meta_data, Mapping)
+                and isinstance(unilab_meta_data.get("input_contract"), Mapping)
+                else {"version": 1, "parameters": []}
+            )
+            output_contract = (
+                deepcopy(unilab_meta_data.get("output_contract"))
+                if isinstance(unilab_meta_data, Mapping)
+                and isinstance(unilab_meta_data.get("output_contract"), Mapping)
+                else {"version": 1, "outputs": []}
+            )
+            output_bindings = (
+                deepcopy(unilab_meta_data.get("output_bindings"))
+                if isinstance(unilab_meta_data, Mapping)
+                and isinstance(unilab_meta_data.get("output_bindings"), Mapping)
+                else {}
+            )
+            if "version" not in input_contract:
+                input_contract["version"] = 1
+            if "parameters" not in input_contract:
+                input_contract["parameters"] = []
+            if "version" not in output_contract:
+                output_contract["version"] = 1
+            if "outputs" not in output_contract:
+                output_contract["outputs"] = []
+            output_bindings = _remap_control_references(
+                output_bindings,
+                old_to_new,
+            )
             try:
                 workflow_type = normalize_workflow_type(definition.get("workflow_type"))
             except (TypeError, ValueError):
@@ -3049,6 +3094,10 @@ class WorkflowService:
             nodes=nodes,
             edges=edges,
             workflow_type=workflow_type,
+            input_contract=input_contract,
+            output_contract=output_contract,
+            output_bindings=output_bindings,
+            inline_expanded_composites=True,
         )
 
     def _commit_domain_workflow_creation(
@@ -3064,13 +3113,17 @@ class WorkflowService:
         workflow_type: str,
         input_contract: Mapping[str, Any] | None = None,
         output_contract: Mapping[str, Any] | None = None,
+        output_bindings: Mapping[str, Any] | None = None,
+        inline_expanded_composites: bool = False,
     ) -> dict[str, Any]:
         """在工作流锁内把新定义规范化为首版领域 Python 源码。
 
         参数：``registration`` 固定目标领域包身份和类型目录；其余字段是已规范
-        的根字段、可为空的节点、连线与工作流类型。返回：已发布到领域包并应用
-        的首版完整图。异常：类别引用、模板、编译、来源发布或内存定义提交失败
-        时回滚本次定义、源码和清单，既有领域包内容不受影响。
+        的根字段、可为空的节点、连线与工作流类型；``inline_expanded_composites``
+        只给 JSON 导入使用：先按已发布实验操作保留 ``workflow()`` 调用，只有
+        编译器无法展开时才把已展开子图写成内部控制流。返回：已发布到领域包并
+        应用的首版完整图。异常：类别引用、模板、编译、来源发布或内存定义提交
+        失败时回滚本次定义、源码和清单，既有领域包内容不受影响。
         """
 
         identity = registration.workflow_uuid
@@ -3084,12 +3137,22 @@ class WorkflowService:
                         meta_data=meta_data,
                         tags=tags,
                     )
+                    # 首次写入完整图时也要让图校验看到输入/输出合同；否则带
+                    # workflow_input 或输出绑定的控制图会在尚未生成源码前被
+                    # 当成“合同缺失”拒绝。其余 ``unilab`` 字段仍由后续源码
+                    # 固化步骤统一生成，避免把调用方私有元数据直接写入权威。
+                    creation_meta_data = dict(validated_meta_data)
+                    creation_meta_data["unilab"] = {
+                        "input_contract": deepcopy(dict(input_contract or {})),
+                        "output_contract": deepcopy(dict(output_contract or {})),
+                        "output_bindings": deepcopy(dict(output_bindings or {})),
+                    }
                     created = self._definition_store.create_workflow_with_graph(
                         workflow_uuid=identity,
                         name=name,
                         tags=tags,
                         description=description,
-                        meta_data=validated_meta_data,
+                        meta_data=creation_meta_data,
                         nodes=[
                             WorkflowNodeWrite.model_validate(node) for node in nodes
                         ],
@@ -3099,14 +3162,22 @@ class WorkflowService:
                         workflow_type=workflow_type,
                     )
                 workflow_created = True
-            except (KeyError, TypeError, ValueError, ValidationError):
-                raise WorkflowError("invalid_input") from None
+            except (KeyError, TypeError, ValueError, ValidationError) as error:
+                detail = str(error).strip()
+                raise WorkflowError(
+                    "invalid_input",
+                    message=detail or None,
+                ) from None
             except StoreNotFound:
                 raise WorkflowError("not_found") from None
             except StoreAuthoringConflict as error:
                 raise WorkflowError(error.code) from None
-            except StoreConflict:
-                raise WorkflowError("invalid_input") from None
+            except StoreConflict as error:
+                detail = str(error).strip()
+                raise WorkflowError(
+                    "invalid_input",
+                    message=detail or None,
+                ) from None
 
             try:
                 source_meta_data = dict(created["workflow"].get("meta_data") or {})
@@ -3126,24 +3197,60 @@ class WorkflowService:
                     source_meta_data["unilab"]["output_contract"] = deepcopy(
                         dict(output_contract)
                     )
+                if isinstance(output_bindings, Mapping):
+                    source_meta_data["unilab"]["output_bindings"] = deepcopy(
+                        dict(output_bindings)
+                    )
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
-                try:
-                    compilation = CandidateCompilation.model_validate(
-                        self.compiler.generate_python(
-                            workflow_uuid=identity,
-                            workflow_revision=int(created["workflow"]["revision"]),
-                            graph=source_graph,
-                            source_uri=registration.source_uri,
-                        )
-                    )
-                except Exception:
-                    raise WorkflowError("internal_error") from None
+                # 公共创建会丢掉客户端提交的执行器绑定；导入图里的设备物料
+                # UUID 必须在生成 Python 前写回固定绑定，否则人工确认和设备
+                # 动作无法建成可运行的执行计划。
+                self._bind_imported_fixed_executors(source_graph)
+                # JSON 导入优先保留已展开实验操作为 ``workflow()`` 调用，这样
+                # 测试环境里已发布的子流程可以重新展开；没有展开端口时再摊平。
+                compilation, canonical = self._compile_imported_graph(
+                    workflow_uuid=identity,
+                    workflow_revision=int(created["workflow"]["revision"]),
+                    source_uri=registration.source_uri,
+                    source_graph=source_graph,
+                    inline_expanded_composites=False,
+                )
                 if (
-                    not compilation.valid
+                    inline_expanded_composites
+                    and (
+                        canonical is None
+                        or not canonical.valid
+                        or canonical.graph is None
+                    )
+                ):
+                    compilation, canonical = self._compile_imported_graph(
+                        workflow_uuid=identity,
+                        workflow_revision=int(created["workflow"]["revision"]),
+                        source_uri=registration.source_uri,
+                        source_graph=source_graph,
+                        inline_expanded_composites=True,
+                    )
+                if (
+                    compilation is None
+                    or not compilation.valid
                     or compilation.normalized_python_source is None
                 ):
-                    raise WorkflowError("candidate_invalid")
+                    raise WorkflowError(
+                        "candidate_invalid",
+                        message=self._candidate_error_message(
+                            compilation,
+                            fallback="工作流图不能转换为规范 Python 源码",
+                        ),
+                    )
+                if canonical is None or not canonical.valid or canonical.graph is None:
+                    raise WorkflowError(
+                        "candidate_invalid",
+                        message=self._candidate_error_message(
+                            canonical,
+                            fallback="生成的候选结果不能通过公共工作流校验",
+                        ),
+                    )
                 function_name = self._authoring_function_name_from_source(
                     compilation.normalized_python_source,
                     identity,
@@ -3152,23 +3259,6 @@ class WorkflowService:
                     workflow_uuid=identity,
                     function_name=function_name,
                 )
-
-                # 接口创建或旧 JSON 图先经过公共图校验，再以生成的规范 Python
-                # 重编译；重新创建首版图以带齐作者源码映射，同时保持 revision=1。
-                try:
-                    canonical = CandidateCompilation.model_validate(
-                        self.compiler.compile(
-                            workflow_uuid=identity,
-                            workflow_revision=1,
-                            python_source=compilation.normalized_python_source,
-                            source_uri=registration.source_uri,
-                            applied_graph=source_graph,
-                        )
-                    )
-                except Exception:
-                    raise WorkflowError("internal_error") from None
-                if not canonical.valid or canonical.graph is None:
-                    raise WorkflowError("candidate_invalid")
                 canonical_workflow = canonical.graph["workflow"]
                 canonical_workflow_type = normalize_workflow_type(
                     canonical_workflow.get("workflow_type")
@@ -3479,17 +3569,175 @@ class WorkflowService:
         }
 
     @staticmethod
+    def _candidate_error_message(
+        compilation: CandidateCompilation | None,
+        *,
+        fallback: str,
+    ) -> str:
+        """取出编译诊断中的第一条错误说明，供 JSON 导入返回可行动消息。"""
+
+        diagnostics = (
+            compilation.diagnostics
+            if compilation is not None and isinstance(compilation.diagnostics, list)
+            else []
+        )
+        diagnostic = next(
+            (
+                item
+                for item in diagnostics
+                if isinstance(item, Mapping)
+                and str(item.get("severity", "")).lower() == "error"
+                and item.get("message")
+            ),
+            None,
+        )
+        if isinstance(diagnostic, Mapping):
+            return str(diagnostic["message"])
+        return fallback
+
+    def _compile_imported_graph(
+        self,
+        *,
+        workflow_uuid: str,
+        workflow_revision: int,
+        source_uri: str,
+        source_graph: Mapping[str, Any],
+        inline_expanded_composites: bool,
+    ) -> tuple[CandidateCompilation | None, CandidateCompilation | None]:
+        """把导入图画成 Python 并重编译。内联失败时由调用方改走另一条路径。
+
+        参数：``inline_expanded_composites`` 为假时保留 ``workflow()`` 调用；为
+        真时摊平已展开组合并去掉组合父节点后再编译。返回：源码生成结果与重编译
+        结果；源码无效时第二项为 ``None``。异常：编译器抛出未声明错误时转为
+        ``internal_error``。
+        """
+
+        if self.compiler is None:
+            raise WorkflowError("template_catalog_unavailable")
+        try:
+            compilation = CandidateCompilation.model_validate(
+                self.compiler.generate_python(
+                    workflow_uuid=workflow_uuid,
+                    workflow_revision=workflow_revision,
+                    graph=source_graph,
+                    source_uri=source_uri,
+                    inline_expanded_composites=inline_expanded_composites,
+                )
+            )
+        except Exception:
+            raise WorkflowError("internal_error") from None
+        if not compilation.valid or compilation.normalized_python_source is None:
+            return compilation, None
+        applied_graph: Mapping[str, Any] = source_graph
+        if inline_expanded_composites:
+            applied_graph = self._applied_graph_without_inlined_composite_parents(
+                source_graph
+            )
+        try:
+            canonical = CandidateCompilation.model_validate(
+                self.compiler.compile(
+                    workflow_uuid=workflow_uuid,
+                    workflow_revision=1,
+                    python_source=compilation.normalized_python_source,
+                    source_uri=source_uri,
+                    applied_graph=dict(applied_graph),
+                )
+            )
+        except Exception:
+            raise WorkflowError("internal_error") from None
+        return compilation, canonical
+
+    @staticmethod
+    def _applied_graph_without_inlined_composite_parents(
+        graph: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """去掉已内联组合调用节点，避免重编译后留下悬挂的 ``parent_uuid``。
+
+        参数：``graph`` 是 JSON 导入后、生成内联 Python 前的完整候选图。返回：
+        删除已展开的 ``type=workflow`` 组合调用及其相关连线，并把其子节点提升
+        为顶层；未展开的 ``workflow()`` 调用节点会保留。供编译器按源码结构重
+        建父子关系。异常：无。
+        """
+
+        result = deepcopy(dict(graph))
+        nodes = list(result.get("nodes") or [])
+        parent_ids = {
+            str(node.get("uuid"))
+            for node in nodes
+            if isinstance(node, Mapping) and str(node.get("type") or "") == "workflow"
+        }
+        child_parents = {
+            str(node.get("parent_uuid"))
+            for node in nodes
+            if isinstance(node, Mapping) and isinstance(node.get("parent_uuid"), str)
+        }
+        invocation_uuids = parent_ids & child_parents
+        lifted: list[dict[str, Any]] = []
+        for node in nodes:
+            if not isinstance(node, Mapping):
+                continue
+            node_uuid = str(node.get("uuid"))
+            if node_uuid in invocation_uuids:
+                continue
+            lifted_node = dict(node)
+            if lifted_node.get("parent_uuid") in invocation_uuids:
+                lifted_node["parent_uuid"] = None
+            lifted.append(lifted_node)
+        result["nodes"] = lifted
+        result["edges"] = [
+            dict(edge)
+            for edge in result.get("edges") or []
+            if isinstance(edge, Mapping)
+            and str(edge.get("source_node_uuid")) not in invocation_uuids
+            and str(edge.get("target_node_uuid")) not in invocation_uuids
+        ]
+        return result
+
+    @staticmethod
+    def _bind_imported_fixed_executors(graph: dict[str, Any]) -> None:
+        """按导入节点上的设备物料 UUID 写回固定执行器绑定。
+
+        参数：``graph`` 是即将生成 Python 的创作图，会原地补齐
+        ``meta_data.unilab.executor_binding``。返回：无。异常：物料身份不是规范
+        UUID 时跳过该节点，避免把部署业务 ID 写进 ``device()`` 后编译失败。
+        """
+
+        nodes = graph.get("nodes")
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            try:
+                device_id = validate_uuid(str(node.get("material_uuid")))
+            except (TypeError, ValueError):
+                continue
+            meta_data = node.get("meta_data")
+            if not isinstance(meta_data, dict):
+                meta_data = {}
+                node["meta_data"] = meta_data
+            unilab = meta_data.get("unilab")
+            if not isinstance(unilab, dict):
+                unilab = {}
+                meta_data["unilab"] = unilab
+            unilab["executor_binding"] = {
+                "mode": "fixed",
+                "device_id": device_id,
+            }
+
+    @staticmethod
     def _authoring_graph_projection(graph: Mapping[str, Any]) -> dict[str, Any]:
         """把公共读图收敛为创作编译器要求的完整集合。"""
 
         fields = ("workflow", "nodes", "edges", "node_templates", "handle_templates")
         try:
-            return {
+            projection = {
                 **{field: deepcopy(graph[field]) for field in fields},
                 "inventory_requirements": deepcopy(
                     graph.get("inventory_requirements", [])
                 ),
             }
+            return projection
         except (KeyError, TypeError):
             raise WorkflowError("candidate_invalid") from None
 
@@ -6750,24 +6998,11 @@ class WorkflowService:
                 },
                 "authoring": authoring,
             }
-        if not self._workspace_activation_batch:
-            refresh_catalog_dependent_authoring(
-                dependent_workflow_uuids=(
-                    self._composite_dependent_workflow_uuids(workflow_uuid)
-                ),
-                load_authoring=self.get_authoring,
-                reconcile_source=partial(
-                    self.reconcile_registered_source,
-                    force_compile=True,
-                    preserve_author_source=preserve_author_source,
-                ),
-                apply_candidate=partial(
-                    self.apply_authoring,
-                    preserve_author_source=preserve_author_source,
-                ),
-                mutated_workflow_uuid=workflow_uuid,
-                warnings=warnings,
-            )
+        # 引用方父工作流只能在当前子流程发布后刷新。Apply 仅提交子流程的
+        # 编辑候选；如果此处提前重编译并应用父流程，父图会切换到尚未发布的
+        # 子版本，且父子调用节点的合同身份可能被清空。发布路径统一由
+        # ``_refresh_published_contract_dependents`` 按不可变发布合同刷新，
+        # 因此 Apply 阶段不得触发任何依赖方更新。
         return result
 
     def list_events(

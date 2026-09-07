@@ -8,6 +8,9 @@
 """
 
 import json
+import threading
+import time
+import traceback
 
 from unilabos.app.scheduler.dispatch import RecordingDispatcher
 from unilabos.app.scheduler.inventory.domain import MaterialRequirement
@@ -20,6 +23,7 @@ from unilabos.app.scheduler.models import (
     node_from_dict,
     spec_from_dict,
 )
+from unilabos.app.scheduler.monitor import MonitorBus
 from unilabos.app.scheduler.service import EdgeScheduler
 
 
@@ -38,13 +42,45 @@ def _req(lot="", qty=0.0, instance=""):
     return MaterialRequirement(lot_id=lot, quantity=qty, instance_uuid=instance)
 
 
-def _stack(stock=100.0):
-    svc = InventoryService(InventoryStore(":memory:"))
+def _stack(stock=100.0, *, monitor=None):
+    svc = InventoryService(InventoryStore(":memory:"), monitor=monitor)
     if stock > 0:
         svc.inbound_lot("tpl-w", stock, lot_id="lot-1")
     dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(dispatcher=dispatcher, inventory=svc)
+    scheduler = EdgeScheduler(dispatcher=dispatcher, inventory=svc, monitor=monitor)
     return scheduler, dispatcher, svc
+
+
+def _call_with_timeout(function, timeout=3.0):
+    """在子线程跑调度调用，超时视为死锁。"""
+
+    box: dict[str, object] = {}
+
+    def run() -> None:
+        try:
+            box["result"] = function()
+        except Exception:
+            box["error"] = traceback.format_exc()
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    worker.join(timeout)
+    assert not worker.is_alive(), "调度调用超时，可能再次死锁"
+    if "error" in box:
+        raise AssertionError(box["error"])
+    return box["result"]
+
+
+def _wait_state(scheduler, workflow_id, state, timeout=2.0):
+    """等待物料唤醒把工作流推到目标状态。"""
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        snapshot = scheduler.workflow_snapshot(workflow_id)
+        if snapshot and snapshot["state"] == state:
+            return snapshot
+        time.sleep(0.02)
+    raise AssertionError(f"workflow {workflow_id} did not reach {state}")
 
 
 class TestSubmitReserve:
@@ -321,3 +357,148 @@ class TestSpecSerialization:
             ],
         )
         assert list(spec.material_requirements_by_node().keys()) == ["A"]
+
+
+class TestMaterialMonitorWakeup:
+    def test_submit_returns_dispatched_jobs_when_reserve_emits(self):
+        """预留事件不得抢走 submit 等待的那一轮派发结果。"""
+
+        bus = MonitorBus()
+        scheduler, dispatcher, _svc = _stack(monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-monitor-submit",
+            nodes=[
+                _node("A", materials=[_req(lot="lot-1", qty=20.0)]),
+                _node("B", device="dev2", materials=[_req(lot="lot-1", qty=10.0)]),
+            ],
+            edges=[_edge("A", "B")],
+        )
+        result = _call_with_timeout(lambda: scheduler.submit_workflow(spec))
+        assert result["state"] == "running"
+        assert [item["node_id"] for item in result["dispatched"]] == ["A"]
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
+
+    def test_finish_returns_next_dispatch_when_consume_emits(self):
+        """结算事件不得让完成回调等到空的下一轮重排。"""
+
+        bus = MonitorBus()
+        scheduler, dispatcher, _svc = _stack(monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-monitor-finish",
+            nodes=[
+                _node("A", materials=[_req(lot="lot-1", qty=20.0)]),
+                _node("B", device="dev2", materials=[_req(lot="lot-1", qty=10.0)]),
+            ],
+            edges=[_edge("A", "B")],
+        )
+        submitted = _call_with_timeout(lambda: scheduler.submit_workflow(spec))
+        job_id = submitted["dispatched"][0]["job_id"]
+        finished = _call_with_timeout(
+            lambda: scheduler.on_job_finished(job_id, True, {})
+        )
+        assert [item["node_id"] for item in finished["dispatched"]] == ["B"]
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A", "B"]
+
+    def test_inbound_resumes_waiting_workflow_without_manual_reschedule(self):
+        """补料后物料监听必须自动恢复等待中的工作流。"""
+
+        bus = MonitorBus()
+        scheduler, dispatcher, svc = _stack(stock=10.0, monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-monitor-wait",
+            nodes=[_node("A", materials=[_req(lot="lot-1", qty=50.0)])],
+        )
+        result = _call_with_timeout(lambda: scheduler.submit_workflow(spec))
+        assert result["state"] == "waiting_for_material"
+        assert dispatcher.dispatched == []
+        svc.inbound_lot("tpl-w", 100.0, lot_id="lot-1")
+        snapshot = _wait_state(scheduler, "wf-monitor-wait", "running")
+        assert snapshot["state"] == "running"
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
+
+    def test_wake_while_holding_lock_after_emit_does_not_hang(self):
+        """持锁发布物料事件后再等待重排，不得与重排线程互相等待。"""
+
+        bus = MonitorBus()
+        scheduler, _dispatcher, _svc = _stack(monitor=bus)
+
+        def probe():
+            with scheduler._lock:
+                bus.emit("material", "lot.inbound", {"lot_id": "lot-1"})
+                return scheduler._wake_reconcile()
+
+        assert _call_with_timeout(probe, timeout=2.0) == []
+
+    def test_submit_does_not_join_stale_empty_reconcile(self):
+        """无物料提交不得并进已经查过空队列的在途重排。
+
+        生产里物料总线先唤醒一轮空重排后，用户再点运行；若 submit 并进该轮
+        且不标脏，登记后的工作流不会再被派发，看起来像整条流程不通。
+        """
+
+        bus = MonitorBus()
+        scheduler, dispatcher, _svc = _stack(monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-stale-submit",
+            nodes=[_node("A")],
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        rounds = {"count": 0}
+        original_reschedule = scheduler.reschedule
+
+        def delaying_reschedule() -> list[dict[str, object]]:
+            dispatched = original_reschedule()
+            rounds["count"] += 1
+            if rounds["count"] == 1:
+                entered.set()
+                assert release.wait(timeout=2)
+            return dispatched
+
+        scheduler.reschedule = delaying_reschedule  # type: ignore[method-assign]
+        bus.emit("material", "lot.inbound", {"lot_id": "lot-1"})
+        assert entered.wait(timeout=2)
+
+        def release_after_submit_joins() -> None:
+            time.sleep(0.05)
+            release.set()
+
+        threading.Thread(target=release_after_submit_joins, daemon=True).start()
+        result = _call_with_timeout(lambda: scheduler.submit_workflow(spec), timeout=3.0)
+        assert result["state"] == "running"
+        assert [item["node_id"] for item in result["dispatched"]] == ["A"]
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
+
+    def test_inbound_during_in_flight_reconcile_is_not_dropped(self):
+        """重排已经做过等料检查后到达的补料，必须再跑一轮。"""
+
+        bus = MonitorBus()
+        scheduler, dispatcher, svc = _stack(stock=10.0, monitor=bus)
+        spec = WorkflowSpec(
+            workflow_id="wf-monitor-dirty",
+            nodes=[_node("A", materials=[_req(lot="lot-1", qty=50.0)])],
+        )
+        result = _call_with_timeout(lambda: scheduler.submit_workflow(spec))
+        assert result["state"] == "waiting_for_material"
+
+        entered = threading.Event()
+        release = threading.Event()
+        rounds = {"count": 0}
+        original_impl = scheduler._reschedule_impl
+
+        def delaying_impl() -> list[dict[str, object]]:
+            dispatched = original_impl()
+            rounds["count"] += 1
+            if rounds["count"] == 1:
+                entered.set()
+                assert release.wait(timeout=2)
+            return dispatched
+
+        scheduler._reschedule_impl = delaying_impl  # type: ignore[method-assign]
+        bus.emit("material", "lot.inbound", {"lot_id": "lot-1"})
+        assert entered.wait(timeout=2)
+        svc.inbound_lot("tpl-w", 100.0, lot_id="lot-1")
+        release.set()
+        snapshot = _wait_state(scheduler, "wf-monitor-dirty", "running")
+        assert snapshot["state"] == "running"
+        assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
