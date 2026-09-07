@@ -121,6 +121,21 @@ _CONTROL_FLOW_IMPORT_FIXTURE = (
 )
 
 
+class _RecordingAuthoringEngine:
+    """记录 JSON 导入是否先尝试保留 ``workflow()`` 再退回内联。"""
+
+    def __init__(self, inner: WorkflowAuthoringEngine) -> None:
+        self._inner = inner
+        self.inline_flags: list[bool] = []
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def generate_python(self, **kwargs: Any) -> Any:
+        self.inline_flags.append(bool(kwargs.get("inline_expanded_composites")))
+        return self._inner.generate_python(**kwargs)
+
+
 def _control_flow_import_catalog(
     payload: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -693,8 +708,10 @@ def test_legacy_import_accepts_nested_composite_control_flow_json(
 
     payload = json.loads(_CONTROL_FLOW_IMPORT_FIXTURE.read_text(encoding="utf-8"))
     templates, handles = _control_flow_import_catalog(payload)
-    engine = WorkflowAuthoringEngine(
-        catalog=AuthoringCatalogSnapshot.from_entities(templates, handles)
+    engine = _RecordingAuthoringEngine(
+        WorkflowAuthoringEngine(
+            catalog=AuthoringCatalogSnapshot.from_entities(templates, handles)
+        )
     )
     selected_root = tmp_path / "domain"
     _empty_domain_package(selected_root)
@@ -723,6 +740,7 @@ def test_legacy_import_accepts_nested_composite_control_flow_json(
         for edge in imported["edges"]:
             assert edge["source_node_uuid"] in imported_nodes
             assert edge["target_node_uuid"] in imported_nodes
+        assert engine.inline_flags[:2] == [False, True]
     except WorkflowError as error:
         raise AssertionError(f"{error.code}: {error.message}") from error
     finally:
@@ -1191,6 +1209,70 @@ def test_http_create_rejects_duplicate_authoring_function_name(
         assert first.status_code == 201, first.text
         assert second.status_code == 200
         assert second.json()["code"] == 3003
+    finally:
+        service.close()
+
+
+def test_legacy_import_accepts_backend_string_template_schema(
+    tmp_path: Path,
+) -> None:
+    """活环境把动作模板 schema 存成 JSON 文本时，单节点导入不能报 3003。"""
+
+    schema_text = json.dumps(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "goal": {"type": "object", "additionalProperties": True},
+                "result": {"type": "object", "additionalProperties": True},
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    template, handles = _template(
+        "30000000-0000-4000-8000-000000000091",
+        name="noop",
+        handles=[],
+    )
+    template["schema"] = schema_text
+    engine = WorkflowAuthoringEngine(
+        catalog=AuthoringCatalogSnapshot.from_entities([template], handles)
+    )
+    selected_root = tmp_path / "domain"
+    _empty_domain_package(selected_root)
+    service, _runtime_store, definitions = _service(
+        database_path=tmp_path / "workflow_history.db",
+        selected_root=selected_root,
+        engine=engine,
+    )
+
+    class _CatalogProjection:
+        graph = {"node_templates": [template], "handle_templates": handles}
+        template_catalog_fingerprint = engine.template_catalog_fingerprint
+
+    _project_compiled_catalog(definitions, _CatalogProjection)
+    try:
+        imported = service.import_legacy_workflow(
+            payload={
+                "name": "单动作导入",
+                "tags": ["schema-regression"],
+                "nodes": [
+                    {
+                        "uuid": "20000000-0000-4000-8000-000000000091",
+                        "name": "noop",
+                        "type": "compute",
+                        "workflow_node_template_uuid": template["uuid"],
+                        "description": "单动作导入回归",
+                        "param": {},
+                    }
+                ],
+                "edges": [],
+            }
+        )
+        assert imported["nodes"]
+        assert imported["workflow"]["name"] == "单动作导入"
     finally:
         service.close()
 

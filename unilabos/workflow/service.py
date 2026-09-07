@@ -3120,9 +3120,10 @@ class WorkflowService:
 
         参数：``registration`` 固定目标领域包身份和类型目录；其余字段是已规范
         的根字段、可为空的节点、连线与工作流类型；``inline_expanded_composites``
-        只给 JSON 导入使用，把已展开组合写成可独立编译的内部控制流。返回：已
-        发布到领域包并应用的首版完整图。异常：类别引用、模板、编译、来源发布
-        或内存定义提交失败时回滚本次定义、源码和清单，既有领域包内容不受影响。
+        只给 JSON 导入使用：先按已发布实验操作保留 ``workflow()`` 调用，只有
+        编译器无法展开时才把已展开子图写成内部控制流。返回：已发布到领域包并
+        应用的首版完整图。异常：类别引用、模板、编译、来源发布或内存定义提交
+        失败时回滚本次定义、源码和清单，既有领域包内容不受影响。
         """
 
         identity = registration.workflow_uuid
@@ -3202,23 +3203,50 @@ class WorkflowService:
                     )
                 source_graph = self._authoring_graph_projection(created)
                 source_graph["workflow"]["meta_data"] = source_meta_data
-                try:
-                    compilation = CandidateCompilation.model_validate(
-                        self.compiler.generate_python(
-                            workflow_uuid=identity,
-                            workflow_revision=int(created["workflow"]["revision"]),
-                            graph=source_graph,
-                            source_uri=registration.source_uri,
-                            inline_expanded_composites=inline_expanded_composites,
-                        )
-                    )
-                except Exception:
-                    raise WorkflowError("internal_error") from None
+                # JSON 导入优先保留已展开实验操作为 ``workflow()`` 调用，这样
+                # 测试环境里已发布的子流程可以重新展开；没有展开端口时再摊平。
+                compilation, canonical = self._compile_imported_graph(
+                    workflow_uuid=identity,
+                    workflow_revision=int(created["workflow"]["revision"]),
+                    source_uri=registration.source_uri,
+                    source_graph=source_graph,
+                    inline_expanded_composites=False,
+                )
                 if (
-                    not compilation.valid
+                    inline_expanded_composites
+                    and (
+                        canonical is None
+                        or not canonical.valid
+                        or canonical.graph is None
+                    )
+                ):
+                    compilation, canonical = self._compile_imported_graph(
+                        workflow_uuid=identity,
+                        workflow_revision=int(created["workflow"]["revision"]),
+                        source_uri=registration.source_uri,
+                        source_graph=source_graph,
+                        inline_expanded_composites=True,
+                    )
+                if (
+                    compilation is None
+                    or not compilation.valid
                     or compilation.normalized_python_source is None
                 ):
-                    raise WorkflowError("candidate_invalid")
+                    raise WorkflowError(
+                        "candidate_invalid",
+                        message=self._candidate_error_message(
+                            compilation,
+                            fallback="工作流图不能转换为规范 Python 源码",
+                        ),
+                    )
+                if canonical is None or not canonical.valid or canonical.graph is None:
+                    raise WorkflowError(
+                        "candidate_invalid",
+                        message=self._candidate_error_message(
+                            canonical,
+                            fallback="生成的候选结果不能通过公共工作流校验",
+                        ),
+                    )
                 function_name = self._authoring_function_name_from_source(
                     compilation.normalized_python_source,
                     identity,
@@ -3227,30 +3255,6 @@ class WorkflowService:
                     workflow_uuid=identity,
                     function_name=function_name,
                 )
-
-                # 接口创建或旧 JSON 图先经过公共图校验，再以生成的规范 Python
-                # 重编译；重新创建首版图以带齐作者源码映射，同时保持 revision=1。
-                compile_applied_graph = source_graph
-                if inline_expanded_composites:
-                    compile_applied_graph = (
-                        self._applied_graph_without_inlined_composite_parents(
-                            source_graph
-                        )
-                    )
-                try:
-                    canonical = CandidateCompilation.model_validate(
-                        self.compiler.compile(
-                            workflow_uuid=identity,
-                            workflow_revision=1,
-                            python_source=compilation.normalized_python_source,
-                            source_uri=registration.source_uri,
-                            applied_graph=compile_applied_graph,
-                        )
-                    )
-                except Exception:
-                    raise WorkflowError("internal_error") from None
-                if not canonical.valid or canonical.graph is None:
-                    raise WorkflowError("candidate_invalid")
                 canonical_workflow = canonical.graph["workflow"]
                 canonical_workflow_type = normalize_workflow_type(
                     canonical_workflow.get("workflow_type")
@@ -3561,6 +3565,85 @@ class WorkflowService:
         }
 
     @staticmethod
+    def _candidate_error_message(
+        compilation: CandidateCompilation | None,
+        *,
+        fallback: str,
+    ) -> str:
+        """取出编译诊断中的第一条错误说明，供 JSON 导入返回可行动消息。"""
+
+        diagnostics = (
+            compilation.diagnostics
+            if compilation is not None and isinstance(compilation.diagnostics, list)
+            else []
+        )
+        diagnostic = next(
+            (
+                item
+                for item in diagnostics
+                if isinstance(item, Mapping)
+                and str(item.get("severity", "")).lower() == "error"
+                and item.get("message")
+            ),
+            None,
+        )
+        if isinstance(diagnostic, Mapping):
+            return str(diagnostic["message"])
+        return fallback
+
+    def _compile_imported_graph(
+        self,
+        *,
+        workflow_uuid: str,
+        workflow_revision: int,
+        source_uri: str,
+        source_graph: Mapping[str, Any],
+        inline_expanded_composites: bool,
+    ) -> tuple[CandidateCompilation | None, CandidateCompilation | None]:
+        """把导入图画成 Python 并重编译。内联失败时由调用方改走另一条路径。
+
+        参数：``inline_expanded_composites`` 为假时保留 ``workflow()`` 调用；为
+        真时摊平已展开组合并去掉组合父节点后再编译。返回：源码生成结果与重编译
+        结果；源码无效时第二项为 ``None``。异常：编译器抛出未声明错误时转为
+        ``internal_error``。
+        """
+
+        if self.compiler is None:
+            raise WorkflowError("template_catalog_unavailable")
+        try:
+            compilation = CandidateCompilation.model_validate(
+                self.compiler.generate_python(
+                    workflow_uuid=workflow_uuid,
+                    workflow_revision=workflow_revision,
+                    graph=source_graph,
+                    source_uri=source_uri,
+                    inline_expanded_composites=inline_expanded_composites,
+                )
+            )
+        except Exception:
+            raise WorkflowError("internal_error") from None
+        if not compilation.valid or compilation.normalized_python_source is None:
+            return compilation, None
+        applied_graph: Mapping[str, Any] = source_graph
+        if inline_expanded_composites:
+            applied_graph = self._applied_graph_without_inlined_composite_parents(
+                source_graph
+            )
+        try:
+            canonical = CandidateCompilation.model_validate(
+                self.compiler.compile(
+                    workflow_uuid=workflow_uuid,
+                    workflow_revision=1,
+                    python_source=compilation.normalized_python_source,
+                    source_uri=source_uri,
+                    applied_graph=dict(applied_graph),
+                )
+            )
+        except Exception:
+            raise WorkflowError("internal_error") from None
+        return compilation, canonical
+
+    @staticmethod
     def _applied_graph_without_inlined_composite_parents(
         graph: Mapping[str, Any],
     ) -> dict[str, Any]:
@@ -3618,17 +3701,6 @@ class WorkflowService:
                     graph.get("inventory_requirements", [])
                 ),
             }
-            # SQLite 旧投影把模板 schema 作为 JSON 文本保存，而创作目录快照
-            # 使用对象；在作者编译边界统一成对象，避免候选目录被误判为语义漂移。
-            for template in projection["node_templates"]:
-                if not isinstance(template, dict):
-                    continue
-                schema = template.get("schema")
-                if isinstance(schema, str):
-                    try:
-                        template["schema"] = json.loads(schema)
-                    except (TypeError, ValueError):
-                        pass
             return projection
         except (KeyError, TypeError):
             raise WorkflowError("candidate_invalid") from None
