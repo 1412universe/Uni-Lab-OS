@@ -11,7 +11,6 @@ from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from copy import deepcopy
 from datetime import datetime, timezone
-from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -39,7 +38,6 @@ from unilabos.workflow.candidate_validation import (
 )
 from unilabos.workflow.catalog_dependent_authoring_refresh import (
     CatalogAuthoringGenerationTracker,
-    refresh_catalog_dependent_authoring,
 )
 from unilabos.workflow.composite_contract_refresh import (
     CompositeContractRefreshPending,
@@ -6750,24 +6748,11 @@ class WorkflowService:
                 },
                 "authoring": authoring,
             }
-        if not self._workspace_activation_batch:
-            refresh_catalog_dependent_authoring(
-                dependent_workflow_uuids=(
-                    self._composite_dependent_workflow_uuids(workflow_uuid)
-                ),
-                load_authoring=self.get_authoring,
-                reconcile_source=partial(
-                    self.reconcile_registered_source,
-                    force_compile=True,
-                    preserve_author_source=preserve_author_source,
-                ),
-                apply_candidate=partial(
-                    self.apply_authoring,
-                    preserve_author_source=preserve_author_source,
-                ),
-                mutated_workflow_uuid=workflow_uuid,
-                warnings=warnings,
-            )
+        # 引用方父工作流只能在当前子流程发布后刷新。Apply 仅提交子流程的
+        # 编辑候选；如果此处提前重编译并应用父流程，父图会切换到尚未发布的
+        # 子版本，且父子调用节点的合同身份可能被清空。发布路径统一由
+        # ``_refresh_published_contract_dependents`` 按不可变发布合同刷新，
+        # 因此 Apply 阶段不得触发任何依赖方更新。
         return result
 
     def list_events(
