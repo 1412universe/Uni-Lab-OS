@@ -196,6 +196,7 @@ interface ActionParameterEditorProps {
   onLiteralDraftChange: (key: string, value: string) => void
   onManualConfirmationChange: (config: DraftAction['manualConfirmation']) => void
   onNotify: (message: string) => void
+  workflowParameters: string[]
 }
 
 /**
@@ -211,7 +212,7 @@ interface ActionParameterEditorProps {
  * @param props.onNotify 展示输入错误的回调。
  * @returns 当前设备动作（Action）的参数来源编辑区域。
  */
-export function ActionParameterEditor({ action, actions, paramDrafts, onClose, onBindingChange, onLiteralChange, onLiteralDraftChange, onManualConfirmationChange, onNotify }: ActionParameterEditorProps): React.JSX.Element {
+export function ActionParameterEditor({ action, actions, paramDrafts, onClose, onBindingChange, onLiteralChange, onLiteralDraftChange, onManualConfirmationChange, onNotify, workflowParameters }: ActionParameterEditorProps): React.JSX.Element {
   const manualConfirmation = action.manualConfirmation
   const hasFixedDevice = Boolean(action.materialUuid && action.deviceId)
   return <div className="node-parameter-editor">
@@ -282,7 +283,7 @@ export function ActionParameterEditor({ action, actions, paramDrafts, onClose, o
           <option value="workflow">工作流参数</option>
           <option value="upstream" disabled={!upstreamOptions.length}>上游节点输出</option>
         </select>
-        {source === 'workflow' ? <input aria-label={`工作流参数 ${action.name} ${field.key}`} value={binding && 'parameter' in binding ? binding.parameter : ''} onChange={(event) => onBindingChange(field, { parameter: event.target.value })} placeholder={field.required ? '必填：参数名称' : '选填：参数名称'} />
+        {source === 'workflow' ? <select aria-label={`工作流参数 ${action.name} ${field.key}`} value={binding && 'parameter' in binding ? binding.parameter : ''} onChange={(event) => onBindingChange(field, event.target.value ? { parameter: event.target.value } : undefined)}><option value="">选择已声明的工作流参数</option>{workflowParameters.map((parameter) => <option value={parameter} key={parameter}>{parameter}</option>)}</select>
           : source === 'upstream' ? <select aria-label={`上游输出 ${action.name} ${field.key}`} value={selectedUpstream} onChange={(event) => {
             const [sourceActionId, sourceHandleUuid] = event.target.value.split('|')
             onBindingChange(field, { kind: 'node_output', sourceActionId: sourceActionId || '', sourceHandleUuid: sourceHandleUuid || '' })

@@ -625,6 +625,11 @@ class TaskSchedulerBridge:
                 "canceled",
                 "timeout",
             }:
+                if aggregate["task"].get("status") == "canceled":
+                    return self._release_canceled_inventory(
+                        aggregate,
+                        reason="manual_confirmation_rejected",
+                    )
                 return self._aggregate(task_uuid)
             # 同一 reject 在取消步骤失败后可补做 Task Cancel；取消已经进入终态
             # 时由上方直接返回，不生成新的取消命令。
@@ -1137,6 +1142,13 @@ class TaskSchedulerBridge:
                 task_uuid,
                 reason="runtime_restarted",
             )
+        restarted_job_uuids = [
+            str(job["uuid"])
+            for job in jobs
+            if isinstance(job, Mapping) and str(job.get("status") or "") == "failed"
+        ]
+        if restarted_job_uuids:
+            self._scheduler.fail_restarted_jobs(restarted_job_uuids)
 
     def _recover_running_task(
         self,
@@ -2983,6 +2995,19 @@ class TaskSchedulerBridge:
         cleanup_status = str(task.get("cleanup_status") or "")
         if cleanup_status not in {"required", "settled"}:
             return aggregate
+        inventory = self._scheduler.station_resource_inventory
+        for job in jobs:
+            if not isinstance(job, Mapping):
+                continue
+            job_uuid = str(job.get("uuid") or "")
+            if not job_uuid:
+                continue
+            claim = self._projection.get_execution_claim(job_uuid)
+            if claim is not None and inventory is not None:
+                inventory.transition_dispatch_permit(
+                    str(claim["claim_uuid"]),
+                    target_state="released",
+                )
         if self._quantity_inventory is not None:
             self._quantity_inventory.release_task(
                 str(task["uuid"]),

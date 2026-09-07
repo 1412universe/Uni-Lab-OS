@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -1168,6 +1168,83 @@ class LocalEdgeAuthorityStore:
             self._connection.commit()
         return True
 
+    def fail_restarted_jobs(self, job_uuids: Sequence[str]) -> list[str]:
+        """把工作流已失败的重启作业从 unknown 收成 failed，并释放忙碌键。
+
+        参数：``job_uuids`` 是工作流侧已经失败并释放锁的作业身份。返回：本次
+        实际从占用态收口的作业 UUID。异常：SQLite 错误回滚后原样传播。已有明确
+        终态或账本中不存在的作业保持不变。
+        """
+
+        normalized = [str(uuid.UUID(str(job_uuid))) for job_uuid in job_uuids]
+        if not normalized:
+            return []
+        now = time.time()
+        failed: list[str] = []
+        with self._lock:
+            try:
+                for job_uuid in normalized:
+                    row = self._connection.execute(
+                        """
+                        SELECT status, outcome_json FROM local_edge_job
+                        WHERE job_uuid = ?
+                        """,
+                        (job_uuid,),
+                    ).fetchone()
+                    if row is None or str(row["status"]) not in {
+                        "pending",
+                        "dispatched",
+                        "running",
+                        "unknown",
+                        "outcome_pending",
+                    }:
+                        continue
+                    outcome = row["outcome_json"]
+                    if outcome is None:
+                        outcome = json.dumps(
+                            {
+                                "outcome": "failed",
+                                "return_info": {},
+                                "error_info": [
+                                    {
+                                        "code": "execution_process_restarted",
+                                        "message": (
+                                            "设备执行进程重启，无法继续推进原工作流任务"
+                                        ),
+                                    }
+                                ],
+                                "unknown_command_ids": [],
+                                "inventory_consumptions": [],
+                                "material_aliquot_receipts": [],
+                            },
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    changed = self._connection.execute(
+                        """
+                        UPDATE local_edge_job
+                        SET status = 'failed',
+                            unknown_command_ids_json = '[]',
+                            outcome_json = ?,
+                            projected_at = COALESCE(projected_at, ?),
+                            updated_at = ?
+                        WHERE job_uuid = ?
+                          AND status IN (
+                              'pending', 'dispatched', 'running',
+                              'unknown', 'outcome_pending'
+                          )
+                        """,
+                        (outcome, now, now, job_uuid),
+                    ).rowcount
+                    if changed == 1:
+                        failed.append(job_uuid)
+                self._connection.commit()
+            except BaseException:
+                self._connection.rollback()
+                raise
+        return failed
+
     def busy_device_action_keys(self) -> set[str]:
         with self._lock:
             rows = self._connection.execute(
@@ -1433,6 +1510,11 @@ class LocalEdgeControlAuthority:
 
     def busy_device_action_keys(self) -> set[str]:
         return self.store.busy_device_action_keys()
+
+    def fail_restarted_jobs(self, job_uuids: Sequence[str]) -> list[str]:
+        """工作流已失败后，把 Edge 账本中的重启占用作业收成 failed。"""
+
+        return self.store.fail_restarted_jobs(job_uuids)
 
     def commit_outcome(
         self,

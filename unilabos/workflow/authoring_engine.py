@@ -240,18 +240,24 @@ class WorkflowAuthoringEngine:
         workflow_revision: int,
         graph: dict[str, Any],
         source_uri: str,
+        inline_expanded_composites: bool = False,
     ) -> CandidateCompilation:
         """把候选图确定性生成规范 Python 源码。
 
         参数说明：工作流身份必须与 ``graph`` 一致，``source_uri`` 只校验文本
-        合法性；返回保留原图的源码结果，失败时返回结构化诊断。
+        合法性；``inline_expanded_composites`` 为真时把已展开组合写成内部控制流。
+        返回保留原图的源码结果，失败时返回结构化诊断。
         """
 
         try:
             identity, revision = _request_identity(workflow_uuid, workflow_revision)
             _source_contract("", source_uri)
             _assert_graph_identity(graph, identity=identity, revision=revision)
-            rendered = render_authoring_python(graph=graph, catalog=self._catalog)
+            rendered = render_authoring_python(
+                graph=graph,
+                catalog=self._catalog,
+                inline_expanded_composites=inline_expanded_composites,
+            )
             changeset = candidate_changeset(graph=graph, applied_graph=graph)
             validate_candidate_bundle(
                 graph=graph,

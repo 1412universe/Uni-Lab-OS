@@ -84,13 +84,12 @@ def _template_node(
 
     template_type = _required_text(template.get("node_type"), "模板 node_type")
     requested_type = str(payload.get("type") or "").strip()
-    if requested_type:
-        manual_wrapper = (
-            requested_type.lower() == "manual_confirm"
-            and template_type.lower() in _DEVICE_ACTION_TEMPLATE_TYPES
-        )
-        if not manual_wrapper:
-            raise WorkflowDefinitionInvalid("节点 type 由 workflow_node_template_uuid 派生")
+    # 导出/完整图会带上模板派生的 type。导入时仍以模板为准，不能因为该字段
+    # 存在就拒绝；只有把设备动作包成人工确认时才允许覆盖。
+    if (
+        requested_type.lower() == "manual_confirm"
+        and template_type.lower() in _DEVICE_ACTION_TEMPLATE_TYPES
+    ):
         template_type = "manual_confirm"
     name = str(payload.get("name") or "").strip()
     if not name:
