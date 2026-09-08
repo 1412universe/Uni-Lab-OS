@@ -5,7 +5,7 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="alternate" type="text/markdown" href="workspace.md">
 <link rel="describedby" type="text/plain" href="llms.txt">
-<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="初始化工作区（unilab workspace init）" href="workspace-init.html"><link rel="prev" title="设备包规范与系统启动" href="unilabos-installation.html">
+<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="1. 设备接入模板" href="device-template.html"><link rel="prev" title="设备包规范与系统启动" href="unilabos-installation.html">
 
     <!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>工作区 - Uni-Lab OS 产品使用说明书</title>
@@ -228,11 +228,8 @@
 <p class="caption" role="heading"><span class="caption-text">设备包开发规范</span></p>
 <ul class="current">
 <li class="toctree-l1 current has-children"><a class="reference internal" href="unilabos-installation.html">设备包规范与系统启动</a><input aria-label="Toggle navigation of 设备包规范与系统启动" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
-<li class="toctree-l2 current has-children current-page"><a class="current reference internal" href="#">工作区</a><input aria-label="Toggle navigation of 工作区" checked="" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
-<li class="toctree-l3"><a class="reference internal" href="workspace-init.html">初始化工作区（unilab workspace init）</a></li>
-</ul>
-</li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="device-template.html">1. 设备接入模板</a><input aria-label="Toggle navigation of 1. 设备接入模板" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 current current-page"><a class="current reference internal" href="#">工作区</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="device-template.html">1. 设备接入模板</a><input aria-label="Toggle navigation of 1. 设备接入模板" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l3"><a class="reference internal" href="template-library.html">设备模板库与类别选择</a></li>
 <li class="toctree-l3"><a class="reference internal" href="device-registration.html">设备登记、动作表单与设备联动</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generic-device.html">通用设备规范</a></li>
@@ -242,7 +239,7 @@
 <li class="toctree-l3"><a class="reference internal" href="mouse-automation.html">鼠标模拟点击（可选）</a></li>
 </ul>
 </li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="material-template.html">2. 物料定义模板</a><input aria-label="Toggle navigation of 2. 物料定义模板" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="material-template.html">2. 物料定义模板</a><input aria-label="Toggle navigation of 2. 物料定义模板" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l3"><a class="reference internal" href="deck-warehouse.html">工作站台面与仓库</a></li>
 <li class="toctree-l3"><a class="reference internal" href="stack.html">光电堆栈与旋转堆栈：物料 + 设备</a></li>
 <li class="toctree-l3"><a class="reference internal" href="plate-tiprack.html">孔板与吸头盒（Plate／Tiprack）</a></li>
@@ -254,11 +251,11 @@
 <li class="toctree-l3"><a class="reference internal" href="other-materials.html">其他可追踪物料</a></li>
 </ul>
 </li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="startup-files.html">3. 启动文件</a><input aria-label="Toggle navigation of 3. 启动文件" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="startup-files.html">3. 启动文件</a><input aria-label="Toggle navigation of 3. 启动文件" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l3"><a class="reference internal" href="graph-json.html">启动图（Graph JSON）编写指南</a></li>
 </ul>
 </li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="workflow.html">4. 工作流运行</a><input aria-label="Toggle navigation of 4. 工作流运行" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="workflow.html">4. 工作流运行</a><input aria-label="Toggle navigation of 4. 工作流运行" class="toctree-checkbox" id="toctree-checkbox-5" name="toctree-checkbox-5" role="switch" type="checkbox"/><label for="toctree-checkbox-5"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l3"><a class="reference internal" href="workflow-concepts.html">先理解工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="workflow-features.html">工作流编排特性</a></li>
 <li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作</a></li>
@@ -269,7 +266,6 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l1"><a class="reference internal" href="repository-builder-skill.html">AI 设备包生成器</a></li>
 <li class="toctree-l1"><a class="reference internal" href="scenario-guide.html">设备包验收</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">环境、部署、运行</span></p>
@@ -369,11 +365,6 @@
 </div>
 <p>工作区是用户设备包的项目根目录。它把设备类型、物料模板、启动图（Graph JSON）、工作流和测试放在同一个可交付版本中，供 Uni-Lab OS 检查和加载。</p>
 <p>设备包由用户自行准备。Uni-Lab OS 不会从任意目录猜测要加载哪些文件；启动时必须通过 <code class="docutils literal notranslate"><span class="pre">--workspace</span></code> 指向一个明确的设备包根目录。</p>
-<div class="toctree-wrapper compound">
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="workspace-init.html">初始化工作区（unilab workspace init）</a></li>
-</ul>
-</div>
 <section id="uni-lab-os">
 <h2>Uni-Lab OS 如何读取设备包<a class="headerlink" href="#uni-lab-os" title="链接到此标题。">¶</a></h2>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>pyproject.toml ───────────────► 包名称、版本、依赖和 Python 导入目录
@@ -673,12 +664,12 @@ unilab<span class="w"> </span>workspace<span class="w"> </span>status<span class
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="workspace-init.html">
+          <a class="next-page" href="device-template.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">初始化工作区（unilab workspace init）</div>
+                <div class="title">1. 设备接入模板</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>

@@ -6,19 +6,19 @@
 - **验收人员**：确认安装来源、版本、初始 `dry-run` 和停止流程均可追溯。
 :::
 
-本页按“**安装 Uni-Lab OS → 创建设备包 → 启动示例**”的顺序操作。安装系统时不要求用户提前准备设备包；OS 命令可用后，再由初始化命令生成一个带示例驱动、示例工作流和安全启动图的设备包。
+本页按“**安装 Uni-Lab OS → 下载示例设备包 → 启动示例**”的顺序操作。安装系统时不要求用户提前准备设备包；OS 命令可用后，再下载带有示例驱动、示例工作流和安全启动图的 `demo-lab` 设备包。
 
 :::{important}
-第一次启动固定使用初始化生成的 `dry-run` 启动图。它只用于验证 OS、设备包发现和工作流加载，不连接真实设备，也不能代替真机安全验收。
+第一次启动固定使用示例设备包自带的 `dry-run` 启动图。它只用于验证 OS、设备包发现和工作流加载，不连接真实设备，也不能代替真机安全验收。
 :::
 
 ## 1. 选择安装路径
 
-默认推荐下面两条路径，任选一条即可：
+系统规划下面两条安装路径；当前请使用可用的源码安装路径：
 
 | 路径 | 适合谁 | 得到什么 |
 | --- | --- | --- |
-| **一键安装包** | 首次体验、演示和不修改 OS 源码的用户 | 已打包的 Uni-Lab OS 运行环境、命令行和操作页面 |
+| **一键安装包（暂无法提供）** | 首次体验、演示和不修改 OS 源码的用户 | 已打包的 Uni-Lab OS 运行环境、命令行和操作页面 |
 | **Conda/Mamba + `unilabos-env` + 源码** | 需要创建设备包、开发驱动或修改 OS 的用户 | ROS/Python 依赖、可编辑源码，以及仓库内置的轻量操作页面 |
 
 `unilabos-full` 等仿真和可视化环境不是默认安装路径。确实需要 Gazebo、RViz 或 MoveIt 时，再按[环境与运行配置](environment.md)选择。
@@ -37,6 +37,10 @@
 如果终端中已经能执行 `conda --version` 或 `mamba --version`，直接选择下一节的一条路径。否则先安装 Miniforge，并重新打开终端。
 
 ## 3. 路径一：使用一键安装包
+
+:::{warning}
+**一键安装包暂无法提供。** 当前请使用第 4 节“安装 `unilabos-env` 后拉取源码”的方式安装 Uni-Lab OS。
+:::
 
 一键安装包适合最快完成首次体验。它已经包含 Uni-Lab OS 运行环境，不需要先克隆仓库或寻找设备包。
 
@@ -118,12 +122,6 @@ git switch product/durable-scheduler-kernel-v2
 git pull --ff-only origin product/durable-scheduler-kernel-v2
 ```
 
-也可以用仓库安装脚本完成同样的可编辑安装和依赖安装：
-
-```bash
-python scripts/dev_install.py
-```
-
 源码仓库已经包含构建好的轻量操作页面，位于 `unilabos/app/web/static/console/`，会随 Uni-Lab OS 一起提供。只使用页面时不需要执行 `npm install` 或单独启动前端；只有修改 `frontend/` 源码时，才需要 Node.js 并重新执行前端测试和构建。
 
 :::{note}
@@ -143,40 +141,28 @@ unilab workspace --help
 
 四条命令都成功，才说明 OS 已经安装。此时即使本机还没有任何用户设备包，安装也已经完成。
 
-下一步确认当前版本提供工作区初始化命令：
+## 6. 下载并安装示例设备包
+
+当前分支尚未提供 `unilab workspace init`，不能通过命令自动生成设备包。首次体验请先下载已经准备好的示例设备包：
+
+:::{admonition} 示例文件下载
+:class: note
+
+- {download}`下载 demo-lab.zip <_static/example-package/demo-lab.zip>`
+- [查看示例设备包说明](demo-lab.md)
+:::
+
+将下载的压缩包放到准备使用的目录，解压后进入设备包：
 
 ```bash
-unilab workspace init --help
-```
-
-如果 `workspace` 的帮助中没有 `init`，说明当前一键包或源码版本早于该功能，请更新到包含 `unilab workspace init` 的版本后继续；不要为了绕过版本问题复制其他实验室的生产设备包。
-
-## 6. 创建第一个设备包
-
-设置一个**尚不存在**的新目录，然后初始化设备包：
-
-```bash
-export DEVICE_PACKAGE_ROOT="$HOME/unilab-workspace/demo-lab"
-
-unilab workspace init \
-  --output "$DEVICE_PACKAGE_ROOT" \
-  --name demo-lab
-```
-
-命令会生成：
-
-- 可安装的 Python 设备包骨架；
-- 一个无硬件副作用的示例驱动；
-- 一个调用示例动作的工作流；
-- `deployment/graphs/dry-run.json` 安全启动图；
-- `package.yaml`、测试和设备包需求卡。
-
-目标目录已经存在时命令会拒绝覆盖。完整参数、目录和失败行为见[初始化工作区](workspace-init.md)。
-
-进入新设备包并执行本地检查：
-
-```bash
+unzip demo-lab.zip
+export DEVICE_PACKAGE_ROOT="$(pwd)/demo-lab"
 cd "$DEVICE_PACKAGE_ROOT"
+```
+
+安装示例设备包并执行本地检查：
+
+```bash
 python -m pip install -e '.[dev]'
 python -m pytest -q
 unilab package inspect --path . --out dist/inspect
@@ -186,7 +172,7 @@ unilab package inspect --path . --out dist/inspect
 
 ## 7. 以安全模式启动
 
-第一次启动显式指定初始化生成的启动图，避免读取其他项目或旧环境的默认配置：
+第一次启动显式指定示例设备包自带的启动图，避免读取其他项目或旧环境的默认配置：
 
 ```bash
 unilab workspace start \

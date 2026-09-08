@@ -22,15 +22,7 @@
 
 ## 开始前确认这两件事
 
-1. 这台电脑已经装好 **Uni-Lab OS**。还没有的话，按官方源码安装（环境名以你本机为准）：
-
-```bash
-mamba create -n unilab python=3.11.14
-conda activate unilab
-mamba install uni-lab::unilabos-env -c robostack-staging -c conda-forge
-cd /path/to/Uni-Lab-OS
-python scripts/dev_install.py
-```
+1. 这台电脑已经装好 **Uni-Lab OS**。还没有的话，先按[系统安装](installation.md)完成 Conda 环境、`unilabos-env` 和 Uni-Lab OS 源码安装。
 
 装好后先确认命令可用：输入 `unilab` 再按回车，应看到命令说明。找不到命令时执行 `conda activate unilab`（或 `mamba activate unilab`），再试一次。
 

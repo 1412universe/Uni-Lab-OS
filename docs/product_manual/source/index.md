@@ -17,7 +17,7 @@
 ## 从哪里开始
 
 - **已有可用环境**：先读[认识产品](overview.md)，再进入[Uni-Lab OS 快速上手](console.md)。
-- **从零建设环境**：先完成[系统安装](installation.md)，再[初始化工作区](workspace-init.md)、启动教学设备包，最后按[设备包规范与系统启动](unilabos-installation.md)替换为真实设备。
+- **从零建设环境**：先完成[系统安装](installation.md)，再下载并启动[示例设备包](demo-lab.md)，最后按[设备包规范与系统启动](unilabos-installation.md)替换为真实设备。
 - **编写设备包**：在[设备包规范与系统启动](unilabos-installation.md)中依次完成工作区、设备、物料、启动图和工作流。
 - **发布并运行**：进入[工作流发布与任务运行](workflows.md)，生产上线前完成[运行模式、安全与恢复](runtime-safety.md)和[Kubernetes 部署](deployment.md)。
 - **验收与排查**：使用[设备包验收](scenario-guide.md)、[故障排查](troubleshooting.md)和[API 使用参考](api-reference.md)。
@@ -58,7 +58,6 @@ environment
 :maxdepth: 2
 
 unilabos-installation
-AI 设备包生成器 <repository-builder-skill>
 scenario-guide
 ```
 
