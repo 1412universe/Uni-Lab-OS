@@ -58,6 +58,7 @@ environment
 :maxdepth: 2
 
 unilabos-installation
+使用 AI 设备包生成器（实验性） <repository-builder-skill>
 scenario-guide
 ```
 

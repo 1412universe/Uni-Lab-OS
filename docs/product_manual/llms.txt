@@ -19,7 +19,7 @@
 ## 设备包开发规范
 
 - [设备包规范与系统启动](/unilabos-installation.md): 按工作区、设备、物料、启动图和工作流的顺序完成设备包开发与系统启动。
-- [使用 AI 设备包生成器（实验性）](/repository-builder-skill.md): 使用本地 Workbench 的 AI Skill 新建、迁移或诊断设备包。
+- [使用 AI 设备包生成器（实验性）](/repository-builder-skill.md): 使用仓库内的 AI Skill 新建、迁移、修改或诊断用户自己的设备包。
 - [设备包验收](/scenario-guide.md): 按设备、物料、工作流和现场约束验收用户设备包。
 - [工作区](/workspace.md): 规划设备包目录、文件职责、命名规则和交付检查。
 - [1. 设备接入模板](/device-template.md): 根据控制方式选择设备接入模板，并完成设备合同和验证。
@@ -45,7 +45,7 @@
 - [4. 工作流运行](/workflow.md): 按统一规范编写实验操作和完整工作流，并完成登记、预检和验收。
 - [实验操作（子工作流）](/experiment-operations.md): 编写职责单一、可发布和可复用的实验操作。
 - [完整工作流](/complete-workflow.md): 组合设备动作、实验操作和物料流，形成完整实验流程。
-- [用 AI 编写工作流（推荐）](/ai-workflow-authoring.md): 让 AI 基于当前设备包证据生成工作流，并由人审查、导入、发布和验证。
+- [AI 编写工作流（推荐）](/ai-workflow-authoring.md): 让 AI 基于当前设备包证据生成工作流，并由人审查、导入、发布和验证。
 
 ## 环境、部署、运行
 

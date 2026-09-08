@@ -14,7 +14,7 @@
 实验操作 <experiment-operations>
 完整工作流 <complete-workflow>
 手写并运行第一个工作流 <first-workflow>
-用 AI 编写工作流（推荐） <ai-workflow-authoring>
+AI 编写工作流（推荐） <ai-workflow-authoring>
 ```
 
 工作流把业务人员描述的实验步骤转换成 Uni-Lab OS 能检查、调度和追踪的流程。它只能使用用户设备包中已经登记的设备动作、物料模板和启动图（Graph JSON）实例，不能在工作流里重新实现设备通信。

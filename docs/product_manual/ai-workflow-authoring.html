@@ -5,10 +5,10 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="alternate" type="text/markdown" href="ai-workflow-authoring.md">
 <link rel="describedby" type="text/plain" href="llms.txt">
-<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="设备包验收" href="scenario-guide.html"><link rel="prev" title="手写并运行第一个工作流（用户设备包 教学）" href="first-workflow.html">
+<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="使用 AI 设备包生成器（实验性）" href="repository-builder-skill.html"><link rel="prev" title="手写并运行第一个工作流（用户设备包 教学）" href="first-workflow.html">
 
     <!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
-        <title>用 AI 编写工作流（推荐） - Uni-Lab OS 产品使用说明书</title>
+        <title>AI 编写工作流（推荐） - Uni-Lab OS 产品使用说明书</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -261,11 +261,12 @@
 <li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作</a></li>
 <li class="toctree-l3"><a class="reference internal" href="complete-workflow.html">完整工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="first-workflow.html">手写并运行第一个工作流</a></li>
-<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">用 AI 编写工作流（推荐）</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">AI 编写工作流（推荐）</a></li>
 </ul>
 </li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="repository-builder-skill.html">使用 AI 设备包生成器（实验性）</a></li>
 <li class="toctree-l1"><a class="reference internal" href="scenario-guide.html">设备包验收</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">环境、部署、运行</span></p>
@@ -354,7 +355,7 @@
   <span class="ai-docs-status" role="status" aria-live="polite"></span>
 </div>
 <section id="ai">
-<h1>用 AI 编写工作流（推荐）<a class="headerlink" href="#ai" title="链接到此标题。">¶</a></h1>
+<h1>AI 编写工作流（推荐）<a class="headerlink" href="#ai" title="链接到此标题。">¶</a></h1>
 <div class="admonition- admonition">
 <p class="admonition-title">阅读角色</p>
 <ul class="simple">
@@ -364,7 +365,7 @@
 </ul>
 </div>
 <p>本页假设设备包已经能被 Uni-Lab OS 加载，而且你已完成<a class="reference internal" href="workflow-concepts.html"><span class="std std-doc">工作流基础</span></a>、<a class="reference internal" href="first-workflow.html"><span class="std std-doc">用户设备包 手写教程</span></a>和<a class="reference internal" href="workflow-features.html"><span class="std std-doc">编排特性</span></a>。这些基础让你能够审查 AI 生成的 DSL，而不是直接相信生成结果。</p>
-<p>若你还没有 <code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code>、设备定义、启动图（Graph JSON）和 <code class="docutils literal notranslate"><span class="pre">package.yaml</span></code>，先按<a class="reference internal" href="workspace.html"><span class="std std-doc">工作区</span></a>完成最小闭环。也可选择本地 Workbench 的<a class="reference internal" href="repository-builder-skill.html"><span class="std std-doc">AI 设备包生成器</span></a>辅助新建、迁移或诊断。</p>
+<p>若你还没有 <code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code>、设备定义、启动图（Graph JSON）和 <code class="docutils literal notranslate"><span class="pre">package.yaml</span></code>，先按<a class="reference internal" href="workspace.html"><span class="std std-doc">工作区</span></a>完成最小闭环。维护用户自己的设备包时，也可使用<a class="reference internal" href="repository-builder-skill.html"><span class="std std-doc">AI 设备包生成器（实验性）</span></a>，让本地 Coding Agent 协助修改或排查。</p>
 <p>日常工作流创作推荐交给能够读取当前 Uni-Lab OS 与实验室设备包的 AI 编码助手：让它先从 Catalog、设备驱动、资源模板和 用户设备包 已登记流程中取证，再生成静态 Python DSL。人负责确认实验意图、审查证据、批准发布，并决定是否运行。</p>
 <p>这不是“让 AI 猜一段 Python 后直接开设备”。推荐闭环是：</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>实验需求
@@ -665,12 +666,12 @@ unilab-mcp<span class="w"> </span>--workspace<span class="w"> </span><span class
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="scenario-guide.html">
+          <a class="next-page" href="repository-builder-skill.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">设备包验收</div>
+                <div class="title">使用 AI 设备包生成器（实验性）</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
@@ -716,7 +717,7 @@ unilab-mcp<span class="w"> </span>--workspace<span class="w"> </span><span class
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">用 AI 编写工作流（推荐）</a><ul>
+<li><a class="reference internal" href="#">AI 编写工作流（推荐）</a><ul>
 <li><a class="reference internal" href="#id1">当前支持到什么程度</a></li>
 <li><a class="reference internal" href="#id2">1. 建立干净基线</a></li>
 <li><a class="reference internal" href="#id3">2. 写清实验需求卡</a></li>

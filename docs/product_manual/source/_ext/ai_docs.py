@@ -85,7 +85,7 @@ _DESCRIPTIONS: dict[str, str] = {
     "console": "浏览 Uni-Lab OS 页面，并了解各入口的当前功能和限制。",
     "interfaces": "了解开发工具、接口入口、适用场景和能力边界。",
     "unilabos-installation": "按工作区、设备、物料、启动图和工作流的顺序完成设备包开发与系统启动。",
-    "repository-builder-skill": "使用本地 Workbench 的 AI Skill 新建、迁移或诊断设备包。",
+    "repository-builder-skill": "使用仓库内的 AI Skill 新建、迁移、修改或诊断用户自己的设备包。",
     "workspace": "规划设备包目录、文件职责、命名规则和交付检查。",
     "device-template": "根据控制方式选择设备接入模板，并完成设备合同和验证。",
     "template-library": "按设备能力选择类别、动作和模拟实现，不依赖固定类别数量。",
