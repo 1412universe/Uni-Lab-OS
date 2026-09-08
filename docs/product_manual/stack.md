@@ -1,154 +1,230 @@
-# 堆栈／旋转堆栈
+# 光电堆栈与旋转堆栈（设备）
+
+:::{admonition} 带光电传感器的堆栈：当前没有规范
+:class: warning
+
+带光电传感器的堆栈**是设备，不是仓库**。Uni-Lab OS **还没有**这类设备的接入规范：没有标准设备类、没有标准动作名、本手册也没有可照抄的驱动示例。
+
+因此现在不能按物料/载架模板交付光电堆栈，也不能宣称“已经可驱动”。仓库页只登记槽位；光电占位、到位和故障必须等设备规范补齐后再接入。在此之前，只允许做资源布局和仿真验证。
+:::
 
 :::{admonition} 阅读角色
-- **业务负责人**：确认物料名称、规格、容量、放置规则、条码和现场状态。
-- **开发人员**：实现物料模板、放置位约束、启动图实例和工作流资源合同。
-- **验收人员**：核对实物兼容性、位置关系、数量变化、搬运和异常恢复。
+- **业务负责人**：确认现场是静止料架，还是会旋转、选层的设备；光电占位仍属未规范缺口。
+- **开发人员**：仓库资源按台面与仓库登记；光电堆栈暂无规范，不要自行发明标准类；旋转堆栈按本页标准类实现出库、入库，行列号来自已验收的放置位。
+- **验收人员**：光电堆栈不得按“仓库已画完”验收通过；旋转堆栈核对动作成功后才改库存。
 :::
 
-本页适用于板库、缓存架、多层料架和旋转仓。业务人员先画出实际层级、编号方向和取放顺序；开发人员再把每个可放置位置登记到系统中。这样操作员看到的编号、设备协议中的编号和库存位置能够保持一致。
+现场说的“堆栈”经常混了两件事。一层是**仓库**：保存有哪些放置位、每位允许放什么、现在被谁占用。另一层才是**设备**：电机旋转、选层选列、光电判断有无料、开关门和报故障。Uni-Lab OS 已经能登记仓库和放置位；静止料架走[工作站台面与仓库](deck-warehouse.md)。
 
-本页说明怎样登记普通堆栈、分层仓库和旋转堆栈。核心原则是：**设备完成实际运动；载架保存有哪些位置；每个放置位记录是否被占用；库存记录每件物料属于哪个位置。**
+两类设备当前状态不同：
+
+| 现场对象 | 它是什么 | 当前状态 |
+| --- | --- | --- |
+| 带光电传感器的堆栈 | 设备 | <span class="status status-unavailable">当前不可用</span>：尚无统一规范，本手册不提供模板或示例驱动 |
+| 可驱动的旋转堆栈 | 设备 | <span class="status status-ready">当前可用</span>：按本页标准类接入；库位仍挂在仓库树上 |
+| 没有电机、没有光电的多层料架 | 仓库 | <span class="status status-ready">当前可用</span>：按仓库页登记 |
 
 :::{admonition} 本页完成条件
-在 `resources/carriers.py` 中登记载架，为所有放置位填写固定编号、尺寸、坐标和允许的物料类型；再在启动图（Graph JSON）中建立现场仓库，并检查空位、已占用位置和不兼容物料。
+静止料架并入[工作站台面与仓库](deck-warehouse.md)。光电堆栈先记录“是设备、尚无规范”，不要用载架模板冒充已接入。旋转堆栈按本页标准类交付设备动作；库位仍挂在启动图的仓库树上；工作流只调用已登记动作和放置位。
 :::
 
-开发人员可使用 `BottleCarrier + ResourceHolder` 表示吸头盒、烧杯、粉桶和试剂瓶堆栈，使用 `PlateCarrier + PlateHolder` 表示旋转板库。所有可用位置和机械臂取放位置都必须有长期稳定的编号。
+## 1. 先分开三种对象
 
-## 1. 先画清现场的层级和位置
-
-建模前准备一张经过确认的表：
-
-| 必填信息 | 示例 | 用途 |
+| 对象 | 在系统中的职责 | 当前怎么做 |
 | --- | --- | --- |
-| 放置位（Site）名称 | `L1C1`、`cassette_01_layer_01` | 启动图、工作流和库存的稳定地址 |
-| 相对坐标 | `x/y/z`，单位 mm | 画布布局和资源包络 |
-| 槽位尺寸 | `width/height/depth` | 兼容性校验 |
-| 允许类型 | `my_lab_plate_96` | `content_type` |
-| 是否启用 | true/false | 排除损坏或未交付槽位 |
-| 设备地址 | 层号、列号或协议位 | 由驱动映射，不能等同于视觉坐标 |
+| 仓库 / 静止堆栈 | 保存放置位、允许物料类型、父子关系和占用 | 按[工作站台面与仓库](deck-warehouse.md)登记，再写入启动图 |
+| 光电堆栈设备 | 通过光电判断有无料、到位、门状态和故障 | **尚无规范**：不要按仓库交差，也不要发明一套“标准光电堆栈” |
+| 旋转堆栈设备 | 按行/列出库、入库；电机把选中槽位转到交互位 | 按本页标准类接入，**不是**只画载架几何 |
 
-旋转堆栈还要确认零点、旋转方向、层号/列号的起始值、交互位、门联锁和断电恢复方式。资料不完整时只允许做布局模型和模拟验证。
+因此：
 
-## 2. 按模板登记普通堆栈
+- 没有电机、没有光电、只是多层/多列料架 → 不要读本页，去仓库页。
+- 带光电 → 记为未规范的设备缺口，仓库只保存位置。
+- 能旋转驱动 → 拆成「仓库资源 + 设备动作」，按下一节标准类实现，不要把电机写进物料模板。
 
-下面为自己的设备包建立一个 2 层 × 3 列容器架：
+## 2. 光电堆栈：当前没有规范，不要按已接入交付
+
+带光电传感器的堆栈看起来像架子，实际上是一台要轮询状态的设备。典型能力包括：某层/某列是否有料、交互位是否到位、门是否关闭、故障或遮挡。
+
+**本手册到此为止。** Uni-Lab OS 核心仓库没有光电堆栈的标准类、标准动作名或示例驱动。下面几条只是将来一旦补规范时仍应遵守的通用设备原则，**不是**现在可以照着实现并验收通过的清单：
+
+- 将来用 `@device` 登记身份和类别，不要用仓库工厂冒充设备；
+- 将来用 `@action` 表达业务动作，不要把光电地址暴露给工作流；
+- 将来用 `@topic_config` 发布占位、门、故障等只读状态；
+- 光电读数不能代替库存权威。传感器说“有料”、库存说“空位”时，先停在人工核对。
+
+在规范发布前：新项目不要在设备包里自封“官方光电堆栈模板”；不要把“页面上能画出一排槽位”理解成“光电堆栈已经可驱动”。需要接入时，先作为项目缺口登记，再按[通用设备规范](generic-device.md)另开设备类，并在验收记录里写明：这是项目私有实现，不是产品规范。
+
+## 3. 旋转堆栈：标准设备类
+
+可驱动的旋转堆栈是设备。库位几何挂在资源树上，旋转、选层、出库、入库走设备动作。复制载架循环、却没有 `@device` 动作，不能称为已经接入旋转堆栈。
+
+必须同时交付三件事：
+
+| 交付物 | 职责 | 不负责 |
+| --- | --- | --- |
+| 设备类 | 出库、入库；把行/列转换成控制器命令；返回结构化成功/失败 | 不保存“这个槽位现在是谁” |
+| 启动图设备实例 | 现场这一台堆栈的连接参数、超时、实例 ID | 不代替放置位目录 |
+| 仓库 / 放置位 | 每一格的行号、列号、允许物料类型、交互位 | 不代替电机命令 |
+
+工作流只调用业务动作 `outbound` / `inbound`，参数只用已标定的行、列整数。驱动在内部映射到控制器协议。工作流不得出现品牌命令名、寄存器地址或画布 `x/y/z`。
+
+### 3.1 业务能力怎样落到动作
+
+现场常说的“旋转、回零、选层/列、报告在位”，按本规范这样落地，不要再发明一套平行接口：
+
+| 现场说法 | 本规范怎么做 | 不要怎么做 |
+| --- | --- | --- |
+| 选层 / 选列 | 出库、入库的必填参数 `row`（第几行）、`column`（第几列） | 不要传视觉坐标；不要让驱动猜默认行列 |
+| 旋转 | 出库、入库时，设备把该行/列转到交互位（或从交互位收回） | 不要单独暴露“转多少度”给工作流 |
+| 回零 | **不是必选动作**。已验收协议只有出库、入库两项，没有独立回零命令。零点由现场标定写入启动图/驱动配置 | 不要在动作里给行列默认值来冒充回零；不要返回假成功 |
+| 在位状态 | 设备报告运行状态 `status` / `fault`。槽位占用以库存树为准，在动作成功后更新一次 | 不要用圆心、半径、层高推断占位；协议没有按槽查询时不要伪造光电读数 |
+
+某型号若另外提供回零或槽位光电，作为**该型号扩展**登记，不改变本大类必选动作。扩展动作仍须遵守[通用设备规范](generic-device.md)：有协议映射、有成功/失败语义、未知结果不得写成成功。
+
+### 3.2 标准类
+
+标准模板不负责实际通信；具体型号的驱动必须提供相同的动作名称、参数和返回结果。类别从存储能力到旋转堆栈排列，大类 ID 不含品牌或型号。
 
 ```python
-from pylabrobot.resources import Coordinate, ResourceHolder
-from unilabos.registry.decorators import resource
-from unilabos.resources.itemized_carrier import BottleCarrier
+from typing import Any, Dict, Optional
+
+from unilabos.registry.decorators import action, device, topic_config
 
 
-@resource(
-    id="my_lab_vial_stack",
-    displayname="My Lab 样品瓶堆栈",
-    category=["my_lab", "warehouse", "stack"],
-    description="2 层 × 3 列；每个放置位 最多放一只 50 mL 样品瓶。",
-    metadata={"site_count": 6},
+@device(
+    id="rotating_stack",
+    category=["plate_storage", "rotating_stack"],
+    description="旋转堆栈标准接口：按已标定的行/列出库、入库，并报告运行与故障状态。",
+    displayname="旋转堆栈",
 )
-def make_vial_stack(name: str = "my-lab-vial-stack") -> BottleCarrier:
-    sites = {}
-    for layer in range(2):
-        for column in range(3):
-            label = f"L{layer + 1}C{column + 1}"
-            holder = ResourceHolder(
-                name=f"{name}_{label}",
-                size_x=40.0,
-                size_y=40.0,
-                size_z=80.0,
-            )
-            holder.location = Coordinate(
-                x=20.0 + column * 60.0,
-                y=20.0,
-                z=20.0 + layer * 100.0,
-            )
-            holder.unilabos_extra = {
-                "content_type": ["my_lab_sample_vial_50ml"],
-            }
-            sites[label] = holder
+class RotatingStack:
+    def __init__(
+        self,
+        device_id: Optional[str] = None,
+        host: str = "127.0.0.1",
+        port: int = 6003,
+        timeout: float = 30.0,
+        **kwargs,
+    ):
+        """
+        Args:
+            device_id[设备实例编号]: 与启动图中的设备 id 一致。
+            host[主机]: 控制器地址；构造阶段不发起运动。
+            port[端口]: 控制器端口。
+            timeout[超时时间(s)]: 单次命令最长等待时间，必须大于 0。
+        """
+        if timeout <= 0:
+            raise ValueError("timeout 必须大于 0 秒")
+        self.device_id = device_id or "rotating_stack"
+        self.host = host
+        self.port = port
+        self.timeout = timeout
+        self.data: Dict[str, Any] = {"status": "Idle", "fault": False}
 
-    return BottleCarrier(
-        name=name,
-        size_x=200.0,
-        size_y=80.0,
-        size_z=220.0,
-        sites=sites,
-        category="vial_stack",
-    )
+    @action(description="堆栈出库：把指定行/列转到交互位并送出物料")
+    def outbound(self, row: int, column: int) -> Dict[str, Any]:
+        raise NotImplementedError("请在设备包中实现该动作")
+
+    @action(description="堆栈入库：从交互位把物料收回到指定行/列")
+    def inbound(self, row: int, column: int) -> Dict[str, Any]:
+        raise NotImplementedError("请在设备包中实现该动作")
+
+    @property
+    @topic_config()
+    def status(self) -> str:
+        return self.data.get("status", "Unknown")
+
+    @property
+    @topic_config()
+    def fault(self) -> bool:
+        return self.data.get("fault", False)
 ```
 
-示例坐标必须替换为实测/CAD 数据。放置位 名称一旦进入 启动图、库存和工作流，就不要随意变更。
+具体型号应使用自己的类型编号，但继续归入相同类别，并保持 `outbound(row: int, column: int)`、`inbound(row: int, column: int)`、`status: str` 和 `fault: bool` 不变。
 
-## 3. 按模板登记旋转堆栈
+### 3.3 参数、校验和成功标准
 
-旋转堆栈同样先定义整个载架；每个实际位置对应一个固定放置位，并额外定义机械臂取放物料的交互位置 `interaction_site`：
+出库、入库使用同一组参数。协议把它们称为第几行、第几列；工作流使用 `row` / `column`，驱动在发送前映射到控制器字段。
+
+| 工作流参数 | 含义 | 类型 | 控制器字段 | 约束 |
+| --- | --- | --- | --- | --- |
+| `row` | 第几行 | `int` | `posX` | 必填；JSON 线缆类型为整数 |
+| `column` | 第几列 | `int` | `posY` | 必填；JSON 线缆类型为整数 |
+
+协议**没有**给出行/列的合法范围、原点和占用规则。请求样例里出现过 `row=1, column=1`，这只是样例，不是原点定义。因此：
+
+- 行列号必须来自已验收的库存/放置位目录或标定表，与仓库树上该槽位的行、列一致；
+- 驱动不得为 `row` / `column` 提供会立即运动的默认值；
+- 范围校验以现场放置位目录为准（例如该仓库有哪些行、哪些列），不要在标准类里写死某一型号的层数。
+
+发送到控制器之前，驱动必须按整数协议做保守校验。下列输入视为失败，不得当成成功：
+
+- 参数名不是 `posX` / `posY`（或业务侧未映射到这两个字段）；
+- 缺参数、值为 `null`；
+- 类型不是整数：浮点（含 `1.0`）、数字字符串（`"1"`）、布尔（`true`/`false` 不得当 1/0）；
+- 多余参数；
+- 未知方法名。
+
+整数按 32 位有符号范围理解：最小 `-2147483648`，最大 `2147483647`。超出该范围在驱动边界拒绝。真正允许的行、列集合仍以仓库目录为准，不能只靠这个机器范围。
+
+动作返回结构化结果，例如：
 
 ```python
-from pylabrobot.resources import Coordinate, PlateCarrier, PlateHolder
-
-
-def make_rotating_plate_store(name: str) -> PlateCarrier:
-    sites = {}
-    for cassette in range(1, 11):
-        for layer in range(1, 6):
-            site_name = f"cassette_{cassette:02d}_layer_{layer:02d}"
-            holder = PlateHolder(
-                name=site_name,
-                size_x=127.76,
-                size_y=85.48,
-                size_z=23.0,
-                pedestal_size_z=0.0,
-            ).at(Coordinate(x=0.0, y=0.0, z=layer * 25.0))
-            holder.unilabos_extra = {
-                "content_type": ["my_lab_96_well_plate"],
-            }
-            sites[site_name] = holder
-
-    interaction = PlateHolder(
-        name="interaction_site",
-        size_x=127.76,
-        size_y=85.48,
-        size_z=44.0,
-        pedestal_size_z=0.0,
-    ).at(Coordinate(x=300.0, y=0.0, z=100.0))
-    interaction.unilabos_extra = {
-        "site_role": "interaction",
-        "content_type": ["my_lab_96_well_plate"],
-    }
-    sites["interaction_site"] = interaction
-
-    return PlateCarrier(
-        name=name,
-        size_x=560.0,
-        size_y=560.0,
-        size_z=750.0,
-        sites=sites,
-        category="rotating_plate_store",
-    )
+{"success": True, "message": "堆栈出库完成"}
 ```
 
-这里的循环只演示结构。真实旋转几何应由已确认的圆心、半径、层高和旋转角计算；启用 放置位 数量应增加断言，避免配置漏位。
+至少包含 `success: bool`。具体型号可以附加命令编号、设备名、原始应答文本，但工作流只依赖 `success` 和失败时的可定位信息。
 
-## 4. 设备确认搬运成功后再更新库存
+协议文本对返回类型存在内部不一致（整数成功码与字符串结果并存）。驱动以实际通信帧的成功标志为准：成功才返回 `success=true`；超时、断线、设备拒绝、无效响应或无法判断结果时抛出异常或返回明确失败，**不得返回假成功**。
 
-在设备类中定义 `inbound`、`outbound`、`home`、`get_status` 等动作。动作接收稳定 放置位 或设备层/列参数，由驱动转换为 PLC/协议地址；工作流不要传视觉 `x/y/z`。
+出库、入库会改变设备姿态和物料位置，不能标记为 `always_free`。
 
-一次出库应按以下顺序：
+### 3.4 工作流怎么调用
 
-1. 校验来源放置位 有物料、交互位为空且类型兼容；
-2. 锁定堆栈、目标放置位 和物料实例；
-3. 调用旋转/出库设备动作；
-4. 确认设备返回成功及必要在位信号；
-5. 唯一一次调用库存转移，把物料挂到 `interaction_site` 或目标载架；
+工作流绑定启动图里的**设备实例 ID**，不是类型 ID。行列来自调用方已经校验过的放置位，而不是页面拖出来的坐标。
+
+```python
+from unilabos.workflow.authoring import device, workflow
+
+rotating_stack = device("rotating_stack_01")
+
+
+@workflow(workflow_uuid="...", displayname="旋转堆栈出库")
+def outbound_one_slot(*, row: int, column: int) -> None:
+    rotating_stack.outbound(row=row, column=column)
+```
+
+入库同理，调用 `inbound(row=..., column=...)`。调试流程应能串行完成一次出库再入库，且两次都使用同一套已标定行列。
+
+### 3.5 仓库放置位怎么对齐设备参数
+
+旋转堆栈的槽位仍按[工作站台面与仓库](deck-warehouse.md)登记。每个可寻址槽位必须有稳定的行号、列号，并与 `outbound` / `inbound` 的 `row` / `column` 一一对应。另外登记交互位（物料交给机械臂或下一工位的位置）。圆心、半径、层高、转盘几何属于资源布局，不能代替电机驱动。
+
+设备类可以引用仓库模型以绘制或校验槽位，但取放仍必须走本页动作。库存权威在仓库树；设备成功只是更新库存的前提，见第 4 节。
+
+## 4. 设备确认成功后再更新库存
+
+无论将来接入光电还是现在接入旋转，库存更新顺序相同：
+
+1. 校验来源放置位有物料、交互位为空且类型兼容；
+2. 锁定设备、目标放置位和物料实例；
+3. 调用设备动作（出库、入库等）；
+4. 确认设备返回成功，并核对接线的在位/光电信号（若有；光电规范未发布前不得把未接入的光电当成已核对）；
+5. 只更新一次库存归属，把物料挂到交互位或目标载架；
 6. 失败或结果不确定时不改归属，进入人工核对。
+
+动作参数使用稳定放置位或设备层/列；由驱动转换成控制器字段。工作流不要传视觉 `x/y/z`。
 
 ## 5. 交付前必须检查
 
-- 放置位 数量、名称、顺序和停用位与现场表一致；
-- 每个放置位 的 `content_type` 能解析到已注册模板；
-- 空位、占用位、错误类型、满栈和重复请求会被拒绝；
+- 静止料架已经在仓库页完成；
+- **光电堆栈未按已接入验收**：没有产品规范，不得因槽位画完就通过；
+- 旋转堆栈已按本页标准类登记：`outbound` / `inbound` 的名称、参数类型和返回结构与标准类一致；
+- 启动图设备实例 ID 与工作流 `device(...)` 一致；每个可寻址槽位的行/列与动作参数一致，并有交互位；
+- 空位、占用、错误类型、满栈和重复请求会被拒绝；
+- 行列来自标定/库存目录；驱动无默认位置；非法类型（浮点、字符串数字、布尔）会被拒绝；
 - 旋转堆栈的零点、方向、超时与联锁不由视觉模型推断；
-- 离线试运行完成“出库→取放位置→入库”的完整过程，库存位置只更新一次；
-- 真机测试前单独验证门、急停、掉电和动作结果不确定场景。
+- 光电占位与库存不一致时有人工路径，不会静默改树；
+- 离线试运行走完“出库 → 交互位 → 入库”，库存只更新一次；
+- 真机前单独验证门、急停、掉电和动作结果不确定场景。

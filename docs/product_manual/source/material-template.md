@@ -17,7 +17,6 @@
 ```{toctree}
 :maxdepth: 1
 
-stack
 deck-warehouse
 plate-tiprack
 container-template
@@ -291,8 +290,8 @@ unilab package inspect --path . --out ./inspect-output
 
 ## 各类型适配指南
 
-- [堆栈／旋转堆栈](stack.md)：多层/旋转仓库、放置位 命名与库存归属；
-- [工作站台面与仓库](deck-warehouse.md)：Deck、WareHouse、位置坐标和排列顺序；
+- [工作站台面与仓库](deck-warehouse.md)：Deck、WareHouse、普通堆栈/料架、位置坐标和排列顺序；
+- [光电堆栈与旋转堆栈（设备）](stack.md)：光电堆栈是设备且尚无规范；旋转堆栈按标准类出库/入库接入，不是仓库模板；
 - [孔板与吸头盒（Plate／Tiprack）](plate-tiprack.md)：孔、吸头位和资源树规模；
 - [Container](container-template.md)：烧杯、样品瓶、试剂瓶与容量；
 - [小瓶载架](vial-rack.md)：小瓶架、放置位以及载架与瓶子的归属关系；

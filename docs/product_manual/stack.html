@@ -5,10 +5,10 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="alternate" type="text/markdown" href="stack.md">
 <link rel="describedby" type="text/plain" href="llms.txt">
-<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="工作站台面与仓库" href="deck-warehouse.html"><link rel="prev" title="2. 物料定义模板" href="material-template.html">
+<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="2. 物料定义模板" href="material-template.html"><link rel="prev" title="鼠标模拟点击（可选）" href="mouse-automation.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
-        <title>堆栈／旋转堆栈 - Uni-Lab OS 产品使用说明书</title>
+        <title>光电堆栈与旋转堆栈（设备） - Uni-Lab OS 产品使用说明书</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -232,7 +232,7 @@
 <li class="toctree-l3"><a class="reference internal" href="workspace-init.html">初始化工作区（unilab workspace init）</a></li>
 </ul>
 </li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="device-template.html">1. 设备接入模板</a><input aria-label="Toggle navigation of 1. 设备接入模板" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="device-template.html">1. 设备接入模板</a><input aria-label="Toggle navigation of 1. 设备接入模板" checked="" class="toctree-checkbox" id="toctree-checkbox-3" name="toctree-checkbox-3" role="switch" type="checkbox"/><label for="toctree-checkbox-3"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l3"><a class="reference internal" href="template-library.html">设备模板库与类别选择</a></li>
 <li class="toctree-l3"><a class="reference internal" href="device-registration.html">设备登记、动作表单与设备联动</a></li>
 <li class="toctree-l3"><a class="reference internal" href="generic-device.html">通用设备规范</a></li>
@@ -240,10 +240,10 @@
 <li class="toctree-l3"><a class="reference internal" href="serial-network.html">串口／网络连接</a></li>
 <li class="toctree-l3"><a class="reference internal" href="host-api.html">上位机 API 接入</a></li>
 <li class="toctree-l3"><a class="reference internal" href="mouse-automation.html">鼠标模拟点击（可选）</a></li>
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">光电堆栈与旋转堆栈（设备）</a></li>
 </ul>
 </li>
-<li class="toctree-l2 current has-children"><a class="reference internal" href="material-template.html">2. 物料定义模板</a><input aria-label="Toggle navigation of 2. 物料定义模板" checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
-<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">堆栈／旋转堆栈</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="material-template.html">2. 物料定义模板</a><input aria-label="Toggle navigation of 2. 物料定义模板" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l3"><a class="reference internal" href="deck-warehouse.html">工作站台面与仓库</a></li>
 <li class="toctree-l3"><a class="reference internal" href="plate-tiprack.html">孔板与吸头盒（Plate／Tiprack）</a></li>
 <li class="toctree-l3"><a class="reference internal" href="container-template.html">容器（Container）</a></li>
@@ -353,181 +353,315 @@
   <span class="ai-docs-status" role="status" aria-live="polite"></span>
 </div>
 <section id="id1">
-<h1>堆栈／旋转堆栈<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
+<h1>光电堆栈与旋转堆栈（设备）<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
+<div class="warning admonition">
+<p class="admonition-title">带光电传感器的堆栈：当前没有规范</p>
+<p>带光电传感器的堆栈<strong>是设备，不是仓库</strong>。Uni-Lab OS <strong>还没有</strong>这类设备的接入规范：没有标准设备类、没有标准动作名、本手册也没有可照抄的驱动示例。</p>
+<p>因此现在不能按物料/载架模板交付光电堆栈，也不能宣称“已经可驱动”。仓库页只登记槽位；光电占位、到位和故障必须等设备规范补齐后再接入。在此之前，只允许做资源布局和仿真验证。</p>
+</div>
 <div class="admonition- admonition">
 <p class="admonition-title">阅读角色</p>
 <ul class="simple">
-<li><p><strong>业务负责人</strong>：确认物料名称、规格、容量、放置规则、条码和现场状态。</p></li>
-<li><p><strong>开发人员</strong>：实现物料模板、放置位约束、启动图实例和工作流资源合同。</p></li>
-<li><p><strong>验收人员</strong>：核对实物兼容性、位置关系、数量变化、搬运和异常恢复。</p></li>
+<li><p><strong>业务负责人</strong>：确认现场是静止料架，还是会旋转、选层的设备；光电占位仍属未规范缺口。</p></li>
+<li><p><strong>开发人员</strong>：仓库资源按台面与仓库登记；光电堆栈暂无规范，不要自行发明标准类；旋转堆栈按本页标准类实现出库、入库，行列号来自已验收的放置位。</p></li>
+<li><p><strong>验收人员</strong>：光电堆栈不得按“仓库已画完”验收通过；旋转堆栈核对动作成功后才改库存。</p></li>
 </ul>
 </div>
-<p>本页适用于板库、缓存架、多层料架和旋转仓。业务人员先画出实际层级、编号方向和取放顺序；开发人员再把每个可放置位置登记到系统中。这样操作员看到的编号、设备协议中的编号和库存位置能够保持一致。</p>
-<p>本页说明怎样登记普通堆栈、分层仓库和旋转堆栈。核心原则是：<strong>设备完成实际运动；载架保存有哪些位置；每个放置位记录是否被占用；库存记录每件物料属于哪个位置。</strong></p>
-<div class="admonition- admonition">
-<p class="admonition-title">本页完成条件</p>
-<p>在 <code class="docutils literal notranslate"><span class="pre">resources/carriers.py</span></code> 中登记载架，为所有放置位填写固定编号、尺寸、坐标和允许的物料类型；再在启动图（Graph JSON）中建立现场仓库，并检查空位、已占用位置和不兼容物料。</p>
-</div>
-<p>开发人员可使用 <code class="docutils literal notranslate"><span class="pre">BottleCarrier</span> <span class="pre">+</span> <span class="pre">ResourceHolder</span></code> 表示吸头盒、烧杯、粉桶和试剂瓶堆栈，使用 <code class="docutils literal notranslate"><span class="pre">PlateCarrier</span> <span class="pre">+</span> <span class="pre">PlateHolder</span></code> 表示旋转板库。所有可用位置和机械臂取放位置都必须有长期稳定的编号。</p>
-<section id="id2">
-<h2>1. 先画清现场的层级和位置<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
-<p>建模前准备一张经过确认的表：</p>
+<p>现场说的“堆栈”经常混了两件事。一层是<strong>仓库</strong>：保存有哪些放置位、每位允许放什么、现在被谁占用。另一层才是<strong>设备</strong>：电机旋转、选层选列、光电判断有无料、开关门和报故障。Uni-Lab OS 已经能登记仓库和放置位；静止料架走<a class="reference internal" href="deck-warehouse.html"><span class="std std-doc">工作站台面与仓库</span></a>。</p>
+<p>两类设备当前状态不同：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
-<tr class="row-odd"><th class="head"><p>必填信息</p></th>
-<th class="head"><p>示例</p></th>
-<th class="head"><p>用途</p></th>
+<tr class="row-odd"><th class="head"><p>现场对象</p></th>
+<th class="head"><p>它是什么</p></th>
+<th class="head"><p>当前状态</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>放置位（Site）名称</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">L1C1</span></code>、<code class="docutils literal notranslate"><span class="pre">cassette_01_layer_01</span></code></p></td>
-<td><p>启动图、工作流和库存的稳定地址</p></td>
+<tr class="row-even"><td><p>带光电传感器的堆栈</p></td>
+<td><p>设备</p></td>
+<td><p><span class="status status-unavailable">当前不可用</span>：尚无统一规范，本手册不提供模板或示例驱动</p></td>
 </tr>
-<tr class="row-odd"><td><p>相对坐标</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">x/y/z</span></code>，单位 mm</p></td>
-<td><p>画布布局和资源包络</p></td>
+<tr class="row-odd"><td><p>可驱动的旋转堆栈</p></td>
+<td><p>设备</p></td>
+<td><p><span class="status status-ready">当前可用</span>：按本页标准类接入；库位仍挂在仓库树上</p></td>
 </tr>
-<tr class="row-even"><td><p>槽位尺寸</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">width/height/depth</span></code></p></td>
-<td><p>兼容性校验</p></td>
-</tr>
-<tr class="row-odd"><td><p>允许类型</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">my_lab_plate_96</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">content_type</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>是否启用</p></td>
-<td><p>true/false</p></td>
-<td><p>排除损坏或未交付槽位</p></td>
-</tr>
-<tr class="row-odd"><td><p>设备地址</p></td>
-<td><p>层号、列号或协议位</p></td>
-<td><p>由驱动映射，不能等同于视觉坐标</p></td>
+<tr class="row-even"><td><p>没有电机、没有光电的多层料架</p></td>
+<td><p>仓库</p></td>
+<td><p><span class="status status-ready">当前可用</span>：按仓库页登记</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>旋转堆栈还要确认零点、旋转方向、层号/列号的起始值、交互位、门联锁和断电恢复方式。资料不完整时只允许做布局模型和模拟验证。</p>
+<div class="admonition- admonition">
+<p class="admonition-title">本页完成条件</p>
+<p>静止料架并入<a class="reference internal" href="deck-warehouse.html"><span class="std std-doc">工作站台面与仓库</span></a>。光电堆栈先记录“是设备、尚无规范”，不要用载架模板冒充已接入。旋转堆栈按本页标准类交付设备动作；库位仍挂在启动图的仓库树上；工作流只调用已登记动作和放置位。</p>
+</div>
+<section id="id2">
+<h2>1. 先分开三种对象<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>对象</p></th>
+<th class="head"><p>在系统中的职责</p></th>
+<th class="head"><p>当前怎么做</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>仓库 / 静止堆栈</p></td>
+<td><p>保存放置位、允许物料类型、父子关系和占用</p></td>
+<td><p>按<a class="reference internal" href="deck-warehouse.html"><span class="std std-doc">工作站台面与仓库</span></a>登记，再写入启动图</p></td>
+</tr>
+<tr class="row-odd"><td><p>光电堆栈设备</p></td>
+<td><p>通过光电判断有无料、到位、门状态和故障</p></td>
+<td><p><strong>尚无规范</strong>：不要按仓库交差，也不要发明一套“标准光电堆栈”</p></td>
+</tr>
+<tr class="row-even"><td><p>旋转堆栈设备</p></td>
+<td><p>按行/列出库、入库；电机把选中槽位转到交互位</p></td>
+<td><p>按本页标准类接入，<strong>不是</strong>只画载架几何</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>因此：</p>
+<ul class="simple">
+<li><p>没有电机、没有光电、只是多层/多列料架 → 不要读本页，去仓库页。</p></li>
+<li><p>带光电 → 记为未规范的设备缺口，仓库只保存位置。</p></li>
+<li><p>能旋转驱动 → 拆成「仓库资源 + 设备动作」，按下一节标准类实现，不要把电机写进物料模板。</p></li>
+</ul>
 </section>
 <section id="id3">
-<h2>2. 按模板登记普通堆栈<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
-<p>下面为自己的设备包建立一个 2 层 × 3 列容器架：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pylabrobot.resources</span><span class="w"> </span><span class="kn">import</span> <span class="n">Coordinate</span><span class="p">,</span> <span class="n">ResourceHolder</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">unilabos.registry.decorators</span><span class="w"> </span><span class="kn">import</span> <span class="n">resource</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">unilabos.resources.itemized_carrier</span><span class="w"> </span><span class="kn">import</span> <span class="n">BottleCarrier</span>
-
-
-<span class="nd">@resource</span><span class="p">(</span>
-    <span class="nb">id</span><span class="o">=</span><span class="s2">"my_lab_vial_stack"</span><span class="p">,</span>
-    <span class="n">displayname</span><span class="o">=</span><span class="s2">"My Lab 样品瓶堆栈"</span><span class="p">,</span>
-    <span class="n">category</span><span class="o">=</span><span class="p">[</span><span class="s2">"my_lab"</span><span class="p">,</span> <span class="s2">"warehouse"</span><span class="p">,</span> <span class="s2">"stack"</span><span class="p">],</span>
-    <span class="n">description</span><span class="o">=</span><span class="s2">"2 层 × 3 列；每个放置位 最多放一只 50 mL 样品瓶。"</span><span class="p">,</span>
-    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">"site_count"</span><span class="p">:</span> <span class="mi">6</span><span class="p">},</span>
-<span class="p">)</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">make_vial_stack</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"my-lab-vial-stack"</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">BottleCarrier</span><span class="p">:</span>
-    <span class="n">sites</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">):</span>
-            <span class="n">label</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"L</span><span class="si">{</span><span class="n">layer</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">C</span><span class="si">{</span><span class="n">column</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">"</span>
-            <span class="n">holder</span> <span class="o">=</span> <span class="n">ResourceHolder</span><span class="p">(</span>
-                <span class="n">name</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">label</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-                <span class="n">size_x</span><span class="o">=</span><span class="mf">40.0</span><span class="p">,</span>
-                <span class="n">size_y</span><span class="o">=</span><span class="mf">40.0</span><span class="p">,</span>
-                <span class="n">size_z</span><span class="o">=</span><span class="mf">80.0</span><span class="p">,</span>
-            <span class="p">)</span>
-            <span class="n">holder</span><span class="o">.</span><span class="n">location</span> <span class="o">=</span> <span class="n">Coordinate</span><span class="p">(</span>
-                <span class="n">x</span><span class="o">=</span><span class="mf">20.0</span> <span class="o">+</span> <span class="n">column</span> <span class="o">*</span> <span class="mf">60.0</span><span class="p">,</span>
-                <span class="n">y</span><span class="o">=</span><span class="mf">20.0</span><span class="p">,</span>
-                <span class="n">z</span><span class="o">=</span><span class="mf">20.0</span> <span class="o">+</span> <span class="n">layer</span> <span class="o">*</span> <span class="mf">100.0</span><span class="p">,</span>
-            <span class="p">)</span>
-            <span class="n">holder</span><span class="o">.</span><span class="n">unilabos_extra</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="s2">"content_type"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"my_lab_sample_vial_50ml"</span><span class="p">],</span>
-            <span class="p">}</span>
-            <span class="n">sites</span><span class="p">[</span><span class="n">label</span><span class="p">]</span> <span class="o">=</span> <span class="n">holder</span>
-
-    <span class="k">return</span> <span class="n">BottleCarrier</span><span class="p">(</span>
-        <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
-        <span class="n">size_x</span><span class="o">=</span><span class="mf">200.0</span><span class="p">,</span>
-        <span class="n">size_y</span><span class="o">=</span><span class="mf">80.0</span><span class="p">,</span>
-        <span class="n">size_z</span><span class="o">=</span><span class="mf">220.0</span><span class="p">,</span>
-        <span class="n">sites</span><span class="o">=</span><span class="n">sites</span><span class="p">,</span>
-        <span class="n">category</span><span class="o">=</span><span class="s2">"vial_stack"</span><span class="p">,</span>
-    <span class="p">)</span>
-</pre></div>
-</div>
-<p>示例坐标必须替换为实测/CAD 数据。放置位 名称一旦进入 启动图、库存和工作流，就不要随意变更。</p>
+<h2>2. 光电堆栈：当前没有规范，不要按已接入交付<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<p>带光电传感器的堆栈看起来像架子，实际上是一台要轮询状态的设备。典型能力包括：某层/某列是否有料、交互位是否到位、门是否关闭、故障或遮挡。</p>
+<p><strong>本手册到此为止。</strong> Uni-Lab OS 核心仓库没有光电堆栈的标准类、标准动作名或示例驱动。下面几条只是将来一旦补规范时仍应遵守的通用设备原则，<strong>不是</strong>现在可以照着实现并验收通过的清单：</p>
+<ul class="simple">
+<li><p>将来用 <code class="docutils literal notranslate"><span class="pre">&#64;device</span></code> 登记身份和类别，不要用仓库工厂冒充设备；</p></li>
+<li><p>将来用 <code class="docutils literal notranslate"><span class="pre">&#64;action</span></code> 表达业务动作，不要把光电地址暴露给工作流；</p></li>
+<li><p>将来用 <code class="docutils literal notranslate"><span class="pre">&#64;topic_config</span></code> 发布占位、门、故障等只读状态；</p></li>
+<li><p>光电读数不能代替库存权威。传感器说“有料”、库存说“空位”时，先停在人工核对。</p></li>
+</ul>
+<p>在规范发布前：新项目不要在设备包里自封“官方光电堆栈模板”；不要把“页面上能画出一排槽位”理解成“光电堆栈已经可驱动”。需要接入时，先作为项目缺口登记，再按<a class="reference internal" href="generic-device.html"><span class="std std-doc">通用设备规范</span></a>另开设备类，并在验收记录里写明：这是项目私有实现，不是产品规范。</p>
 </section>
 <section id="id4">
-<h2>3. 按模板登记旋转堆栈<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
-<p>旋转堆栈同样先定义整个载架；每个实际位置对应一个固定放置位，并额外定义机械臂取放物料的交互位置 <code class="docutils literal notranslate"><span class="pre">interaction_site</span></code>：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">pylabrobot.resources</span><span class="w"> </span><span class="kn">import</span> <span class="n">Coordinate</span><span class="p">,</span> <span class="n">PlateCarrier</span><span class="p">,</span> <span class="n">PlateHolder</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">make_rotating_plate_store</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PlateCarrier</span><span class="p">:</span>
-    <span class="n">sites</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="k">for</span> <span class="n">cassette</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">11</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">6</span><span class="p">):</span>
-            <span class="n">site_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"cassette_</span><span class="si">{</span><span class="n">cassette</span><span class="si">:</span><span class="s2">02d</span><span class="si">}</span><span class="s2">_layer_</span><span class="si">{</span><span class="n">layer</span><span class="si">:</span><span class="s2">02d</span><span class="si">}</span><span class="s2">"</span>
-            <span class="n">holder</span> <span class="o">=</span> <span class="n">PlateHolder</span><span class="p">(</span>
-                <span class="n">name</span><span class="o">=</span><span class="n">site_name</span><span class="p">,</span>
-                <span class="n">size_x</span><span class="o">=</span><span class="mf">127.76</span><span class="p">,</span>
-                <span class="n">size_y</span><span class="o">=</span><span class="mf">85.48</span><span class="p">,</span>
-                <span class="n">size_z</span><span class="o">=</span><span class="mf">23.0</span><span class="p">,</span>
-                <span class="n">pedestal_size_z</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
-            <span class="p">)</span><span class="o">.</span><span class="n">at</span><span class="p">(</span><span class="n">Coordinate</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">z</span><span class="o">=</span><span class="n">layer</span> <span class="o">*</span> <span class="mf">25.0</span><span class="p">))</span>
-            <span class="n">holder</span><span class="o">.</span><span class="n">unilabos_extra</span> <span class="o">=</span> <span class="p">{</span>
-                <span class="s2">"content_type"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"my_lab_96_well_plate"</span><span class="p">],</span>
-            <span class="p">}</span>
-            <span class="n">sites</span><span class="p">[</span><span class="n">site_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">holder</span>
-
-    <span class="n">interaction</span> <span class="o">=</span> <span class="n">PlateHolder</span><span class="p">(</span>
-        <span class="n">name</span><span class="o">=</span><span class="s2">"interaction_site"</span><span class="p">,</span>
-        <span class="n">size_x</span><span class="o">=</span><span class="mf">127.76</span><span class="p">,</span>
-        <span class="n">size_y</span><span class="o">=</span><span class="mf">85.48</span><span class="p">,</span>
-        <span class="n">size_z</span><span class="o">=</span><span class="mf">44.0</span><span class="p">,</span>
-        <span class="n">pedestal_size_z</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">at</span><span class="p">(</span><span class="n">Coordinate</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mf">300.0</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">z</span><span class="o">=</span><span class="mf">100.0</span><span class="p">))</span>
-    <span class="n">interaction</span><span class="o">.</span><span class="n">unilabos_extra</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">"site_role"</span><span class="p">:</span> <span class="s2">"interaction"</span><span class="p">,</span>
-        <span class="s2">"content_type"</span><span class="p">:</span> <span class="p">[</span><span class="s2">"my_lab_96_well_plate"</span><span class="p">],</span>
-    <span class="p">}</span>
-    <span class="n">sites</span><span class="p">[</span><span class="s2">"interaction_site"</span><span class="p">]</span> <span class="o">=</span> <span class="n">interaction</span>
-
-    <span class="k">return</span> <span class="n">PlateCarrier</span><span class="p">(</span>
-        <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
-        <span class="n">size_x</span><span class="o">=</span><span class="mf">560.0</span><span class="p">,</span>
-        <span class="n">size_y</span><span class="o">=</span><span class="mf">560.0</span><span class="p">,</span>
-        <span class="n">size_z</span><span class="o">=</span><span class="mf">750.0</span><span class="p">,</span>
-        <span class="n">sites</span><span class="o">=</span><span class="n">sites</span><span class="p">,</span>
-        <span class="n">category</span><span class="o">=</span><span class="s2">"rotating_plate_store"</span><span class="p">,</span>
-    <span class="p">)</span>
-</pre></div>
+<h2>3. 旋转堆栈：标准设备类<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<p>可驱动的旋转堆栈是设备。库位几何挂在资源树上，旋转、选层、出库、入库走设备动作。复制载架循环、却没有 <code class="docutils literal notranslate"><span class="pre">&#64;device</span></code> 动作，不能称为已经接入旋转堆栈。</p>
+<p>必须同时交付三件事：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>交付物</p></th>
+<th class="head"><p>职责</p></th>
+<th class="head"><p>不负责</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>设备类</p></td>
+<td><p>出库、入库；把行/列转换成控制器命令；返回结构化成功/失败</p></td>
+<td><p>不保存“这个槽位现在是谁”</p></td>
+</tr>
+<tr class="row-odd"><td><p>启动图设备实例</p></td>
+<td><p>现场这一台堆栈的连接参数、超时、实例 ID</p></td>
+<td><p>不代替放置位目录</p></td>
+</tr>
+<tr class="row-even"><td><p>仓库 / 放置位</p></td>
+<td><p>每一格的行号、列号、允许物料类型、交互位</p></td>
+<td><p>不代替电机命令</p></td>
+</tr>
+</tbody>
+</table>
 </div>
-<p>这里的循环只演示结构。真实旋转几何应由已确认的圆心、半径、层高和旋转角计算；启用 放置位 数量应增加断言，避免配置漏位。</p>
-</section>
+<p>工作流只调用业务动作 <code class="docutils literal notranslate"><span class="pre">outbound</span></code> / <code class="docutils literal notranslate"><span class="pre">inbound</span></code>，参数只用已标定的行、列整数。驱动在内部映射到控制器协议。工作流不得出现品牌命令名、寄存器地址或画布 <code class="docutils literal notranslate"><span class="pre">x/y/z</span></code>。</p>
 <section id="id5">
-<h2>4. 设备确认搬运成功后再更新库存<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
-<p>在设备类中定义 <code class="docutils literal notranslate"><span class="pre">inbound</span></code>、<code class="docutils literal notranslate"><span class="pre">outbound</span></code>、<code class="docutils literal notranslate"><span class="pre">home</span></code>、<code class="docutils literal notranslate"><span class="pre">get_status</span></code> 等动作。动作接收稳定 放置位 或设备层/列参数，由驱动转换为 PLC/协议地址；工作流不要传视觉 <code class="docutils literal notranslate"><span class="pre">x/y/z</span></code>。</p>
-<p>一次出库应按以下顺序：</p>
-<ol class="arabic simple">
-<li><p>校验来源放置位 有物料、交互位为空且类型兼容；</p></li>
-<li><p>锁定堆栈、目标放置位 和物料实例；</p></li>
-<li><p>调用旋转/出库设备动作；</p></li>
-<li><p>确认设备返回成功及必要在位信号；</p></li>
-<li><p>唯一一次调用库存转移，把物料挂到 <code class="docutils literal notranslate"><span class="pre">interaction_site</span></code> 或目标载架；</p></li>
-<li><p>失败或结果不确定时不改归属，进入人工核对。</p></li>
-</ol>
+<h3>3.1 业务能力怎样落到动作<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<p>现场常说的“旋转、回零、选层/列、报告在位”，按本规范这样落地，不要再发明一套平行接口：</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>现场说法</p></th>
+<th class="head"><p>本规范怎么做</p></th>
+<th class="head"><p>不要怎么做</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>选层 / 选列</p></td>
+<td><p>出库、入库的必填参数 <code class="docutils literal notranslate"><span class="pre">row</span></code>（第几行）、<code class="docutils literal notranslate"><span class="pre">column</span></code>（第几列）</p></td>
+<td><p>不要传视觉坐标；不要让驱动猜默认行列</p></td>
+</tr>
+<tr class="row-odd"><td><p>旋转</p></td>
+<td><p>出库、入库时，设备把该行/列转到交互位（或从交互位收回）</p></td>
+<td><p>不要单独暴露“转多少度”给工作流</p></td>
+</tr>
+<tr class="row-even"><td><p>回零</p></td>
+<td><p><strong>不是必选动作</strong>。已验收协议只有出库、入库两项，没有独立回零命令。零点由现场标定写入启动图/驱动配置</p></td>
+<td><p>不要在动作里给行列默认值来冒充回零；不要返回假成功</p></td>
+</tr>
+<tr class="row-odd"><td><p>在位状态</p></td>
+<td><p>设备报告运行状态 <code class="docutils literal notranslate"><span class="pre">status</span></code> / <code class="docutils literal notranslate"><span class="pre">fault</span></code>。槽位占用以库存树为准，在动作成功后更新一次</p></td>
+<td><p>不要用圆心、半径、层高推断占位；协议没有按槽查询时不要伪造光电读数</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>某型号若另外提供回零或槽位光电，作为<strong>该型号扩展</strong>登记，不改变本大类必选动作。扩展动作仍须遵守<a class="reference internal" href="generic-device.html"><span class="std std-doc">通用设备规范</span></a>：有协议映射、有成功/失败语义、未知结果不得写成成功。</p>
 </section>
 <section id="id6">
-<h2>5. 交付前必须检查<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<h3>3.2 标准类<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<p>标准模板不负责实际通信；具体型号的驱动必须提供相同的动作名称、参数和返回结果。类别从存储能力到旋转堆栈排列，大类 ID 不含品牌或型号。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Optional</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">unilabos.registry.decorators</span><span class="w"> </span><span class="kn">import</span> <span class="n">action</span><span class="p">,</span> <span class="n">device</span><span class="p">,</span> <span class="n">topic_config</span>
+
+
+<span class="nd">@device</span><span class="p">(</span>
+    <span class="nb">id</span><span class="o">=</span><span class="s2">"rotating_stack"</span><span class="p">,</span>
+    <span class="n">category</span><span class="o">=</span><span class="p">[</span><span class="s2">"plate_storage"</span><span class="p">,</span> <span class="s2">"rotating_stack"</span><span class="p">],</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">"旋转堆栈标准接口：按已标定的行/列出库、入库，并报告运行与故障状态。"</span><span class="p">,</span>
+    <span class="n">displayname</span><span class="o">=</span><span class="s2">"旋转堆栈"</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">RotatingStack</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">device_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">host</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"127.0.0.1"</span><span class="p">,</span>
+        <span class="n">port</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">6003</span><span class="p">,</span>
+        <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">30.0</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">kwargs</span><span class="p">,</span>
+    <span class="p">):</span>
+<span class="w">        </span><span class="sd">"""</span>
+<span class="sd">        Args:</span>
+<span class="sd">            device_id[设备实例编号]: 与启动图中的设备 id 一致。</span>
+<span class="sd">            host[主机]: 控制器地址；构造阶段不发起运动。</span>
+<span class="sd">            port[端口]: 控制器端口。</span>
+<span class="sd">            timeout[超时时间(s)]: 单次命令最长等待时间，必须大于 0。</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="n">timeout</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"timeout 必须大于 0 秒"</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">device_id</span> <span class="o">=</span> <span class="n">device_id</span> <span class="ow">or</span> <span class="s2">"rotating_stack"</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">host</span> <span class="o">=</span> <span class="n">host</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">port</span> <span class="o">=</span> <span class="n">port</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">timeout</span> <span class="o">=</span> <span class="n">timeout</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="p">:</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"status"</span><span class="p">:</span> <span class="s2">"Idle"</span><span class="p">,</span> <span class="s2">"fault"</span><span class="p">:</span> <span class="kc">False</span><span class="p">}</span>
+
+    <span class="nd">@action</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">"堆栈出库：把指定行/列转到交互位并送出物料"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">outbound</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">row</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">column</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">"请在设备包中实现该动作"</span><span class="p">)</span>
+
+    <span class="nd">@action</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="s2">"堆栈入库：从交互位把物料收回到指定行/列"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">inbound</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">row</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">column</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span><span class="s2">"请在设备包中实现该动作"</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="nd">@topic_config</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">status</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"status"</span><span class="p">,</span> <span class="s2">"Unknown"</span><span class="p">)</span>
+
+    <span class="nd">@property</span>
+    <span class="nd">@topic_config</span><span class="p">()</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">fault</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"fault"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>具体型号应使用自己的类型编号，但继续归入相同类别，并保持 <code class="docutils literal notranslate"><span class="pre">outbound(row:</span> <span class="pre">int,</span> <span class="pre">column:</span> <span class="pre">int)</span></code>、<code class="docutils literal notranslate"><span class="pre">inbound(row:</span> <span class="pre">int,</span> <span class="pre">column:</span> <span class="pre">int)</span></code>、<code class="docutils literal notranslate"><span class="pre">status:</span> <span class="pre">str</span></code> 和 <code class="docutils literal notranslate"><span class="pre">fault:</span> <span class="pre">bool</span></code> 不变。</p>
+</section>
+<section id="id7">
+<h3>3.3 参数、校验和成功标准<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<p>出库、入库使用同一组参数。协议把它们称为第几行、第几列；工作流使用 <code class="docutils literal notranslate"><span class="pre">row</span></code> / <code class="docutils literal notranslate"><span class="pre">column</span></code>，驱动在发送前映射到控制器字段。</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>工作流参数</p></th>
+<th class="head"><p>含义</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>控制器字段</p></th>
+<th class="head"><p>约束</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">row</span></code></p></td>
+<td><p>第几行</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">posX</span></code></p></td>
+<td><p>必填；JSON 线缆类型为整数</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">column</span></code></p></td>
+<td><p>第几列</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">posY</span></code></p></td>
+<td><p>必填；JSON 线缆类型为整数</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>协议<strong>没有</strong>给出行/列的合法范围、原点和占用规则。请求样例里出现过 <code class="docutils literal notranslate"><span class="pre">row=1,</span> <span class="pre">column=1</span></code>，这只是样例，不是原点定义。因此：</p>
 <ul class="simple">
-<li><p>放置位 数量、名称、顺序和停用位与现场表一致；</p></li>
-<li><p>每个放置位 的 <code class="docutils literal notranslate"><span class="pre">content_type</span></code> 能解析到已注册模板；</p></li>
-<li><p>空位、占用位、错误类型、满栈和重复请求会被拒绝；</p></li>
+<li><p>行列号必须来自已验收的库存/放置位目录或标定表，与仓库树上该槽位的行、列一致；</p></li>
+<li><p>驱动不得为 <code class="docutils literal notranslate"><span class="pre">row</span></code> / <code class="docutils literal notranslate"><span class="pre">column</span></code> 提供会立即运动的默认值；</p></li>
+<li><p>范围校验以现场放置位目录为准（例如该仓库有哪些行、哪些列），不要在标准类里写死某一型号的层数。</p></li>
+</ul>
+<p>发送到控制器之前，驱动必须按整数协议做保守校验。下列输入视为失败，不得当成成功：</p>
+<ul class="simple">
+<li><p>参数名不是 <code class="docutils literal notranslate"><span class="pre">posX</span></code> / <code class="docutils literal notranslate"><span class="pre">posY</span></code>（或业务侧未映射到这两个字段）；</p></li>
+<li><p>缺参数、值为 <code class="docutils literal notranslate"><span class="pre">null</span></code>；</p></li>
+<li><p>类型不是整数：浮点（含 <code class="docutils literal notranslate"><span class="pre">1.0</span></code>）、数字字符串（<code class="docutils literal notranslate"><span class="pre">&quot;1&quot;</span></code>）、布尔（<code class="docutils literal notranslate"><span class="pre">true</span></code>/<code class="docutils literal notranslate"><span class="pre">false</span></code> 不得当 1/0）；</p></li>
+<li><p>多余参数；</p></li>
+<li><p>未知方法名。</p></li>
+</ul>
+<p>整数按 32 位有符号范围理解：最小 <code class="docutils literal notranslate"><span class="pre">-2147483648</span></code>，最大 <code class="docutils literal notranslate"><span class="pre">2147483647</span></code>。超出该范围在驱动边界拒绝。真正允许的行、列集合仍以仓库目录为准，不能只靠这个机器范围。</p>
+<p>动作返回结构化结果，例如：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s2">"success"</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span> <span class="s2">"message"</span><span class="p">:</span> <span class="s2">"堆栈出库完成"</span><span class="p">}</span>
+</pre></div>
+</div>
+<p>至少包含 <code class="docutils literal notranslate"><span class="pre">success:</span> <span class="pre">bool</span></code>。具体型号可以附加命令编号、设备名、原始应答文本，但工作流只依赖 <code class="docutils literal notranslate"><span class="pre">success</span></code> 和失败时的可定位信息。</p>
+<p>协议文本对返回类型存在内部不一致（整数成功码与字符串结果并存）。驱动以实际通信帧的成功标志为准：成功才返回 <code class="docutils literal notranslate"><span class="pre">success=true</span></code>；超时、断线、设备拒绝、无效响应或无法判断结果时抛出异常或返回明确失败，<strong>不得返回假成功</strong>。</p>
+<p>出库、入库会改变设备姿态和物料位置，不能标记为 <code class="docutils literal notranslate"><span class="pre">always_free</span></code>。</p>
+</section>
+<section id="id8">
+<h3>3.4 工作流怎么调用<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<p>工作流绑定启动图里的<strong>设备实例 ID</strong>，不是类型 ID。行列来自调用方已经校验过的放置位，而不是页面拖出来的坐标。</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">unilabos.workflow.authoring</span><span class="w"> </span><span class="kn">import</span> <span class="n">device</span><span class="p">,</span> <span class="n">workflow</span>
+
+<span class="n">rotating_stack</span> <span class="o">=</span> <span class="n">device</span><span class="p">(</span><span class="s2">"rotating_stack_01"</span><span class="p">)</span>
+
+
+<span class="nd">@workflow</span><span class="p">(</span><span class="n">workflow_uuid</span><span class="o">=</span><span class="s2">"..."</span><span class="p">,</span> <span class="n">displayname</span><span class="o">=</span><span class="s2">"旋转堆栈出库"</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">outbound_one_slot</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">row</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">column</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">rotating_stack</span><span class="o">.</span><span class="n">outbound</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">row</span><span class="p">,</span> <span class="n">column</span><span class="o">=</span><span class="n">column</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>入库同理，调用 <code class="docutils literal notranslate"><span class="pre">inbound(row=...,</span> <span class="pre">column=...)</span></code>。调试流程应能串行完成一次出库再入库，且两次都使用同一套已标定行列。</p>
+</section>
+<section id="id9">
+<h3>3.5 仓库放置位怎么对齐设备参数<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<p>旋转堆栈的槽位仍按<a class="reference internal" href="deck-warehouse.html"><span class="std std-doc">工作站台面与仓库</span></a>登记。每个可寻址槽位必须有稳定的行号、列号，并与 <code class="docutils literal notranslate"><span class="pre">outbound</span></code> / <code class="docutils literal notranslate"><span class="pre">inbound</span></code> 的 <code class="docutils literal notranslate"><span class="pre">row</span></code> / <code class="docutils literal notranslate"><span class="pre">column</span></code> 一一对应。另外登记交互位（物料交给机械臂或下一工位的位置）。圆心、半径、层高、转盘几何属于资源布局，不能代替电机驱动。</p>
+<p>设备类可以引用仓库模型以绘制或校验槽位，但取放仍必须走本页动作。库存权威在仓库树；设备成功只是更新库存的前提，见第 4 节。</p>
+</section>
+</section>
+<section id="id10">
+<h2>4. 设备确认成功后再更新库存<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h2>
+<p>无论将来接入光电还是现在接入旋转，库存更新顺序相同：</p>
+<ol class="arabic simple">
+<li><p>校验来源放置位有物料、交互位为空且类型兼容；</p></li>
+<li><p>锁定设备、目标放置位和物料实例；</p></li>
+<li><p>调用设备动作（出库、入库等）；</p></li>
+<li><p>确认设备返回成功，并核对接线的在位/光电信号（若有；光电规范未发布前不得把未接入的光电当成已核对）；</p></li>
+<li><p>只更新一次库存归属，把物料挂到交互位或目标载架；</p></li>
+<li><p>失败或结果不确定时不改归属，进入人工核对。</p></li>
+</ol>
+<p>动作参数使用稳定放置位或设备层/列；由驱动转换成控制器字段。工作流不要传视觉 <code class="docutils literal notranslate"><span class="pre">x/y/z</span></code>。</p>
+</section>
+<section id="id11">
+<h2>5. 交付前必须检查<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h2>
+<ul class="simple">
+<li><p>静止料架已经在仓库页完成；</p></li>
+<li><p><strong>光电堆栈未按已接入验收</strong>：没有产品规范，不得因槽位画完就通过；</p></li>
+<li><p>旋转堆栈已按本页标准类登记：<code class="docutils literal notranslate"><span class="pre">outbound</span></code> / <code class="docutils literal notranslate"><span class="pre">inbound</span></code> 的名称、参数类型和返回结构与标准类一致；</p></li>
+<li><p>启动图设备实例 ID 与工作流 <code class="docutils literal notranslate"><span class="pre">device(...)</span></code> 一致；每个可寻址槽位的行/列与动作参数一致，并有交互位；</p></li>
+<li><p>空位、占用、错误类型、满栈和重复请求会被拒绝；</p></li>
+<li><p>行列来自标定/库存目录；驱动无默认位置；非法类型（浮点、字符串数字、布尔）会被拒绝；</p></li>
 <li><p>旋转堆栈的零点、方向、超时与联锁不由视觉模型推断；</p></li>
-<li><p>离线试运行完成“出库→取放位置→入库”的完整过程，库存位置只更新一次；</p></li>
-<li><p>真机测试前单独验证门、急停、掉电和动作结果不确定场景。</p></li>
+<li><p>光电占位与库存不一致时有人工路径，不会静默改树；</p></li>
+<li><p>离线试运行走完“出库 → 交互位 → 入库”，库存只更新一次；</p></li>
+<li><p>真机前单独验证门、急停、掉电和动作结果不确定场景。</p></li>
 </ul>
 </section>
 </section>
@@ -537,23 +671,23 @@
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="deck-warehouse.html">
+          <a class="next-page" href="material-template.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">工作站台面与仓库</div>
+                <div class="title">2. 物料定义模板</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="material-template.html">
+          <a class="prev-page" href="mouse-automation.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">2. 物料定义模板</div>
+                <div class="title">鼠标模拟点击（可选）</div>
                 
               </div>
             </a>
@@ -588,12 +722,19 @@
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">堆栈／旋转堆栈</a><ul>
-<li><a class="reference internal" href="#id2">1. 先画清现场的层级和位置</a></li>
-<li><a class="reference internal" href="#id3">2. 按模板登记普通堆栈</a></li>
-<li><a class="reference internal" href="#id4">3. 按模板登记旋转堆栈</a></li>
-<li><a class="reference internal" href="#id5">4. 设备确认搬运成功后再更新库存</a></li>
-<li><a class="reference internal" href="#id6">5. 交付前必须检查</a></li>
+<li><a class="reference internal" href="#">光电堆栈与旋转堆栈（设备）</a><ul>
+<li><a class="reference internal" href="#id2">1. 先分开三种对象</a></li>
+<li><a class="reference internal" href="#id3">2. 光电堆栈：当前没有规范，不要按已接入交付</a></li>
+<li><a class="reference internal" href="#id4">3. 旋转堆栈：标准设备类</a><ul>
+<li><a class="reference internal" href="#id5">3.1 业务能力怎样落到动作</a></li>
+<li><a class="reference internal" href="#id6">3.2 标准类</a></li>
+<li><a class="reference internal" href="#id7">3.3 参数、校验和成功标准</a></li>
+<li><a class="reference internal" href="#id8">3.4 工作流怎么调用</a></li>
+<li><a class="reference internal" href="#id9">3.5 仓库放置位怎么对齐设备参数</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id10">4. 设备确认成功后再更新库存</a></li>
+<li><a class="reference internal" href="#id11">5. 交付前必须检查</a></li>
 </ul>
 </li>
 </ul>
