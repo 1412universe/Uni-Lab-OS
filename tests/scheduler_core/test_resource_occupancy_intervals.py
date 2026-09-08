@@ -197,11 +197,14 @@ def _three_job_scoped_task(
                     for interval in resource_plan["intervals"]
                     if node_uuid in interval["node_uuids"]
                 ],
-                "resource_acquire_set_id": next(
-                    acquire_set["acquire_set_id"]
-                    for acquire_set in resource_plan["acquire_sets"]
-                    if acquire_set["node_uuid"] == node_uuid
-                ),
+                    "resource_acquire_set_id": next(
+                        (
+                            acquire_set["acquire_set_id"]
+                            for acquire_set in resource_plan["acquire_sets"]
+                            if acquire_set["node_uuid"] == node_uuid
+                        ),
+                        "",
+                    ),
             }
         )
     edges = [
@@ -315,10 +318,10 @@ def test_continuous_interval_keeps_resource_across_jobs_before_priority_waiter(
     )
 
 
-def test_successor_waits_for_own_atomic_acquire_without_releasing_common_interval(
+def test_scope_preacquires_complete_set_before_first_action(
     core_runtime: CoreRuntime,
 ) -> None:
-    """后继等待独有资源时，公共区间锁不断档且竞争 Task 不能插队。"""
+    """后续动作的资源在首动作前原子取得，区间内不再增量补锁。"""
 
     blocker = core_runtime.submit(
         task_name="scoped-successor-blocker",
@@ -356,134 +359,45 @@ def test_successor_waits_for_own_atomic_acquire_without_releasing_common_interva
     )
     assert acquire_by_node == {
         owner_nodes[0]: (
-            frozenset({"robot-a", "warehouse-a"}),
+            frozenset({"reactor-a", "reactor-b", "robot-a", "warehouse-a"}),
             frozenset(),
             True,
-        ),
-        owner_nodes[1]: (
-            frozenset({"reactor-a", "reactor-b"}),
-            frozenset({"warehouse-a"}),
-            True,
-        ),
-        owner_nodes[2]: (
-            frozenset({"robot-a"}),
-            frozenset({"warehouse-a"}),
-            True,
-        ),
+        )
     }
 
+    # reactor-b 被占用时 owner 连第一个动作都不能开始；随后提交的 warehouse
+    # waiter 可先运行，证明 owner 没有边等边占一部分资源。
     assert [payload["job_id"] for payload in core_runtime.dispatcher.dispatched] == [
         blocker_job,
-        owner_jobs[0],
+        waiter_job,
     ]
+    core_runtime.scheduler.on_job_finished(waiter_job, True, {"done": True})
+    core_runtime.scheduler.on_job_finished(blocker_job, True, {"released": True})
+    assert core_runtime.dispatcher.dispatched[-1]["job_id"] == owner_jobs[0]
+
     common_key = f"/devices/{core_runtime.device_materials['warehouse-a']}"
     exclusive_key = f"/devices/{core_runtime.device_materials['reactor-b']}"
     first_executor_key = f"/devices/{core_runtime.device_materials['robot-a']}"
     second_executor_key = f"/devices/{core_runtime.device_materials['reactor-a']}"
-    first_payload = core_runtime.dispatcher.dispatched[1]
+    expected_keys = {
+        common_key,
+        exclusive_key,
+        first_executor_key,
+        second_executor_key,
+    }
+    first_payload = core_runtime.dispatcher.dispatched[-1]
     first_fences = _fences(first_payload)
-    assert set(first_fences) == {common_key, first_executor_key}
-    assert exclusive_key not in first_fences
+    assert set(first_fences) == expected_keys
 
     core_runtime.scheduler.on_job_finished(owner_jobs[0], True, {"step": 1})
-
-    assert [payload["job_id"] for payload in core_runtime.dispatcher.dispatched] == [
-        blocker_job,
-        owner_jobs[0],
-    ]
-    assert core_runtime.workflow_store.get_job(owner_jobs[1])["status"] == "pending"
-    assert core_runtime.workflow_store.get_job(waiter_job)["status"] == "pending"
-    assert core_runtime.inventory_store.query_all(
-        "SELECT job_uuid FROM station_execution_claim WHERE job_uuid IN (?,?)",
-        (owner_jobs[1], waiter_job),
-    ) == []
-    assert _active_task_leases(core_runtime, owner_task_uuid) == [
-        {
-            "claim_uuid": first_payload["claim_uuid"],
-            "job_uuid": owner_jobs[0],
-            "lock_key": common_key,
-            "fencing_token": first_fences[common_key],
-        }
-    ]
-
-    unrelated = core_runtime.submit(
-        task_name="scoped-unrelated-during-wait",
-        devices=["robot-a"],
-    )
-    unrelated_job = stable_uuid("job:scoped-unrelated-during-wait:0")
-    assert [payload["job_id"] for payload in core_runtime.dispatcher.dispatched] == [
-        blocker_job,
-        owner_jobs[0],
-        unrelated_job,
-    ]
-    core_runtime.scheduler.on_job_finished(unrelated_job, True, {"done": True})
-
-    core_runtime.scheduler.on_job_finished(blocker_job, True, {"released": "x"})
-
-    assert [payload["job_id"] for payload in core_runtime.dispatcher.dispatched] == [
-        blocker_job,
-        owner_jobs[0],
-        unrelated_job,
-        owner_jobs[1],
-    ]
-    second_payload = core_runtime.dispatcher.dispatched[3]
-    second_fences = _fences(second_payload)
-    assert second_payload["claim_uuid"] != first_payload["claim_uuid"]
-    assert set(second_fences) == {common_key, exclusive_key, second_executor_key}
-    assert second_fences[common_key] > first_fences[common_key]
-    second_leases = _active_task_leases(core_runtime, owner_task_uuid)
-    assert {row["lock_key"]: row["fencing_token"] for row in second_leases} == (
-        second_fences
-    )
-    assert {row["claim_uuid"] for row in second_leases} == {
-        second_payload["claim_uuid"]
-    }
-    assert {row["job_uuid"] for row in second_leases} == {owner_jobs[1]}
-    assert core_runtime.inventory_store.query_one(
-        "SELECT state FROM station_execution_claim WHERE claim_uuid=?",
-        (first_payload["claim_uuid"],),
-    ) == {"state": "released"}
+    assert core_runtime.dispatcher.dispatched[-1]["job_id"] == owner_jobs[1]
+    assert set(_fences(core_runtime.dispatcher.dispatched[-1])) == expected_keys
 
     core_runtime.scheduler.on_job_finished(owner_jobs[1], True, {"step": 2})
-
-    assert [payload["job_id"] for payload in core_runtime.dispatcher.dispatched] == [
-        blocker_job,
-        owner_jobs[0],
-        unrelated_job,
-        owner_jobs[1],
-        owner_jobs[2],
-    ]
-    assert core_runtime.workflow_store.get_job(waiter_job)["status"] == "pending"
-    third_payload = core_runtime.dispatcher.dispatched[4]
-    third_fences = _fences(third_payload)
-    assert third_payload["claim_uuid"] not in {
-        first_payload["claim_uuid"],
-        second_payload["claim_uuid"],
-    }
-    assert set(third_fences) == {common_key, first_executor_key}
-    assert exclusive_key not in third_fences
-    assert third_fences[common_key] > second_fences[common_key]
-    third_leases = _active_task_leases(core_runtime, owner_task_uuid)
-    assert {
-        row["lock_key"]: row["fencing_token"] for row in third_leases
-    } == third_fences
-    assert {row["claim_uuid"] for row in third_leases} == {
-        third_payload["claim_uuid"]
-    }
-    assert {row["job_uuid"] for row in third_leases} == {owner_jobs[2]}
+    assert core_runtime.dispatcher.dispatched[-1]["job_id"] == owner_jobs[2]
+    assert set(_fences(core_runtime.dispatcher.dispatched[-1])) == expected_keys
 
     core_runtime.scheduler.on_job_finished(owner_jobs[2], True, {"step": 3})
-
-    assert [payload["job_id"] for payload in core_runtime.dispatcher.dispatched] == [
-        blocker_job,
-        owner_jobs[0],
-        unrelated_job,
-        owner_jobs[1],
-        owner_jobs[2],
-        waiter_job,
-    ]
-    waiter_payload = core_runtime.dispatcher.dispatched[5]
-    assert set(_fences(waiter_payload)) == {common_key}
     assert _active_task_leases(core_runtime, owner_task_uuid) == []
     assert core_runtime.inventory_store.query_all(
         "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
@@ -491,11 +405,7 @@ def test_successor_waits_for_own_atomic_acquire_without_releasing_common_interva
         (owner_task_uuid,),
     ) == []
 
-    core_runtime.scheduler.on_job_finished(waiter_job, True, {"done": True})
     assert core_runtime.workflow_store.get_task(blocker["task"]["uuid"])["status"] == (
-        "succeeded"
-    )
-    assert core_runtime.workflow_store.get_task(unrelated["task"]["uuid"])["status"] == (
         "succeeded"
     )
     assert core_runtime.workflow_store.get_task(owner_task_uuid)["status"] == "succeeded"

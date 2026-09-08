@@ -886,13 +886,13 @@ def test_repeat_until_persists_each_iteration_before_dispatch(
     [(True, 2, "succeeded"), (False, 1, "failed")],
     ids=("exit", "iteration-limit"),
 )
-def test_repeat_tail_reconciles_persistent_resource_interval(
+def test_repeat_tail_reconciles_or_latches_persistent_resource_interval(
     core_runtime: CoreRuntime,
     qualified: bool,
     max_iterations: int,
     repeat_status: str,
 ) -> None:
-    """RepeatUntil 正常退出或失败结算区间尾时同步释放两套持久锁。"""
+    """RepeatUntil 正常退出释放区间，失败则保留到人工整组解锁。"""
 
     repeat_uuid = stable_uuid("repeat-tail:control")
     measure_uuid = stable_uuid("repeat-tail:measure")
@@ -1031,6 +1031,14 @@ def test_repeat_tail_reconciles_persistent_resource_interval(
     )
 
     assert core_runtime.workflow_store.get_job(repeat_job)["status"] == repeat_status
+    if repeat_status == "failed":
+        assert core_runtime.workflow_store.get_job(waiter_job)["status"] == "pending"
+        core_runtime.scheduler.on_job_finished(parallel_job, True, {})
+        core_runtime.bridge.unlock_resources(
+            owner_task_uuid,
+            command_uuid=stable_uuid("command:repeat-tail-failure-unlock"),
+            reason="操作员确认循环失败后的设备、物料和库位均已核对",
+        )
     assert core_runtime.workflow_store.get_job(waiter_job)["status"] == "running"
     inventory_keys, workflow_keys = active_resource_keys(
         core_runtime,

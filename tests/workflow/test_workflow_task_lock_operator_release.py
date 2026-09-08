@@ -151,6 +151,47 @@ def test_task_lock_listing_projects_release_eligibility(store: WorkflowStore) ->
     assert all(item["claim_uuid"] == CLAIM_UUID for item in result["locks"])
 
 
+def test_job_level_force_release_rejects_explicit_continuous_interval(
+    store: WorkflowStore,
+) -> None:
+    """连续区间不能按单个 Job 解锁，只能走任务级整组人工释放。"""
+
+    _seed_lock_task(store)
+    execution_plan = {
+        "resource_plan": {
+            "intervals": [
+                {
+                    "interval_id": "continuous-interval",
+                    "explicit_boundary": True,
+                    "node_uuids": [NODE_UUID],
+                }
+            ]
+        }
+    }
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=? WHERE uuid=?",
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+
+    listed = TaskRuntimeProjection(store).list_task_execution_locks(TASK_UUID)
+    assert all(not item["can_release"] for item in listed["locks"])
+    assert all("任务级人工解锁" in item["release_block_reason"] for item in listed["locks"])
+    with pytest.raises(WorkflowConflict, match="任务级人工解锁"):
+        WorkflowService(store).force_release_workflow_task_execution_lock(
+            TASK_UUID,
+            LEASE_A_UUID,
+            expected_claim_uuid=CLAIM_UUID,
+            expected_fencing_token=7,
+            reason="不能拆开连续区间",
+            physical_settlement_confirmed=True,
+        )
+    assert {
+        item["state"]
+        for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
+    } == {"running"}
+
+
 def test_force_release_is_atomic_audited_and_idempotent(store: WorkflowStore) -> None:
     """人工释放应整组释放锁/Claim、写审计事件，并支持重复点击。"""
 

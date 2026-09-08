@@ -78,12 +78,12 @@ _SUBMISSION_PHASE_PRE_DISPATCH = "pre_dispatch"
 _SUBMISSION_PHASE_LOCAL_CONTROL = "local_control"
 
 
-def _continuing_interval_ids_for_result(
+def _retained_interval_ids_for_result(
     task: Mapping[str, Any],
     job: Mapping[str, Any],
     completed_nodes: Sequence[str | Mapping[str, Any]] = (),
 ) -> tuple[str, ...]:
-    """返回明确成功后仍需跨 Job 持有的资源区间。"""
+    """返回正常连续持有或异常闩锁后仍须保留的资源区间。"""
 
     control_data = job.get("control_data")
     if not isinstance(control_data, Mapping):
@@ -97,13 +97,17 @@ def _continuing_interval_ids_for_result(
     execution_plan = task.get("execution_plan")
     if not isinstance(execution_plan, Mapping):
         return ()
-    from unilabos.workflow.resource_lock_plan import (
-        completed_resource_nodes_for_job,
-        continuing_resource_interval_ids,
-    )
+    from unilabos.workflow.resource_lock_plan import retained_resource_interval_ids
 
-    if completed_nodes and isinstance(completed_nodes[0], Mapping):
-        completed_nodes = completed_resource_nodes_for_job(job, completed_nodes, execution_plan)
+    jobs = completed_nodes if completed_nodes and isinstance(completed_nodes[0], Mapping) else ()
+    if jobs:
+        return retained_resource_interval_ids(
+            execution_plan,
+            interval_ids,
+            job,
+            jobs,
+        )
+    from unilabos.workflow.resource_lock_plan import continuing_resource_interval_ids
 
     return continuing_resource_interval_ids(
         execution_plan,
@@ -510,7 +514,8 @@ class TaskSchedulerBridge:
         """在操作员已确认现场安全后整组释放异常终态 Task 资源。
 
         参数：Task/Command 身份和现场处置说明均由应用服务验证。
-        返回各类释放计数与最终清理状态。异常：任务或 Job 非终态、
+        返回各类释放计数与最终清理状态。异常：任务非异常终态，或仍有
+        已派发/运行中的 Job、
         库存权威不支持整组释放或持久事实冲突时抛出稳定桥接错误。
 
         跨库无法使用单一 SQLite 事务；因此严格按库存 Permit → 任务级
@@ -530,11 +535,8 @@ class TaskSchedulerBridge:
         jobs = self._store.list_jobs(normalized_uuid)
         if task.get("status") not in {"failed", "canceled", "timeout"}:
             raise TaskSchedulerBridgeError("任务尚未进入异常终态")
-        if any(
-            job.get("status") not in {"succeeded", "failed", "canceled", "timeout"}
-            for job in jobs
-        ):
-            raise TaskSchedulerBridgeError("任务仍有非终态作业")
+        if any(job.get("status") in {"dispatched", "running"} for job in jobs):
+            raise TaskSchedulerBridgeError("任务仍有已派发或运行中的作业")
 
         try:
             station_inventory = self._scheduler.station_resource_inventory
@@ -1049,6 +1051,16 @@ class TaskSchedulerBridge:
                 for task in task_page["items"]:
                     task_uuid = str(task["uuid"])
                     jobs = self._store.list_jobs(task_uuid)
+                    from unilabos.workflow.resource_lock_plan import (
+                        failed_explicit_resource_interval_ids,
+                    )
+
+                    failure_latched = bool(
+                        failed_explicit_resource_interval_ids(
+                            task.get("execution_plan", {}),
+                            jobs,
+                        )
+                    )
                     restart_cleanup_required = (
                         self._requires_runtime_restart_cleanup(task, jobs)
                     )
@@ -1072,12 +1084,12 @@ class TaskSchedulerBridge:
                     ):
                         continue
                     reason = f"workflow_{status}_recovery"
-                    if self._quantity_inventory is not None:
+                    if self._quantity_inventory is not None and not failure_latched:
                         self._quantity_inventory.release_task(
                             task_uuid,
                             reason=reason,
                         )
-                    if any(
+                    if not failure_latched and any(
                         job.get("executor_kind") == "material_source" for job in jobs
                     ):
                         self._material_sources.release_terminal_reservations(
@@ -1086,6 +1098,7 @@ class TaskSchedulerBridge:
                         )
                     if (
                         status != "succeeded"
+                        and not failure_latched
                         and task.get("cleanup_status")
                         in CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL
                     ):
@@ -1322,6 +1335,16 @@ class TaskSchedulerBridge:
             raise StoreConflict("重启失败聚合结构非法")
         task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
         inventory = self._scheduler.station_resource_inventory
+        from unilabos.workflow.resource_lock_plan import (
+            failed_explicit_resource_interval_ids,
+        )
+
+        failure_latched_interval_ids = set(
+            failed_explicit_resource_interval_ids(
+                task.get("execution_plan", {}),
+                jobs,
+            )
+        )
         retained_uncertain_job_uuids = restart_retained_uncertain_job_uuids(jobs)
         if (
             retained_uncertain_job_uuids
@@ -1354,14 +1377,34 @@ class TaskSchedulerBridge:
             ):
                 restarted_job_uuids.append(job_uuid)
             if claim is not None and inventory is not None:
-                inventory.transition_dispatch_permit(
-                    str(claim["claim_uuid"]),
-                    target_state=(
-                        "uncertain"
-                        if job_uuid in retained_uncertain_job_uuids
-                        else "released"
-                    ),
+                control_data = job.get("control_data")
+                interval_map = (
+                    control_data.get("resource_interval_ids_by_lock", {})
+                    if isinstance(control_data, Mapping)
+                    else {}
                 )
+                keep_lock_keys = tuple(
+                    str(lock_key)
+                    for lock_key, raw_ids in interval_map.items()
+                    if isinstance(raw_ids, (list, tuple, set, frozenset))
+                    and {str(value) for value in raw_ids}
+                    & failure_latched_interval_ids
+                )
+                if keep_lock_keys:
+                    inventory.retain_dispatch_permit_resources(
+                        str(claim["claim_uuid"]),
+                        keep_lock_keys=keep_lock_keys,
+                    )
+                    retained_task_resources = True
+                else:
+                    inventory.transition_dispatch_permit(
+                        str(claim["claim_uuid"]),
+                        target_state=(
+                            "uncertain"
+                            if job_uuid in retained_uncertain_job_uuids
+                            else "released"
+                        ),
+                    )
             if job_uuid in retained_uncertain_job_uuids:
                 retained_task_resources = True
             elif (
@@ -2822,12 +2865,22 @@ class TaskSchedulerBridge:
                     reason="workflow_succeeded",
                 )
         elif terminal_status == "failed":
+            from unilabos.workflow.resource_lock_plan import (
+                failed_explicit_resource_interval_ids,
+            )
+
+            failure_latched = bool(
+                failed_explicit_resource_interval_ids(
+                    aggregate["task"].get("execution_plan", {}),
+                    aggregate["jobs"],
+                )
+            )
             scheduler_snapshot = self._scheduler.snapshot()
             active_for_task = any(
                 inflight.get("workflow_id") == task_uuid
                 for inflight in scheduler_snapshot.get("inflight_jobs", {}).values()
             )
-            if not active_for_task:
+            if not active_for_task and not failure_latched:
                 if self._quantity_inventory is not None:
                     self._quantity_inventory.release_task(
                         task_uuid,
@@ -3068,7 +3121,7 @@ class TaskSchedulerBridge:
             manual_confirmation_status=manual_confirmation_status,
         )
         settled_job = next(item for item in aggregate["jobs"] if item["uuid"] == job_uuid)
-        continuing_interval_ids = _continuing_interval_ids_for_result(
+        continuing_interval_ids = _retained_interval_ids_for_result(
             aggregate["task"],
             settled_job,
             aggregate["jobs"],
@@ -3166,7 +3219,7 @@ class TaskSchedulerBridge:
             if self._projection.get_execution_claim(previous["uuid"]) is None:
                 continue
             remaining = set(
-                _continuing_interval_ids_for_result(
+                _retained_interval_ids_for_result(
                     aggregate["task"], previous, jobs
                 )
             )
@@ -3252,7 +3305,7 @@ class TaskSchedulerBridge:
             ]
             if not active_for_task and not unsettled_jobs:
                 retained_intervals = any(
-                    _continuing_interval_ids_for_result(aggregate["task"], job, aggregate["jobs"])
+                    _retained_interval_ids_for_result(aggregate["task"], job, aggregate["jobs"])
                     for job in aggregate["jobs"]
                 )
                 if retained_intervals:

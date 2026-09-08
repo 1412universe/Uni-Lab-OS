@@ -926,7 +926,7 @@ def retain_dispatch_permit_resources(
     claim_uuid: str,
     keep_lock_keys: Sequence[str],
 ) -> None:
-    """在连续区间成功交接时只释放当前 Claim 的临时资源。"""
+    """在连续区间交接或异常冻结时只释放当前 Claim 的临时资源。"""
 
     keep = {
         str(value or "").strip() for value in keep_lock_keys if str(value or "").strip()
@@ -938,13 +938,13 @@ def retain_dispatch_permit_resources(
     if row is None:
         raise DispatchAdmissionConflict(f"库存 Claim 不存在：{claim_uuid}")
     state = str(row["state"])
-    if state not in {"prepared", "reserved", "running"}:
+    if state not in {"prepared", "reserved", "running", "uncertain"}:
         raise DispatchAdmissionConflict(
             f"库存 Claim 不能进行连续资源保留：{claim_uuid}"
         )
     active_rows = connection.execute(
         "SELECT lock_key FROM station_execution_lock_lease "
-        "WHERE claim_uuid=? AND state IN ('prepared','reserved','running')",
+        "WHERE claim_uuid=? AND state IN ('prepared','reserved','running','uncertain')",
         (claim_uuid,),
     ).fetchall()
     active_keys = {str(item["lock_key"]) for item in active_rows}
@@ -965,7 +965,7 @@ def retain_dispatch_permit_resources(
             "UPDATE station_execution_lock_lease "
             "SET state='released', released_at=?, update_time=? "
             f"WHERE claim_uuid=? AND lock_key IN ({placeholders}) "
-            "AND state IN ('prepared','reserved','running')",
+            "AND state IN ('prepared','reserved','running','uncertain')",
             (now, now, claim_uuid, *release_keys),
         )
     connection.execute(
