@@ -1385,11 +1385,16 @@ def _event_trace_carrier(event: StoredEvent) -> dict[str, str]:
 
 
 def _message_trace_carrier(message: dict[str, Any]) -> dict[str, str]:
-    return {
-        "trace_id": str(message.get("trace_id") or ""),
+    # 保留控制信封实际携带的字段边界。尤其不能把缺失的 ``trace_id``
+    # 扩写为空字符串，否则重放路径会把“没有该只读投影”误表示为“收到一个
+    # 无效投影”，并让下游载体合同与原始持久命令不一致。
+    carrier = {
         "traceparent": str(message.get("traceparent") or ""),
         "tracestate": str(message.get("tracestate") or ""),
     }
+    if message.get("trace_id"):
+        carrier["trace_id"] = str(message["trace_id"])
+    return carrier
 
 
 def _current_trace_carrier(

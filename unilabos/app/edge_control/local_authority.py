@@ -1459,13 +1459,12 @@ class LocalEdgeControlAuthority:
         """把动作进程重启事实同步送入工站调度生命周期。
 
         参数：``job_uuids`` 是本地账本刚标为不确定的在途作业。返回无；空集合
-        不触发回调。异常：监听器异常原样传播，禁止静默遗失整条 DAG 的失败事实。
-        普通网络断线不会调用本方法。
+        仍传播进程重启事实，使工作流权威能够终结账本尚未记录的等待任务。异常：
+        监听器异常原样传播，禁止静默遗失整条 DAG 的失败事实。普通网络断线不会
+        调用本方法。
         """
 
         affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
-        if not affected:
-            return
         for listener in tuple(self._execution_process_restarted_listeners):
             listener(affected)
 

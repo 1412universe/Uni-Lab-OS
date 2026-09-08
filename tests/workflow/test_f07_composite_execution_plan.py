@@ -412,3 +412,78 @@ def test_composite_static_passthrough_projects_actual_action_params() -> None:
     assert [
         (edge["source_node_uuid"], edge["target_node_uuid"]) for edge in flattened
     ] == [(INTERNAL_UUID, CONSUMER_UUID)]
+
+
+def test_composite_output_binding_is_frozen_against_internal_job() -> None:
+    """父工作流输出引用组合调用时须改写为真实内部 Job，不能保留虚拟节点。"""
+
+    invocation = _composite_node()
+    invocation["meta_data"]["unilab"]["composite"]["source_mappings"] = {
+        INVOCATION_SOURCE: {
+            "kind": "node_output",
+            "workflow_node_uuid": INTERNAL_UUID,
+            "source_handle_uuid": INTERNAL_READY,
+        }
+    }
+    graph = {
+        "workflow": {
+            "uuid": WORKFLOW_UUID,
+            "revision": 1,
+            "name": "composite output",
+            "tags": [],
+            "meta_data": {
+                "unilab": {
+                    "input_contract": {"version": 1, "parameters": []},
+                    "output_contract": {
+                        "version": 1,
+                        "outputs": [
+                            {"name": "result", "schema": {"type": "integer"}}
+                        ],
+                    },
+                    "output_bindings": {
+                        "result": {
+                            "kind": "node_output",
+                            "workflow_node_uuid": INVOCATION_UUID,
+                            "source_handle_uuid": INVOCATION_SOURCE,
+                        }
+                    },
+                }
+            },
+        },
+        "nodes": [invocation, _node(INTERNAL_UUID, INTERNAL_TEMPLATE)],
+        "edges": [],
+        "node_templates": [
+            {
+                "uuid": INVOCATION_TEMPLATE,
+                "node_type": "workflow",
+                "type": "workflow",
+            },
+            {"uuid": INTERNAL_TEMPLATE, "node_type": "compute", "type": "compute"},
+        ],
+        "handle_templates": [
+            handle
+            for handle in _handles()
+            if handle["uuid"] in {INVOCATION_SOURCE, INTERNAL_READY}
+        ],
+    }
+
+    plan, jobs = ExecutionPlanBuilder().build(
+        graph, run_mode="normal", target_node_uuid=None
+    )
+    prepared = prepare_task_input(
+        graph=graph,
+        raw_input={},
+        execution_plan=plan,
+        jobs=jobs,
+    )
+
+    output_node = next(
+        node
+        for node in prepared.execution_plan["nodes"]
+        if node.get("kind") == "workflow_output"
+    )
+    assert output_node["output_bindings"]["result"] == {
+        "kind": "node_output",
+        "workflow_node_uuid": INTERNAL_UUID,
+        "source_handle_uuid": INTERNAL_READY,
+    }
