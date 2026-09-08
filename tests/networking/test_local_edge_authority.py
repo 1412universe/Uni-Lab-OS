@@ -998,6 +998,22 @@ def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
         authority.stop()
 
 
+def test_restart_notification_with_empty_edge_ledger_reaches_scheduler(
+    tmp_path: Path,
+) -> None:
+    """进程身份变化本身就是崩溃证据；空 Edge 账本也必须唤醒任务恢复。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    notifications: list[tuple[str, ...]] = []
+    authority.add_execution_process_restarted_listener(notifications.append)
+    try:
+        authority.notify_execution_process_restarted(())
+    finally:
+        authority.stop()
+
+    assert notifications == [()]
+
+
 def test_fail_restarted_jobs_clears_unknown_busy_key(tmp_path: Path) -> None:
     """工作流已失败后，Edge 账本须把 unknown 作业收成 failed 并释放忙碌键。"""
 

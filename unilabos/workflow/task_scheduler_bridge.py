@@ -1203,8 +1203,9 @@ class TaskSchedulerBridge:
         单项投影故障在其余任务全部处理后聚合为 ``TaskSchedulerBridgeError``；陈旧
         终态任务幂等跳过。Runtime 崩溃证明该进程承载的物理动作均已停止，因此
         不只处理账本列出的在途作业：每个非终态任务都只投影一次，运行中作业进入
-        失败，尚未物理执行的节点进入取消。普通 Claim/Fence 与任务预留释放；
-        重启前已经等待物理对账及其 preheld provider 的占用保持 uncertain。
+        失败，尚未物理执行的节点进入取消。无库存变化的 Claim/Fence 与任务预留
+        释放；转运/分装以及重启前已经等待物理对账的 Job 和其 preheld provider
+        占用保持 uncertain。
         """
 
         task_uuids: list[str] = []
@@ -1307,8 +1308,8 @@ class TaskSchedulerBridge:
     ) -> None:
         """runtime 重启终止任务后，释放本次中断的资源。
 
-        重启前已终态且仍需物理对账/交接的 Job 不属于本次中断；它们的
-        Inventory/Workflow Claim 必须继续阻断其他 Task。
+        重启前已终态且仍需物理对账/交接的 Job，以及本次中断后实际物料位置
+        未知的转运/分装 Job，其 Inventory/Workflow Claim 必须继续阻断其他 Task。
         """
 
         task = aggregate.get("task")

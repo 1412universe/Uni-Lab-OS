@@ -1282,7 +1282,10 @@ def test_edge_http_outcome_projects_exact_terminal_evidence(
     assert job["error_info"] == error_info
 
 
-@pytest.mark.parametrize("outcome", ["succeeded", "failed", "canceled", "timeout"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["succeeded", "failed", "canceled", "timeout", "runtime_restart"],
+)
 def test_edge_material_transfer_settles_only_after_inventory_is_certain(
     store: WorkflowStore,
     outcome: str,
@@ -1370,6 +1373,18 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             assert claim_uuid == "75000000-0000-4000-8000-000000000001"
             self.claim_states.append(target_state)
 
+        def release_unprojected_dispatch_permits(
+            self,
+            *,
+            known_claim_uuids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            """恢复扫描只观察当前 Workflow Claim，不改写测试 Permit。"""
+
+            assert known_claim_uuids == (
+                "75000000-0000-4000-8000-000000000001",
+            )
+            return ()
+
         def move_instance(self, material_uuid: str, **kwargs: Any) -> dict[str, Any]:
             """记录转移结算命令并返回同一事实。
 
@@ -1448,25 +1463,37 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
     bridge = _bridge(store, scheduler)
     try:
         bridge.submit(store.get_task(TASK_UUID))
-        scheduler.on_job_outcome(
-            JOB_UUID,
-            CommittedJobOutcome(
-                outcome=outcome,
-                return_info={"result": "ok" if outcome == "succeeded" else "stopped"},
-                error_info=(
-                    [] if outcome == "succeeded" else [{"code": "grip_failed"}]
+        expected_outcome = "failed" if outcome == "runtime_restart" else outcome
+        if outcome == "runtime_restart":
+            scheduler.on_execution_process_restarted((JOB_UUID,))
+            assert bridge.recover_active_tasks() == []
+        else:
+            scheduler.on_job_outcome(
+                JOB_UUID,
+                CommittedJobOutcome(
+                    outcome=outcome,
+                    return_info={
+                        "result": "ok" if outcome == "succeeded" else "stopped"
+                    },
+                    error_info=(
+                        [] if outcome == "succeeded" else [{"code": "grip_failed"}]
+                    ),
+                    unknown_command_ids=[],
                 ),
-                unknown_command_ids=[],
-            ),
-        )
-        if outcome != "succeeded":
+            )
+        if expected_outcome != "succeeded":
             failed_job = store.get_job(JOB_UUID)
-            assert failed_job["status"] == outcome
+            assert failed_job["status"] == expected_outcome
             assert failed_job["uncertainty_reason"] == (
                 "material_transfer_inventory_reconciliation_required"
             )
             assert inventory.moves == []
-            assert inventory.claim_states == ["reserved", "running", "uncertain"]
+            assert inventory.claim_states == [
+                "reserved",
+                "running",
+                "uncertain",
+                *(["uncertain"] if outcome == "runtime_restart" else []),
+            ]
             assert {
                 item["state"]
                 for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
@@ -1501,8 +1528,8 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             ),
         }
     ]
-    assert store.get_job(JOB_UUID)["status"] == outcome
-    assert store.get_task(TASK_UUID)["status"] == outcome
+    assert store.get_job(JOB_UUID)["status"] == expected_outcome
+    assert store.get_task(TASK_UUID)["status"] == expected_outcome
     assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
     if outcome == "succeeded":
         assert inventory.claim_states == ["reserved", "running", "released"]
@@ -1511,6 +1538,7 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             "reserved",
             "running",
             "uncertain",
+            *(["uncertain"] if outcome == "runtime_restart" else []),
             "released",
         ]
         assert store.get_task(TASK_UUID)["control_status"] == "active"

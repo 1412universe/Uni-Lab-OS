@@ -13,6 +13,11 @@ from unilabos.workflow.event_writer import (
 from unilabos.workflow.job_evidence import record_job_result
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.manual_confirmation import close_pending_manual_confirmation
+from unilabos.workflow.physical_settlement_policy import (
+    PhysicalSettlementPolicyError,
+    TerminalSettlementPlan,
+    plan_terminal_settlement,
+)
 from unilabos.workflow.station_status_projection import (
     append_job_state_event,
     append_task_state_event,
@@ -44,9 +49,10 @@ def fail_task_after_execution_process_restart(
     任务或作业缺失时抛
     ``StoreNotFound``/``StoreConflict``，SQLite 写入错误原样传播。
 
-    已完成节点保持终态；在途节点失败；未开始节点取消且永不恢复。只释放本次
-    重启终结 Job 的旧 Claim、Lease 与 Fence；重启前已进入物理对账的
-    终态 Job 仍保持占用。
+    已完成节点保持终态；在途节点失败；未开始节点取消且永不恢复。明确无库存
+    变化的中断 Job 释放旧 Claim、Lease 与 Fence；转运/分装虽已物理停止，实际
+    物料位置仍可能变化，必须进入 uncertain 并保持占用到库存对账完成。重启前
+    已进入物理对账的终态 Job 同样保持占用。
     """
 
     task = connection.execute(
@@ -104,7 +110,46 @@ def fail_task_after_execution_process_restart(
         if str(job["status"]) in _TERMINAL_JOB_STATES
         and str(job["uncertainty_reason"] or "").strip()
     ]
-    retained_uncertain_job_uuids = restart_retained_uncertain_job_uuids(jobs)
+    restart_settlements: dict[str, TerminalSettlementPlan] = {}
+    for job in jobs:
+        if str(job["status"]) not in _IN_FLIGHT_JOB_STATES:
+            continue
+        job_uuid = str(job["uuid"])
+        try:
+            expected_change_set = decode_json_bytes(
+                str(job["expected_change_set"] or "{}").encode("utf-8")
+            )
+            control_data = decode_json_bytes(
+                str(job["control_data"] or "{}").encode("utf-8")
+            )
+        except (TypeError, ValueError, UnicodeError) as error:
+            raise StoreConflict(
+                f"重启作业物理结算审计字段已损坏：{job_uuid}"
+            ) from error
+        if not isinstance(expected_change_set, Mapping) or not isinstance(
+            control_data,
+            Mapping,
+        ):
+            raise StoreConflict(f"重启作业物理结算审计字段已损坏：{job_uuid}")
+        try:
+            restart_settlements[job_uuid] = plan_terminal_settlement(
+                outcome="failed",
+                return_info={},
+                error_info=failure_details,
+                expected_change_set=expected_change_set,
+                control_data=control_data,
+                # dispatched/running/cancel_requested 已越过工作流派发边界；只有
+                # Edge 明确提交 local_no_send_proof 才能证明从未物理执行，而该
+                # 证明会走标准终态结果路径，不会进入本恢复函数。
+                proven_not_started=False,
+            )
+        except PhysicalSettlementPolicyError as error:
+            raise StoreConflict(str(error)) from error
+    retained_uncertain_job_uuids = restart_retained_uncertain_job_uuids(jobs) | {
+        job_uuid
+        for job_uuid, settlement in restart_settlements.items()
+        if settlement.hold_claim
+    }
     protected_provider_claims = _restart_preheld_provider_claims(
         connection,
         task_uuid=task_uuid,
@@ -116,11 +161,13 @@ def fail_task_after_execution_process_restart(
         job_uuid = str(job["uuid"])
         status = str(job["status"])
         if status in _IN_FLIGHT_JOB_STATES:
+            settlement = restart_settlements[job_uuid]
             changed = connection.execute(
                 """
                 UPDATE workflow_node_job
                 SET status = 'failed', error_info = ?, wait_reason = '{}',
-                    uncertainty_reason = NULL, cancel_ack_deadline_at = NULL,
+                    control_data = ?, uncertainty_reason = ?,
+                    cancel_ack_deadline_at = NULL,
                     cancel_complete_deadline_at = NULL, finished_at = ?,
                     update_time = ?
                 WHERE uuid = ?
@@ -131,6 +178,10 @@ def fail_task_after_execution_process_restart(
                 """,
                 (
                     failure_info,
+                    encode_json(settlement.control_data, sort_keys=True).decode(
+                        "utf-8"
+                    ),
+                    settlement.uncertainty_reason,
                     failed_at,
                     failed_at,
                     job_uuid,
@@ -316,14 +367,23 @@ def fail_task_after_execution_process_restart(
 
     retained_uncertainty_reason = next(
         (
-            str(job["uncertainty_reason"]).strip()
-            for job in retained_uncertain_jobs
-            if str(job["uncertainty_reason"] or "").strip()
+            reason
+            for reason in (
+                *(
+                    str(job["uncertainty_reason"] or "").strip()
+                    for job in retained_uncertain_jobs
+                ),
+                *(
+                    str(settlement.uncertainty_reason or "").strip()
+                    for settlement in restart_settlements.values()
+                ),
+            )
+            if reason
         ),
         "",
     )
     existing_attention_reason = str(task["attention_reason"] or "").strip()
-    retains_physical_resources = bool(retained_uncertain_jobs)
+    retains_physical_resources = bool(retained_uncertain_job_uuids)
     if retains_physical_resources:
         cleanup_status = "requires_attention"
         attention_reason = (

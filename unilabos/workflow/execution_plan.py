@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
@@ -397,7 +398,10 @@ class ExecutionPlanBuilder:
                 }
                 and template.get("schema") is not None
             ):
-                planned_node["param_schema"] = template["schema"]
+                planned_node["param_schema"] = self._frozen_param_schema(
+                    template,
+                    node_uuid=node_uuid,
+                )
             if requirements.get(node_uuid):
                 planned_node["material_requirements"] = requirements[node_uuid]
             if material_binding_targets.get(node_uuid):
@@ -1479,6 +1483,33 @@ class ExecutionPlanBuilder:
                 f"设备动作模板缺少完整动作合同：{node_uuid}",
             )
         return deepcopy(dict(contract))
+
+    @staticmethod
+    def _frozen_param_schema(
+        template: Mapping[str, Any], *, node_uuid: str
+    ) -> dict[str, Any]:
+        """冻结非设备节点的参数 Schema，并兼容 Backend 的 JSON 文本格式。
+
+        参数：``template`` 是应用图冻结的节点模板，``node_uuid`` 是诊断使用的
+        节点身份。返回：与模板容器隔离的 JSON Schema 对象。异常：Schema 文本
+        不是合法 JSON，或解码后不是对象时抛 ``ExecutionPlanBuildError``。
+        """
+
+        schema = template.get("schema")
+        if isinstance(schema, str):
+            try:
+                schema = json.loads(schema)
+            except json.JSONDecodeError as error:
+                raise ExecutionPlanBuildError(
+                    "invalid_param_schema",
+                    f"节点参数 Schema 不是合法 JSON：{node_uuid}",
+                ) from error
+        if not isinstance(schema, Mapping):
+            raise ExecutionPlanBuildError(
+                "invalid_param_schema",
+                f"节点参数 Schema 必须是对象：{node_uuid}",
+            )
+        return deepcopy(dict(schema))
 
     @staticmethod
     def _frozen_action_resource_contract(
