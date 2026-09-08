@@ -48,7 +48,7 @@ def test_plan_resource_cannot_disappear_from_inventory_projection() -> None:
     assert dispatcher.dispatched == []
 
 
-def test_certain_failure_releases_interval_with_unstarted_successor(core_runtime) -> None:
+def test_certain_failure_latches_interval_with_unstarted_successor(core_runtime) -> None:
     from tests.scheduler_core.test_resource_occupancy_intervals import _continuous_task
     from tests.scheduler_core.conftest import stable_uuid
 
@@ -57,9 +57,16 @@ def test_certain_failure_releases_interval_with_unstarted_successor(core_runtime
     )
     core_runtime.submit(task_name="review-failed-waiter", devices=["reactor-a"])
     core_runtime.scheduler.on_job_finished(jobs[0], False, {})
-    assert core_runtime.dispatcher.dispatched[-1]["job_id"] == stable_uuid(
-        "job:review-failed-waiter:0"
+    waiter_job_uuid = stable_uuid("job:review-failed-waiter:0")
+    assert waiter_job_uuid not in {
+        payload["job_id"] for payload in core_runtime.dispatcher.dispatched
+    }
+    core_runtime.bridge.unlock_resources(
+        owner["task"]["uuid"],
+        command_uuid=stable_uuid("command:review-failed-sequence-unlock"),
+        reason="操作员确认失败动作已停止且连续区间资源安全",
     )
+    assert core_runtime.dispatcher.dispatched[-1]["job_id"] == waiter_job_uuid
 
 
 def test_failed_physical_handoff_keeps_inventory_and_mirror_until_recovery(

@@ -155,7 +155,7 @@ def test_each_shared_scope_job_persists_the_complete_authoritative_fences(
 
 @pytest.mark.parametrize("completion_order", [(0, 1), (1, 0)])
 @pytest.mark.parametrize("terminal_outcome", ["failed", "canceled"])
-def test_shared_scope_releases_settled_nonphysical_claims_after_terminal_branch(
+def test_shared_scope_abnormal_branch_requires_operator_release(
     core_runtime: CoreRuntime, completion_order: tuple[int, int], terminal_outcome: str
 ) -> None:
     runtime = core_runtime
@@ -174,24 +174,29 @@ def test_shared_scope_releases_settled_nonphysical_claims_after_terminal_branch(
         if position == 0:
             assert len(runtime.dispatcher.dispatched) == 2, "另一个物理命令未结算就释放共同范围"
     assert runtime.workflow_store.get_task(task_uuid)["status"] == terminal_outcome
-    assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_id
-    assert (
-        runtime.inventory_store.query_all(
-            "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
-            "AND state IN ('prepared','reserved','running','uncertain')",
-            (task_uuid,),
-        )
-        == []
+    assert waiter_id not in {
+        payload["job_id"] for payload in runtime.dispatcher.dispatched
+    }
+    assert runtime.inventory_store.query_all(
+        "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
+        "AND state IN ('prepared','reserved','running','uncertain')",
+        (task_uuid,),
     )
     with runtime.workflow_store.read() as connection:
-        assert (
-            connection.execute(
-                "SELECT uuid FROM execution_lock_lease WHERE workflow_task_uuid=? "
-                "AND state IN ('reserved','running','uncertain')",
-                (task_uuid,),
-            ).fetchall()
-            == []
-        )
+        assert connection.execute(
+            "SELECT uuid FROM execution_lock_lease WHERE workflow_task_uuid=? "
+            "AND state IN ('reserved','running','uncertain')",
+            (task_uuid,),
+        ).fetchall()
+
+    runtime.bridge.unlock_resources(
+        task_uuid,
+        command_uuid=stable_uuid(
+            f"command:unlock-{terminal_outcome}-{completion_order}"
+        ),
+        reason="操作员确认异常分支已经停止并核对现场资源",
+    )
+    assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_id
 
 
 @pytest.mark.parametrize("peer_outcome", ["succeeded", "failed"])
@@ -210,9 +215,112 @@ def test_shared_scope_unknown_peer_keeps_claim_until_certain_result(
         "SELECT state FROM station_execution_claim WHERE job_uuid=?", (jobs[1],)
     ) == [{"state": "uncertain"}]
     runtime.scheduler.on_job_outcome(jobs[1], outcome("succeeded"))
-    assert runtime.dispatcher.dispatched[-1]["job_id"] == stable_uuid("job:scope-waiter:0")
+    waiter_id = stable_uuid("job:scope-waiter:0")
+    if peer_outcome == "succeeded":
+        assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_id
+    else:
+        assert waiter_id not in {
+            payload["job_id"] for payload in runtime.dispatcher.dispatched
+        }
+        runtime.bridge.unlock_resources(
+            owner["task"]["uuid"],
+            command_uuid=stable_uuid("command:unlock-resolved-unknown-scope"),
+            reason="操作员确认失败分支与曾不确定分支均已完成现场核对",
+        )
+        assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_id
     assert runtime.inventory_store.query_all(
         "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
         "AND state IN ('prepared','reserved','running','uncertain')",
         (owner["task"]["uuid"],),
     ) == []
+
+
+def test_shared_scope_failure_keeps_every_lock_until_operator_unlocks(
+    core_runtime: CoreRuntime,
+) -> None:
+    """连续区间任一动作失败后整组冻结，只能由操作员显式释放。"""
+
+    runtime = core_runtime
+    owner, jobs = submit_shared_scope(runtime)
+    task_uuid = str(owner["task"]["uuid"])
+    waiter_job_uuid = stable_uuid("job:scope-waiter:0")
+    runtime.submit(task_name="scope-waiter", devices=["warehouse-a"], priority="high")
+
+    dispatched_owner_jobs = [
+        payload["job_id"]
+        for payload in runtime.dispatcher.dispatched
+        if payload["job_id"] in jobs
+    ]
+    assert dispatched_owner_jobs
+    failed_job_uuid = dispatched_owner_jobs[0]
+    runtime.scheduler.on_job_finished(failed_job_uuid, False, {}, "failed")
+
+    assert runtime.workflow_store.get_task(task_uuid)["status"] == "failed"
+    assert waiter_job_uuid not in {
+        payload["job_id"] for payload in runtime.dispatcher.dispatched
+    }
+    assert runtime.inventory_store.query_all(
+        "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
+        "AND state IN ('prepared','reserved','running','uncertain')",
+        (task_uuid,),
+    )
+    with runtime.workflow_store.read() as connection:
+        assert connection.execute(
+            "SELECT uuid FROM execution_lock_lease WHERE workflow_task_uuid=? "
+            "AND state IN ('reserved','running','uncertain')",
+            (task_uuid,),
+        ).fetchall()
+
+    # 同区间已经派发的兄弟动作必须先由设备结算；它结束后失败闩锁仍不能
+    # 自动打开，操作员才可以在现场核对完成后整组释放。
+    running_peer_uuid = next(job_uuid for job_uuid in jobs if job_uuid != failed_job_uuid)
+    runtime.scheduler.on_job_finished(running_peer_uuid, True, {})
+    assert waiter_job_uuid not in {
+        payload["job_id"] for payload in runtime.dispatcher.dispatched
+    }
+
+    result = runtime.bridge.unlock_resources(
+        task_uuid,
+        command_uuid=stable_uuid("command:unlock-failed-shared-scope"),
+        reason="操作员已确认设备停止并完成物料与库位核对",
+    )
+
+    assert result["cleanup_status"] == "settled"
+    assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_job_uuid
+
+
+def test_execution_process_restart_also_latches_continuous_scope(
+    core_runtime: CoreRuntime,
+) -> None:
+    """执行进程重启属于失败，不能绕过连续区间的人工释放闩锁。"""
+
+    runtime = core_runtime
+    owner, jobs = submit_shared_scope(runtime)
+    task_uuid = str(owner["task"]["uuid"])
+    waiter_job_uuid = stable_uuid("job:scope-waiter:0")
+
+    runtime.scheduler.on_execution_process_restarted((jobs[0],))
+    runtime.submit(task_name="scope-waiter", devices=["warehouse-a"], priority="high")
+
+    assert runtime.workflow_store.get_task(task_uuid)["status"] == "failed"
+    assert waiter_job_uuid not in {
+        payload["job_id"] for payload in runtime.dispatcher.dispatched
+    }
+    assert runtime.inventory_store.query_all(
+        "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
+        "AND state IN ('prepared','reserved','running','uncertain')",
+        (task_uuid,),
+    )
+    with runtime.workflow_store.read() as connection:
+        assert connection.execute(
+            "SELECT uuid FROM execution_lock_lease WHERE workflow_task_uuid=? "
+            "AND state IN ('reserved','running','uncertain')",
+            (task_uuid,),
+        ).fetchall()
+
+    runtime.bridge.unlock_resources(
+        task_uuid,
+        command_uuid=stable_uuid("command:unlock-restarted-shared-scope"),
+        reason="操作员确认执行进程重启后所有动作停止且现场资源安全",
+    )
+    assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_job_uuid

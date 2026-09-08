@@ -21,6 +21,7 @@ from unilabos.workflow.resource_lock_plan import (
     serialize_resource_plan,
     validate_resource_plan,
 )
+from unilabos.workflow.resource_lock_key import material_lock_key, site_lock_key
 
 
 def test_direct_successor_reuses_resource_and_adds_one_atomic_resource() -> None:
@@ -82,6 +83,83 @@ def test_root_scope_is_hard_boundary_and_serializes_deterministically() -> None:
     assert photo_interval.scope_id == root.scope_id
     assert serialized == serialize_resource_plan(restored)
     assert resource_plan_for_node(plan, "capture")["plan_id"] == plan.plan_id
+
+
+def test_continuous_scope_merges_every_member_resource_into_one_full_interval() -> None:
+    """连续作用域必须提前持有其中所有动作的设备、物料和库位资源。"""
+
+    plan = compile_template_resource_plan(
+        {
+            "workflow_uuid": "workflow-merged-continuous-scope",
+            "nodes": [
+                {
+                    "uuid": "prepare",
+                    "resource_defaults": ["reactor", "sample", "reactor-site"],
+                },
+                {
+                    "uuid": "finish",
+                    "resource_defaults": ["robot"],
+                },
+            ],
+            "edges": [
+                {"source_node_uuid": "prepare", "target_node_uuid": "finish"}
+            ],
+            "resource_scopes": [
+                {
+                    "scope_id": "continuous-operation",
+                    "kind": "with",
+                    "resources": ["operator-declared"],
+                    "node_uuids": ["prepare", "finish"],
+                }
+            ],
+        }
+    )
+
+    scope = next(item for item in plan.scopes if item.scope_id == "continuous-operation")
+    aliases_by_id = {item.resource_id: item.alias for item in plan.resources}
+    assert {aliases_by_id[item] for item in scope.resource_ids} == {
+        "operator-declared",
+        "reactor",
+        "sample",
+        "reactor-site",
+        "robot",
+    }
+    for alias in aliases_by_id.values():
+        interval = next(
+            item
+            for item in plan.intervals
+            if aliases_by_id[item.resource_id] == alias
+        )
+        assert interval.scope_id == scope.scope_id
+        assert interval.node_uuids == ("prepare", "finish")
+
+    device_uuid = "00000000-0000-4000-8000-000000000101"
+    sample_uuid = "00000000-0000-4000-8000-000000000102"
+    owner_uuid = "00000000-0000-4000-8000-000000000103"
+    site_uuid = "00000000-0000-4000-8000-000000000104"
+    robot_uuid = "00000000-0000-4000-8000-000000000105"
+    bound = bind_station_resource_plan(
+        plan,
+        {
+            "reactor": {"instance_uuid": device_uuid, "kind": "device"},
+            "sample": {"instance_uuid": sample_uuid, "kind": "material"},
+            "reactor-site": {
+                "canonical_key": site_lock_key(owner_uuid, site_uuid),
+                "kind": "site",
+            },
+            "robot": {"instance_uuid": robot_uuid, "kind": "device"},
+        },
+    )
+    bound_scope = next(
+        item for item in bound.scopes if item.scope_id == "continuous-operation"
+    )
+    keys_by_id = {item.resource_id: item.canonical_key for item in bound.resources}
+    assert {
+        f"/devices/{device_uuid}",
+        material_lock_key(sample_uuid),
+        site_lock_key(owner_uuid, site_uuid),
+        f"/devices/{robot_uuid}",
+    } <= {keys_by_id[item] for item in bound_scope.resource_ids}
 
 
 def test_parallel_sibling_resource_identity_is_not_merged() -> None:
@@ -286,8 +364,8 @@ def test_non_atomic_acquire_set_cannot_be_admitted() -> None:
     assert caught.value.code == "non_atomic_acquire"
 
 
-def test_root_and_lexical_scopes_compose_without_cross_boundary_merge() -> None:
-    """根资源与词法资源可叠加，离开词法边界后不延长其区间。"""
+def test_root_scope_absorbs_nested_and_member_resources() -> None:
+    """根连续区间一次取得嵌套作用域与所有成员动作的完整资源集合。"""
 
     plan = compile_template_resource_plan(
         {
@@ -317,18 +395,17 @@ def test_root_and_lexical_scopes_compose_without_cross_boundary_merge() -> None:
     robot_intervals = [
         item for item in plan.intervals if item.resource_id == robot.resource_id
     ]
-    assert len(robot_intervals) == 3
-    assert {item.node_uuids for item in robot_intervals} == {
-        ("before",),
-        ("inside",),
-        ("after",),
-    }
+    assert len(robot_intervals) == 1
+    assert robot_intervals[0].node_uuids == ("before", "inside", "after")
+    assert robot_intervals[0].scope_id == "root"
+    assert robot_intervals[0].explicit_boundary is True
     robot_acquires = [
         item
         for item in plan.acquire_sets
         if robot.resource_id in item.resource_ids
     ]
-    assert len(robot_acquires) == 3
+    assert len(robot_acquires) == 1
+    assert robot_acquires[0].node_uuid == "before"
 
 
 def test_nested_same_resource_scope_keeps_one_outer_interval() -> None:

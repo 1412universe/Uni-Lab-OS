@@ -207,7 +207,13 @@ def test_explicit_dependencies_exclude_nonoverlapping_reverse_relations():
             ],
         }
     )
-    assert len(plan.relations) == 2
+    assert plan.relations == ()
+    aliases_by_id = {resource.resource_id: resource.alias for resource in plan.resources}
+    assert [
+        {aliases_by_id[resource_id] for resource_id in scope.resource_ids}
+        for scope in plan.scopes
+        if scope.scope_id in {"first", "second"}
+    ] == [{"A", "B"}, {"A", "B"}]
 
 
 def test_resource_binding_changes_plan_identity():
@@ -319,8 +325,8 @@ def test_runtime_accepts_transfer_role_lists_and_rejects_unsettled_step():
         )
 
 
-def test_parallel_scope_release_requires_all_members_before_cycle_exclusion():
-    """拓扑最后成员已结束不证明仍在等待的兄弟释放了共同资源。"""
+def test_parallel_scopes_merge_complete_sets_to_eliminate_incremental_cycle():
+    """并行作用域在入口原子取得完整集合，不再生成中途反向取得环。"""
     graph = {
         "nodes": [node("a0"), node("a1"), node("b0", ["B"]), node("c0"), node("c1", ["A"])],
         "edges": [edge("a0", "a1"), edge("a1", "c0"), edge("c0", "c1")],
@@ -334,8 +340,15 @@ def test_parallel_scope_release_requires_all_members_before_cycle_exclusion():
             {"scope_id": "B_scope", "kind": "with", "resources": ["B"], "node_uuids": ["c0", "c1"]},
         ],
     }
-    with pytest.raises(ResourcePlanError, match="成环"):
-        compile_template_resource_plan(graph)
+    plan = compile_template_resource_plan(graph)
+    aliases_by_id = {resource.resource_id: resource.alias for resource in plan.resources}
+    assert plan.relations == ()
+    assert all(
+        {aliases_by_id[resource_id] for resource_id in scope.resource_ids}
+        == {"A", "B"}
+        for scope in plan.scopes
+        if scope.scope_id in {"A_scope", "B_scope"}
+    )
 
 
 @pytest.mark.parametrize("outer_scope", [False, True])
@@ -478,7 +491,7 @@ def test_repeat_second_iteration_keeps_persisted_resource_claim(
     )
 
 
-def test_transfer_must_hold_carrier_until_place_not_just_next_motion():
+def test_root_scope_merges_transfer_carrier_through_place():
     def step(operation, resource, site):
         return {
             "operation": operation,
@@ -488,19 +501,24 @@ def test_transfer_must_hold_carrier_until_place_not_just_next_motion():
             "carrier_resources": ["robot"],
         }
 
-    with pytest.raises(ResourcePlanError, match="不可安全交接"):
-        compile_template_resource_plan(
-            {
-                "resources": ["target", "target-site"],
-                "nodes": [
-                    node("pick", transfer_step=step("pick", "source", "source-site")),
-                    node("move", ["robot"]),
-                    node("camera", ["camera"]),
-                    node("place", transfer_step=step("place", "target", "target-site")),
-                ],
-                "edges": [edge("pick", "move"), edge("move", "camera"), edge("camera", "place")],
-            }
-        )
+    plan = compile_template_resource_plan(
+        {
+            "resources": ["target", "target-site"],
+            "nodes": [
+                node("pick", transfer_step=step("pick", "source", "source-site")),
+                node("move", ["robot"]),
+                node("camera", ["camera"]),
+                node("place", transfer_step=step("place", "target", "target-site")),
+            ],
+            "edges": [edge("pick", "move"), edge("move", "camera"), edge("camera", "place")],
+        }
+    )
+    assert intervals(plan, "robot")[0].node_uuids == (
+        "pick",
+        "move",
+        "camera",
+        "place",
+    )
 
 
 def test_bound_builder_merges_aliases_before_rejecting_symbolic_cycle():
@@ -658,10 +676,10 @@ def test_failed_or_skipped_place_cannot_release_successful_pick(terminal):
     assert continuing_resource_interval_ids(
         plan, ids, "place", completed, current_completed=False
     ) == tuple(ids)
-    from unilabos.workflow.task_scheduler_bridge import _continuing_interval_ids_for_result
+    from unilabos.workflow.task_scheduler_bridge import _retained_interval_ids_for_result
 
     jobs[1]["control_data"] = {"resource_interval_ids": ids}
-    assert _continuing_interval_ids_for_result({"execution_plan": plan}, jobs[1], jobs) == tuple(
+    assert _retained_interval_ids_for_result({"execution_plan": plan}, jobs[1], jobs) == tuple(
         ids
     )
 

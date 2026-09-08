@@ -799,6 +799,8 @@ class EdgeScheduler:
             ]
             for job_uuid in aborted_job_ids:
                 job = self._inflight.pop(job_uuid, None)
+                if job is not None:
+                    self._record_interval_handoff(job, success=False)
                 self._job_resource_locks.pop(job_uuid, None)
                 action_trace = self._job_spans.pop(job_uuid, None)
                 if action_trace is not None:
@@ -815,7 +817,10 @@ class EdgeScheduler:
                         state="failed",
                     )
             for workflow_id in affected_workflow_ids:
-                self._clear_interval_holders(workflow_id)
+                self._clear_interval_holders(
+                    workflow_id,
+                    preserve_explicit=True,
+                )
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
 
@@ -1896,12 +1901,12 @@ class EdgeScheduler:
                     job.node_id,
                     job.workflow_id,
                 )
-            if run.state in {
-                WorkflowState.SUCCESS,
-                WorkflowState.FAILED,
-                WorkflowState.CANCELED,
-                WorkflowState.WAITING_MATERIAL,
-            }:
+            if run.state in {WorkflowState.FAILED, WorkflowState.CANCELED, WorkflowState.TIMEOUT}:
+                self._clear_interval_holders(
+                    job.workflow_id,
+                    preserve_explicit=True,
+                )
+            elif run.state in {WorkflowState.SUCCESS, WorkflowState.WAITING_MATERIAL}:
                 self._clear_interval_holders(job.workflow_id)
 
             # normal→step 的切换请求在最后一个在途 Job 结算前始终保持排空态；
@@ -2320,14 +2325,14 @@ class EdgeScheduler:
                 for key in job.resource_lock_keys
                 if key not in shared_scope_holders.get(job.job_id, set())
             }
-            nonshareable_active_keys.update(
-                {
-                    device_lock_key(identity)
-                    for job in self._inflight.values()
-                    for identity in (job.device_id, job.device_material_uuid)
-                    if identity
-                }
-            )
+            for job in self._inflight.values():
+                shared_keys = shared_scope_holders.get(job.job_id, set())
+                for identity in (job.device_id, job.device_material_uuid):
+                    if not identity:
+                        continue
+                    key = device_lock_key(identity)
+                    if key not in shared_keys:
+                        nonshareable_active_keys.add(key)
             # 默认连续区间只能由一个在途后继接管。只有显式共同 scope 才允许
             # 同 Task 的并行 Job 复用同一资源；层级 Material/Site 锁也按真实
             # 冲突关系移出可继承集合，避免后继绕过当前在途持有者。
@@ -3183,7 +3188,11 @@ class EdgeScheduler:
                 or any(job.workflow_id == wid for job in self._inflight.values())
             ):
                 continue
-            self._clear_interval_holders(wid)
+            self._clear_interval_holders(
+                wid,
+                preserve_explicit=run.state
+                in {WorkflowState.FAILED, WorkflowState.CANCELED, WorkflowState.TIMEOUT},
+            )
             self._notified_workflows.add(wid)
             pending.append((wid, run.state.value))
             self._emit_monitor(
@@ -3211,7 +3220,14 @@ class EdgeScheduler:
                 if workflow_trace is not None and state != WorkflowState.SUCCESS.value:
                     workflow_trace.error(f"workflow {state}")
                 # 终态工作流释放剩余 active 预留（幂等，依据 DB 状态而非内存）
-                if wid in self._material_workflows:
+                run = self._workflows.get(wid)
+                plan = self._resource_plan_for_spec(run.spec) if run is not None else None
+                retains_explicit_failure = bool(
+                    state != WorkflowState.SUCCESS.value
+                    and plan is not None
+                    and any(interval.explicit_boundary for interval in plan.intervals)
+                )
+                if wid in self._material_workflows and not retains_explicit_failure:
                     self._safe_inventory_call(
                         "release_workflow",
                         wid,
@@ -3674,6 +3690,44 @@ class EdgeScheduler:
         for interval_id in job.resource_interval_ids:
             interval = intervals.get(interval_id)
             key = (job.workflow_id, interval_id)
+            resources = {item.resource_id: item for item in plan.resources}
+            held = (
+                {
+                    _bound_resource_lock_key(
+                        {
+                            "canonical_key": resources[interval.resource_id].canonical_key,
+                            "kind": resources[interval.resource_id].kind,
+                            "instance_uuid": resources[interval.resource_id].instance_uuid,
+                        }
+                    )
+                }
+                & set(job.resource_lock_keys)
+                if interval is not None
+                else set()
+            )
+            failure_latched = bool(
+                interval is not None
+                and interval.explicit_boundary
+                and (
+                    not success
+                    or run.state
+                    in {
+                        WorkflowState.FAILED,
+                        WorkflowState.CANCELED,
+                        WorkflowState.TIMEOUT,
+                    }
+                )
+            )
+            if failure_latched:
+                # 显式连续区间的异常结果是单向闩锁。保留已经取得的物理键，
+                # 直到任务级 ``unlock_resources`` 完成人工整组释放。
+                if held:
+                    self._interval_resource_holders.setdefault(key, set()).update(held)
+                    self._interval_resource_holder_jobs.setdefault(key, set()).add(
+                        job.job_id
+                    )
+                    self._opened_resource_intervals.add(key)
+                continue
             if (
                 not success
                 or interval is None
@@ -3690,17 +3744,6 @@ class EdgeScheduler:
                 self._interval_resource_holder_jobs.pop(key, None)
                 self._opened_resource_intervals.discard(key)
                 continue
-            resources = {item.resource_id: item for item in plan.resources}
-            held = {
-                _bound_resource_lock_key(
-                    {
-                        "canonical_key": resources[interval.resource_id].canonical_key,
-                        "kind": resources[interval.resource_id].kind,
-                        "instance_uuid": resources[interval.resource_id].instance_uuid,
-                    }
-                )
-            }
-            held &= set(job.resource_lock_keys)
             if held:
                 self._interval_resource_holders[key] = held
                 self._interval_resource_holder_jobs.setdefault(key, set()).add(job.job_id)
@@ -3780,13 +3823,30 @@ class EdgeScheduler:
             for interval_id in job.resource_interval_ids
         )
 
-    def _clear_interval_holders(self, workflow_id: str) -> None:
+    def _clear_interval_holders(
+        self,
+        workflow_id: str,
+        *,
+        preserve_explicit: bool = False,
+    ) -> None:
+        explicit_ids: set[str] = set()
+        if preserve_explicit:
+            run = self._workflows.get(workflow_id)
+            plan = self._resource_plan_for_spec(run.spec) if run is not None else None
+            if plan is not None:
+                explicit_ids = {
+                    interval.interval_id
+                    for interval in plan.intervals
+                    if interval.explicit_boundary
+                }
         for key in tuple(self._interval_resource_holders):
-            if key[0] == workflow_id:
+            if key[0] == workflow_id and key[1] not in explicit_ids:
                 self._interval_resource_holders.pop(key, None)
                 self._interval_resource_holder_jobs.pop(key, None)
         self._opened_resource_intervals = {
-            key for key in self._opened_resource_intervals if key[0] != workflow_id
+            key
+            for key in self._opened_resource_intervals
+            if key[0] != workflow_id or key[1] in explicit_ids
         }
 
     def _release_completed_interval_holders(

@@ -13,6 +13,7 @@ from unilabos.workflow.event_writer import (
 from unilabos.workflow.job_evidence import record_job_result
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.manual_confirmation import close_pending_manual_confirmation
+from unilabos.workflow.execution_lock_lease import release_execution_locks
 from unilabos.workflow.physical_settlement_policy import (
     PhysicalSettlementPolicyError,
     TerminalSettlementPlan,
@@ -22,6 +23,7 @@ from unilabos.workflow.station_status_projection import (
     append_job_state_event,
     append_task_state_event,
 )
+from unilabos.workflow.resource_lock_plan import failed_explicit_resource_interval_ids
 from unilabos.workflow.store import StoreConflict, StoreNotFound, utc_now
 
 EXECUTION_PROCESS_RESTARTED = "execution_process_restarted"
@@ -254,6 +256,22 @@ def fail_task_after_execution_process_restart(
         if status not in _TERMINAL_JOB_STATES:
             raise StoreConflict(f"作业存在无法收敛的重启状态：{job_uuid}/{status}")
 
+    current_jobs = connection.execute(
+        "SELECT * FROM workflow_node_job WHERE workflow_task_uuid=? "
+        "AND deleted_at IS NULL ORDER BY topological_index, uuid",
+        (task_uuid,),
+    ).fetchall()
+    try:
+        execution_plan = decode_json_bytes(
+            str(task["execution_plan"] or "{}").encode("utf-8")
+        )
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise StoreConflict("工作流任务资源计划已损坏") from error
+    failure_latched_interval_ids = failed_explicit_resource_interval_ids(
+        execution_plan if isinstance(execution_plan, Mapping) else {},
+        [dict(job) for job in current_jobs],
+    )
+
     for job in jobs:
         job_uuid = str(job["uuid"])
         if job_uuid in retained_uncertain_job_uuids:
@@ -275,6 +293,14 @@ def fail_task_after_execution_process_restart(
                   AND state IN ('reserved', 'running', 'uncertain')
                 """,
                 (failed_at, job_uuid),
+            )
+            continue
+        if failure_latched_interval_ids:
+            release_execution_locks(
+                connection,
+                job_uuid=job_uuid,
+                now=failed_at,
+                keep_interval_ids=failure_latched_interval_ids,
             )
             continue
         provider_claims = protected_provider_claims.get(job_uuid)

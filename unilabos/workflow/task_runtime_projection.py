@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 from unilabos.workflow.resource_lock_key import (
     is_canonical_generic_resource_lock_key,
 )
+from unilabos.workflow.resource_lock_plan import node_has_explicit_resource_interval
 from unilabos.utils.tracing import normalize_trace_context
 from unilabos.workflow._execution_plan_graph import final_target_data_key
 from unilabos.workflow.device_tenancy import (
@@ -124,7 +125,7 @@ _TERMINAL_JOB_STATES = frozenset(
 )
 
 
-def _continuing_resource_intervals(
+def _retained_resource_intervals(
     *,
     connection: sqlite3.Connection,
     task_row: sqlite3.Row,
@@ -142,10 +143,7 @@ def _continuing_resource_intervals(
     plan = _decode_json_field(task_row["execution_plan"], fallback={})
     if not isinstance(plan, Mapping):
         return ()
-    from unilabos.workflow.resource_lock_plan import (
-        completed_resource_nodes_for_job,
-        continuing_resource_interval_ids,
-    )
+    from unilabos.workflow.resource_lock_plan import retained_resource_interval_ids
 
     completed_jobs = [
         dict(row)
@@ -154,12 +152,11 @@ def _continuing_resource_intervals(
             (job_row["workflow_task_uuid"],),
         )
     ]
-    return continuing_resource_interval_ids(
+    return retained_resource_interval_ids(
         plan,
         interval_ids,
-        str(job_row["workflow_node_uuid"]),
-        completed_resource_nodes_for_job(dict(job_row), completed_jobs, plan),
-        current_completed=job_row["status"] == "succeeded",
+        dict(job_row),
+        completed_jobs,
     )
 
 
@@ -191,7 +188,7 @@ def _reconcile_terminal_resource_intervals(
             connection,
             job_uuid=job_row["uuid"],
             now=now,
-            keep_interval_ids=_continuing_resource_intervals(
+            keep_interval_ids=_retained_resource_intervals(
                 connection=connection,
                 task_row=task_row,
                 job_row=job_row,
@@ -1680,7 +1677,7 @@ class TaskRuntimeProjection:
                 raise StoreConflict(f"任务仍有活动设备托管：{task_uuid}")
             # 确定停止不等于物理交接完成；仍持料的区间不能被终态清理批量释放。
             retained_intervals = any(
-                _continuing_resource_intervals(
+                _retained_resource_intervals(
                     connection=connection,
                     task_row=task_row,
                     job_row=job,
@@ -1735,8 +1732,8 @@ class TaskRuntimeProjection:
 
         参数：Task/Command UUID 已由应用服务校验；``reason`` 是操作员
         留下的现场处置说明。返回清理状态及各类已释放事实数量。
-        异常：Task 或任一 Job 尚未终态时失败关闭；SQLite 故障使整笔
-        工作流库事务回滚。
+        从未越过物理边界的 pending Job 可随异常 Task 一并清理；仍处于
+        dispatched/running 的 Job 会失败关闭。SQLite 故障使整笔工作流库事务回滚。
         """
 
         normalized_reason = str(reason or "").strip()
@@ -1746,18 +1743,18 @@ class TaskRuntimeProjection:
             task_row = self._task_row(connection, task_uuid)
             if task_row["status"] not in {"failed", "canceled", "timeout"}:
                 raise StoreConflict("只有异常终态任务才能人工释放全部资源")
-            nonterminal_job = connection.execute(
+            active_job = connection.execute(
                 """
                 SELECT uuid FROM workflow_node_job
                 WHERE workflow_task_uuid=? AND deleted_at IS NULL
-                  AND status NOT IN ('succeeded','failed','canceled','timeout')
+                  AND status IN ('dispatched','running')
                 ORDER BY topological_index, uuid LIMIT 1
                 """,
                 (task_uuid,),
             ).fetchone()
-            if nonterminal_job is not None:
+            if active_job is not None:
                 raise StoreConflict(
-                    "任务仍有非终态作业，不能人工释放全部资源"
+                    "任务仍有已派发或运行中的作业，不能人工释放全部资源"
                 )
 
             def active_count(table: str, predicate: str) -> int:
@@ -2733,7 +2730,18 @@ class TaskRuntimeProjection:
                 ),
             )
             if no_inventory_change:
-                release_execution_locks(connection, job_uuid=job_uuid, now=now)
+                updated_job = self._job_row(connection, job_uuid)
+                release_execution_locks(
+                    connection,
+                    job_uuid=job_uuid,
+                    now=now,
+                    keep_interval_ids=_retained_resource_intervals(
+                        connection=connection,
+                        task_row=self._task_row(connection, task_uuid),
+                        job_row=updated_job,
+                        control_data=settlement.control_data,
+                    ),
+                )
                 self._resume_task_after_reconciliation(
                     connection,
                     task_uuid=task_uuid,
@@ -2841,10 +2849,22 @@ class TaskRuntimeProjection:
                     job["uncertainty_reason"],
                 ),
             )
-            release_execution_locks(connection, job_uuid=job_uuid, now=now)
+            updated_job = self._job_row(connection, job_uuid)
+            task_uuid = str(job["workflow_task_uuid"])
+            release_execution_locks(
+                connection,
+                job_uuid=job_uuid,
+                now=now,
+                keep_interval_ids=_retained_resource_intervals(
+                    connection=connection,
+                    task_row=self._task_row(connection, task_uuid),
+                    job_row=updated_job,
+                    control_data=updated_control,
+                ),
+            )
             self._resume_task_after_reconciliation(
                 connection,
-                task_uuid=str(job["workflow_task_uuid"]),
+                task_uuid=task_uuid,
                 now=now,
             )
             append_runtime_event(
@@ -2880,6 +2900,7 @@ class TaskRuntimeProjection:
             task = self._task_row(connection, task_uuid)
             task_status = str(task["status"])
             terminal_task = task_status in {"failed", "canceled", "timeout"}
+            execution_plan = _decode_json_field(task["execution_plan"], fallback={})
             tenancies = active_task_device_tenancies(
                 connection,
                 task_uuid=task_uuid,
@@ -2898,7 +2919,7 @@ class TaskRuntimeProjection:
                 str(row["uuid"]): row
                 for row in connection.execute(
                     """
-                    SELECT uuid, status, uncertainty_reason
+                    SELECT uuid, workflow_node_uuid, status, uncertainty_reason
                     FROM workflow_node_job
                     WHERE workflow_task_uuid = ? AND deleted_at IS NULL
                     """,
@@ -2931,6 +2952,11 @@ class TaskRuntimeProjection:
                     ),
                     has_active_tenancy=bool(tenancies),
                 )
+                if job is not None and node_has_explicit_resource_interval(
+                    execution_plan,
+                    str(job["workflow_node_uuid"]),
+                ):
+                    reason = "连续区间锁必须通过任务级人工解锁整组释放"
                 result.append(
                     {
                         **lease,
@@ -2978,7 +3004,7 @@ class TaskRuntimeProjection:
             job_uuid = str(lease["workflow_node_job_uuid"])
             job = connection.execute(
                 """
-                SELECT uuid, status, uncertainty_reason
+                SELECT uuid, workflow_node_uuid, status, uncertainty_reason
                 FROM workflow_node_job
                 WHERE uuid = ? AND workflow_task_uuid = ? AND deleted_at IS NULL
                 """,
@@ -2986,6 +3012,12 @@ class TaskRuntimeProjection:
             ).fetchone()
             if job is None:
                 raise StoreNotFound(f"执行锁所属作业不存在：{job_uuid}")
+            execution_plan = _decode_json_field(task["execution_plan"], fallback={})
+            if node_has_explicit_resource_interval(
+                execution_plan,
+                str(job["workflow_node_uuid"]),
+            ):
+                raise StoreConflict("连续区间锁必须通过任务级人工解锁整组释放")
             job_status = str(job["status"])
             if job_status not in {"failed", "canceled", "timeout"}:
                 raise StoreConflict("只有终态作业才能人工释放执行锁")
@@ -3895,7 +3927,7 @@ class TaskRuntimeProjection:
                 if same_return_info and same_error_info:
                     replayed_at = utc_now()
                     if not job_row["uncertainty_reason"]:
-                        keep_interval_ids = _continuing_resource_intervals(
+                        keep_interval_ids = _retained_resource_intervals(
                             connection=connection,
                             task_row=task_row,
                             job_row=job_row,
@@ -3965,7 +3997,7 @@ class TaskRuntimeProjection:
                     now=finished_at,
                 )
             else:
-                keep_interval_ids = _continuing_resource_intervals(
+                keep_interval_ids = _retained_resource_intervals(
                     connection=connection,
                     task_row=task_row,
                     job_row=job_row,

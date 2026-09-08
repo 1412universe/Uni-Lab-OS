@@ -482,9 +482,61 @@ def compile_template_resource_plan(
                 "source": str(raw_scope.get("source") or f"resource_scopes[{index}]"),
             }
         )
-    for node in nodes.values():
-        for alias in _node_resource_aliases(node):
-            resource_aliases.append(alias)
+    node_aliases = {
+        node_uuid: _node_resource_aliases(node)
+        for node_uuid, node in nodes.items()
+    }
+    for raw_scope in scope_inputs:
+        members = _scope_node_members(raw_scope, order, nodes, edges)
+        raw_scope["members"] = tuple(members)
+        if raw_scope["kind"] in {"root", "with"}:
+            # 连续作用域在入口前必须取得其中所有动作的完整资源集合；只把
+            # 作者显式别名放进 Scope 会让后续设备、物料或 Site 在区间中途
+            # 动态补锁，既不连续也会重新引入 hold-and-wait。
+            raw_scope["aliases"] = tuple(
+                dict.fromkeys(
+                    [
+                        *raw_scope["aliases"],
+                        *(
+                            alias
+                            for node_uuid in members
+                            for alias in node_aliases[node_uuid]
+                        ),
+                    ]
+                )
+            )
+
+    # 子作用域可以声明没有直接附着到动作节点的命名资源。沿显式父链把这些
+    # 资源提升到连续祖先；根作用域作为整图连续所有者，同时覆盖所有成员位于
+    # 根内的词法作用域。固定点支持多层组合工作流嵌套。
+    changed = True
+    while changed:
+        changed = False
+        for scope in scope_inputs:
+            if scope["kind"] not in {"root", "with"}:
+                continue
+            scope_members = set(scope["members"])
+            merged = list(scope["aliases"])
+            for child in scope_inputs:
+                if child is scope:
+                    continue
+                direct_child = child.get("parent_scope_id") == scope["scope_id"]
+                root_child = (
+                    scope["kind"] == "root"
+                    and set(child["members"]) <= scope_members
+                )
+                if not direct_child and not root_child:
+                    continue
+                merged.extend(child["aliases"])
+            normalized = tuple(dict.fromkeys(merged))
+            if normalized != scope["aliases"]:
+                scope["aliases"] = normalized
+                changed = True
+
+    for aliases_for_node in node_aliases.values():
+        resource_aliases.extend(aliases_for_node)
+    for raw_scope in scope_inputs:
+        resource_aliases.extend(raw_scope["aliases"])
     aliases = tuple(sorted(set(resource_aliases)))
     resource_by_alias = {
         alias: CanonicalResource(
@@ -498,7 +550,7 @@ def compile_template_resource_plan(
     scopes: list[ResourceScope] = []
     scope_membership: dict[str, list[tuple[str, bool, str | None]]] = defaultdict(list)
     for raw_scope in scope_inputs:
-        members = _scope_node_members(raw_scope, order, nodes, edges)
+        members = list(raw_scope["members"])
         entry = raw_scope["entry_node_uuid"] or (members[0] if members else "")
         exit_node = raw_scope["exit_node_uuid"] or (members[-1] if members else "")
         if not entry or not exit_node:
@@ -1706,6 +1758,9 @@ __all__ = [
     "STATIC_RESOURCE_DAG_CAPABILITY",
     "bind_station_resource_plan",
     "compile_template_resource_plan",
+    "failed_explicit_resource_interval_ids",
+    "node_has_explicit_resource_interval",
+    "retained_resource_interval_ids",
     "deserialize_resource_plan",
     "resource_plan_for_node",
     "serialize_resource_plan",
@@ -1876,6 +1931,67 @@ def completed_resource_nodes_for_job(
     return completed
 
 
+def failed_explicit_resource_interval_ids(
+    execution_plan: Mapping[str, Any],
+    jobs: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """返回被异常结果永久闩住、只能由操作员释放的显式连续区间。"""
+
+    plan = normalize_execution_resource_plan(execution_plan).get(
+        "resource_plan", execution_plan
+    )
+    raw_intervals = plan.get("intervals", ()) if isinstance(plan, Mapping) else ()
+    if not isinstance(raw_intervals, Sequence) or isinstance(
+        raw_intervals, (str, bytes)
+    ):
+        return ()
+    abnormal_nodes = {
+        str(job.get("workflow_node_uuid") or "")
+        for job in jobs
+        if isinstance(job, Mapping)
+        and (
+            job.get("status") in {"failed", "canceled", "timeout"}
+            or bool(str(job.get("uncertainty_reason") or "").strip())
+        )
+    }
+    return tuple(
+        sorted(
+            interval_id
+            for interval in raw_intervals
+            if isinstance(interval, Mapping)
+            and bool(interval.get("explicit_boundary"))
+            and (
+                interval_id := str(interval.get("interval_id") or "")
+            )
+            and abnormal_nodes.intersection(
+                str(value) for value in interval.get("node_uuids", ())
+            )
+        )
+    )
+
+
+def node_has_explicit_resource_interval(
+    execution_plan: Mapping[str, Any],
+    node_uuid: str,
+) -> bool:
+    """判断节点是否属于必须按 Task 整组释放的显式连续区间。"""
+
+    plan = normalize_execution_resource_plan(execution_plan).get(
+        "resource_plan", execution_plan
+    )
+    raw_intervals = plan.get("intervals", ()) if isinstance(plan, Mapping) else ()
+    if not isinstance(raw_intervals, Sequence) or isinstance(
+        raw_intervals, (str, bytes)
+    ):
+        return False
+    return any(
+        isinstance(interval, Mapping)
+        and bool(interval.get("explicit_boundary"))
+        and node_uuid in {str(value) for value in interval.get("node_uuids", ())}
+        for interval in raw_intervals
+    )
+
+
 def continuing_resource_interval_ids(
     execution_plan: Mapping[str, Any],
     interval_ids: Sequence[str] | set[str],
@@ -1898,6 +2014,31 @@ def continuing_resource_interval_ids(
             and not set(item["node_uuids"]) <= completed
         )
     )
+
+
+def retained_resource_interval_ids(
+    execution_plan: Mapping[str, Any],
+    interval_ids: Sequence[str] | set[str],
+    current_job: Mapping[str, Any],
+    jobs: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    """统一计算正常连续持有与异常失败闩锁要求保留的区间。"""
+
+    normalized_ids = {str(value) for value in interval_ids}
+    retained = set(
+        continuing_resource_interval_ids(
+            execution_plan,
+            normalized_ids,
+            str(current_job.get("workflow_node_uuid") or ""),
+            completed_resource_nodes_for_job(current_job, jobs, execution_plan),
+            current_completed=current_job.get("status") == "succeeded",
+        )
+    )
+    retained.update(
+        set(failed_explicit_resource_interval_ids(execution_plan, jobs))
+        & normalized_ids
+    )
+    return tuple(sorted(retained))
 
 
 def _compile_transfer_pairs(

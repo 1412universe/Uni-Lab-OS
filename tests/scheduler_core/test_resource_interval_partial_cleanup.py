@@ -128,8 +128,7 @@ def test_finished_interval_releases_waiter_while_other_interval_stays_owned(tmp_
         runtime.scheduler.on_job_finished(job_ids[1], True, {})
         assert len(runtime.dispatcher.dispatched) == 4
         runtime.scheduler.on_job_finished(job_ids[2], True, {})
-        assert runtime.dispatcher.dispatched[-1]["job_id"] == stable_uuid("job:wait-a:0")
-        assert len(runtime.dispatcher.dispatched) == 5
+        assert len(runtime.dispatcher.dispatched) == 4
         key_a = f"/devices/{runtime.device_materials['scope-a']}"
         key_b = f"/devices/{runtime.device_materials['scope-b']}"
         active = runtime.inventory_store.query_all(
@@ -138,7 +137,7 @@ def test_finished_interval_releases_waiter_while_other_interval_stays_owned(tmp_
             "WHERE claim.task_uuid=? AND lease.state IN ('prepared','reserved','running','uncertain')",
             (task_uuid,),
         )
-        assert key_a not in {row["lock_key"] for row in active}
+        assert key_a in {row["lock_key"] for row in active}
         assert key_b in {row["lock_key"] for row in active}
         with runtime.workflow_store.read() as connection:
             mirrors = connection.execute(
@@ -146,10 +145,13 @@ def test_finished_interval_releases_waiter_while_other_interval_stays_owned(tmp_
                 "AND state IN ('reserved','running','uncertain')",
                 (task_uuid,),
             ).fetchall()
-            assert key_a not in {row["lock_key"] for row in mirrors}
+            assert key_a in {row["lock_key"] for row in mirrors}
             assert key_b in {row["lock_key"] for row in mirrors}
         runtime.scheduler.on_job_finished(job_ids[3], True, {})
-        assert runtime.dispatcher.dispatched[-1]["job_id"] == stable_uuid("job:wait-b:0")
+        assert {payload["job_id"] for payload in runtime.dispatcher.dispatched[-2:]} == {
+            stable_uuid("job:wait-a:0"),
+            stable_uuid("job:wait-b:0"),
+        }
         assert (
             runtime.inventory_store.query_all(
                 "SELECT claim_uuid FROM station_execution_claim WHERE task_uuid=? "
