@@ -264,10 +264,12 @@
 <li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作</a></li>
 <li class="toctree-l3"><a class="reference internal" href="complete-workflow.html">完整工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="first-workflow.html">手写并运行第一个工作流</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ai-workflow-authoring.html">用 AI 编写工作流（推荐）</a></li>
 </ul>
 </li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="repository-builder-skill.html">AI 设备包生成器</a></li>
 <li class="toctree-l1"><a class="reference internal" href="scenario-guide.html">设备包验收</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">环境、部署、运行</span></p>
@@ -383,7 +385,7 @@
 <p>工作区是设备包项目的根目录，用于统一保存包描述文件、设备接入代码、物料定义、启动图、工作流和测试。</p>
 <section id="unilab-workspace-init">
 <h3><a class="reference internal" href="workspace-init.html"><span class="std std-doc">初始化工作区（unilab workspace init）</span></a><a class="headerlink" href="#unilab-workspace-init" title="链接到此标题。">¶</a></h3>
-<p>当前版本尚未提供 <code class="docutils literal notranslate"><span class="pre">init</span></code> 子命令。请在专用的新目录中手工生成项目骨架，再填写 <code class="docutils literal notranslate"><span class="pre">package.yaml</span></code>、<code class="docutils literal notranslate"><span class="pre">pyproject.toml</span></code>、设备与物料定义、启动图、工作流和测试；链接页面提供可复制的当前操作步骤，并单独说明未来命令的预期行为。</p>
+<p>安装 Uni-Lab OS 后，使用 <code class="docutils literal notranslate"><span class="pre">unilab</span> <span class="pre">workspace</span> <span class="pre">init</span></code> 在尚不存在的新目录中生成设备包。初始化结果自带无硬件副作用的示例驱动、示例工作流、<code class="docutils literal notranslate"><span class="pre">dry-run</span></code> 启动图和检查用例，不需要用户在安装 OS 前先准备设备包。</p>
 </section>
 </section>
 <section id="id3">

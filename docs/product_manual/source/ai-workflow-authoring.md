@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 # 用 AI 编写工作流（推荐）
 
 :::{admonition} 阅读角色

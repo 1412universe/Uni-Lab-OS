@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 # 使用 AI 设备包生成器（实验性）
 
 :::{admonition} 阅读角色

@@ -26,7 +26,7 @@ workflow
 
 ### [初始化工作区（unilab workspace init）](workspace-init.md)
 
-当前版本尚未提供 `init` 子命令。请在专用的新目录中手工生成项目骨架，再填写 `package.yaml`、`pyproject.toml`、设备与物料定义、启动图、工作流和测试；链接页面提供可复制的当前操作步骤，并单独说明未来命令的预期行为。
+安装 Uni-Lab OS 后，使用 `unilab workspace init` 在尚不存在的新目录中生成设备包。初始化结果自带无硬件副作用的示例驱动、示例工作流、`dry-run` 启动图和检查用例，不需要用户在安装 OS 前先准备设备包。
 
 ## 1. 设备接入模板
 

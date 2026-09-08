@@ -264,10 +264,12 @@
 <li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作</a></li>
 <li class="toctree-l3"><a class="reference internal" href="complete-workflow.html">完整工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="first-workflow.html">手写并运行第一个工作流</a></li>
+<li class="toctree-l3"><a class="reference internal" href="ai-workflow-authoring.html">用 AI 编写工作流（推荐）</a></li>
 </ul>
 </li>
 </ul>
 </li>
+<li class="toctree-l1"><a class="reference internal" href="repository-builder-skill.html">AI 设备包生成器</a></li>
 <li class="toctree-l1"><a class="reference internal" href="scenario-guide.html">设备包验收</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">环境、部署、运行</span></p>
@@ -368,7 +370,7 @@
 <p>Uni-Lab OS 的“环境”分为三层：Conda 软件环境决定有哪些 Python/ROS 能力，Workspace 决定加载哪个设备包和设备图，运行配置决定以什么安全模式启动。新手最容易遇到的问题，是把这三层混成一份配置。</p>
 <section id="conda">
 <h2>选择 Conda 环境<a class="headerlink" href="#conda" title="链接到此标题。">¶</a></h2>
-<p>Uni-Lab OS 提供三档环境。这里解释它们的用途，不重复安装步骤；首次安装统一按照<a class="reference internal" href="installation.html"><span class="std std-doc">系统安装</span></a>中的版本和命令执行。</p>
+<p>Uni-Lab OS 提供三档 Conda 包。默认安装入口只推荐“一键安装包”和“<code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> + 仓库源码”两条路径；这里解释各包用途，不重复安装步骤。首次安装统一按照<a class="reference internal" href="installation.html"><span class="std std-doc">系统安装</span></a>中的顺序执行。</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -397,7 +399,7 @@
 </tbody>
 </table>
 </div>
-<p>本手册的源码安装路径使用 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code>。只有直接运行正式发布包时才选择 <code class="docutils literal notranslate"><span class="pre">unilabos</span></code>；只有确实需要三维仿真或可视化时才选择 <code class="docutils literal notranslate"><span class="pre">unilabos-full</span></code>。环境类型由部署负责人在安装前确认，业务人员不应在安装过程中自行替换。</p>
+<p>本手册的源码安装路径使用 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code>，随后拉取仓库并以可编辑模式安装；仓库已经包含可由 Workspace Backend 提供的轻量操作页面。<code class="docutils literal notranslate"><span class="pre">unilabos</span></code> 是标准 Conda 发布包，<code class="docutils literal notranslate"><span class="pre">unilabos-full</span></code> 只在确实需要三维仿真或可视化时选择。</p>
 <div class="admonition note">
 <p class="admonition-title">备注</p>
 <p><code class="docutils literal notranslate"><span class="pre">--override-channels</span></code>、版本号和频道顺序用于保证安装结果一致。升级 Uni-Lab OS 时，应同时确认设备包、启动图（Graph JSON）和环境版本的兼容性，并重新执行验收。</p>
