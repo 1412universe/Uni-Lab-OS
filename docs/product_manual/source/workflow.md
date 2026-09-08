@@ -9,6 +9,7 @@
 ```{toctree}
 :maxdepth: 1
 
+workflow-features
 experiment-operations
 complete-workflow
 ```

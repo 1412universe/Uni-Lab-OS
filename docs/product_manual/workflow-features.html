@@ -5,7 +5,7 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="alternate" type="text/markdown" href="workflow-features.md">
 <link rel="describedby" type="text/plain" href="llms.txt">
-<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html">
+<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="实验操作（子工作流）" href="experiment-operations.html"><link rel="prev" title="4. 工作流" href="workflow.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>工作流编排特性 - Uni-Lab OS 产品使用说明书</title>
@@ -226,8 +226,8 @@
 <li class="toctree-l1"><a class="reference internal" href="interfaces.html">开发工具与接口</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">设备包开发</span></p>
-<ul>
-<li class="toctree-l1 has-children"><a class="reference internal" href="unilabos-installation.html">设备包规范与系统启动</a><input aria-label="Toggle navigation of 设备包规范与系统启动" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<ul class="current">
+<li class="toctree-l1 current has-children"><a class="reference internal" href="unilabos-installation.html">设备包规范与系统启动</a><input aria-label="Toggle navigation of 设备包规范与系统启动" checked="" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l2 has-children"><a class="reference internal" href="workspace.html">工作区</a><input aria-label="Toggle navigation of 工作区" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l3"><a class="reference internal" href="workspace-init.html">初始化工作区（unilab workspace init）</a></li>
 </ul>
@@ -258,7 +258,8 @@
 <li class="toctree-l3"><a class="reference internal" href="graph-json.html">启动图（Graph JSON）编写指南</a></li>
 </ul>
 </li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="workflow.html">4. 工作流</a><input aria-label="Toggle navigation of 4. 工作流" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 current has-children"><a class="reference internal" href="workflow.html">4. 工作流</a><input aria-label="Toggle navigation of 4. 工作流" checked="" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
+<li class="toctree-l3 current current-page"><a class="current reference internal" href="#">工作流编排特性</a></li>
 <li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作（子工作流）</a></li>
 <li class="toctree-l3"><a class="reference internal" href="complete-workflow.html">完整工作流</a></li>
 </ul>
@@ -426,9 +427,9 @@
 <td><p>加液体积</p></td>
 </tr>
 <tr class="row-even"><td><p>人工确认</p></td>
-<td><p>画布包装设备动作</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">&#64;action(node_type=NodeType.MANUAL_CONFIRM)</span></code></p></td>
 <td><p>取得资源后等待批准，再下发同一 Job</p></td>
-<td><p>实验室操作编辑器</p></td>
+<td><p>需要人员放行的设备动作</p></td>
 </tr>
 <tr class="row-odd"><td><p>子工作流</p></td>
 <td><p>调用已发布 <code class="docutils literal notranslate"><span class="pre">experiment_operation</span></code></p></td>
@@ -733,19 +734,86 @@
 </section>
 <section id="id5">
 <h2>人工确认<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
-<p>当前 Python DSL <strong>没有</strong> <code class="docutils literal notranslate"><span class="pre">manual_confirm()</span></code> 或 <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">manual_confirm()</span></code>。不要在源码中发明这种语法。</p>
-<p>正确做法是在“实验室操作”画布中选中一个已绑定的真实设备动作，打开人工确认包装，并设置 <code class="docutils literal notranslate"><span class="pre">1..86400</span></code> 秒的超时。运行语义是：</p>
-<ol class="arabic simple">
-<li><p>Uni-Lab OS 先取得该动作需要的设备、物料和资源；</p></li>
-<li><p>Job 进入等待人工确认，并在等待期间持有资源；</p></li>
-<li><p>批准后，同一个 Job 恢复成原设备动作且只下发一次；</p></li>
-<li><p>拒绝或超时取消整个 Task；</p></li>
-<li><p>不回应绝不会自动批准。</p></li>
-</ol>
-<p>人工确认是“动作下发前复核”，不是一个无设备的纯人工停顿节点。超时默认 3600 秒。运行时重启不会自动恢复未决确认，因此恢复后要根据 Task/Job 状态重新对账。</p>
-</section>
+<p>人工确认不是无设备的独立工作流节点。用户应在设备包中把一个真实设备动作声明为
+<code class="docutils literal notranslate"><span class="pre">NodeType.MANUAL_CONFIRM</span></code>，工作流仍按普通设备动作调用它。Uni-Lab OS 会在取得该动作所需资源后等待批准，批准后再执行同一个设备 Job。</p>
 <section id="id6">
-<h2>子工作流与实验操作<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<h3>1. 在设备类中声明“执行前确认”<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># example_lab/devices/reactor/device.py</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">TypedDict</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">unilabos.registry.decorators</span><span class="w"> </span><span class="kn">import</span> <span class="n">NodeType</span><span class="p">,</span> <span class="n">action</span><span class="p">,</span> <span class="n">device</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">HeatResult</span><span class="p">(</span><span class="n">TypedDict</span><span class="p">):</span>
+    <span class="n">status</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">actual_temperature</span><span class="p">:</span> <span class="nb">float</span>
+
+
+<span class="nd">@device</span><span class="p">(</span>
+    <span class="nb">id</span><span class="o">=</span><span class="s2">"example_reactor"</span><span class="p">,</span>
+    <span class="n">category</span><span class="o">=</span><span class="p">[</span><span class="s2">"reaction"</span><span class="p">,</span> <span class="s2">"reactor"</span><span class="p">],</span>
+    <span class="n">displayname</span><span class="o">=</span><span class="s2">"反应器"</span><span class="p">,</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">"执行受控升温。"</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Reactor</span><span class="p">:</span>
+    <span class="nd">@action</span><span class="p">(</span>
+        <span class="n">node_type</span><span class="o">=</span><span class="n">NodeType</span><span class="o">.</span><span class="n">MANUAL_CONFIRM</span><span class="p">,</span>
+        <span class="n">displayname</span><span class="o">=</span><span class="s2">"确认后升温"</span><span class="p">,</span>
+        <span class="n">description</span><span class="o">=</span><span class="s2">"操作员批准后执行升温。"</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">heat</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">temperature</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">HeatResult</span><span class="p">:</span>
+        <span class="c1"># 此处必须调用具体型号的真实驱动，不能返回假成功。</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_driver</span><span class="o">.</span><span class="n">heat</span><span class="p">(</span><span class="n">temperature</span><span class="o">=</span><span class="n">temperature</span><span class="p">)</span>
+        <span class="k">return</span> <span class="p">{</span>
+            <span class="s2">"status"</span><span class="p">:</span> <span class="n">result</span><span class="o">.</span><span class="n">status</span><span class="p">,</span>
+            <span class="s2">"actual_temperature"</span><span class="p">:</span> <span class="n">result</span><span class="o">.</span><span class="n">actual_temperature</span><span class="p">,</span>
+        <span class="p">}</span>
+</pre></div>
+</div>
+<p>关键规范只有一条：<code class="docutils literal notranslate"><span class="pre">node_type=NodeType.MANUAL_CONFIRM</span></code> 必须写在真实设备动作的 <code class="docutils literal notranslate"><span class="pre">&#64;action</span></code> 上；动作参数、返回值、资源合同和驱动实现与普通设备动作完全相同。</p>
+</section>
+<section id="id7">
+<h3>2. 在工作流中正常调用设备动作<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h3>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># example_lab/experiment_operations/heat_after_confirmation.py</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">unilabos.workflow.authoring</span><span class="w"> </span><span class="kn">import</span> <span class="n">device</span><span class="p">,</span> <span class="n">workflow</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">example_lab.devices.reactor.device</span><span class="w"> </span><span class="kn">import</span> <span class="n">HeatResult</span><span class="p">,</span> <span class="n">Reactor</span>
+
+<span class="n">reactor</span><span class="p">:</span> <span class="n">Reactor</span> <span class="o">=</span> <span class="n">device</span><span class="p">(</span><span class="s2">"reactor_01"</span><span class="p">)</span>
+
+
+<span class="nd">@workflow</span><span class="p">(</span>
+    <span class="n">workflow_uuid</span><span class="o">=</span><span class="s2">"d25efee5-618f-4ca9-8f27-3a64e35b64ca"</span><span class="p">,</span>
+    <span class="n">displayname</span><span class="o">=</span><span class="s2">"反应器升温前人工确认"</span><span class="p">,</span>
+    <span class="n">description</span><span class="o">=</span><span class="s2">"人工核对反应器和样品后，再执行升温动作。"</span><span class="p">,</span>
+    <span class="n">workflow_type</span><span class="o">=</span><span class="s2">"experiment_operation"</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">heat_after_confirmation</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">temperature</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">42.0</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">HeatResult</span><span class="p">:</span>
+    <span class="c1"># unilab:node_uuid=41a9ee20-02af-44de-bb45-a78f6647cb8b</span>
+    <span class="n">heated</span> <span class="o">=</span> <span class="n">reactor</span><span class="o">.</span><span class="n">heat</span><span class="p">(</span><span class="n">temperature</span><span class="o">=</span><span class="n">temperature</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">"status"</span><span class="p">:</span> <span class="n">heated</span><span class="o">.</span><span class="n">status</span><span class="p">,</span>
+        <span class="s2">"actual_temperature"</span><span class="p">:</span> <span class="n">heated</span><span class="o">.</span><span class="n">actual_temperature</span><span class="p">,</span>
+    <span class="p">}</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">reactor_01</span></code> 必须是启动图中的真实设备实例。编译器从 <code class="docutils literal notranslate"><span class="pre">Reactor.heat</span></code> 的动作元数据识别人工确认，不需要也不支持 <code class="docutils literal notranslate"><span class="pre">manual_confirm()</span></code> 或 <code class="docutils literal notranslate"><span class="pre">with</span> <span class="pre">manual_confirm()</span></code>。</p>
+</section>
+<section id="uni-lab-os-api">
+<h3>3. 通过 Uni-Lab OS API 批准或拒绝<a class="headerlink" href="#uni-lab-os-api" title="Link to this heading">¶</a></h3>
+<p>调用任务 Job 查询接口取得等待确认的 <code class="docutils literal notranslate"><span class="pre">job_uuid</span></code>，再通过 Uni-Lab OS HTTP API 提交决定：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span><span class="s2">"&lt;UNILABOS_URL&gt;/api/v1/workflow-tasks/&lt;TASK_UUID&gt;/jobs"</span>
+
+curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">"&lt;UNILABOS_URL&gt;/api/v1/workflow-node-jobs/&lt;JOB_UUID&gt;/manual-confirmation"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"action":"approve"}'</span>
+</pre></div>
+</div>
+<p>拒绝时把 <code class="docutils literal notranslate"><span class="pre">approve</span></code> 改为 <code class="docutils literal notranslate"><span class="pre">reject</span></code>。当前 Python 声明使用默认确认超时 3600 秒；拒绝或超时会取消整个 Task，批准后原设备动作只下发一次。</p>
+</section>
+</section>
+<section id="id8">
+<h2>子工作流与实验操作<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
 <p>可复用子流程先声明并发布为实验操作：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@workflow</span><span class="p">(</span>
     <span class="n">workflow_uuid</span><span class="o">=</span><span class="s2">"e7c53119-9fde-5250-9bf5-264f23d157a8"</span><span class="p">,</span>
@@ -776,13 +844,13 @@
 <p>编译器不会真的 import 并运行子模块，而是从目录解析合同。每次调用有独立 invocation 身份；父图冻结子合同 UUID 和摘要。合同损坏、pin 过期或普通 <code class="docutils literal notranslate"><span class="pre">normal</span></code> 工作流被当作子流程时都会失败关闭。</p>
 <p>在可编辑的 <code class="docutils literal notranslate"><span class="pre">develop</span></code> Workspace 冷启动中，系统会按依赖从子到父应用已登记源码，直到目录达到固定点；无需人为逐个打开子流程。产品发布、画布插入和产品运行仍要求子流程是已发布的 <code class="docutils literal notranslate"><span class="pre">experiment_operation</span></code>。</p>
 </section>
-<section id="id7">
-<h2>图编辑与源码往返<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<section id="id9">
+<h2>图编辑与源码往返<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
 <p>Python 是人维护的来源，画布图是它的投影。保存复杂编辑时，系统必须完成“Python → AST → 图 → Python → 图”的语义固定点：两张图等价，Workflow/节点身份、类型 Handle、物料身份与支持的标题说明保持不变，再次生成不继续漂移。</p>
 <p>不要用 <code class="docutils literal notranslate"><span class="pre">#</span> <span class="pre">unilab:parallelize</span></code>、空 <code class="docutils literal notranslate"><span class="pre">pass</span></code> 或伪造的 Fork/Join 节点保存拓扑。不是所有 DAG 都能由当前结构化语言表达；遇到不可表达的断边或交叉依赖时，应保留原编辑并根据诊断恢复依赖或重构源码，不能把差异藏进注释。</p>
 </section>
-<section id="id8">
-<h2>常见错误写法<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
+<section id="id10">
+<h2>常见错误写法<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -830,7 +898,7 @@
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">manual_confirm()</span></code></p></td>
 <td><p>当前没有这种 Python marker</p></td>
-<td><p>在实验操作画布包装真实动作</p></td>
+<td><p>在真实设备动作上声明 <code class="docutils literal notranslate"><span class="pre">&#64;action(node_type=NodeType.MANUAL_CONFIRM)</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>调用未发布子操作</p></td>
 <td><p>没有可冻结合同</p></td>
@@ -840,8 +908,8 @@
 </table>
 </div>
 </section>
-<section id="id9">
-<h2>作者提交前检查表<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
+<section id="id11">
+<h2>作者提交前检查表<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h2>
 <p>这份清单同样适用于 AI 生成的源码；AI 自己报告“已检查”不能代替人工复核和产品编译。</p>
 <ul class="simple">
 <li><p>模块级只包含 import、可选 docstring、设备声明、至多一个输出 <code class="docutils literal notranslate"><span class="pre">TypedDict</span></code> 和一个工作流函数；</p></li>
@@ -864,8 +932,26 @@
       <footer>
         
         <div class="related-pages">
-          
-          
+          <a class="next-page" href="experiment-operations.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">实验操作（子工作流）</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="workflow.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+
+                <div class="title">4. 工作流</div>
+
+              </div>
+            </a>
         </div>
         <div class="bottom-of-page">
           <div class="left-details">
@@ -909,11 +995,16 @@
 <li><a class="reference internal" href="#material-source">物料来源 <code class="docutils literal notranslate"><span class="pre">material_source</span></code></a></li>
 <li><a class="reference internal" href="#site-group">动态库位 <code class="docutils literal notranslate"><span class="pre">site_group</span></code></a></li>
 <li><a class="reference internal" href="#quantity-requirement">数量预留 <code class="docutils literal notranslate"><span class="pre">quantity_requirement</span></code></a></li>
-<li><a class="reference internal" href="#id5">人工确认</a></li>
-<li><a class="reference internal" href="#id6">子工作流与实验操作</a></li>
-<li><a class="reference internal" href="#id7">图编辑与源码往返</a></li>
-<li><a class="reference internal" href="#id8">常见错误写法</a></li>
-<li><a class="reference internal" href="#id9">作者提交前检查表</a></li>
+<li><a class="reference internal" href="#id5">人工确认</a><ul>
+<li><a class="reference internal" href="#id6">1. 在设备类中声明“执行前确认”</a></li>
+<li><a class="reference internal" href="#id7">2. 在工作流中正常调用设备动作</a></li>
+<li><a class="reference internal" href="#uni-lab-os-api">3. 通过 Uni-Lab OS API 批准或拒绝</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id8">子工作流与实验操作</a></li>
+<li><a class="reference internal" href="#id9">图编辑与源码往返</a></li>
+<li><a class="reference internal" href="#id10">常见错误写法</a></li>
+<li><a class="reference internal" href="#id11">作者提交前检查表</a></li>
 </ul>
 </li>
 </ul>

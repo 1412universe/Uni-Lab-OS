@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 # 工作流编排特性
 
 :::{admonition} 阅读角色
@@ -26,7 +22,7 @@ orphan: true
 | 物料来源 | `material_source(...)` | 创建/选择物料并声明保管语义 | 样品与容器来源 |
 | 动态库位 | `site_group(...)` | Task 创建时冻结候选站点 | 多库位工站选择 |
 | 数量要求 | `quantity_requirement(...)` | Task 接纳时预留数量，消费后记账 | 加液体积 |
-| 人工确认 | 画布包装设备动作 | 取得资源后等待批准，再下发同一 Job | 实验室操作编辑器 |
+| 人工确认 | `@action(node_type=NodeType.MANUAL_CONFIRM)` | 取得资源后等待批准，再下发同一 Job | 需要人员放行的设备动作 |
 | 子工作流 | 调用已发布 `experiment_operation` | 按固定合同展开并冻结版本 | 标准转运操作 |
 
 ## 类型化输入
@@ -350,17 +346,87 @@ Task 接纳时会按当前库存建立数量预留，动作结果收敛后再进
 
 ## 人工确认
 
-当前 Python DSL **没有** `manual_confirm()` 或 `with manual_confirm()`。不要在源码中发明这种语法。
+人工确认不是无设备的独立工作流节点。用户应在设备包中把一个真实设备动作声明为
+`NodeType.MANUAL_CONFIRM`，工作流仍按普通设备动作调用它。Uni-Lab OS 会在取得该动作所需资源后等待批准，批准后再执行同一个设备 Job。
 
-正确做法是在“实验室操作”画布中选中一个已绑定的真实设备动作，打开人工确认包装，并设置 `1..86400` 秒的超时。运行语义是：
+### 1. 在设备类中声明“执行前确认”
 
-1. Uni-Lab OS 先取得该动作需要的设备、物料和资源；
-2. Job 进入等待人工确认，并在等待期间持有资源；
-3. 批准后，同一个 Job 恢复成原设备动作且只下发一次；
-4. 拒绝或超时取消整个 Task；
-5. 不回应绝不会自动批准。
+```python
+# example_lab/devices/reactor/device.py
+from typing import TypedDict
 
-人工确认是“动作下发前复核”，不是一个无设备的纯人工停顿节点。超时默认 3600 秒。运行时重启不会自动恢复未决确认，因此恢复后要根据 Task/Job 状态重新对账。
+from unilabos.registry.decorators import NodeType, action, device
+
+
+class HeatResult(TypedDict):
+    status: str
+    actual_temperature: float
+
+
+@device(
+    id="example_reactor",
+    category=["reaction", "reactor"],
+    displayname="反应器",
+    description="执行受控升温。",
+)
+class Reactor:
+    @action(
+        node_type=NodeType.MANUAL_CONFIRM,
+        displayname="确认后升温",
+        description="操作员批准后执行升温。",
+    )
+    def heat(self, temperature: float) -> HeatResult:
+        # 此处必须调用具体型号的真实驱动，不能返回假成功。
+        result = self._driver.heat(temperature=temperature)
+        return {
+            "status": result.status,
+            "actual_temperature": result.actual_temperature,
+        }
+```
+
+关键规范只有一条：`node_type=NodeType.MANUAL_CONFIRM` 必须写在真实设备动作的 `@action` 上；动作参数、返回值、资源合同和驱动实现与普通设备动作完全相同。
+
+### 2. 在工作流中正常调用设备动作
+
+```python
+# example_lab/experiment_operations/heat_after_confirmation.py
+from unilabos.workflow.authoring import device, workflow
+from example_lab.devices.reactor.device import HeatResult, Reactor
+
+reactor: Reactor = device("reactor_01")
+
+
+@workflow(
+    workflow_uuid="d25efee5-618f-4ca9-8f27-3a64e35b64ca",
+    displayname="反应器升温前人工确认",
+    description="人工核对反应器和样品后，再执行升温动作。",
+    workflow_type="experiment_operation",
+)
+def heat_after_confirmation(*, temperature: float = 42.0) -> HeatResult:
+    # unilab:node_uuid=41a9ee20-02af-44de-bb45-a78f6647cb8b
+    heated = reactor.heat(temperature=temperature)
+    return {
+        "status": heated.status,
+        "actual_temperature": heated.actual_temperature,
+    }
+```
+
+`reactor_01` 必须是启动图中的真实设备实例。编译器从 `Reactor.heat` 的动作元数据识别人工确认，不需要也不支持 `manual_confirm()` 或 `with manual_confirm()`。
+
+### 3. 通过 Uni-Lab OS API 批准或拒绝
+
+调用任务 Job 查询接口取得等待确认的 `job_uuid`，再通过 Uni-Lab OS HTTP API 提交决定：
+
+```bash
+curl "<UNILABOS_URL>/api/v1/workflow-tasks/<TASK_UUID>/jobs"
+
+curl -X POST \
+  "<UNILABOS_URL>/api/v1/workflow-node-jobs/<JOB_UUID>/manual-confirmation" \
+  -H "Content-Type: application/json" \
+  -d '{"action":"approve"}'
+```
+
+拒绝时把 `approve` 改为 `reject`。当前 Python 声明使用默认确认超时 3600 秒；拒绝或超时会取消整个 Task，批准后原设备动作只下发一次。
 
 ## 子工作流与实验操作
 
@@ -418,7 +484,7 @@ Python 是人维护的来源，画布图是它的投影。保存复杂编辑时�
 | 用 group 期待加锁 | group 只控制展示 | 使用 `resources(...)` |
 | 用 parallel 保证同时动作 | 资源锁仍可串行 | 把它理解为并行机会 |
 | 用 magic comment 或空 `pass` 保存断边 | 不是规范拓扑 | 用真实 `group`/`parallel`，不可表达时按诊断重构 |
-| `manual_confirm()` | 当前没有这种 Python marker | 在实验操作画布包装真实动作 |
+| `manual_confirm()` | 当前没有这种 Python marker | 在真实设备动作上声明 `@action(node_type=NodeType.MANUAL_CONFIRM)` |
 | 调用未发布子操作 | 没有可冻结合同 | 先发布 `experiment_operation` |
 
 ## 作者提交前检查表
