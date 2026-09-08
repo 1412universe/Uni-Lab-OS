@@ -27,6 +27,7 @@ from unilabos.app.scheduler.inventory.sync import OutboxWorker
 from unilabos.app.scheduler.models import WorkflowNode, WorkflowSpec
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.utils import tracing
+from unilabos.workflow.material_transfer_settlement import MaterialTransferSettlement
 
 
 class _RecordingSpan:
@@ -983,3 +984,85 @@ def test_ros_async_driver_preserves_submit_context_and_runs_once(
     assert callback_results == ["done"]
     assert driver_span.trace_id == action_span.trace_id
     assert driver_span.parent_span_id == action_span.span_id
+
+
+def test_material_transfer_settlement_has_child_trace_interface(recorder) -> None:
+    """证明 Scheduler 的 Claim/Fence 库存提交具有可独立检索的子 Span。"""
+
+    class Inventory:
+        def settle_material_transfer(self, command):
+            return {"edge_uuid": command.material_uuid}
+
+    job_uuid = "40000000-0000-4000-8000-000000000001"
+    task_uuid = "41000000-0000-4000-8000-000000000001"
+    material_uuid = "50000000-0000-4000-8000-000000000001"
+    node_uuid = "30000000-0000-4000-8000-000000000001"
+    with tracing.span("workflow.job.result") as parent:
+        result = MaterialTransferSettlement(Inventory()).settle_success(
+            job={
+                "uuid": job_uuid,
+                "workflow_task_uuid": task_uuid,
+                "workflow_node_uuid": node_uuid,
+                "executor_kind": "material_transfer",
+                "attempt": 1,
+                "dispatch_effect_uuid": "effect-001",
+                "dispatch_parameter_hash": "sha256:parameters",
+                "expected_change_set": {
+                    "kind": "material_transfer",
+                    "material_uuid": material_uuid,
+                    "source_site_uuid": "source-site",
+                    "target_site_uuid": "target-site",
+                },
+                "param": {
+                    "resource": {"uuid": material_uuid},
+                    "target": {"uuid": "60000000-0000-4000-8000-000000000001"},
+                    "site": "S0721",
+                },
+            },
+            execution_plan={
+                "nodes": [
+                    {
+                        "uuid": node_uuid,
+                        "action_resource_contract": {
+                            "version": 1,
+                            "transfer": {
+                                "material_param": "resource",
+                                "source_owner_param": "",
+                                "source_site_uuid_param": "",
+                                "source_site_name_param": "",
+                                "target_owner_param": "target",
+                                "target_site_uuid_param": "",
+                                "target_site_name_param": "site",
+                                "gripper_site_role": "robot.gripper",
+                            },
+                        },
+                    }
+                ]
+            },
+            execution_claim={
+                "claim_uuid": "80000000-0000-4000-8000-000000000001",
+                "attempt": 1,
+                "fences": [
+                    {
+                        "lock_key": f"material/{material_uuid}/exclusive",
+                        "fencing_token": 3,
+                    }
+                ],
+            },
+        )
+
+    settlement_span = _span_by_name(recorder, "inventory.material_transfer.settle")[0]
+    assert result == {"edge_uuid": material_uuid}
+    assert settlement_span.trace_id == parent.trace_id
+    assert settlement_span.parent_span_id == parent.span_id
+    assert settlement_span.attributes == {
+        "workflow.job.uuid": job_uuid,
+        "workflow.task.uuid": task_uuid,
+        "inventory.claim.uuid": "80000000-0000-4000-8000-000000000001",
+        "material.uuid": material_uuid,
+        "inventory.target.owner.uuid": "60000000-0000-4000-8000-000000000001",
+        "inventory.target.site.uuid": "target-site",
+        "inventory.target.site.name": "S0721",
+        "workflow.job.attempt": 1,
+    }
+    assert settlement_span.ended is True

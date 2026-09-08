@@ -975,22 +975,51 @@ class BaseROS2DeviceNode(Node, Generic[T]):
             self.lab_logger().warning(f"[HostLink] 物料查询失败，回退 ROS service: {e}")
             return None
 
-    async def get_resource(self, resources_uuid: List[str], with_children: bool = True) -> ResourceTreeSet:
-        """
-        根据资源UUID列表获取资源树
+    async def get_resource(
+        self,
+        resources_uuid: List[str],
+        with_children: bool = True,
+    ) -> ResourceTreeSet:
+        """按稳定 UUID 读取动作参数所需的资源树。
 
-        Args:
-            resources_uuid: 资源UUID列表
-            with_children: 是否包含子节点，默认为True
+        参数：``resources_uuid`` 是调度器（Scheduler）已解析的物料（Material）
+        或设备资源稳定身份；``with_children`` 控制是否保留查询根的后代。
+        返回：可供原生 ROS 动作转换的 ``ResourceTreeSet``。
 
-        Returns:
-            ResourceTreeSet: 资源树集合
+        Edge Runtime 只能读取注册阶段安装的 Backend 物料投影，不能回退到同进程
+        Host 的遗留 ROS 服务；本地组合进程继续优先使用 HostLink，再使用 ROS 服务。
+        异常：生产投影未安装、身份未知或遗留服务返回无效 JSON 时失败关闭。
         """
+
+        # ``normalized_uuids`` 是本次原生动作请求的稳定资源身份集合。
+        normalized_uuids = [str(resource_uuid).strip() for resource_uuid in resources_uuid]
+        if (
+            BasicConfig.control_plane == "backend"
+            or BasicConfig.process_role == "edge_runtime"
+        ):
+            # ``raw_nodes`` 来自 Edge 注册时冻结的 Backend 身份投影，不发起新的
+            # 本机 HTTP/ROS 查询，因此不会把 Edge 镜像误当库存权威。
+            raw_nodes = query_production_resource_nodes_sync(normalized_uuids)
+            if not with_children:
+                requested_uuids = set(normalized_uuids)
+                raw_nodes = [
+                    node
+                    for node in raw_nodes
+                    if str(node.get("uuid") or node.get("unilabos_uuid") or "")
+                    in requested_uuids
+                ]
+            tree_set = ResourceTreeSet.from_raw_dict_list(raw_nodes)
+            self.lab_logger().trace(
+                "从 Backend 物料投影读取资源结果: "
+                f"{len(tree_set.trees)} 个资源树"
+            )
+            return tree_set
+
         # TCP 优先：HostLink 在线时逐 uuid 向 host 的物料服务查询
         link_nodes: Optional[List[Dict[str, Any]]] = None
-        if resources_uuid:
+        if normalized_uuids:
             collected: List[Dict[str, Any]] = []
-            for res_uuid in resources_uuid:
+            for res_uuid in normalized_uuids:
                 nodes = self._hostlink_get_nodes(uuid=res_uuid, with_children=with_children)
                 if nodes is None:
                     collected = []
@@ -1006,7 +1035,7 @@ class BaseROS2DeviceNode(Node, Generic[T]):
             SerialCommand.Request(
                 command=json.dumps(
                     {
-                        "data": {"data": resources_uuid, "with_children": with_children},
+                        "data": {"data": normalized_uuids, "with_children": with_children},
                         "action": "get",
                     }
                 )
