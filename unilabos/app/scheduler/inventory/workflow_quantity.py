@@ -48,7 +48,7 @@ def _quantity_unit(unit: Any) -> tuple[str, float] | None:
         "mg": ("mass", 0.001),
         "g": ("mass", 1.0),
         "kg": ("mass", 1000.0),
-        "µl": ("volume", 0.001),
+        "μl": ("volume", 0.001),
         "ul": ("volume", 0.001),
         "ml": ("volume", 1.0),
         "l": ("volume", 1000.0),

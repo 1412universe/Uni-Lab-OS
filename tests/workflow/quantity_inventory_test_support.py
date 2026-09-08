@@ -44,6 +44,7 @@ def _inventory(tmp_path: Path) -> tuple[InventoryStore, str, str, str]:
                     "display_name": "工作流试剂瓶",
                     "registry_type": "material",
                     "category": ["container"],
+                    "metadata": {"capacity": {"max_volume_ul": 100000}},
                     "model": {},
                     "class": {},
                     "handles": [],

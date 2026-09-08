@@ -41,6 +41,8 @@ _OPTIONAL_CSV_FIELDS = {
     "concentration_unit",
     "source",
     "observed_at",
+    "container_capacity",
+    "expected_material_revision",
 }
 
 
@@ -95,6 +97,8 @@ class MaterialReagentRequest(ReagentModel):
     observed_at: Optional[datetime] = None
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+    container_capacity: Optional[Dict[str, Any]] = None
+    expected_material_revision: Optional[int] = None
 
 
 class ReagentCreateRequest(MaterialReagentRequest):
@@ -133,6 +137,8 @@ class ReagentUpdateRequest(ReagentModel):
     expected_revision: Optional[int] = None
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+    container_capacity: Optional[Dict[str, Any]] = None
+    expected_material_revision: Optional[int] = None
 
 
 def _import_error(
@@ -199,7 +205,7 @@ def _normalize_tabular_row(
                 normalized[key] = ""
             else:
                 normalized[key] = None if key in _OPTIONAL_CSV_FIELDS else ""
-        elif key in {"aliases", "meta_data"}:
+        elif key in {"aliases", "meta_data", "container_capacity"}:
             parsed = _parse_json_value(
                 value, field=key, row_number=row_number, source=source
             )
@@ -208,10 +214,10 @@ def _normalize_tabular_row(
                     INVALID_PARAMETER,
                     f"{source} 第 {row_number} 行的 aliases 必须是 JSON 数组",
                 )
-            if key == "meta_data" and not isinstance(parsed, dict):
+            if key in {"meta_data", "container_capacity"} and not isinstance(parsed, dict):
                 raise BackendContractError(
                     INVALID_PARAMETER,
-                    f"{source} 第 {row_number} 行的 meta_data 必须是 JSON 对象",
+                    f"{source} 第 {row_number} 行的 {key} 必须是 JSON 对象",
                 )
             normalized[key] = parsed
         else:
@@ -691,7 +697,7 @@ def create_reagent_router(service: BackendReagentService) -> APIRouter:
         return call(
             service.update_reagent,
             str(reagent_uuid),
-            body.model_dump(mode="json"),
+            body.model_dump(mode="json", exclude_unset=True),
         )
 
     @router.delete("/reagents/{reagent_uuid}")

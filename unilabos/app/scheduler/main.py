@@ -234,6 +234,7 @@ if _inventory is not None:
             _inventory.store,
             edge_id=_inventory.edge_id,
             lab_id=_inventory.lab_id,
+            monitor=monitor_bus,
         ),
         compound_source=configured_compound_source(),
     )

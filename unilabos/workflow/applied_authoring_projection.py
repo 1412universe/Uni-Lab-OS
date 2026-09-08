@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -574,7 +575,25 @@ def _catalog_semantic_entity(
     for field_name in nullable_fields:
         if semantic.get(field_name) is None:
             semantic.pop(field_name, None)
+    if "schema" in semantic:
+        semantic["schema"] = _canonical_catalog_schema(semantic.get("schema"))
     return semantic
+
+
+def _canonical_catalog_schema(value: Any) -> Any:
+    """把节点模板 schema 的 JSON 文本和对象收成同一比较值。
+
+    参数：``value`` 是已应用图或当前目录里的 ``schema``。返回：可 JSON 解码的
+    文本变成对象，其余值原样保留。异常：无；非法 JSON 文本保持字符串，由后续
+    严格比较关闭失败。
+    """
+
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return value
 
 
 def _fail(code: str, message: str) -> None:

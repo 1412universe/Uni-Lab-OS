@@ -296,11 +296,7 @@ def test_legacy_import_accepts_wrapped_payload_and_rebuilds_identities(tmp_path)
                         "workflow_node_template_uuid": (
                             "30000000-0000-4000-8000-000000000090"
                         ),
-                        **{
-                            key: value
-                            for key, value in _compute_node("旧计算节点").items()
-                            if key != "type"
-                        },
+                        **_compute_node("旧计算节点"),
                         "description": "旧版节点说明",
                     }
                 ],

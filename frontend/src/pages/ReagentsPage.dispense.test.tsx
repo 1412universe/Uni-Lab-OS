@@ -13,6 +13,11 @@ function template(uuid: string, tags: string[]): ResourceTemplateRecord {
   return { uuid, name: uuid, displayName: uuid, description: '', resourceType: 'resource', tags, availableSites: [] }
 }
 
+function containerOptions(trigger: HTMLElement) {
+  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger)
+  return screen.getByRole('listbox')
+}
+
 describe('deriveContainerFilterTags', () => {
   it('keeps discriminating container tags and removes shared package tags', () => {
     const tags = deriveContainerFilterTags([
@@ -33,11 +38,11 @@ describe('DispenseForm container filters', () => {
       template('powder-template', ['szlab_poly_studio', 'container', 'powder_reagent']),
     ]
     const containers = [
-      { ...demoMaterials[0], uuid: 'liquid-1', name: '液体瓶 R1C2', barcode: 'UNILAB-GRAPH-s10-liquid-R1C2', resourceTemplateUuid: 'liquid-template', isStructural: false },
-      { ...demoMaterials[0], uuid: 'powder-1', name: '注粉瓶 L1C2', barcode: 'UNILAB-GRAPH-powder-L1C2', resourceTemplateUuid: 'powder-template', isStructural: false },
+      { ...demoMaterials[0], uuid: 'liquid-1', name: '液体瓶 R1C2', barcode: 'UNILAB-GRAPH-s10-liquid-R1C2', resourceTemplateUuid: 'liquid-template', isStructural: false, capacity: { max_volume_ul: 100000 }, ratedCapacity: { max_volume_ul: 100000 } },
+      { ...demoMaterials[0], uuid: 'powder-1', name: '注粉瓶 L1C2', barcode: 'UNILAB-GRAPH-powder-L1C2', resourceTemplateUuid: 'powder-template', isStructural: false, capacity: { max_volume_ul: 100000, max_mass_g: 100 }, ratedCapacity: { max_volume_ul: 100000, max_mass_g: 100 } },
     ]
     render(<DispenseForm
-      source={{ uuid: 'source-reagent', materialUuid: 'source-material', reagentInfoUuid: 'info', name: '乙醇', physicalState: 'liquid', quantity: 100, quantityUnit: 'mL', revision: 1, updatedAt: '' }}
+      source={{ uuid: 'source-reagent', materialUuid: 'source-material', reagentInfoUuid: 'info', name: '乙醇', physicalState: 'liquid', densityGPerMl: 0.789, quantity: 100, quantityUnit: 'mL', revision: 1, updatedAt: '' }}
       rows={[row(1, '', '')]}
       setRows={vi.fn()}
       containers={containers}
@@ -50,13 +55,15 @@ describe('DispenseForm container filters', () => {
 
     const targetSelect = screen.getByRole('combobox', { name: '目标容器 1' })
     expect(screen.getByRole('button', { name: /液体试剂瓶/ })).toHaveAttribute('aria-pressed', 'true')
-    expect(within(targetSelect).getByRole('option', { name: '液体瓶 R1C2' })).toBeInTheDocument()
-    expect(within(targetSelect).queryByRole('option', { name: '注粉瓶 L1C2' })).not.toBeInTheDocument()
-    expect(targetSelect.textContent).not.toContain('UNILAB-GRAPH')
+    const initialOptions = containerOptions(targetSelect)
+    expect(within(initialOptions).getByRole('option', { name: /^液体瓶 R1C2/ })).toBeInTheDocument()
+    expect(within(initialOptions).queryByRole('option', { name: /^注粉瓶 L1C2/ })).not.toBeInTheDocument()
+    expect(initialOptions.textContent).not.toContain('UNILAB-GRAPH')
 
     fireEvent.click(screen.getByRole('button', { name: /粉末试剂瓶/ }))
-    expect(within(targetSelect).getByRole('option', { name: '注粉瓶 L1C2' })).toBeInTheDocument()
-    expect(within(targetSelect).queryByRole('option', { name: '液体瓶 R1C2' })).not.toBeInTheDocument()
+    const filteredOptions = containerOptions(targetSelect)
+    expect(within(filteredOptions).getByRole('option', { name: /^注粉瓶 L1C2/ })).toBeInTheDocument()
+    expect(within(filteredOptions).queryByRole('option', { name: /^液体瓶 R1C2/ })).not.toBeInTheDocument()
   })
 })
 
@@ -67,13 +74,13 @@ describe('RegisterForm container filters', () => {
       template('beaker-template', ['szlab_poly_studio', 'container', 'beaker']),
     ]
     const containers = [
-      { ...demoMaterials[0], uuid: 'liquid-1', name: '液体瓶 R1C2', barcode: 'UNILAB-GRAPH-s10-liquid-R1C2', resourceTemplateUuid: 'liquid-template', isStructural: false },
-      { ...demoMaterials[0], uuid: 'beaker-1', name: '烧杯 L1A1', barcode: 'UNILAB-GRAPH-s3-beaker-L1A1', resourceTemplateUuid: 'beaker-template', isStructural: false },
+      { ...demoMaterials[0], uuid: 'liquid-1', name: '液体瓶 R1C2', barcode: 'UNILAB-GRAPH-s10-liquid-R1C2', resourceTemplateUuid: 'liquid-template', isStructural: false, capacity: { max_volume_ul: 100000 }, ratedCapacity: { max_volume_ul: 100000 } },
+      { ...demoMaterials[0], uuid: 'beaker-1', name: '烧杯 L1A1', barcode: 'UNILAB-GRAPH-s3-beaker-L1A1', resourceTemplateUuid: 'beaker-template', isStructural: false, capacity: { max_volume_ul: 100000 }, ratedCapacity: { max_volume_ul: 100000 } },
     ]
     render(<RegisterForm
-      form={{ materialUuid: '', reagentInfoUuid: '', quantity: '', quantityUnit: 'mL', concentrationValue: '', concentrationUnit: '%', description: '' }}
+      form={{ materialUuid: '', reagentInfoUuid: 'water', quantity: '', quantityUnit: 'mL', concentrationValue: '', concentrationUnit: '%', description: '' }}
       setForm={vi.fn()}
-      infos={[]}
+      infos={[{ uuid: 'water', name: '水', physicalState: 'liquid', densityGPerMl: 1, aliases: [], updatedAt: '' }]}
       containers={containers}
       templates={templates}
       filterTags={deriveContainerFilterTags(templates)}
@@ -83,13 +90,15 @@ describe('RegisterForm container filters', () => {
 
     const containerSelect = screen.getByRole('combobox', { name: '试剂容器' })
     expect(screen.getByRole('group', { name: '按容器标签筛选' })).toBeInTheDocument()
-    expect(within(containerSelect).getByRole('option', { name: '液体瓶 R1C2' })).toBeInTheDocument()
-    expect(within(containerSelect).getByRole('option', { name: '烧杯 L1A1' })).toBeInTheDocument()
-    expect(containerSelect.textContent).not.toContain('UNILAB-GRAPH')
+    const initialOptions = containerOptions(containerSelect)
+    expect(within(initialOptions).getByRole('option', { name: /^液体瓶 R1C2/ })).toBeInTheDocument()
+    expect(within(initialOptions).getByRole('option', { name: /^烧杯 L1A1/ })).toBeInTheDocument()
+    expect(initialOptions.textContent).not.toContain('UNILAB-GRAPH')
 
     fireEvent.click(screen.getByRole('button', { name: /液体试剂瓶/ }))
-    expect(within(containerSelect).getByRole('option', { name: '液体瓶 R1C2' })).toBeInTheDocument()
-    expect(within(containerSelect).queryByRole('option', { name: '烧杯 L1A1' })).not.toBeInTheDocument()
+    const filteredOptions = containerOptions(containerSelect)
+    expect(within(filteredOptions).getByRole('option', { name: /^液体瓶 R1C2/ })).toBeInTheDocument()
+    expect(within(filteredOptions).queryByRole('option', { name: /^烧杯 L1A1/ })).not.toBeInTheDocument()
   })
 })
 

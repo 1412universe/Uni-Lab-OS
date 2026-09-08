@@ -27,6 +27,7 @@ def _container(client: TestClient, suffix: str) -> str:
                     "display_name": "本地容器",
                     "registry_type": "material",
                     "category": ["container"],
+                    "metadata": {"capacity": {"max_volume_ul": 1000000}},
                     "model": {},
                     "class": {},
                     "handles": [],

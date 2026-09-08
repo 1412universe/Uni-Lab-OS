@@ -2004,7 +2004,8 @@ def test_execution_process_restart_fails_task_and_releases_dag_resources(
             """,
             (json.dumps(execution_plan), TASK_UUID),
         )
-    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
     bridge = _bridge(store, scheduler)
     try:
         bridge.submit(store.get_task(TASK_UUID))
@@ -2020,6 +2021,7 @@ def test_execution_process_restart_fails_task_and_releases_dag_resources(
         assert snapshot["workflows"][TASK_UUID]["state"] == "failed"
         assert snapshot["inflight_jobs"] == {}
         assert bridge.active_or_uncertain_job_ids() == set()
+        assert dispatcher.failed_restarted_jobs == [JOB_UUID]
     finally:
         bridge.close()
 

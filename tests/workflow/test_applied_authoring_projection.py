@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -174,6 +175,75 @@ def test_retained_nodes_and_edges_preserve_the_exact_persisted_read_shape() -> N
     assert result.valid and result.graph is not None, result.diagnostics
     assert result.graph["nodes"] == applied_graph["nodes"]
     assert result.graph["edges"] == applied_graph["edges"]
+
+
+def test_backend_string_schema_is_not_catalog_drift_against_parsed_object() -> None:
+    """Backend 文本列 schema 与导入解析出的对象必须视为同一目录代际。
+
+    参数：无。返回：无。异常/断言：把已应用图里的 JSON 文本解析成对象后重编译
+    仍应成功；这是活环境 JSON 导入的形态，不能再判成目录语义漂移。
+    """
+
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "goal": {"type": "object", "additionalProperties": True},
+            "result": {"type": "object", "additionalProperties": True},
+        },
+    }
+    schema_text = json.dumps(
+        schema,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    base_engine = _engine()
+    templates = [action.detached_template() for action in base_engine._catalog.actions]
+    handles = [
+        handle
+        for action in base_engine._catalog.actions
+        for handle in action.detached_handles()
+    ]
+    for template in templates:
+        template["schema"] = schema_text
+    engine = WorkflowAuthoringEngine(
+        catalog=AuthoringCatalogSnapshot.from_entities(templates, handles)
+    )
+    compiled = _compile(engine, graph=_applied_graph())
+    assert compiled.valid and compiled.graph is not None, compiled.diagnostics
+    applied = _persisted_read_graph(compiled.graph)
+    parsed = 0
+    for template in applied["node_templates"]:
+        if isinstance(template.get("schema"), str):
+            template["schema"] = json.loads(template["schema"])
+            parsed += 1
+    assert parsed, applied["node_templates"]
+
+    result = _compile(
+        engine,
+        graph=applied,
+        source=compiled.normalized_python_source,
+    )
+
+    assert result.valid and result.graph is not None, result.diagnostics
+
+
+def test_incompatible_template_schema_still_reports_catalog_drift() -> None:
+    """schema JSON 语义真的变了时，仍须报告目录漂移。"""
+
+    engine, applied_graph, normalized_source = _persisted_standard_graph()
+    applied_graph["node_templates"][0]["schema"] = json.dumps(
+        {"type": "boolean"},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    result = _compile(engine, graph=applied_graph, source=normalized_source)
+
+    assert _diagnostic_code(result) == "template_catalog_mismatch"
+    assert "schema" in result.diagnostics[0]["message"]
 
 
 def test_legacy_store_status_is_not_an_authoring_graph_change() -> None:

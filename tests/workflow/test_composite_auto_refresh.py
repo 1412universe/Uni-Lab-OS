@@ -53,15 +53,16 @@ def _apply_source(
     )
 
 
-def test_compatible_operation_apply_automatically_refreshes_clean_parent(
+def test_child_apply_does_not_refresh_parent_before_publish(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """实验操作兼容更新后，干净引用方工作流自动采用新展开图。
+    """子流程应用但尚未发布时，父工作流仍保持旧合同。
 
     参数：``tmp_path`` 隔离真实领域包、工作流定义目录和库存库。返回：无；断言
-    父修订自动推进、调用节点身份不变、子修订 pin 更新且父源码保持已应用。
-    异常：组合根、源码协调或断言失败时由 pytest 报告。
+    子流程只保存/应用时父修订、调用节点和已发布合同 pin 不变。发布后的刷新由
+    ``publish_workflow_contract`` 路径负责，并由独立发布回归覆盖。异常：组合根、
+    源码协调或断言失败时由 pytest 报告。
     """
 
     reset_workflow_service_for_test()
@@ -85,7 +86,6 @@ def test_compatible_operation_apply_automatically_refreshes_clean_parent(
         )
         parent_before = service.get_graph(PARENT_WORKFLOW_UUID)
         child_before = service.get_graph(CHILD_WORKFLOW_UUID)
-        parent_revision = int(parent_before["workflow"]["revision"])
         child_revision = int(child_before["workflow"]["revision"])
         task_before = service.create_workflow_task(
             workflow_uuid=PARENT_WORKFLOW_UUID,
@@ -103,15 +103,14 @@ def test_compatible_operation_apply_automatically_refreshes_clean_parent(
         )
 
         assert result["apply_result"]["warnings"] == []
-        parent_after = service.get_graph(PARENT_WORKFLOW_UUID)
         child_after = service.get_graph(CHILD_WORKFLOW_UUID)
         assert int(child_after["workflow"]["revision"]) == child_revision + 1
-        assert int(parent_after["workflow"]["revision"]) == parent_revision + 1
-        invocation = next(
-            node for node in parent_after["nodes"] if node["uuid"] == INVOCATION_UUID
-        )
-        composite = invocation["meta_data"]["unilab"]["composite"]
-        assert composite["child_workflow_revision"] == child_revision + 1
+        parent_after_apply = service.get_graph(PARENT_WORKFLOW_UUID)
+        # ``node_templates`` 是当前目录投影，子源码应用后可以反映新模板描述；
+        # 父工作流自身的持久定义、调用节点和连线不能在发布前改变。
+        assert parent_after_apply["workflow"] == parent_before["workflow"]
+        assert parent_after_apply["nodes"] == parent_before["nodes"]
+        assert parent_after_apply["edges"] == parent_before["edges"]
         assert service.get_authoring(PARENT_WORKFLOW_UUID)["state"] == "applied"
         frozen_before = service.get_workflow_task(task_before["uuid"])[
             "workflow_snapshot"
@@ -143,7 +142,7 @@ def test_compatible_operation_apply_automatically_refreshes_clean_parent(
             new_invocation["meta_data"]["unilab"]["composite"][
                 "child_workflow_revision"
             ]
-            == child_revision + 1
+            == child_revision
         )
     finally:
         reset_workflow_service_for_test()
@@ -217,11 +216,11 @@ def test_first_publication_recompiles_parent_blocked_by_unpublished_child(
 def test_child_updates_never_apply_parent_file_changed_before_watcher(
     tmp_path: Path,
 ) -> None:
-    """父 Python 文件已变但 watcher 未同步时不得自动应用该用户编辑。
+    """子流程应用时不得触碰父 Python 文件或其未应用编辑。
 
     参数：``tmp_path`` 隔离真实领域包、内存定义和库存库。返回：无；断言刷新前
-    直接修改的引用方文件会被识别为未应用源码，实验操作更新只留下警告，父修订和
-    已应用图均保持不变。异常：真实源码 CAS、编译或断言失败时由 pytest 报告。
+    直接修改的引用方文件保持未应用状态，子流程更新不会刷新父定义或覆盖用户
+    编辑。异常：真实源码 CAS、编译或断言失败时由 pytest 报告。
     """
 
     reset_workflow_service_for_test()
@@ -252,15 +251,7 @@ def test_child_updates_never_apply_parent_file_changed_before_watcher(
         )
 
         warnings = result["apply_result"]["warnings"]
-        assert warnings == [
-            {
-                "code": "dependent_authoring_refresh_pending",
-                "message": (
-                    f"实验操作已更新，但引用方工作流 {PARENT_WORKFLOW_UUID} 未能自动更新；"
-                    "请打开该工作流，检查组合节点参数和设备动作模板，重新编译并应用"
-                ),
-            }
-        ]
+        assert warnings == []
         parent_after = service.get_graph(PARENT_WORKFLOW_UUID)
         assert int(parent_after["workflow"]["revision"]) == parent_revision
         # 只比较父工作流自身的已应用定义；读图中的模板目录投影会合法反映刚应用
@@ -269,6 +260,7 @@ def test_child_updates_never_apply_parent_file_changed_before_watcher(
         assert parent_after["nodes"] == parent_before["nodes"]
         assert parent_after["edges"] == parent_before["edges"]
         assert service.get_authoring(PARENT_WORKFLOW_UUID)["state"] in {
+            "applied_source_stale",
             "unapplied_source_only",
             "unapplied_graph",
         }

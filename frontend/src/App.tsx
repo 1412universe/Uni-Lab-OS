@@ -131,7 +131,7 @@ export default function App() {
       ) : page === 'operations' ? (
         <OperationsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
       ) : page === 'reagents' ? (
-        <ReagentsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
+        <ReagentsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} onRefresh={refresh} />
       ) : page === 'workflows' ? (
         <WorkflowsPage
           workflows={snapshot.workflows}

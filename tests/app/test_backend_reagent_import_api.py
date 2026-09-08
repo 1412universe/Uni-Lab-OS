@@ -51,6 +51,7 @@ def _containers(client: TestClient, count: int = 2) -> list[str]:
                     "display_name": "批量试剂瓶",
                     "registry_type": "material",
                     "category": ["container"],
+                    "metadata": {"capacity": {"max_volume_ul": 1000000}},
                     "model": {},
                     "class": {},
                     "handles": [],

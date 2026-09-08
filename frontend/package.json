@@ -18,7 +18,8 @@
     "lucide-react": "^1.38.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router-dom": "^7.18.3"
+    "react-router-dom": "^7.18.3",
+    "smiles-drawer": "2.4.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^7.0.1",

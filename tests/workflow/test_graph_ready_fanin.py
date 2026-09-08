@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from unilabos.workflow.graph_validation import GraphValidationError, validate_graph
+from unilabos.workflow.graph_validation import (
+    GraphValidationError,
+    _is_composite_descendant,
+    validate_graph,
+)
 from unilabos.workflow.models import WorkflowEdgeWrite, WorkflowNodeWrite
 
 TEMPLATE_UUID = "10000000-0000-4000-8000-000000000001"
@@ -17,6 +21,37 @@ NODE_UUIDS = (
     "20000000-0000-4000-8000-000000000002",
     "20000000-0000-4000-8000-000000000003",
 )
+
+
+def test_composite_boundary_accepts_nested_control_descendant() -> None:
+    """组合参数可以进入 RepeatUntil 内部动作，但不能越过调用根。"""
+
+    root = WorkflowNodeWrite(
+        uuid=NODE_UUIDS[0],
+        workflow_node_template_uuid=TEMPLATE_UUID,
+        name="调用",
+        type="workflow",
+        param={},
+    )
+    control = WorkflowNodeWrite(
+        uuid=NODE_UUIDS[1],
+        workflow_node_template_uuid=TEMPLATE_UUID,
+        name="循环",
+        type="repeat_until",
+        parent_uuid=NODE_UUIDS[0],
+        param={},
+    )
+    action = WorkflowNodeWrite(
+        uuid=NODE_UUIDS[2],
+        workflow_node_template_uuid=TEMPLATE_UUID,
+        name="搅拌",
+        type="compute",
+        parent_uuid=NODE_UUIDS[1],
+        param={},
+    )
+    nodes = {node.uuid: node for node in (root, control, action)}
+    assert _is_composite_descendant(NODE_UUIDS[2], NODE_UUIDS[0], nodes)
+    assert not _is_composite_descendant(NODE_UUIDS[0], NODE_UUIDS[2], nodes)
 
 
 def _validate(edges: list[WorkflowEdgeWrite]) -> None:

@@ -174,6 +174,10 @@ def _template_definition(
     schema = _initial_parameter_schema(source.get("init_param_schema"))
     if schema:
         definition["init_param_schema"] = schema
+    metadata = _object(source.get("metadata"))
+    if "capacity" in metadata:
+        # 仅透传明确声明的容器规格，不实例化驱动或根据几何尺寸推算容量。
+        definition["metadata"] = {"capacity": metadata["capacity"]}
     for field in ("description", "icon", "cover"):
         value = source.get(field)
         if value is not None:
