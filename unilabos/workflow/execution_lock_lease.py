@@ -20,6 +20,9 @@ from unilabos.app.scheduler.ordering import (
     aged_priority,
 )
 from unilabos.app.scheduler.resource_lock import conflicting_resource_lock_keys
+from unilabos.workflow.resource_lock_key import (
+    parse_canonical_resource_lock_key,
+)
 from unilabos.workflow.execution_claim import (
     ensure_execution_claim,
     next_fencing_token,
@@ -27,8 +30,54 @@ from unilabos.workflow.execution_claim import (
 )
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.store import StoreConflict, utc_now
+from unilabos.workflow.task_material_admission import (
+    find_active_foreign_material_claim,
+)
 
-_SCOPES = frozenset({"device", "material", "material_site"})
+_SCOPES = frozenset({"device", "material", "material_site", "resource"})
+
+
+def _validate_execution_lock_row(row: sqlite3.Row) -> None:
+    """关闭式校验一条持久 Lease 的规范键与冗余物理身份。"""
+
+    identity = parse_canonical_resource_lock_key(row["lock_key"])
+    scope = str(row["scope"] or "")
+    material_uuid = str(row["material_uuid"] or "") or None
+    site_uuid = str(row["site_uuid"] or "") or None
+    if (
+        identity is None
+        or identity.scope != scope
+        or (
+            scope == "resource"
+            and (material_uuid is not None or site_uuid is not None)
+        )
+        or (
+            scope != "resource"
+            and (
+                identity.material_uuid != material_uuid
+                or identity.site_uuid != site_uuid
+            )
+        )
+    ):
+        raise StoreConflict("活动执行锁租约包含非规范或不一致的资源身份")
+
+
+def _validated_active_execution_lock_rows(
+    connection: sqlite3.Connection,
+) -> list[sqlite3.Row]:
+    """读取并验证全局活动 Lease，任何损坏事实均阻止继续签发。"""
+
+    rows = connection.execute(
+        """
+        SELECT * FROM execution_lock_lease
+        WHERE deleted_at IS NULL
+          AND state IN ('reserved', 'running', 'uncertain')
+        ORDER BY acquired_at ASC, uuid ASC
+        """
+    ).fetchall()
+    for row in rows:
+        _validate_execution_lock_row(row)
+    return rows
 
 
 def _normalize_interval_ids_by_lock(
@@ -107,6 +156,20 @@ def normalize_execution_lock_requests(
             raise StoreConflict("执行锁请求缺少合法 lock_key 或 scope")
         material_uuid = str(value.get("material_uuid") or "").strip() or None
         site_uuid = str(value.get("site_uuid") or "").strip() or None
+        key_identity = parse_canonical_resource_lock_key(lock_key)
+        if key_identity is None or key_identity.scope != scope:
+            raise StoreConflict("执行锁 scope 与规范 lock_key 不匹配")
+        if scope == "resource":
+            if material_uuid is not None or site_uuid is not None:
+                raise StoreConflict("通用执行锁不能伪造物料或库位身份")
+        else:
+            if (
+                material_uuid is not None
+                and material_uuid != key_identity.material_uuid
+            ) or (site_uuid is not None and site_uuid != key_identity.site_uuid):
+                raise StoreConflict("执行锁物理身份与 canonical lock_key 不一致")
+            material_uuid = key_identity.material_uuid
+            site_uuid = key_identity.site_uuid
         request = ExecutionLockRequest(
             lock_key=lock_key,
             scope=scope,
@@ -153,6 +216,59 @@ def _find_interval_leases(
     return result
 
 
+def _validate_preheld_interval_leases(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    job_uuid: str,
+    preheld_lock_keys: set[str],
+    preheld_job_uuids: set[str],
+    inherited_by_key: Mapping[str, sqlite3.Row],
+    interval_ids_by_lock: Mapping[str, set[str]],
+) -> None:
+    """证明声明的预持有资源仍由同 Task 的前驱区间 Lease 持有。"""
+
+    if not preheld_lock_keys:
+        return
+    if not preheld_job_uuids:
+        raise StoreConflict("连续区间预持有资源缺少前一 Job 身份")
+    missing: list[str] = []
+    for lock_key in sorted(preheld_lock_keys):
+        row = inherited_by_key.get(lock_key)
+        expected_interval_ids = interval_ids_by_lock.get(lock_key, set())
+        if row is None or not expected_interval_ids:
+            missing.append(lock_key)
+            continue
+        metadata = _lease_metadata(row)
+        raw_interval_ids = metadata.get("resource_interval_ids")
+        lease_interval_ids = (
+            {str(value).strip() for value in raw_interval_ids if str(value).strip()}
+            if isinstance(raw_interval_ids, Sequence)
+            and not isinstance(raw_interval_ids, (str, bytes))
+            else set()
+        )
+        acquired_by = _lease_acquired_by(row)
+        predecessor_job_uuid = acquired_by
+        if acquired_by == job_uuid:
+            predecessor_job_uuid = str(metadata.get("handoff_from_job_uuid") or "")
+        predecessor = connection.execute(
+            "SELECT workflow_task_uuid FROM workflow_node_job WHERE uuid=? "
+            "AND deleted_at IS NULL",
+            (predecessor_job_uuid,),
+        ).fetchone()
+        if (
+            predecessor_job_uuid not in preheld_job_uuids
+            or predecessor is None
+            or str(predecessor["workflow_task_uuid"]) != task_uuid
+            or not expected_interval_ids.intersection(lease_interval_ids)
+        ):
+            missing.append(lock_key)
+    if missing:
+        raise StoreConflict(
+            "连续区间预持有资源缺少匹配的活动前驱租约：" + "、".join(missing)
+        )
+
+
 def try_acquire_execution_locks(
     connection: sqlite3.Connection,
     *,
@@ -165,6 +281,8 @@ def try_acquire_execution_locks(
     resource_interval_ids: Sequence[str] = (),
     resource_acquire_set_id: str | None = None,
     resource_interval_ids_by_lock: Mapping[str, Sequence[str]] | None = None,
+    preheld_lock_keys: Sequence[str] | None = None,
+    preheld_job_uuids: Sequence[str] | None = None,
     authoritative_permit: bool = False,
     aging_interval_seconds: float = DEFAULT_AGING_INTERVAL_SECONDS,
 ) -> ExecutionLockDecision:
@@ -177,11 +295,49 @@ def try_acquire_execution_locks(
     """
 
     normalized = normalize_execution_lock_requests(requests)
+    task_material_blocker = find_active_foreign_material_claim(
+        connection,
+        task_uuid=task_uuid,
+        material_uuids=tuple(
+            request.material_uuid
+            for request in normalized
+            if request.material_uuid is not None
+        ),
+    )
+    if task_material_blocker is not None:
+        if authoritative_permit:
+            raise StoreConflict(
+                "库存 Permit 越过其他任务的活动物料独占："
+                f"{task_material_blocker['material_uuid']}"
+            )
+        waiting_since = _ensure_waiters(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            requests=normalized,
+        )
+        return _record_wait(
+            connection,
+            task_uuid=task_uuid,
+            job_uuid=job_uuid,
+            requests=normalized,
+            blocking_task_uuid=str(
+                task_material_blocker["workflow_task_uuid"]
+            ),
+            blocking_job_uuid=None,
+            waiting_since=waiting_since,
+        )
     provided_fences = dict(fencing_tokens or {})
     normalized_keys = {request.lock_key for request in normalized}
-    interval_ids = {
-        str(value).strip() for value in resource_interval_ids if str(value).strip()
+    declared_preheld_keys = {
+        str(value).strip() for value in (preheld_lock_keys or ()) if str(value).strip()
     }
+    declared_preheld_jobs = {
+        str(value).strip() for value in (preheld_job_uuids or ()) if str(value).strip()
+    }
+    if not declared_preheld_keys <= normalized_keys:
+        raise StoreConflict("连续区间预持有资源不在当前作业完整锁集合中")
+    interval_ids = {str(value).strip() for value in resource_interval_ids if str(value).strip()}
     interval_ids_by_lock = _normalize_interval_ids_by_lock(
         resource_interval_ids_by_lock,
         requested_keys=normalized_keys,
@@ -202,6 +358,15 @@ def try_acquire_execution_locks(
     inherited_keys = set(inherited_by_key)
     if not inherited_keys <= normalized_keys:
         raise StoreConflict("连续区间继承的资源不在当前作业完整锁集合中")
+    _validate_preheld_interval_leases(
+        connection,
+        task_uuid=task_uuid,
+        job_uuid=job_uuid,
+        preheld_lock_keys=declared_preheld_keys,
+        preheld_job_uuids=declared_preheld_jobs,
+        inherited_by_key=inherited_by_key,
+        interval_ids_by_lock=interval_ids_by_lock,
+    )
     provided_fence_keys = set(provided_fences)
     if claim_uuid is not None and provided_fence_keys not in (
         normalized_keys,
@@ -210,6 +375,7 @@ def try_acquire_execution_locks(
         raise StoreConflict("库存 Permit Fence 与完整执行锁集合不一致")
     if any(token <= 0 for token in provided_fences.values()):
         raise StoreConflict("库存 Permit Fence 必须是正整数")
+    active_rows = _validated_active_execution_lock_rows(connection)
     if not normalized:
         claim = ensure_execution_claim(
             connection,
@@ -224,19 +390,7 @@ def try_acquire_execution_locks(
             claim_uuid=str(claim["claim_uuid"]),
         )
 
-    active_rows = connection.execute(
-        """
-        SELECT * FROM execution_lock_lease
-        WHERE deleted_at IS NULL
-          AND state IN ('reserved', 'running', 'uncertain')
-        ORDER BY acquired_at ASC, uuid ASC
-        """
-    ).fetchall()
-    own_keys = {
-        str(row["lock_key"])
-        for row in active_rows
-        if _lease_acquired_by(row) == job_uuid
-    }
+    own_keys = {str(row["lock_key"]) for row in active_rows if _lease_acquired_by(row) == job_uuid}
     own_keys |= inherited_keys
     requested_keys = {request.lock_key for request in normalized}
     if own_keys and not inherited_keys:
@@ -273,20 +427,22 @@ def try_acquire_execution_locks(
             requests=normalized,
         )
     )
-    blockers = [] if authoritative_permit else [
-        row
-        for row in active_rows
-        if _lease_acquired_by(row) != job_uuid
-        and row["workflow_node_job_uuid"] != job_uuid
-        and str(row["lock_key"]) not in inherited_keys
-        and conflicting_resource_lock_keys(
-            requested_keys - inherited_keys,
-            {str(row["lock_key"])},
-        )
-    ]
-    device_keys = tuple(
-        request.lock_key for request in normalized if request.scope == "device"
+    blockers = (
+        []
+        if authoritative_permit
+        else [
+            row
+            for row in active_rows
+            if _lease_acquired_by(row) != job_uuid
+            and row["workflow_node_job_uuid"] != job_uuid
+            and str(row["lock_key"]) not in inherited_keys
+            and conflicting_resource_lock_keys(
+                requested_keys - inherited_keys,
+                {str(row["lock_key"])},
+            )
+        ]
     )
+    device_keys = tuple(request.lock_key for request in normalized if request.scope == "device")
     tenancy_blocker = None
     owned_tenancy_keys: set[str] = set()
     if device_keys:
@@ -303,8 +459,9 @@ def try_acquire_execution_locks(
                 (*device_keys, task_uuid),
             ).fetchall()
         }
-        tenancy_blocker = connection.execute(
-            f"""
+        tenancy_blocker = (
+            connection.execute(
+                f"""
             SELECT workflow_task_uuid, acquired_by_job_uuid
             FROM task_device_tenancy
             WHERE state = 'active'
@@ -312,8 +469,11 @@ def try_acquire_execution_locks(
               AND workflow_task_uuid <> ?
             ORDER BY acquired_at, uuid LIMIT 1
             """,
-            (*device_keys, task_uuid),
-            ).fetchone() if not authoritative_permit else None
+                (*device_keys, task_uuid),
+            ).fetchone()
+            if not authoritative_permit
+            else None
+        )
     if blockers:
         blocker = blockers[0]
         return _record_wait(
@@ -342,15 +502,19 @@ def try_acquire_execution_locks(
     ).fetchone()
     if current_task is None:
         raise StoreConflict(f"执行锁所属任务不存在：{task_uuid}")
-    older = None if authoritative_permit else _older_conflicting_waiter(
-        connection,
-        job_uuid=job_uuid,
-        current_enqueued_at=enqueued_at,
-        current_task_create_time=str(current_task["create_time"]),
-        current_task_uuid=task_uuid,
-        current_priority=priority_weight(current_task["priority"]),
-        requested_keys=requested_keys - owned_tenancy_keys - inherited_keys,
-        aging_interval_seconds=aging_interval_seconds,
+    older = (
+        None
+        if authoritative_permit
+        else _older_conflicting_waiter(
+            connection,
+            job_uuid=job_uuid,
+            current_enqueued_at=enqueued_at,
+            current_task_create_time=str(current_task["create_time"]),
+            current_task_uuid=task_uuid,
+            current_priority=priority_weight(current_task["priority"]),
+            requested_keys=requested_keys - owned_tenancy_keys - inherited_keys,
+            aging_interval_seconds=aging_interval_seconds,
+        )
     )
     if older is not None:
         return _record_wait(
@@ -376,6 +540,18 @@ def try_acquire_execution_locks(
     fencing_tokens: list[tuple[str, int]] = []
     old_claims: set[str] = set()
     for inherited in inherited_rows:
+        previous_job = connection.execute(
+            "SELECT status FROM workflow_node_job WHERE uuid=?",
+            (inherited["workflow_node_job_uuid"],),
+        ).fetchone()
+        if (
+            authoritative_permit
+            and previous_job is not None
+            and previous_job["status"] not in {"succeeded", "skipped"}
+        ):
+            # 在途共同祖先仍由原作业镜像持有；库存 Permit 复用同一栅栏，不能把
+            # 原作业的锁行转移给兄弟作业而破坏原物理完成凭据。
+            continue
         old_claim = str(inherited["claim_uuid"] or "")
         if old_claim and old_claim != claim_uuid:
             old_claims.add(old_claim)
@@ -383,16 +559,12 @@ def try_acquire_execution_locks(
         metadata.update(
             {
                 "acquired_by_job_uuid": job_uuid,
-                "resource_plan_id": str(
-                    resource_plan_id or metadata.get("resource_plan_id") or ""
-                ),
+                "resource_plan_id": str(resource_plan_id or metadata.get("resource_plan_id") or ""),
                 "resource_interval_ids": sorted(
                     interval_ids_by_lock.get(str(inherited["lock_key"]), ())
                 ),
                 "resource_acquire_set_id": str(
-                    resource_acquire_set_id
-                    or metadata.get("resource_acquire_set_id")
-                    or ""
+                    resource_acquire_set_id or metadata.get("resource_acquire_set_id") or ""
                 ),
                 "handoff_from_job_uuid": str(inherited["workflow_node_job_uuid"]),
             }
@@ -410,11 +582,7 @@ def try_acquire_execution_locks(
                 job_uuid,
                 claim_uuid,
                 encode_json(metadata, sort_keys=True).decode("utf-8"),
-                int(
-                    provided_fences.get(
-                        str(inherited["lock_key"]), inherited["fencing_token"]
-                    )
-                ),
+                int(provided_fences.get(str(inherited["lock_key"]), inherited["fencing_token"])),
                 acquired_at,
                 inherited["uuid"],
             ),
@@ -441,9 +609,7 @@ def try_acquire_execution_locks(
             "semantic_scope": request.scope,
             "acquired_by_job_uuid": job_uuid,
             "resource_plan_id": str(resource_plan_id or ""),
-            "resource_interval_ids": sorted(
-                interval_ids_by_lock.get(request.lock_key, ())
-            ),
+            "resource_interval_ids": sorted(interval_ids_by_lock.get(request.lock_key, ())),
             "resource_acquire_set_id": str(resource_acquire_set_id or ""),
         }
         if authoritative_permit:
@@ -513,13 +679,29 @@ def mirror_execution_locks_from_permit(
     resource_interval_ids: Sequence[str] = (),
     resource_acquire_set_id: str | None = None,
     resource_interval_ids_by_lock: Mapping[str, Sequence[str]] | None = None,
+    preheld_lock_keys: Sequence[str] | None = None,
+    preheld_job_uuids: Sequence[str] | None = None,
 ) -> ExecutionLockDecision:
     """只镜像库存 Permit，不在工作流库再次进行资源仲裁。"""
 
     normalized = normalize_execution_lock_requests(requests)
+    task_material_blocker = find_active_foreign_material_claim(
+        connection,
+        task_uuid=task_uuid,
+        material_uuids=tuple(
+            request.material_uuid
+            for request in normalized
+            if request.material_uuid is not None
+        ),
+    )
+    if task_material_blocker is not None:
+        raise StoreConflict(
+            "库存 Permit 越过其他任务的活动物料独占："
+            f"{task_material_blocker['material_uuid']}"
+        )
     provided_fences = {str(key): int(value) for key, value in fencing_tokens.items()}
     requested_keys = {request.lock_key for request in normalized}
-    if resource_interval_ids:
+    if resource_interval_ids or preheld_lock_keys:
         return try_acquire_execution_locks(
             connection,
             task_uuid=task_uuid,
@@ -531,18 +713,23 @@ def mirror_execution_locks_from_permit(
             resource_interval_ids=resource_interval_ids,
             resource_acquire_set_id=resource_acquire_set_id,
             resource_interval_ids_by_lock=resource_interval_ids_by_lock,
+            preheld_lock_keys=preheld_lock_keys,
+            preheld_job_uuids=preheld_job_uuids,
             authoritative_permit=True,
         )
     if not claim_uuid or set(provided_fences) != requested_keys:
         raise StoreConflict("库存 Permit Fence 与完整执行锁集合不一致")
     if any(token <= 0 for token in provided_fences.values()):
         raise StoreConflict("库存 Permit Fence 必须是正整数")
+    _validated_active_execution_lock_rows(connection)
     existing = connection.execute(
         "SELECT * FROM execution_lock_lease WHERE workflow_node_job_uuid=? "
         "AND deleted_at IS NULL ORDER BY lock_key",
         (job_uuid,),
     ).fetchall()
     if existing:
+        for row in existing:
+            _validate_execution_lock_row(row)
         actual = {
             str(row["lock_key"]): (str(row["claim_uuid"]), int(row["fencing_token"]))
             for row in existing
@@ -1166,6 +1353,9 @@ def _wait_resource(request: ExecutionLockRequest) -> dict[str, str]:
     """把内部锁键转换为可展示但不依赖锁键语法的等待资源。"""
 
     resource = {"scope": request.scope}
+    if request.scope == "resource":
+        resource["lock_key"] = request.lock_key
+        return resource
     if request.scope == "device":
         if request.material_uuid is not None:
             resource["device_id"] = request.material_uuid
@@ -1191,6 +1381,7 @@ def wait_resource_identity(
         "device": "device_id",
         "material": "material_uuid",
         "material_site": "site_uuid",
+        "resource": "lock_key",
     }.get(scope)
     if identity_field is None:
         return None

@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from unilabos.app.scheduler.inventory.domain import MaterialRequirement
+from unilabos.workflow.resource_lock_key import device_lock_key
 
 # 与 Go engine.DataKeySplit 一致（pkg/core/schedule/engine/model.go）
 DATA_KEY_SPLIT = "@@@"
@@ -150,7 +151,7 @@ class WorkflowNode:
         不是持久作业执行占用（JobExecutionClaim），也不提供栅栏（Fence）。
         """
 
-        return f"/devices/{self.device_material_uuid or self.device_id}"
+        return device_lock_key(self.device_material_uuid or self.device_id)
 
     def is_ilab(self) -> bool:
         return normalize_node_type(self.node_type) == "ILab"
@@ -196,6 +197,10 @@ class WorkflowSpec:
     repeat_regions: Dict[str, "RepeatUntilRegion"] = field(default_factory=dict)
     # 已绑定的资源计划 JSON 投影；旧工作流为空，不改变旧调度数据模型。
     resource_plan: Dict[str, Any] | None = None
+    # 不进入旧调度 DAG、但资源计划仍保留图身份的协调器节点。该内部投影只由
+    # WorkflowSpecCompiler 写入，spec_from_dict 不接收；区间完成判断只能跳过
+    # 这个显式集合，不能把任意缺失物理节点都推断成成功。
+    resource_coordinator_node_ids: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.task_id:
@@ -259,6 +264,9 @@ class DispatchedJob:
     dispatch_credentials: Dict[str, Any] = field(default_factory=dict)
     # 人工等待与批准后的设备动作始终复用同一组 Claim/Fence 与资源占用。
     resource_lock_keys: set[str] = field(default_factory=set)
+    # 连续作用域中的 reservation 可由同 Task 兄弟共享；本集合只表示当前
+    # Job 正在操作的物料/设备，始终全局互斥并随 Job 终态立即释放。
+    active_resource_lock_keys: set[str] = field(default_factory=set)
     # 绑定资源计划的只读运行投影；旧恢复记录为空时仍走兼容 lock key。
     resource_plan_id: str = ""
     resource_interval_ids: List[str] = field(default_factory=list)

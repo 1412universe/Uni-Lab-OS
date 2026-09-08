@@ -25,7 +25,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
-from unilabos.workflow.store import WorkflowStore
+from unilabos.workflow.store import StoreConflict, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
 WORKFLOW_UUID = "11000000-0000-4000-8000-000000000001"
@@ -2022,6 +2022,737 @@ def test_execution_process_restart_fails_task_and_releases_dag_resources(
         assert snapshot["inflight_jobs"] == {}
         assert bridge.active_or_uncertain_job_ids() == set()
         assert dispatcher.failed_restarted_jobs == [JOB_UUID]
+    finally:
+        bridge.close()
+
+
+def test_execution_process_restart_fails_every_nonterminal_task_in_runtime(
+    store: WorkflowStore,
+) -> None:
+    """动作 Runtime 崩溃必须终止同一运行时内尚未派发的其他任务。"""
+
+    _seed_two_node_debug_task(store)
+    waiting_task_uuid = "21000000-0000-4000-8000-000000000098"
+    waiting_node_uuid = "31000000-0000-4000-8000-000000000098"
+    waiting_job_uuid = "41000000-0000-4000-8000-000000000098"
+    task = store.get_task(TASK_UUID)
+    execution_plan = dict(task["execution_plan"])
+    waiting_plan = {
+        **execution_plan,
+        "run_mode": "step",
+        "nodes": [
+            {
+                **execution_plan["nodes"][0],
+                "uuid": waiting_node_uuid,
+                "device_id": "waiting-device",
+            }
+        ],
+        "edges": [],
+    }
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO workflow_task(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_uuid, status, workflow_snapshot,
+                execution_plan, run_mode, target_node_uuid, control_status,
+                cleanup_status, trace_context, input, output, error_info
+            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, 'pending', '{}', ?,
+                      'step', NULL, 'paused', 'none', '{}', '{}', '{}', '[]')
+            """,
+            (
+                waiting_task_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                WORKFLOW_UUID,
+                json.dumps(waiting_plan),
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO workflow_node_job(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_uuid,
+                feedback_sequence, topological_index, executor_kind,
+                execution_policy, execution_timeout_seconds, status, attempt,
+                param, feedback_data, return_info, control_data, error_info
+            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, 0, 0,
+                      'device_action', '{}', 0, 'pending', 1, '{}', '{}',
+                      '{}', '{}', '[]')
+            """,
+            (
+                waiting_job_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                waiting_task_uuid,
+                waiting_node_uuid,
+            ),
+        )
+        execution_plan["run_mode"] = "normal"
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET execution_plan = ?, run_mode = 'normal', control_status = 'active'
+            WHERE uuid = ?
+            """,
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(waiting_task_uuid))
+        bridge.submit(store.get_task(TASK_UUID))
+        assert waiting_task_uuid in scheduler.snapshot()["workflows"]
+        dispatched_before_restart = list(dispatcher.dispatched)
+
+        scheduler.on_execution_process_restarted((JOB_UUID,))
+
+        first_main_task = store.get_task(TASK_UUID)
+        first_waiting_task = store.get_task(waiting_task_uuid)
+        first_waiting_job = store.get_job(waiting_job_uuid)
+        scheduler.on_execution_process_restarted((JOB_UUID,))
+        assert store.get_task(TASK_UUID) == first_main_task
+        assert store.get_task(waiting_task_uuid) == first_waiting_task
+        assert store.get_job(waiting_job_uuid) == first_waiting_job
+        assert dispatcher.dispatched == dispatched_before_restart
+    finally:
+        bridge.close()
+
+    assert store.get_task(TASK_UUID)["status"] == "failed"
+    assert store.get_task(waiting_task_uuid)["status"] == "failed"
+    assert store.get_job(waiting_job_uuid)["status"] == "canceled"
+    assert store.get_job(waiting_job_uuid)["error_info"][0]["code"] == (
+        "task_aborted_by_runtime_restart"
+    )
+    assert waiting_task_uuid not in scheduler.snapshot()["workflows"]
+
+
+def test_execution_process_restart_fails_running_sibling_under_failed_task(
+    store: WorkflowStore,
+) -> None:
+    """并行分支先失败父 Task 后，Runtime 崩溃仍须终结剩余在途 Job。"""
+
+    _seed_two_node_debug_task(store)
+    task = store.get_task(TASK_UUID)
+    execution_plan = dict(task["execution_plan"])
+    execution_plan["run_mode"] = "normal"
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=?,run_mode='normal' WHERE uuid=?",
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        assert store.get_job(JOB_UUID)["status"] == "running"
+        original_finished_at = "2026-09-08T01:02:03.000000+00:00"
+        original_error_info = [{"code": "parallel_branch_failed"}]
+        with store.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE workflow_task
+                SET status='failed', error_info=?, finished_at=?
+                WHERE uuid=?
+                """,
+                (
+                    json.dumps(original_error_info),
+                    original_finished_at,
+                    TASK_UUID,
+                ),
+            )
+
+        scheduler.on_execution_process_restarted(())
+
+        jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
+        assert jobs[JOB_UUID]["status"] == "failed"
+        assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
+        failed_task = store.get_task(TASK_UUID)
+        assert failed_task["status"] == "failed"
+        assert failed_task["error_info"] == original_error_info
+        assert failed_task["finished_at"] == original_finished_at
+        assert scheduler.snapshot()["inflight_jobs"] == {}
+    finally:
+        bridge.close()
+
+
+def test_execution_process_restart_preserves_preexisting_uncertain_sibling(
+    store: WorkflowStore,
+) -> None:
+    """Runtime 崩溃只释放本次中止 Job，不得越过既有物料对账占用。"""
+
+    class _RestartInventory:
+        """记录跨库 Claim 收敛状态，不复制库存权威。"""
+
+        def __init__(self) -> None:
+            self.transitions: list[tuple[str, str]] = []
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            self.transitions.append((claim_uuid, target_state))
+
+    _seed_two_node_debug_task(store)
+    claim_uuid = "75000000-0000-4000-8000-000000000091"
+    lease_uuid = "76000000-0000-4000-8000-000000000091"
+    provider_claim_uuid = "75000000-0000-4000-8000-000000000092"
+    provider_lease_uuid = "76000000-0000-4000-8000-000000000092"
+    provider_ordinary_lease_uuid = "76000000-0000-4000-8000-000000000093"
+    lock_key = "material/51000000-0000-4000-8000-000000000091/exclusive"
+    provider_lock_key = (
+        "resource/51000000-0000-4000-8000-000000000092/exclusive"
+    )
+    provider_ordinary_lock_key = "device/51000000-0000-4000-8000-000000000093"
+    uncertainty_reason = "material_transfer_inventory_reconciliation_required"
+    original_error_info = [{"code": "parallel_transfer_failed"}]
+    retained_control_data = {
+        "dispatch_preheld_job_uuids": [SECOND_JOB_UUID],
+        "dispatch_preheld_lock_keys": [provider_lock_key],
+        "dispatch_fences": [
+            {"lock_key": lock_key, "fencing_token": 1},
+            {"lock_key": provider_lock_key, "fencing_token": 1},
+        ],
+    }
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET status='failed', control_status='waiting_reconciliation',
+                cleanup_status='requires_attention', attention_reason=?,
+                reconciliation_resume_control_status='active', error_info=?
+            WHERE uuid=?
+            """,
+            (uncertainty_reason, json.dumps(original_error_info), TASK_UUID),
+        )
+        connection.execute(
+            """
+            UPDATE workflow_node_job
+            SET status='failed', uncertainty_reason=?, control_data=?,
+                dispatch_effect_uuid=?
+            WHERE uuid=?
+            """,
+            (
+                uncertainty_reason,
+                json.dumps(retained_control_data),
+                "77000000-0000-4000-8000-000000000091",
+                JOB_UUID,
+            ),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET status='running' WHERE uuid=?",
+            (SECOND_JOB_UUID,),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_claim(
+                claim_uuid, create_time, update_time, workflow_task_uuid,
+                workflow_node_job_uuid, attempt, resource_keys, state,
+                acquired_at, released_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'uncertain', ?, NULL)
+            """,
+            (
+                claim_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                TASK_UUID,
+                JOB_UUID,
+                json.dumps([lock_key, provider_lock_key]),
+                _CREATED_AT,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_lock_lease(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_job_uuid,
+                lock_key, scope, material_uuid, site_uuid, state,
+                acquired_at, released_at, claim_uuid, fencing_token
+            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'material', NULL,
+                      NULL, 'uncertain', ?, NULL, ?, 1)
+            """,
+            (
+                lease_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                json.dumps({"acquired_by_job_uuid": JOB_UUID}),
+                TASK_UUID,
+                JOB_UUID,
+                lock_key,
+                _CREATED_AT,
+                claim_uuid,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_claim(
+                claim_uuid, create_time, update_time, workflow_task_uuid,
+                workflow_node_job_uuid, attempt, resource_keys, state,
+                acquired_at, released_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'running', ?, NULL)
+            """,
+            (
+                provider_claim_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                TASK_UUID,
+                SECOND_JOB_UUID,
+                json.dumps([provider_lock_key, provider_ordinary_lock_key]),
+                _CREATED_AT,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_lock_lease(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_job_uuid,
+                lock_key, scope, material_uuid, site_uuid, state,
+                acquired_at, released_at, claim_uuid, fencing_token
+            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'resource', NULL,
+                      NULL, 'running', ?, NULL, ?, 1)
+            """,
+            (
+                provider_lease_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                json.dumps({"acquired_by_job_uuid": SECOND_JOB_UUID}),
+                TASK_UUID,
+                SECOND_JOB_UUID,
+                provider_lock_key,
+                _CREATED_AT,
+                provider_claim_uuid,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_lock_lease(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_job_uuid,
+                lock_key, scope, material_uuid, site_uuid, state,
+                acquired_at, released_at, claim_uuid, fencing_token
+            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'device', NULL,
+                      NULL, 'running', ?, NULL, ?, 1)
+            """,
+            (
+                provider_ordinary_lease_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                json.dumps({"acquired_by_job_uuid": SECOND_JOB_UUID}),
+                TASK_UUID,
+                SECOND_JOB_UUID,
+                provider_ordinary_lock_key,
+                _CREATED_AT,
+                provider_claim_uuid,
+            ),
+        )
+
+    # retained Claim 缺少任一自有活动 Lease 时，整笔重启投影必须回滚。
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE execution_lock_lease SET state='released',released_at=? "
+            "WHERE uuid=?",
+            (_CREATED_AT, lease_uuid),
+        )
+    with pytest.raises(StoreConflict, match="missing_retained_leases"):
+        TaskRuntimeProjection(store).project_execution_process_restarted(TASK_UUID)
+    assert store.get_job(SECOND_JOB_UUID)["status"] == "running"
+    assert store.get_task(TASK_UUID)["error_info"] == original_error_info
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE execution_lock_lease SET state='uncertain',released_at=NULL "
+            "WHERE uuid=?",
+            (lease_uuid,),
+        )
+
+    # 声明 provider 与实际 Lease 审计身份不一致时也必须回滚；修复测试数据后
+    # 再验证正常的精确锁保留路径。
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE execution_lock_lease SET meta_data=? WHERE uuid=?",
+            (
+                json.dumps({"acquired_by_job_uuid": JOB_UUID}),
+                provider_lease_uuid,
+            ),
+        )
+    with pytest.raises(StoreConflict, match="preheld 权威事实损坏"):
+        TaskRuntimeProjection(store).project_execution_process_restarted(TASK_UUID)
+    assert store.get_job(SECOND_JOB_UUID)["status"] == "running"
+    assert store.get_task(TASK_UUID)["error_info"] == original_error_info
+    assert {
+        item["state"]
+        for item in TaskRuntimeProjection(store).list_execution_locks(
+            SECOND_JOB_UUID
+        )
+    } == {"running"}
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE execution_lock_lease SET meta_data=? WHERE uuid=?",
+            (
+                json.dumps({"acquired_by_job_uuid": SECOND_JOB_UUID}),
+                provider_lease_uuid,
+            ),
+        )
+
+    inventory = _RestartInventory()
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(
+        dispatcher=dispatcher,
+        station_resources=inventory,
+    )
+    bridge = _bridge(store, scheduler)
+    try:
+        scheduler.on_execution_process_restarted(())
+
+        task = store.get_task(TASK_UUID)
+        jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
+        claim = TaskRuntimeProjection(store).get_execution_claim(JOB_UUID)
+        provider_claim = TaskRuntimeProjection(store).get_execution_claim(
+            SECOND_JOB_UUID
+        )
+        assert jobs[JOB_UUID]["status"] == "failed"
+        assert jobs[JOB_UUID]["uncertainty_reason"] == uncertainty_reason
+        assert jobs[SECOND_JOB_UUID]["status"] == "failed"
+        assert task["status"] == "failed"
+        assert task["error_info"] == original_error_info
+        assert task["cleanup_status"] == "requires_attention"
+        assert task["attention_reason"] == uncertainty_reason
+        assert claim is not None and claim["state"] == "uncertain"
+        assert provider_claim is not None and provider_claim["state"] == "running"
+        assert {
+            item["state"]
+            for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
+        } == {"uncertain"}
+        provider_locks = {
+            item["lock_key"]: item["state"]
+            for item in TaskRuntimeProjection(store).list_execution_locks(
+                SECOND_JOB_UUID
+            )
+        }
+        assert provider_locks == {
+            provider_lock_key: "uncertain",
+            provider_ordinary_lock_key: "released",
+        }
+        assert inventory.transitions == [
+            (claim_uuid, "uncertain"),
+            (provider_claim_uuid, "released"),
+        ]
+        assert dispatcher.failed_restarted_jobs == [SECOND_JOB_UUID]
+        assert bridge.active_or_uncertain_job_ids() == {
+            JOB_UUID,
+            SECOND_JOB_UUID,
+        }
+
+        # 模拟 retained Job 的实际库存对账已经提交：其自身 Claim 先释放，随后
+        # Task 级收尾还必须释放此前冻结的 preheld provider Claim。
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE workflow_node_job SET uncertainty_reason=NULL WHERE uuid=?",
+                (JOB_UUID,),
+            )
+            connection.execute(
+                """
+                UPDATE execution_claim
+                SET state='released', released_at=?, update_time=?
+                WHERE workflow_node_job_uuid=?
+                """,
+                (_CREATED_AT, _CREATED_AT, JOB_UUID),
+            )
+            connection.execute(
+                """
+                UPDATE execution_lock_lease
+                SET state='released', released_at=?, update_time=?
+                WHERE workflow_node_job_uuid=?
+                """,
+                (_CREATED_AT, _CREATED_AT, JOB_UUID),
+            )
+        inventory.transition_dispatch_permit(
+            claim_uuid,
+            target_state="released",
+        )
+        bridge._finish_settled_terminal_task(JOB_UUID)
+
+        assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+        assert (
+            TaskRuntimeProjection(store).get_execution_claim(SECOND_JOB_UUID)[
+                "state"
+            ]
+            == "released"
+        )
+        assert inventory.transitions == [
+            (claim_uuid, "uncertain"),
+            (provider_claim_uuid, "released"),
+            (claim_uuid, "released"),
+            (provider_claim_uuid, "released"),
+        ]
+        assert bridge.active_or_uncertain_job_ids() == set()
+    finally:
+        bridge.close()
+
+
+def test_execution_process_restart_retries_cross_authority_cleanup(
+    store: WorkflowStore,
+) -> None:
+    """Workflow 已终态后重放相同 restart 事件仍须补齐 Edge 清理。"""
+
+    class _FlakyRestartDispatcher(RecordingDispatcher):
+        def __init__(self) -> None:
+            super().__init__()
+            self.restart_attempts: list[tuple[str, ...]] = []
+
+        def fail_restarted_jobs(
+            self,
+            job_uuids: tuple[str, ...] | list[str],
+        ) -> list[str]:
+            attempt = tuple(str(job_uuid) for job_uuid in job_uuids)
+            self.restart_attempts.append(attempt)
+            if len(self.restart_attempts) == 1:
+                raise RuntimeError("edge restart cleanup unavailable")
+            return super().fail_restarted_jobs(job_uuids)
+
+    _seed_two_node_debug_task(store)
+    task = store.get_task(TASK_UUID)
+    execution_plan = dict(task["execution_plan"])
+    execution_plan["run_mode"] = "normal"
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=?,run_mode='normal' WHERE uuid=?",
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+    dispatcher = _FlakyRestartDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    bridge = _bridge(store, scheduler)
+    bridge_error = importlib.import_module(
+        "unilabos.workflow.task_scheduler_bridge"
+    ).TaskSchedulerBridgeError
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        with pytest.raises(bridge_error, match="动作进程重启有任务未能提交失败事实"):
+            scheduler.on_execution_process_restarted(())
+        assert store.get_job(JOB_UUID)["status"] == "failed"
+
+        scheduler.on_execution_process_restarted(())
+
+        assert dispatcher.restart_attempts == [(JOB_UUID,), (JOB_UUID,)]
+        assert dispatcher.failed_restarted_jobs == [JOB_UUID]
+        assert scheduler.snapshot()["inflight_jobs"] == {}
+    finally:
+        bridge.close()
+
+
+def test_startup_restart_retries_task_marker_without_refreezing_provider(
+    store: WorkflowStore,
+) -> None:
+    """启动跨库失败后仅凭 Task 标记重试，已交接 provider 保持 released。"""
+
+    class _StrictFlakyRestartInventory:
+        """拒绝 released→uncertain，并让首次 retained 转换瞬时失败。"""
+
+        def __init__(self, retained_claim_uuid: str, provider_claim_uuid: str) -> None:
+            self.states = {
+                retained_claim_uuid: "running",
+                provider_claim_uuid: "released",
+            }
+            self.transitions: list[tuple[str, str]] = []
+            self.fail_once = True
+
+        def release_unprojected_dispatch_permits(
+            self,
+            *,
+            known_claim_uuids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            del known_claim_uuids
+            return ()
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            self.transitions.append((claim_uuid, target_state))
+            if self.states[claim_uuid] == "released" and target_state == "uncertain":
+                raise AssertionError("released provider must not become uncertain")
+            if self.fail_once and target_state == "uncertain":
+                self.fail_once = False
+                raise RuntimeError("inventory transition unavailable")
+            self.states[claim_uuid] = target_state
+
+    _seed_two_node_debug_task(store)
+    retained_claim_uuid = "75000000-0000-4000-8000-000000000093"
+    provider_claim_uuid = "75000000-0000-4000-8000-000000000094"
+    retained_lock_key = "material/51000000-0000-4000-8000-000000000094/exclusive"
+    handed_off_lock_key = (
+        "resource/51000000-0000-4000-8000-000000000095/exclusive"
+    )
+    uncertainty_reason = "material_transfer_inventory_reconciliation_required"
+    retained_control_data = {
+        "dispatch_preheld_job_uuids": [SECOND_JOB_UUID],
+        "dispatch_preheld_lock_keys": [handed_off_lock_key],
+        "dispatch_fences": [
+            {"lock_key": retained_lock_key, "fencing_token": 1},
+            {"lock_key": handed_off_lock_key, "fencing_token": 1},
+        ],
+    }
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET status='running',control_status='active' "
+            "WHERE uuid=?",
+            (TASK_UUID,),
+        )
+        connection.execute(
+            """
+            UPDATE workflow_node_job
+            SET status='failed', uncertainty_reason=?, control_data=?
+            WHERE uuid=?
+            """,
+            (uncertainty_reason, json.dumps(retained_control_data), JOB_UUID),
+        )
+        connection.execute(
+            "UPDATE workflow_node_job SET status='succeeded' WHERE uuid=?",
+            (SECOND_JOB_UUID,),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_claim(
+                claim_uuid, create_time, update_time, workflow_task_uuid,
+                workflow_node_job_uuid, attempt, resource_keys, state,
+                acquired_at, released_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'uncertain', ?, NULL)
+            """,
+            (
+                retained_claim_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                TASK_UUID,
+                JOB_UUID,
+                json.dumps([retained_lock_key, handed_off_lock_key]),
+                _CREATED_AT,
+            ),
+        )
+        for index, lock_key in enumerate((retained_lock_key, handed_off_lock_key)):
+            connection.execute(
+                """
+                INSERT INTO execution_lock_lease(
+                    uuid, create_time, update_time, deleted_at, description,
+                    meta_data, workflow_task_uuid, workflow_node_job_uuid,
+                    lock_key, scope, material_uuid, site_uuid, state,
+                    acquired_at, released_at, claim_uuid, fencing_token
+                ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'resource', NULL,
+                          NULL, 'uncertain', ?, NULL, ?, 1)
+                """,
+                (
+                    f"76000000-0000-4000-8000-00000000009{4 + index}",
+                    _CREATED_AT,
+                    _CREATED_AT,
+                    json.dumps(
+                        {
+                            "acquired_by_job_uuid": JOB_UUID,
+                            "handoff_from_job_uuid": SECOND_JOB_UUID,
+                        }
+                    ),
+                    TASK_UUID,
+                    JOB_UUID,
+                    lock_key,
+                    _CREATED_AT,
+                    retained_claim_uuid,
+                ),
+            )
+        connection.execute(
+            """
+            INSERT INTO execution_claim(
+                claim_uuid, create_time, update_time, workflow_task_uuid,
+                workflow_node_job_uuid, attempt, resource_keys, state,
+                acquired_at, released_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'released', ?, ?)
+            """,
+            (
+                provider_claim_uuid,
+                _CREATED_AT,
+                _CREATED_AT,
+                TASK_UUID,
+                SECOND_JOB_UUID,
+                json.dumps([handed_off_lock_key]),
+                _CREATED_AT,
+                _CREATED_AT,
+            ),
+        )
+
+    inventory = _StrictFlakyRestartInventory(
+        retained_claim_uuid,
+        provider_claim_uuid,
+    )
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        station_resources=inventory,
+    )
+    bridge = _bridge(store, scheduler)
+    try:
+        assert bridge.recover_active_tasks() == []
+
+        task_after_projection = store.get_task(TASK_UUID)
+        assert task_after_projection["status"] == "failed"
+        assert task_after_projection["error_info"][0]["code"] == (
+            "execution_process_restarted"
+        )
+        assert all(
+            item.get("code") != "execution_process_restarted"
+            for job in store.list_jobs(TASK_UUID)
+            for item in job["error_info"]
+        )
+        assert bridge._runtime_restart_cleanup_pending_tasks == {TASK_UUID}
+
+        scheduler.on_execution_process_restarted(())
+
+        assert inventory.states == {
+            retained_claim_uuid: "uncertain",
+            provider_claim_uuid: "released",
+        }
+        assert inventory.transitions == [
+            (retained_claim_uuid, "uncertain"),
+            (retained_claim_uuid, "uncertain"),
+            (provider_claim_uuid, "released"),
+        ]
+        assert bridge._runtime_restart_cleanup_pending_tasks == set()
+    finally:
+        bridge.close()
+
+
+def test_execution_process_restart_repairs_succeeded_task_with_unfinished_jobs(
+    store: WorkflowStore,
+) -> None:
+    """父 Task 误成成功但仍有在途 Job 时，崩溃恢复不能跳过物理动作。"""
+
+    _seed_two_node_debug_task(store)
+    task = store.get_task(TASK_UUID)
+    execution_plan = dict(task["execution_plan"])
+    execution_plan["run_mode"] = "normal"
+    with store.transaction() as connection:
+        connection.execute(
+            "UPDATE workflow_task SET execution_plan=?,run_mode='normal' WHERE uuid=?",
+            (json.dumps(execution_plan), TASK_UUID),
+        )
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    try:
+        bridge.submit(store.get_task(TASK_UUID))
+        assert store.get_job(JOB_UUID)["status"] == "running"
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE workflow_task SET status='succeeded' WHERE uuid=?",
+                (TASK_UUID,),
+            )
+
+        scheduler.on_execution_process_restarted(())
+
+        jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
+        assert jobs[JOB_UUID]["status"] == "failed"
+        assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
+        assert store.get_task(TASK_UUID)["status"] == "failed"
+        assert scheduler.snapshot()["inflight_jobs"] == {}
     finally:
         bridge.close()
 

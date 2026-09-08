@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from tests.scheduler_core.conftest import CoreRuntime, stable_uuid
 from tests.scheduler_core.test_manual_confirmation import _manual_node_job
 from unilabos.workflow.resource_lock_plan import (
@@ -10,7 +12,7 @@ from unilabos.workflow.resource_lock_plan import (
     resource_plan_for_node,
     serialize_resource_plan,
 )
-from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.service import WorkflowConflict, WorkflowService
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
 
@@ -45,6 +47,141 @@ def test_manual_confirmation_simulation_reuses_claim_and_fence_after_approval(
     assert next(job for job in approved["jobs"] if job["uuid"] == job_uuid)[
         "manual_confirmation"
     ]["status"] == "approved"
+
+
+def test_manual_approval_rejects_released_workflow_claim_before_dispatch(
+    core_runtime: CoreRuntime,
+) -> None:
+    """人工批准必须在物理边界前拒绝已释放的工作流 Claim。"""
+
+    _pending, job_uuid = core_runtime.submit_manual(
+        task_name="manual-released-workflow-credentials"
+    )
+    with core_runtime.workflow_store.transaction() as connection:
+        connection.execute(
+            "UPDATE execution_claim SET state='released', released_at=update_time "
+            "WHERE workflow_node_job_uuid=?",
+            (job_uuid,),
+        )
+
+    service = WorkflowService(
+        core_runtime.workflow_store,
+        task_scheduler_bridge=core_runtime.bridge,
+    )
+    with pytest.raises(WorkflowConflict):
+        service.decide_manual_confirmation(job_uuid, action="approve")
+
+    assert core_runtime.dispatcher.dispatched == []
+
+
+def test_manual_approval_rejects_missing_workflow_lease_before_dispatch(
+    core_runtime: CoreRuntime,
+) -> None:
+    """人工批准必须在物理边界前拒绝缺失的工作流 Lease。"""
+
+    _pending, job_uuid = core_runtime.submit_manual(
+        task_name="manual-missing-workflow-lease"
+    )
+    with core_runtime.workflow_store.transaction() as connection:
+        connection.execute(
+            "DELETE FROM execution_lock_lease WHERE workflow_node_job_uuid=?",
+            (job_uuid,),
+        )
+
+    service = WorkflowService(
+        core_runtime.workflow_store,
+        task_scheduler_bridge=core_runtime.bridge,
+    )
+    with pytest.raises(WorkflowConflict):
+        service.decide_manual_confirmation(job_uuid, action="approve")
+
+    assert core_runtime.dispatcher.dispatched == []
+
+
+def test_manual_approval_rejects_released_inventory_claim_before_dispatch(
+    core_runtime: CoreRuntime,
+) -> None:
+    """人工批准必须在物理边界前拒绝已释放的库存 Claim。"""
+
+    _pending, job_uuid = core_runtime.submit_manual(
+        task_name="manual-released-inventory-claim"
+    )
+    with core_runtime.inventory_store.transaction() as connection:
+        connection.execute(
+            "UPDATE station_execution_claim SET state='released', "
+            "released_at=update_time WHERE job_uuid=?",
+            (job_uuid,),
+        )
+
+    service = WorkflowService(
+        core_runtime.workflow_store,
+        task_scheduler_bridge=core_runtime.bridge,
+    )
+    with pytest.raises(WorkflowConflict):
+        service.decide_manual_confirmation(job_uuid, action="approve")
+
+    assert core_runtime.dispatcher.dispatched == []
+
+
+@pytest.mark.parametrize("lease_corruption", ["released", "missing"])
+def test_manual_approval_rejects_invalid_inventory_lease_before_dispatch(
+    core_runtime: CoreRuntime,
+    lease_corruption: str,
+) -> None:
+    """人工批准必须在物理边界前拒绝失活或缺失的库存 Lease。"""
+
+    _pending, job_uuid = core_runtime.submit_manual(
+        task_name="manual-inactive-inventory-lease"
+    )
+    with core_runtime.inventory_store.transaction() as connection:
+        if lease_corruption == "released":
+            connection.execute(
+                "UPDATE station_execution_lock_lease SET state='released', "
+                "released_at=update_time WHERE claim_uuid=("
+                "SELECT claim_uuid FROM station_execution_claim WHERE job_uuid=?)",
+                (job_uuid,),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM station_execution_lock_lease WHERE claim_uuid=("
+                "SELECT claim_uuid FROM station_execution_claim WHERE job_uuid=?)",
+                (job_uuid,),
+            )
+
+    service = WorkflowService(
+        core_runtime.workflow_store,
+        task_scheduler_bridge=core_runtime.bridge,
+    )
+    with pytest.raises(WorkflowConflict):
+        service.decide_manual_confirmation(job_uuid, action="approve")
+
+    assert core_runtime.dispatcher.dispatched == []
+
+
+def test_manual_approval_rejects_inventory_fence_mismatch_before_dispatch(
+    core_runtime: CoreRuntime,
+) -> None:
+    """人工批准必须在物理边界前拒绝库存与工作流不一致的 Fence。"""
+
+    _pending, job_uuid = core_runtime.submit_manual(
+        task_name="manual-inventory-fence-mismatch"
+    )
+    with core_runtime.inventory_store.transaction() as connection:
+        connection.execute(
+            "UPDATE station_execution_lock_lease "
+            "SET fencing_token=fencing_token+1 WHERE claim_uuid=("
+            "SELECT claim_uuid FROM station_execution_claim WHERE job_uuid=?)",
+            (job_uuid,),
+        )
+
+    service = WorkflowService(
+        core_runtime.workflow_store,
+        task_scheduler_bridge=core_runtime.bridge,
+    )
+    with pytest.raises(WorkflowConflict):
+        service.decide_manual_confirmation(job_uuid, action="approve")
+
+    assert core_runtime.dispatcher.dispatched == []
 
 
 def test_manual_confirmation_simulation_keeps_bound_resource_plan_identity(

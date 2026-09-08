@@ -199,8 +199,20 @@ def test_static_resource_cycle_is_rejected_with_stable_code() -> None:
     """关系图出现 A→B→A 时必须失败关闭。"""
 
     resources = (
-        CanonicalResource("r-a", "device:a", "device", "a", "00000000-0000-4000-8000-000000000001"),
-        CanonicalResource("r-b", "device:b", "device", "b", "00000000-0000-4000-8000-000000000002"),
+        CanonicalResource(
+            "r-a",
+            "/devices/00000000-0000-4000-8000-000000000001",
+            "device",
+            "a",
+            "00000000-0000-4000-8000-000000000001",
+        ),
+        CanonicalResource(
+            "r-b",
+            "/devices/00000000-0000-4000-8000-000000000002",
+            "device",
+            "b",
+            "00000000-0000-4000-8000-000000000002",
+        ),
     )
     plan = ResourcePlan(
         plan_id="plan-cycle",

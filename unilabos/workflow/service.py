@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
 import re
@@ -49,7 +48,7 @@ from unilabos.workflow.composite_invocation import (
     CompositeInvocationInvalid,
     _remap_control_references,
     _remap_nested_composite_metadata,
-    expand_composite_invocation,
+    compile_composite_invocation,
 )
 from unilabos.workflow.definition_edit import (
     WorkflowDefinitionInvalid,
@@ -500,6 +499,17 @@ class WorkflowTaskSchedulerBridge(Protocol):
 
     def reschedule(self) -> None:
         """在外部持久事实释放后唤醒本地调度循环。"""
+
+        ...
+
+    def unlock_resources(
+        self,
+        task_uuid: str,
+        *,
+        command_uuid: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        """整组释放操作员已确认安全的异常终态 Task 资源。"""
 
         ...
 
@@ -1811,6 +1821,9 @@ class WorkflowService:
                                 WorkflowEdgeWrite.model_validate(edge)
                                 for edge in refreshed.graph["edges"]
                             ],
+                            workflow_meta_data=refreshed.graph["workflow"][
+                                "meta_data"
+                            ],
                         )
                     updated.append(parent_uuid)
                 except CompositeContractRefreshPending as error:
@@ -2033,7 +2046,7 @@ class WorkflowService:
                 ):
                     raise WorkflowError("invalid_input")
             try:
-                insertion_nodes, insertion_edges = expand_composite_invocation(
+                expansion = compile_composite_invocation(
                     parent_graph=parent_graph,
                     contract=contract,
                     invocation_uuid=invocation_identity,
@@ -2043,17 +2056,18 @@ class WorkflowService:
                 )
                 node_values = [
                     WorkflowNodeWrite.model_validate(item)
-                    for item in [*parent_graph["nodes"], *insertion_nodes]
+                    for item in [*parent_graph["nodes"], *expansion.nodes]
                 ]
                 edge_values = [
                     WorkflowEdgeWrite.model_validate(item)
-                    for item in [*parent_graph["edges"], *insertion_edges]
+                    for item in [*parent_graph["edges"], *expansion.edges]
                 ]
                 return self._save_server_generated_graph(
                     parent_uuid,
                     revision=revision,
                     nodes=node_values,
                     edges=edge_values,
+                    workflow_meta_data=expansion.workflow_meta_data,
                 )
             except (CompositeInvocationInvalid, ValidationError):
                 raise WorkflowError("invalid_input") from None
@@ -2193,6 +2207,7 @@ class WorkflowService:
         revision: int,
         nodes: list[WorkflowNodeWrite | dict[str, Any]],
         edges: list[WorkflowEdgeWrite | dict[str, Any]],
+        workflow_meta_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """保存由 OS 生成、并已完成组合合同校验的完整工作流图。
 
@@ -2208,6 +2223,7 @@ class WorkflowService:
             nodes=nodes,
             edges=edges,
             protect_reserved_metadata=False,
+            workflow_meta_data=workflow_meta_data,
         )
 
     def _save_graph(
@@ -2218,6 +2234,7 @@ class WorkflowService:
         nodes: list[WorkflowNodeWrite | dict[str, Any]],
         edges: list[WorkflowEdgeWrite | dict[str, Any]],
         protect_reserved_metadata: bool,
+        workflow_meta_data: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """在线性化锁内执行公共或系统生成图的统一保存事务。
 
@@ -2250,6 +2267,7 @@ class WorkflowService:
                         nodes=node_values,
                         edges=edge_values,
                         protect_reserved_metadata=protect_reserved_metadata,
+                        workflow_meta_data=workflow_meta_data,
                         validate_workflow_io_contract=True,
                     )
                     return self._commit_domain_graph_candidate(
@@ -2263,6 +2281,7 @@ class WorkflowService:
                     nodes=node_values,
                     edges=edge_values,
                     protect_reserved_metadata=protect_reserved_metadata,
+                    workflow_meta_data=workflow_meta_data,
                     validate_workflow_io_contract=True,
                 )
             except ValidationError:
@@ -4159,7 +4178,13 @@ class WorkflowService:
 
         try:
             task_uuid = validate_uuid(task_uuid)
-            if command_type not in {"step", "pause", "resume", "cancel"}:
+            if command_type not in {
+                "step",
+                "pause",
+                "resume",
+                "cancel",
+                "unlock_resources",
+            }:
                 raise WorkflowError("invalid_input")
             if target_node_uuid is not None:
                 target_node_uuid = validate_uuid(target_node_uuid)
@@ -4170,6 +4195,11 @@ class WorkflowService:
                 raise WorkflowError("invalid_input")
             meta_data = normalize_json_object(meta_data)
             description = self._optional_text(description)
+            if command_type == "unlock_resources" and (
+                meta_data.get("confirmed_physical_safe") is not True
+                or description is None
+            ):
+                raise WorkflowError("invalid_input")
             task = self._store.get_task(task_uuid)
             command, created = self._store.create_task_command(
                 task_uuid=task_uuid,
@@ -4182,6 +4212,36 @@ class WorkflowService:
             )
             if not created or command["status"] != "pending":
                 return command
+            if command_type == "unlock_resources":
+                if task.get("status") not in {"failed", "canceled", "timeout"}:
+                    return self._store.complete_task_command(
+                        command["uuid"],
+                        status="rejected",
+                        result={"reason": "task_is_not_abnormal_terminal"},
+                    )
+                if self._task_scheduler_bridge is None:
+                    return self._store.complete_task_command(
+                        command["uuid"],
+                        status="rejected",
+                        result={"reason": "scheduler_unavailable"},
+                    )
+                try:
+                    result = self._task_scheduler_bridge.unlock_resources(
+                        task_uuid,
+                        command_uuid=command["uuid"],
+                        reason=description,
+                    )
+                except TaskSchedulerBridgeError as error:
+                    return self._store.complete_task_command(
+                        command["uuid"],
+                        status="rejected",
+                        result={"reason": str(error)},
+                    )
+                return self._store.complete_task_command(
+                    command["uuid"],
+                    status="succeeded",
+                    result=result,
+                )
             if task.get("status") in {
                 "succeeded",
                 "success",
@@ -6349,11 +6409,9 @@ class WorkflowService:
                 registration=registration,
                 python_source=source["python_source"],
             )
-            # When an API-generated composite graph is used as the compiler
-            # base, the compiler's local changeset is relative to that
-            # candidate rather than to the actually applied parent graph.
-            # Rebase the changeset on the real applied graph before signing;
-            # otherwise the candidate is rejected as an inexact change set.
+            # API 生成的组合图作为编译基线时，本地变更集相对于该候选图，而非
+            # 真正已应用的父图。签名前必须把变更集重建到真实已应用图上，否则
+            # 候选会因变更集不精确而被拒绝。
             if compilation.graph is not None:
                 compilation = compilation.model_copy(
                     update={
@@ -6772,11 +6830,9 @@ class WorkflowService:
                 bootstrap_no_advance = candidate_graph_hash == bootstrap_entry[2]
             if prevalidated_candidate != (workflow_uuid, candidate_hash):
                 applied_graph = self.get_graph(workflow_uuid)
-                # Revalidate against the exact candidate graph used when the
-                # hash was signed.  This is important for server-generated
-                # composite invocations: the API has already materialized
-                # executor bindings in that candidate, while the authoring
-                # source alone cannot express those runtime bindings.
+                # 必须针对签发哈希时使用的精确候选图再次校验。服务端生成组合调用
+                # 时，API 已在候选图中固化执行器绑定，而创作源码自身无法表达这些
+                # 运行时绑定。
                 compilation_graph = candidate.get("graph")
                 if not isinstance(compilation_graph, Mapping):
                     raise WorkflowError("candidate_invalid")

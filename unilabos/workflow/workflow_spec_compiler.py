@@ -36,6 +36,7 @@ from unilabos.workflow.resource_lock_plan import (
     STATIC_RESOURCE_DAG_CAPABILITY,
     ResourcePlanError,
     deserialize_resource_plan,
+    normalize_execution_resource_plan,
 )
 
 
@@ -58,9 +59,7 @@ class WorkflowSpecCompiler:
 
         task = mapping(task_snapshot, "invalid_task_snapshot", "task_snapshot")
         # ``task_uuid`` 是旧调度运行复用的工作流任务稳定身份。
-        task_uuid = canonical_uuid(
-            task.get("uuid"), "invalid_task_identity", "task_snapshot.uuid"
-        )
+        task_uuid = canonical_uuid(task.get("uuid"), "invalid_task_identity", "task_snapshot.uuid")
         audit_snapshot = task.get("workflow_snapshot")
         if audit_snapshot is not None:
             mapping(
@@ -73,6 +72,7 @@ class WorkflowSpecCompiler:
             "invalid_execution_plan",
             "task_snapshot.execution_plan",
         )
+        plan = normalize_execution_resource_plan(plan)
         version = plan.get("version")
         if isinstance(version, bool) or version not in {
             PLAN_VERSION,
@@ -97,7 +97,10 @@ class WorkflowSpecCompiler:
                 RESOURCE_PLAN_CAPABILITY,
                 STATIC_RESOURCE_DAG_CAPABILITY,
             }
-            if not required_capabilities <= capability_set or capability_set - required_capabilities - allowed_extras:
+            if (
+                not required_capabilities <= capability_set
+                or capability_set - required_capabilities - allowed_extras
+            ):
                 raise WorkflowSpecCompilationError(
                     "unsupported_execution_plan_capability",
                     "控制执行计划能力声明不完整",
@@ -155,9 +158,7 @@ class WorkflowSpecCompiler:
         )
         if resource_plan is not None:
             interval_ids = {item.interval_id for item in resource_plan.intervals}
-            acquire_set_ids = {
-                item.acquire_set_id for item in resource_plan.acquire_sets
-            }
+            acquire_set_ids = {item.acquire_set_id for item in resource_plan.acquire_sets}
             for index, raw_node in enumerate(raw_nodes):
                 raw_interval_ids = raw_node.get("resource_interval_ids") or []
                 if not isinstance(raw_interval_ids, list) or any(
@@ -211,16 +212,16 @@ class WorkflowSpecCompiler:
             task_input=(
                 task.get("input")
                 if isinstance(task.get("input"), Mapping)
-                else task.get("normalized_input")
-                if isinstance(task.get("normalized_input"), Mapping)
-                else {}
+                else (
+                    task.get("normalized_input")
+                    if isinstance(task.get("normalized_input"), Mapping)
+                    else {}
+                )
             ),
             control_enabled=version == CONTROL_PLAN_VERSION,
             repeat_member_uuids=repeat_members,
         )
-        top_level_nodes = [
-            node for node in compiled_nodes if node.id not in repeat_members
-        ]
+        top_level_nodes = [node for node in compiled_nodes if node.id not in repeat_members]
         active_node_uuids = {node.id for node in compiled_nodes}
         # ``coordinator_node_uuids`` 在执行计划中保留图身份，但不会进入旧调度器。
         coordinator_node_uuids = {
@@ -229,6 +230,21 @@ class WorkflowSpecCompiler:
             if str(node.get("kind") or "").strip()
             in {"material_source", "workflow_input", "workflow_output"}
         }
+        # 这些协调器由提交/数据投影边界结算，本身不跨物理派发边界。即使
+        # workflow_output 此刻仍是 pending，也不能成为设备资源的释放屏障。
+        # 只投影真实区间成员，避免把无关协调节点扩大成调度器信任输入。
+        resource_plan_node_uuids = (
+            {
+                member
+                for interval in resource_plan.intervals
+                for member in interval.node_uuids
+            }
+            if resource_plan is not None
+            else set()
+        )
+        resource_coordinator_node_uuids = sorted(
+            coordinator_node_uuids & resource_plan_node_uuids
+        )
         compiled_handles = self._compile_handles(
             ordered_handle_uuids=ordered_handle_uuids,
             handles=handles,
@@ -261,9 +277,7 @@ class WorkflowSpecCompiler:
                 and edge.target_node_id in top_level_node_uuids
             ],
             handles=[
-                handle
-                for handle in compiled_handles
-                if handle.node_id in top_level_node_uuids
+                handle for handle in compiled_handles if handle.node_id in top_level_node_uuids
             ],
             priority=task.get("priority", 1.0),
             submitted_at=self._submitted_at(task.get("create_time")),
@@ -275,9 +289,12 @@ class WorkflowSpecCompiler:
                 else None
             ),
             repeat_regions=repeat_regions,
-            resource_plan=deepcopy(dict(raw_resource_plan))
-            if isinstance(raw_resource_plan, Mapping)
-            else None,
+            resource_plan=(
+                deepcopy(dict(raw_resource_plan))
+                if isinstance(raw_resource_plan, Mapping)
+                else None
+            ),
+            resource_coordinator_node_ids=resource_coordinator_node_uuids,
         )
 
     @staticmethod

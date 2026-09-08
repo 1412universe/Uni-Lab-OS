@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-
 TRANSFER_CONTRACT_FIELDS: tuple[str, ...] = (
     "material_param",
     "source_owner_param",
@@ -65,6 +64,8 @@ def normalize_action_resource_contract(
         "device_tenancy",
         "transfer",
         "operate_in_place",
+        "transfer_step",
+        "order_sensitive",
         "aliquot",
     }
     unknown = set(value) - allowed
@@ -89,9 +90,7 @@ def normalize_action_resource_contract(
         )
     raw_transfer = value.get("transfer")
     if version == 1 and isinstance(raw_transfer, Mapping):
-        unsupported_transfer_fields = set(raw_transfer) & set(
-            TRANSFER_RESOURCE_ROLE_FIELDS
-        )
+        unsupported_transfer_fields = set(raw_transfer) & set(TRANSFER_RESOURCE_ROLE_FIELDS)
         if unsupported_transfer_fields:
             _fail(
                 "unsupported_action_resource_field",
@@ -114,8 +113,7 @@ def normalize_action_resource_contract(
         )
     elif version == 2 and legacy_device_params:
         normalized["resource_params"] = [
-            {"param": name, "role": "device"}
-            for name in legacy_device_params
+            {"param": name, "role": "device"} for name in legacy_device_params
         ]
     if value.get("device_tenancy") is not None:
         normalized["device_tenancy"] = _device_tenancy(value["device_tenancy"])
@@ -125,6 +123,36 @@ def normalize_action_resource_contract(
         normalized["operate_in_place"] = _operate_in_place(value["operate_in_place"])
     if value.get("aliquot") is not None:
         normalized["aliquot"] = _aliquot(value["aliquot"])
+    if "order_sensitive" in value:
+        if not isinstance(value["order_sensitive"], bool):
+            _fail("invalid_order_sensitive", "/order_sensitive", "order_sensitive 必须是布尔值")
+        normalized["order_sensitive"] = value["order_sensitive"]
+    if "transfer_step" in value:
+        step = value["transfer_step"]
+        fields = {"operation", "material_param", "owner_param", "site_param", "carrier_params"}
+        if (
+            version != 2
+            or not isinstance(step, Mapping)
+            or set(step) != fields
+            or step.get("operation") not in {"pick", "place"}
+        ):
+            _fail(
+                "invalid_transfer_step",
+                "/transfer_step",
+                "transfer_step 需要 v2、pick/place 和完整参数映射",
+            )
+        normalized["transfer_step"] = {
+            "operation": step["operation"],
+            **{
+                key: _parameter_name(step[key], f"/transfer_step/{key}")
+                for key in ("material_param", "owner_param", "site_param")
+            },
+            "carrier_params": list(
+                _parameter_names(step["carrier_params"], "/transfer_step/carrier_params")
+            ),
+        }
+        if not normalized["transfer_step"]["carrier_params"]:
+            _fail("invalid_transfer_step", "/transfer_step/carrier_params", "搬运器参数不能为空")
     if len(normalized) == 1:
         _fail(
             "empty_action_resource_contract",
@@ -157,9 +185,7 @@ def validate_action_resource_contract_schema(
         )
     resource_fields: list[tuple[str, str]] = []
     resource_params = contract.get("resource_params", [])
-    if not isinstance(resource_params, Sequence) or isinstance(
-        resource_params, (str, bytes)
-    ):
+    if not isinstance(resource_params, Sequence) or isinstance(resource_params, (str, bytes)):
         _fail("invalid_resource_params", "/resource_params", "resource_params 必须是数组")
     for index, item in enumerate(resource_params):
         if not isinstance(item, Mapping):
@@ -187,14 +213,23 @@ def validate_action_resource_contract_schema(
         resource_fields.append((str(name), f"/required_device_params/{index}"))
     tenancy = contract.get("device_tenancy")
     if isinstance(tenancy, Mapping):
-        resource_fields.append(
-            (str(tenancy["material_param"]), "/device_tenancy/material_param")
-        )
+        resource_fields.append((str(tenancy["material_param"]), "/device_tenancy/material_param"))
         for field in ("acquire_device_param", "release_device_param"):
             if tenancy.get(field):
-                resource_fields.append(
-                    (str(tenancy[field]), f"/device_tenancy/{field}")
-                )
+                resource_fields.append((str(tenancy[field]), f"/device_tenancy/{field}"))
+    step = contract.get("transfer_step")
+    if isinstance(step, Mapping):
+        for field in ("material_param", "owner_param"):
+            resource_fields.append((str(step[field]), f"/transfer_step/{field}"))
+        for name in step["carrier_params"]:
+            resource_fields.append((str(name), "/transfer_step/carrier_params"))
+        site_schema = goal_properties.get(step["site_param"])
+        if not isinstance(site_schema, Mapping) or site_schema.get("type") != "string":
+            _fail(
+                "invalid_site_parameter_type",
+                "/transfer_step/site_param",
+                "搬运端点 Site 参数必须是字符串",
+            )
     transfer = contract.get("transfer")
     if isinstance(transfer, Mapping):
         resource_fields.extend(
@@ -233,9 +268,7 @@ def validate_action_resource_contract_schema(
                     f"动作资源合同引用不存在的参数 {name}",
                 )
             field_type = schema.get("type")
-            allowed_types = (
-                set(field_type) if isinstance(field_type, list) else {field_type}
-            )
+            allowed_types = set(field_type) if isinstance(field_type, list) else {field_type}
             if "string" not in allowed_types:
                 _fail(
                     "invalid_site_parameter_type",
@@ -256,9 +289,7 @@ def validate_action_resource_contract_schema(
             (str(aliquot["source_material_param"]), "/aliquot/source_material_param")
         )
         for index, name in enumerate(aliquot["target_material_params"]):
-            resource_fields.append(
-                (str(name), f"/aliquot/target_material_params/{index}")
-            )
+            resource_fields.append((str(name), f"/aliquot/target_material_params/{index}"))
     for name, path in resource_fields:
         schema = goal_properties.get(name)
         if not isinstance(schema, Mapping):

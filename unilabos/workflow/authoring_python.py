@@ -692,7 +692,15 @@ def _apply_resource_scope_sources(
         for item in source_map
         if isinstance(item, Mapping) and item.get("workflow_node_uuid")
     }
-    scopes = [item for item in resource_scopes if isinstance(item, Mapping)]
+    # 组合子作用域由被调用实验操作的源码拥有；父源码只保留调用表达式，不能把
+    # 子图节点反向渲染成第二份 ``with resources(...)``。下一轮静态展开会按
+    # provenance 字段从同一冻结合同确定性恢复这些派生作用域。
+    scopes = [
+        item
+        for item in resource_scopes
+        if isinstance(item, Mapping)
+        and item.get("composite_invocation_uuid") is None
+    ]
 
     parent_by_scope = {
         str(item.get("scope_id")): str(item.get("parent_scope_id"))

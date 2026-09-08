@@ -658,17 +658,13 @@ def _freeze_site_selections(
             if not parameter or not owner_parameter:
                 raise TaskInputError("计划库位选择器字段不完整")
             raw_owner = node_param.get(owner_parameter)
-            if not isinstance(raw_owner, Mapping) or not isinstance(
-                raw_owner.get("uuid"), str
-            ):
+            if not isinstance(raw_owner, Mapping) or not isinstance(raw_owner.get("uuid"), str):
                 raise TaskInputError("目标库位所属资源没有冻结 UUID")
             try:
                 owner_material_uuid = validate_uuid(raw_owner["uuid"])
             except (TypeError, ValueError):
                 raise TaskInputError("目标库位所属资源 UUID 非法") from None
-            raw_occupant = node_param.get(
-                str(raw_selector.get("occupant_parameter") or "")
-            )
+            raw_occupant = node_param.get(str(raw_selector.get("occupant_parameter") or ""))
             occupant_material_uuid = ""
             if raw_occupant is not None:
                 if not isinstance(raw_occupant, Mapping) or not isinstance(
@@ -684,9 +680,7 @@ def _freeze_site_selections(
                 if exact_parameter not in resolved_input:
                     raise TaskInputError("命名库位组精确覆盖参数没有解析值")
                 exact_reference = resolved_input[exact_parameter]
-                if exact_reference not in (None, "") and not isinstance(
-                    exact_reference, str
-                ):
+                if exact_reference not in (None, "") and not isinstance(exact_reference, str):
                     raise TaskInputError("精确库位覆盖参数必须是字符串")
             else:
                 exact_reference = node_param.get(parameter)
@@ -751,13 +745,13 @@ def _freeze_site_selections(
                 job_param.pop(parameter, None)
             selector_handle_uuid = str(raw_selector.get("handle_uuid") or "").strip()
             input_bindings = node.get("input_bindings")
-            if not selector_handle_uuid:
-                raise TaskInputError("计划库位选择器缺少可冻结的输入连接点")
             # 源码字面量库位没有工作流输入绑定，因此计划节点不会携带
             # ``input_bindings``；它已由库存权威冻结成候选 UUID，无需再删除。
             # 只有字段存在但形状损坏时才关闭失败，避免把损坏计划当成字面量。
             if input_bindings is None:
                 continue
+            if not selector_handle_uuid:
+                raise TaskInputError("计划库位选择器缺少可冻结的输入连接点")
             if not isinstance(input_bindings, dict):
                 raise TaskInputError("计划库位选择器输入绑定不是对象")
             input_bindings.pop(selector_handle_uuid, None)
