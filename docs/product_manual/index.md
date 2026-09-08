@@ -50,7 +50,6 @@ console
 
 installation
 environment
-interfaces
 ```
 
 ```{toctree}

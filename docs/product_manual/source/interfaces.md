@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # 开发工具与接口
 
 :::{admonition} 阅读角色
