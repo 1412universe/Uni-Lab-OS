@@ -36,11 +36,11 @@ workflow
 - [串口／网络连接](serial-network.md)
 - [上位机 API 接入](host-api.md)
 - [鼠标模拟点击（可选）](mouse-automation.md)
-- [光电堆栈与旋转堆栈（设备）](stack.md)
 
 ## 2. 物料定义模板
 
 - [工作站台面与仓库](deck-warehouse.md)
+- [光电堆栈与旋转堆栈：物料 + 设备](stack.md)
 - [孔板与吸头盒（Plate／Tiprack）](plate-tiprack.md)
 - [容器（Container）](container-template.md)
 - [小瓶载架](vial-rack.md)

@@ -5,7 +5,7 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="alternate" type="text/markdown" href="deck-warehouse.md">
 <link rel="describedby" type="text/plain" href="llms.txt">
-<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="孔板与吸头盒（Plate／Tiprack）" href="plate-tiprack.html"><link rel="prev" title="2. 物料定义模板" href="material-template.html">
+<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="光电堆栈与旋转堆栈：物料 + 设备" href="stack.html"><link rel="prev" title="2. 物料定义模板" href="material-template.html">
 
     <!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
         <title>工作站台面与仓库 - Uni-Lab OS 产品使用说明书</title>
@@ -240,11 +240,11 @@
 <li class="toctree-l3"><a class="reference internal" href="serial-network.html">串口／网络连接</a></li>
 <li class="toctree-l3"><a class="reference internal" href="host-api.html">上位机 API 接入</a></li>
 <li class="toctree-l3"><a class="reference internal" href="mouse-automation.html">鼠标模拟点击（可选）</a></li>
-<li class="toctree-l3"><a class="reference internal" href="stack.html">光电堆栈与旋转堆栈（设备）</a></li>
 </ul>
 </li>
 <li class="toctree-l2 current has-children"><a class="reference internal" href="material-template.html">2. 物料定义模板</a><input aria-label="Toggle navigation of 2. 物料定义模板" checked="" class="toctree-checkbox" id="toctree-checkbox-4" name="toctree-checkbox-4" role="switch" type="checkbox"/><label for="toctree-checkbox-4"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul class="current">
 <li class="toctree-l3 current current-page"><a class="current reference internal" href="#">工作站台面与仓库</a></li>
+<li class="toctree-l3"><a class="reference internal" href="stack.html">光电堆栈与旋转堆栈：物料 + 设备</a></li>
 <li class="toctree-l3"><a class="reference internal" href="plate-tiprack.html">孔板与吸头盒（Plate／Tiprack）</a></li>
 <li class="toctree-l3"><a class="reference internal" href="container-template.html">容器（Container）</a></li>
 <li class="toctree-l3"><a class="reference internal" href="vial-rack.html">小瓶载架</a></li>
@@ -363,7 +363,7 @@
 </ul>
 </div>
 <p>本页说明怎样把一台工作站的台面、仓库和固定放置位登记到 Uni-Lab OS。可以把它们理解成一张分层地图：Deck 是整台工作站的台面，WareHouse 是台面上的一个仓库，放置位（Site）是仓库中的一个具体位置。</p>
-<p>现场常说的“堆栈”，如果只是多层料架、板库或缓存架，<strong>没有电机、也没有光电</strong>，就按本页的仓库登记，不要再单独做一页物料模板。带光电传感器或可旋转驱动的堆栈是设备，见<a class="reference internal" href="stack.html"><span class="std std-doc">光电堆栈与旋转堆栈（设备）</span></a>。</p>
+<p>现场常说的“堆栈”，如果只是多层料架、板库或缓存架，<strong>没有电机、也没有光电</strong>，就按本页的仓库登记，不要再单独做一页物料模板。带光电传感器或可旋转驱动的堆栈必须同时定义物料面和设备面，见<a class="reference internal" href="stack.html"><span class="std std-doc">光电堆栈与旋转堆栈：物料 + 设备</span></a>。</p>
 <div class="admonition- admonition">
 <p class="admonition-title">本页完成条件</p>
 <p>业务人员能用现场标签找到每个位置；页面显示的排列方向与实物一致；每个位置只接受经过验证的物料；系统重启后仍能恢复相同的位置名称和层级关系。</p>
@@ -533,7 +533,7 @@
 </pre></div>
 </div>
 <p>示例坐标必须换成实测或 CAD 数据。放置位名称一旦进入启动图、库存和工作流，不要随意变更。所有启用位置都要有长期稳定的编号，并写明允许的物料类型。</p>
-<p>若这排槽位还要读光电或由电机转到交互位，仓库模板只负责位置；运动和传感器走设备，见<a class="reference internal" href="stack.html"><span class="std std-doc">光电堆栈与旋转堆栈（设备）</span></a>。</p>
+<p>若这排槽位还要读光电或由电机转到交互位，必须在同一复合实例中保留物料树，并增加设备动作和状态，见<a class="reference internal" href="stack.html"><span class="std std-doc">光电堆栈与旋转堆栈：物料 + 设备</span></a>。</p>
 </section>
 <section id="deck">
 <h2>4. 在 Deck 中组装多个仓库<a class="headerlink" href="#deck" title="Link to this heading">¶</a></h2>
@@ -609,12 +609,12 @@
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="plate-tiprack.html">
+          <a class="next-page" href="stack.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">孔板与吸头盒（Plate／Tiprack）</div>
+                <div class="title">光电堆栈与旋转堆栈：物料 + 设备</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>

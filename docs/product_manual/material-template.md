@@ -18,6 +18,7 @@
 :maxdepth: 1
 
 deck-warehouse
+stack
 plate-tiprack
 container-template
 vial-rack
@@ -291,7 +292,7 @@ unilab package inspect --path . --out ./inspect-output
 ## 各类型适配指南
 
 - [工作站台面与仓库](deck-warehouse.md)：Deck、WareHouse、普通堆栈/料架、位置坐标和排列顺序；
-- [光电堆栈与旋转堆栈（设备）](stack.md)：光电堆栈是设备且尚无规范；旋转堆栈按标准类出库/入库接入，不是仓库模板；
+- [光电堆栈与旋转堆栈：物料 + 设备](stack.md)：同时定义整机设备能力和挂在设备节点下的 Stack/Site 物料树；光电设备面尚无统一规范；
 - [孔板与吸头盒（Plate／Tiprack）](plate-tiprack.md)：孔、吸头位和资源树规模；
 - [Container](container-template.md)：烧杯、样品瓶、试剂瓶与容量；
 - [小瓶载架](vial-rack.md)：小瓶架、放置位以及载架与瓶子的归属关系；
