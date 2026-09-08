@@ -58,7 +58,6 @@ console
 
 installation
 environment
-interfaces
 ```
 
 ```{toctree}
@@ -801,6 +800,10 @@ unilab workspace logs --workspace "$DEVICE_PACKAGE_ROOT" --component edge --json
 ---
 
 Source: /interfaces.md
+
+---
+orphan: true
+---
 
 # 开发工具与接口
 
