@@ -27,9 +27,10 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "设备包开发",
+        "设备包开发规范",
         (
             "unilabos-installation",
+            "scenario-guide",
             "workspace",
             "workspace-init",
             "device-template",
@@ -58,12 +59,11 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ),
     ),
     (
-        "运行、部署与验收",
+        "环境、部署、运行",
         (
-            "workflows",
-            "runtime-safety",
             "deployment",
-            "scenario-guide",
+            "runtime-safety",
+            "workflows",
         ),
     ),
     (
@@ -252,7 +252,7 @@ def _write_machine_docs(app: Any, exception: Exception | None) -> None:
         "",
         "> 帮助新用户安装 Uni-Lab OS、开发设备包，并安全地预检和运行实验任务。",
         "",
-        "从零使用时，按“系统安装与配置”“设备包开发”“运行、部署与验收”的顺序阅读；遇到问题时进入“排查与参考”。",
+        "从零使用时，按“系统安装与配置”“设备包开发规范”“环境、部署、运行”的顺序阅读；遇到问题时进入“排查与参考”。",
         "",
     ]
     for heading, names in _SECTIONS:

@@ -5,9 +5,9 @@
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="alternate" type="text/markdown" href="installation.md">
 <link rel="describedby" type="text/plain" href="llms.txt">
-<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="环境与运行配置" href="environment.html"><link rel="prev" title="Uni-Lab OS 快速上手" href="console.html">
+<link rel="index" title="索引" href="genindex.html"><link rel="search" title="搜索" href="search.html"><link rel="next" title="环境与运行配置" href="environment.html"><link rel="prev" title="demo-lab 演示说明" href="demo-lab.html">
 
-    <!-- Generated with Sphinx 8.2.3 and Furo 2025.12.19 -->
+    <!-- Generated with Sphinx 9.0.4 and Furo 2025.12.19 -->
         <title>系统安装 - Uni-Lab OS 产品使用说明书</title>
       <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="_static/styles/furo.css?v=7bdb33bb" />
@@ -218,13 +218,14 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="overview.html">认识 Uni-Lab OS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="console.html">Uni-Lab OS 快速上手</a></li>
+<li class="toctree-l1"><a class="reference internal" href="demo-lab.html">示例设备包</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">系统安装与配置</span></p>
 <ul class="current">
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">系统安装</a></li>
 <li class="toctree-l1"><a class="reference internal" href="environment.html">环境与运行配置</a></li>
 </ul>
-<p class="caption" role="heading"><span class="caption-text">设备包开发</span></p>
+<p class="caption" role="heading"><span class="caption-text">设备包开发规范</span></p>
 <ul>
 <li class="toctree-l1 has-children"><a class="reference internal" href="unilabos-installation.html">设备包规范与系统启动</a><input aria-label="Toggle navigation of 设备包规范与系统启动" class="toctree-checkbox" id="toctree-checkbox-1" name="toctree-checkbox-1" role="switch" type="checkbox"/><label for="toctree-checkbox-1"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
 <li class="toctree-l2 has-children"><a class="reference internal" href="workspace.html">工作区</a><input aria-label="Toggle navigation of 工作区" class="toctree-checkbox" id="toctree-checkbox-2" name="toctree-checkbox-2" role="switch" type="checkbox"/><label for="toctree-checkbox-2"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
@@ -257,21 +258,23 @@
 <li class="toctree-l3"><a class="reference internal" href="graph-json.html">启动图（Graph JSON）编写指南</a></li>
 </ul>
 </li>
-<li class="toctree-l2 has-children"><a class="reference internal" href="workflow.html">4. 工作流</a><input aria-label="Toggle navigation of 4. 工作流" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l2 has-children"><a class="reference internal" href="workflow.html">4. 工作流运行</a><input aria-label="Toggle navigation of 4. 工作流运行" class="toctree-checkbox" id="toctree-checkbox-6" name="toctree-checkbox-6" role="switch" type="checkbox"/><label for="toctree-checkbox-6"><span class="icon"><svg><use href="#svg-arrow-right"></use></svg></span></label><ul>
+<li class="toctree-l3"><a class="reference internal" href="workflow-concepts.html">先理解工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="workflow-features.html">工作流编排特性</a></li>
-<li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作（子工作流）</a></li>
+<li class="toctree-l3"><a class="reference internal" href="experiment-operations.html">实验操作</a></li>
 <li class="toctree-l3"><a class="reference internal" href="complete-workflow.html">完整工作流</a></li>
+<li class="toctree-l3"><a class="reference internal" href="first-workflow.html">手写并运行第一个工作流</a></li>
 </ul>
 </li>
 </ul>
 </li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">运行、部署与验收</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="workflows.html">工作流发布与任务运行</a></li>
-<li class="toctree-l1"><a class="reference internal" href="runtime-safety.html">运行模式、安全与恢复</a></li>
-<li class="toctree-l1"><a class="reference internal" href="deployment.html">Kubernetes 部署与上线</a></li>
 <li class="toctree-l1"><a class="reference internal" href="scenario-guide.html">设备包验收</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">环境、部署、运行</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="deployment.html">Kubernetes 部署与上线</a></li>
+<li class="toctree-l1"><a class="reference internal" href="runtime-safety.html">运行模式、安全与恢复</a></li>
+<li class="toctree-l1"><a class="reference internal" href="workflows.html">工作流发布与任务运行</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">参考</span></p>
 <ul>
@@ -353,7 +356,7 @@
   <span class="ai-docs-status" role="status" aria-live="polite"></span>
 </div>
 <section id="id1">
-<h1>系统安装<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h1>
+<h1>系统安装<a class="headerlink" href="#id1" title="链接到此标题。">¶</a></h1>
 <div class="admonition- admonition">
 <p class="admonition-title">阅读角色</p>
 <ul class="simple">
@@ -368,7 +371,7 @@
 <p>Uni-Lab OS 是通用运行基础；设备包由用户自行准备，不随本页提供。示例中的目录、端口和名称都是占位符，必须替换为用户设备包中已经确认的配置。第一次启动建议使用模拟设备或隔离测试环境。</p>
 </div>
 <section id="id2">
-<h2>1. 安装前需要用户提供什么<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<h2>1. 安装前需要用户提供什么<a class="headerlink" href="#id2" title="链接到此标题。">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -412,7 +415,7 @@
 <p>如果用户还没有设备包，请先完成<a class="reference internal" href="workspace-init.html"><span class="std std-doc">工作区初始化</span></a>和<a class="reference internal" href="device-template.html"><span class="std std-doc">设备接入模板</span></a>，再返回本页。</p>
 </section>
 <section id="id3">
-<h2>2. 系统要求<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h2>
+<h2>2. 系统要求<a class="headerlink" href="#id3" title="链接到此标题。">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -444,16 +447,16 @@
 </div>
 </section>
 <section id="id4">
-<h2>3. 安装基础工具<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h2>
+<h2>3. 安装基础工具<a class="headerlink" href="#id4" title="链接到此标题。">¶</a></h2>
 <section id="xcode-command-line-tools">
-<h3>3.1 Xcode Command Line Tools<a class="headerlink" href="#xcode-command-line-tools" title="Link to this heading">¶</a></h3>
+<h3>3.1 Xcode Command Line Tools<a class="headerlink" href="#xcode-command-line-tools" title="链接到此标题。">¶</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>xcode-select<span class="w"> </span>--install
 </pre></div>
 </div>
 <p>系统提示已经安装时可以继续，否则等待安装完成。</p>
 </section>
 <section id="homebrewgitjqnode-js-miniforge">
-<h3>3.2 Homebrew、Git、jq、Node.js 和 Miniforge<a class="headerlink" href="#homebrewgitjqnode-js-miniforge" title="Link to this heading">¶</a></h3>
+<h3>3.2 Homebrew、Git、jq、Node.js 和 Miniforge<a class="headerlink" href="#homebrewgitjqnode-js-miniforge" title="链接到此标题。">¶</a></h3>
 <p>先按 Homebrew 官方说明完成安装，再执行：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>brew<span class="w"> </span>install<span class="w"> </span>git<span class="w"> </span>jq<span class="w"> </span>node@24
 brew<span class="w"> </span>link<span class="w"> </span>--overwrite<span class="w"> </span>--force<span class="w"> </span>node@24
@@ -461,9 +464,9 @@ brew<span class="w"> </span>install<span class="w"> </span>--cask<span class="w"
 </pre></div>
 </div>
 <p>初始化 Miniforge：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">MINIFORGE_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>brew<span class="w"> </span>--prefix<span class="k">)</span><span class="s2">/Caskroom/miniforge/base"</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$MINIFORGE_ROOT</span><span class="s2">/bin:</span><span class="nv">$MINIFORGE_ROOT</span><span class="s2">/condabin:</span><span class="nv">$PATH</span><span class="s2">"</span>
-<span class="s2">"</span><span class="nv">$MINIFORGE_ROOT</span><span class="s2">/condabin/conda"</span><span class="w"> </span>init<span class="w"> </span>zsh
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">MINIFORGE_ROOT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>brew<span class="w"> </span>--prefix<span class="k">)</span><span class="s2">/Caskroom/miniforge/base&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$MINIFORGE_ROOT</span><span class="s2">/bin:</span><span class="nv">$MINIFORGE_ROOT</span><span class="s2">/condabin:</span><span class="nv">$PATH</span><span class="s2">&quot;</span>
+<span class="s2">&quot;</span><span class="nv">$MINIFORGE_ROOT</span><span class="s2">/condabin/conda&quot;</span><span class="w"> </span>init<span class="w"> </span>zsh
 <span class="nb">exec</span><span class="w"> </span>zsh
 </pre></div>
 </div>
@@ -479,24 +482,24 @@ mamba<span class="w"> </span>--version
 </section>
 </section>
 <section id="id5">
-<h2>4. 准备系统和用户设备包<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/unilab-workspace"</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">UNILAB_INSTALL_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/unilab-workspace"</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">OS_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="nv">$UNILAB_INSTALL_ROOT</span><span class="s2">/unilab-os"</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">DEVICE_PACKAGE_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="nv">$UNILAB_INSTALL_ROOT</span><span class="s2">/device-package"</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">ENV_NAME</span><span class="o">=</span><span class="s2">"unilab"</span>
+<h2>4. 准备系统和用户设备包<a class="headerlink" href="#id5" title="链接到此标题。">¶</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mkdir<span class="w"> </span>-p<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/unilab-workspace&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">UNILAB_INSTALL_ROOT</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/unilab-workspace&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">OS_ROOT</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UNILAB_INSTALL_ROOT</span><span class="s2">/unilab-os&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DEVICE_PACKAGE_ROOT</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$UNILAB_INSTALL_ROOT</span><span class="s2">/device-package&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">ENV_NAME</span><span class="o">=</span><span class="s2">&quot;unilab&quot;</span>
 </pre></div>
 </div>
 <p>把团队提供的 Uni-Lab OS 放入 <code class="docutils literal notranslate"><span class="pre">OS_ROOT</span></code>，把用户自己的设备包放入 <code class="docutils literal notranslate"><span class="pre">DEVICE_PACKAGE_ROOT</span></code>。可以从受控代码源下载，也可以解压正式发布文件；文档和共享脚本中不要保存内部下载地址或访问令牌。</p>
 <p>检查必要文件：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$OS_ROOT</span><span class="s2">/pyproject.toml"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"缺少 Uni-Lab OS"</span>
-<span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/pyproject.toml"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"缺少设备包 pyproject.toml"</span>
-<span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/package.yaml"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"缺少设备包 package.yaml"</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$OS_ROOT</span><span class="s2">/pyproject.toml&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;缺少 Uni-Lab OS&quot;</span>
+<span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/pyproject.toml&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;缺少设备包 pyproject.toml&quot;</span>
+<span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/package.yaml&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;缺少设备包 package.yaml&quot;</span>
 </pre></div>
 </div>
 </section>
 <section id="id6">
-<h2>5. 先识别设备包需要哪些组件<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h2>
+<h2>5. 先识别设备包需要哪些组件<a class="headerlink" href="#id6" title="链接到此标题。">¶</a></h2>
 <p>不要直接套用某个固定启动命令。先检查用户设备包中的 <code class="docutils literal notranslate"><span class="pre">package.yaml</span></code>、启动图、README 和部署配置，填写下面的启动确认表：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -544,7 +547,7 @@ mamba<span class="w"> </span>--version
 </div>
 </section>
 <section id="id7">
-<h2>6. 确认设备包的目录和配置<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<h2>6. 确认设备包的目录和配置<a class="headerlink" href="#id7" title="链接到此标题。">¶</a></h2>
 <p>安装阶段只核对交付是否完整，不在这里重新定义设备包目录、启动图 字段或工作流格式。完整规范统一见<a class="reference internal" href="unilabos-installation.html"><span class="std std-doc">设备包规范与系统启动</span></a>。</p>
 <p>安装人员需要确认以下内容：</p>
 <div class="table-wrapper colwidths-auto docutils container">
@@ -579,40 +582,40 @@ mamba<span class="w"> </span>--version
 <p>设备包交付不完整时，应记录缺失项并退回补充。安装人员不能自行编造设备类型、协议点位、物料尺寸、安全范围或生产地址。</p>
 </section>
 <section id="python">
-<h2>7. 创建 Python 环境<a class="headerlink" href="#python" title="Link to this heading">¶</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<h2>7. 创建 Python 环境<a class="headerlink" href="#python" title="链接到此标题。">¶</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--override-channels<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-c<span class="w"> </span>uni-lab<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-c<span class="w"> </span>robostack-staging<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-c<span class="w"> </span>conda-forge<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11.14<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span><span class="s2">"uni-lab::unilabos-env=0.11.4"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">&quot;uni-lab::unilabos-env=0.11.4&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-y
 </pre></div>
 </div>
 <p>本页采用源码安装路径，因此使用 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 准备 Python/ROS 依赖，再在下一步安装 Uni-Lab OS 源码。如果设备包锁定了其他精确版本，必须先确认它与 Uni-Lab OS 兼容，不能只修改其中一个版本。</p>
 </section>
 <section id="uni-lab-os">
-<h2>8. 安装 Uni-Lab OS 和用户设备包<a class="headerlink" href="#uni-lab-os" title="Link to this heading">¶</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>python<span class="w"> </span><span class="s2">"</span><span class="nv">$OS_ROOT</span><span class="s2">/scripts/dev_install.py"</span><span class="w"> </span>--use-pip
+<h2>8. 安装 Uni-Lab OS 和用户设备包<a class="headerlink" href="#uni-lab-os" title="链接到此标题。">¶</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$OS_ROOT</span><span class="s2">/scripts/dev_install.py&quot;</span><span class="w"> </span>--use-pip
 
-mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span>
+mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span>
 </pre></div>
 </div>
 <p>执行设备包检查：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span>unilab<span class="w"> </span>package<span class="w"> </span>inspect<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--path<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--out<span class="w"> </span><span class="s2">"</span><span class="nv">$UNILAB_INSTALL_ROOT</span><span class="s2">/inspect-output"</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span>unilab<span class="w"> </span>package<span class="w"> </span>inspect<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--path<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--out<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$UNILAB_INSTALL_ROOT</span><span class="s2">/inspect-output&quot;</span>
 </pre></div>
 </div>
 <p>检查报告必须能识别用户设备包声明的设备、物料和工作流。重复 ID、导入失败、缺失文件或无法解析的类型必须处理完再启动。</p>
 </section>
 <section id="id8">
-<h2>9. 安装前端<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h2>
+<h2>9. 安装前端<a class="headerlink" href="#id8" title="链接到此标题。">¶</a></h2>
 <p>发布包已经带有构建后前端时可以跳过。需要从源码构建时执行：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$OS_ROOT</span><span class="s2">/frontend"</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$OS_ROOT</span><span class="s2">/frontend&quot;</span>
 npm<span class="w"> </span>ci
 npm<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--<span class="w"> </span>--run
 npm<span class="w"> </span>run<span class="w"> </span>build
@@ -620,7 +623,7 @@ npm<span class="w"> </span>run<span class="w"> </span>build
 </div>
 </section>
 <section id="id9">
-<h2>10. 选择并检查启动图<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h2>
+<h2>10. 选择并检查启动图<a class="headerlink" href="#id9" title="链接到此标题。">¶</a></h2>
 <p>从用户设备包中选择与本次目的相符的 启动图：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
@@ -645,9 +648,9 @@ npm<span class="w"> </span>run<span class="w"> </span>build
 </tbody>
 </table>
 </div>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">GRAPH_FILE</span><span class="o">=</span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/&lt;GRAPH_RELATIVE_PATH&gt;"</span>
-<span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">"</span><span class="nv">$GRAPH_FILE</span><span class="s2">"</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"启动图 文件不存在"</span>
-jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span><span class="nv">$GRAPH_FILE</span><span class="s2">"</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">"启动图 格式正确"</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">GRAPH_FILE</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/&lt;GRAPH_RELATIVE_PATH&gt;&quot;</span>
+<span class="nb">test</span><span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GRAPH_FILE</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;启动图 文件不存在&quot;</span>
+jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GRAPH_FILE</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;启动图 格式正确&quot;</span>
 </pre></div>
 </div>
 <p>启动前确认：</p>
@@ -661,7 +664,7 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
 </ul>
 </section>
 <section id="id10">
-<h2>11. 按设备包配置启动可选组件<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h2>
+<h2>11. 按设备包配置启动可选组件<a class="headerlink" href="#id10" title="链接到此标题。">¶</a></h2>
 <p>只有设备包明确要求时，才启动 PLC 仿真器、厂商服务或其他进程。每个可选组件都应有：</p>
 <ul class="simple">
 <li><p>明确的版本和配置文件；</p></li>
@@ -677,19 +680,19 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
 <p>共享仿真环境中不要修改点位、停止服务或切换配置。仿真只能验证通信和流程逻辑，不能替代真机安全验收。</p>
 </section>
 <section id="id11">
-<h2>12. 启动 Uni-Lab OS<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span>unilab<span class="w"> </span>workspace<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<h2>12. 启动 Uni-Lab OS<a class="headerlink" href="#id11" title="链接到此标题。">¶</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span>unilab<span class="w"> </span>workspace<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--component<span class="w"> </span>all<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graph<span class="w"> </span><span class="s2">"</span><span class="nv">$GRAPH_FILE</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--graph<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$GRAPH_FILE</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--runtime-mode<span class="w"> </span>dry-run<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--startup-mode<span class="w"> </span>develop<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
 </pre></div>
 </div>
 <p>查看状态：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span>unilab<span class="w"> </span>workspace<span class="w"> </span>status<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span>unilab<span class="w"> </span>workspace<span class="w"> </span>status<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
 </pre></div>
 </div>
@@ -697,7 +700,7 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
 <p>启动完成后，应保存本次安装记录：Uni-Lab OS 版本、设备包版本、启动图 文件及校验值、运行模式、实际启用的附加组件和验收时间。以后升级时按这份记录比较，不能只替换其中一个组件后直接进入生产。</p>
 </section>
 <section id="id12">
-<h2>13. 第一次业务验收<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h2>
+<h2>13. 第一次业务验收<a class="headerlink" href="#id12" title="链接到此标题。">¶</a></h2>
 <p>优先选择用户设备包中专门用于验证、不会产生危险动作的工作流：</p>
 <ol class="arabic simple">
 <li><p>确认设备页中的实例、中文名称和状态正确；</p></li>
@@ -710,9 +713,9 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
 <p>如果设备包没有安全的测试工作流，不要随意选择生产工作流代替。应先由设备包作者补充模拟或只读验证路径。</p>
 </section>
 <section id="id13">
-<h2>14. 停止服务<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$ENV_NAME</span><span class="s2">"</span><span class="w"> </span>unilab<span class="w"> </span>workspace<span class="w"> </span>stop<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<h2>14. 停止服务<a class="headerlink" href="#id13" title="链接到此标题。">¶</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>run<span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$ENV_NAME</span><span class="s2">&quot;</span><span class="w"> </span>unilab<span class="w"> </span>workspace<span class="w"> </span>stop<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--component<span class="w"> </span>all<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
 </pre></div>
@@ -720,7 +723,7 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
 <p>如使用外部仿真器或厂商服务，应先停止 Uni-Lab OS，再按用户设备包规定的顺序关闭其他组件。</p>
 </section>
 <section id="id14">
-<h2>15. 常见问题<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h2>
+<h2>15. 常见问题<a class="headerlink" href="#id14" title="链接到此标题。">¶</a></h2>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -779,14 +782,14 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="console.html">
+          <a class="prev-page" href="demo-lab.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Uni-Lab OS 快速上手</div>
+                <div class="title">demo-lab 演示说明</div>
                 
               </div>
             </a>
@@ -853,10 +856,10 @@ jq<span class="w"> </span>empty<span class="w"> </span><span class="s2">"</span>
     </aside>
   </div>
 </div><script src="_static/documentation_options.js?v=4041f460"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
-    <script src="_static/translations.js?v=beaddf03"></script>
+    <script src="_static/translations.js?v=540d3cec"></script>
     <script src="_static/ai-docs.js?v=118f57a4"></script>
     </body>
 </html>

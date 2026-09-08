@@ -42,6 +42,7 @@
 
 overview
 console
+示例设备包 <demo-lab>
 ```
 
 ```{toctree}
@@ -53,20 +54,20 @@ environment
 ```
 
 ```{toctree}
-:caption: 设备包开发
+:caption: 设备包开发规范
 :maxdepth: 2
 
 unilabos-installation
+scenario-guide
 ```
 
 ```{toctree}
-:caption: 运行、部署与验收
+:caption: 环境、部署、运行
 :maxdepth: 1
 
-workflows
-runtime-safety
 deployment
-scenario-guide
+runtime-safety
+workflows
 ```
 
 ```{toctree}
