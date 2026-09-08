@@ -1391,6 +1391,19 @@ class TaskSchedulerBridge:
             )
         if restarted_job_uuids:
             self._scheduler.fail_restarted_jobs(restarted_job_uuids)
+        if (
+            not retained_task_resources
+            and task.get("status") in {"failed", "canceled", "timeout"}
+            and task.get("cleanup_status")
+            in CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL
+            and all(
+                job.get("status") in {"succeeded", "failed", "canceled", "timeout"}
+                for job in jobs
+            )
+        ):
+            # 实际库存对账可能已经提交，而 Permit 释放在跨库窗口中失败。
+            # 幂等补偿全部完成后再提交 settled，释放任务独占物料 Claim。
+            self._projection.project_cleanup_settled(task_uuid)
 
     def _recover_running_task(
         self,

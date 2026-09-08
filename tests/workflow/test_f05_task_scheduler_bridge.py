@@ -19,6 +19,7 @@ from unilabos.app.scheduler.inventory.dispatch_admission import (
     DispatchPermit,
 )
 from unilabos.app.scheduler.inventory.station_resource import (
+    StationResourceError,
     StationSiteTarget,
     TransferResourceFacts,
 )
@@ -1907,6 +1908,174 @@ def test_terminal_restart_recovery_keeps_released_claim_and_settled_cleanup(
     assert inventory.transitions == [(claim["claim_uuid"], "released")]
     assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
     assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
+
+
+def test_restart_recovery_finishes_cleanup_after_reconciled_permit_release_fails(
+    store: WorkflowStore,
+) -> None:
+    """物料已对账但库存 Permit 释放中断时，重启补偿须完成任务级清理。"""
+
+    class _FlakySettlementInventory:
+        """在实际位置提交后让第一次 Permit 释放瞬时失败。"""
+
+        store = None
+
+        def __init__(self) -> None:
+            self.fail_release_once = True
+            self.claim_state = "uncertain"
+            self.transitions: list[str] = []
+
+        def settle_material_transfer(self, command: Any) -> dict[str, Any]:
+            """返回已由库存权威提交的确定物料位置。"""
+
+            return {
+                "material_uuid": command.material_uuid,
+                "parent_uuid": command.target_owner_material_uuid,
+                "site_uuid": command.target_site_uuid,
+            }
+
+        def transition_dispatch_permit(
+            self,
+            claim_uuid: str,
+            *,
+            target_state: str,
+        ) -> None:
+            """第一次 released 模拟跨权威提交窗口，重试后幂等收敛。"""
+
+            assert claim_uuid == "75000000-0000-4000-8000-000000000095"
+            self.transitions.append(target_state)
+            if target_state == "released" and self.fail_release_once:
+                self.fail_release_once = False
+                raise StationResourceError(
+                    "inventory_temporarily_unavailable",
+                    "库存 Permit 暂时无法释放",
+                )
+            self.claim_state = target_state
+
+        def release_unprojected_dispatch_permits(
+            self,
+            *,
+            known_claim_uuids: tuple[str, ...],
+        ) -> tuple[str, ...]:
+            """测试没有未投影的 prepared Permit。"""
+
+            assert known_claim_uuids == ()
+            return ()
+
+    _seed_task(store, with_material=False)
+    projection = TaskRuntimeProjection(store)
+    material_lock_key = f"material/{MATERIAL_UUID}/exclusive"
+    expected_change_set = {
+        "kind": "material_transfer",
+        "material_uuid": MATERIAL_UUID,
+        "source_site_uuid": "72000000-0000-4000-8000-000000000095",
+        "target_site_uuid": "71000000-0000-4000-8000-000000000095",
+    }
+    projection.project_pre_dispatch(
+        task_uuid=TASK_UUID,
+        job_uuid=JOB_UUID,
+        execution_locks=[
+            {
+                "lock_key": material_lock_key,
+                "scope": "material",
+                "material_uuid": MATERIAL_UUID,
+            }
+        ],
+        dispatch_permit={
+            "effect_uuid": "77000000-0000-4000-8000-000000000095",
+            "claim_uuid": "75000000-0000-4000-8000-000000000095",
+            "parameter_hash": "restart-settlement-release-window",
+            "expected_change_set": expected_change_set,
+            "fences": [{"lock_key": material_lock_key, "fencing_token": 1}],
+        },
+    )
+    projection.project_dispatch_accepted(JOB_UUID)
+    with store.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO workflow_task_material_claim(
+                uuid, create_time, update_time, deleted_at, description,
+                meta_data, workflow_task_uuid, workflow_node_uuid,
+                workflow_node_job_uuid, material_uuid, status, revision,
+                acquired_at, released_at
+            ) VALUES (?, ?, ?, NULL, NULL, '{}', ?, ?, ?, ?, 'active', 1,
+                      ?, NULL)
+            """,
+            (
+                "78000000-0000-4000-8000-000000000095",
+                _CREATED_AT,
+                _CREATED_AT,
+                TASK_UUID,
+                NODE_UUID,
+                JOB_UUID,
+                MATERIAL_UUID,
+                _CREATED_AT,
+            ),
+        )
+    projection.project_execution_process_restarted(TASK_UUID)
+
+    inventory = _FlakySettlementInventory()
+    first_bridge = _bridge(
+        store,
+        EdgeScheduler(
+            dispatcher=RecordingDispatcher(),
+            station_resources=inventory,
+        ),
+    )
+    try:
+        with pytest.raises(
+            importlib.import_module(
+                "unilabos.workflow.task_scheduler_bridge"
+            ).TaskSchedulerBridgeError,
+            match="库存 Permit 暂时无法释放",
+        ):
+            first_bridge.settle_failed_material_transfer(
+                JOB_UUID,
+                actual_change_set={
+                    "kind": "material_transfer",
+                    "material_uuid": MATERIAL_UUID,
+                    "target_owner_material_uuid": (
+                        "52000000-0000-4000-8000-000000000095"
+                    ),
+                    "target_site_uuid": (
+                        "71000000-0000-4000-8000-000000000095"
+                    ),
+                },
+                reason="现场确认物料已在目标库位",
+            )
+    finally:
+        first_bridge.close()
+
+    assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "required"
+    with store.transaction() as connection:
+        assert connection.execute(
+            "SELECT status FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid=?",
+            (TASK_UUID,),
+        ).fetchone()[0] == "active"
+
+    restarted_bridge = _bridge(
+        store,
+        EdgeScheduler(
+            dispatcher=RecordingDispatcher(),
+            station_resources=inventory,
+        ),
+    )
+    try:
+        assert restarted_bridge.recover_active_tasks() == []
+    finally:
+        restarted_bridge.close()
+
+    assert inventory.claim_state == "released"
+    assert inventory.transitions == ["released", "released"]
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    with store.transaction() as connection:
+        assert connection.execute(
+            "SELECT status FROM workflow_task_material_claim "
+            "WHERE workflow_task_uuid=?",
+            (TASK_UUID,),
+        ).fetchone()[0] == "released"
 
 
 def test_late_result_after_restart_is_ignored_as_stale_execution(
