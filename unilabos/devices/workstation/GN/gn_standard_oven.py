@@ -5,14 +5,19 @@
 对外仅暴露 execute_command（Oven_CmdType + 写参 + 开关门）。
 
 指令类型 (Oven_CmdType)：
-    1=启动 2=复位/停止
+    1=启动  2=复位/停止
 
-开关门 (1.3.7 新增 bool 节点)：
-    100=开门 → OPEN_DOOR=1
-    101=关门 → COHSE_DOOR=1
+启动写参（Oven_*Set）：
+    Oven_TempSet         运行温度设置
+    Oven_TimeHourSet     运行时间(小时)
+    Oven_TimeMinuteSet   运行时间(分钟)
+
+开关门（独立 bool 节点，非 Oven_CmdType）：
+    OPEN_DOOR=1   烘箱开门
+    COHSE_DOOR=1  烘箱关门
 
 运行状态 (Oven_Running_Status, INT16)：
-    0=停止 1=运行
+    0=停止  1=运行
 
 互锁（下发前校验）：
     - CmdType=1（启动）仅当 Running_Status=0 时允许；触发后应变为 1
@@ -33,36 +38,58 @@ from typing import Optional
 from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, device, not_action
 from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
+from unilabos.devices.workstation.GN.base_opcua_client import OpcUaNode
+from unilabos.device_comms.opcua_client.node.uniopcua import NodeType, DataType
 
 DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.7.csv")
+
+# CSV 中 DataType=bool 无法被通用加载器识别，在此手动注册开关门节点
+_DOOR_OPC_NODES = (
+    OpcUaNode(
+        name="OPEN_DOOR",
+        node_type=NodeType.VARIABLE,
+        node_id="ns=4;s=|var|Inovance-X86-Linux.Application.OPC_UA.OPEN_DOOR",
+        data_type=DataType.BOOLEAN,
+    ),
+    OpcUaNode(
+        name="COHSE_DOOR",
+        node_type=NodeType.VARIABLE,
+        node_id="ns=4;s=|var|Inovance-X86-Linux.Application.OPC_UA.COHSE_DOOR",
+        data_type=DataType.BOOLEAN,
+    ),
+)
 
 RUNNING_STOPPED = 0
 RUNNING_ACTIVE = 1
 
-# Oven_CmdType / 开关门（与 CSV 表头一致）
+# Oven_CmdType（与 CSV 表头一致；开关门不走 CmdType）
 OVEN_CMD_LABELS = {
     1: "启动",
     2: "复位/停止",
-    100: "开门",
-    101: "关门",
 }
 
 
 class OvenCommand(int, Enum):
-    """常规烘箱指令类型"""
+    """常规烘箱 Oven_CmdType"""
 
     START = 1
     RESET = 2
+    # 以下仅 open_door/close_door 内部使用，非 OPC Oven_CmdType 取值
     OPEN_DOOR = 100
     CLOSE_DOOR = 101
 
 
 _EXECUTE_CMD_DOC = (
-    "按 Oven_CmdType / 开关门节点执行 OPC 指令。"
-    "1=启动（写 Oven_TempSet / Oven_TimeHourSet / Oven_TimeMinuteSet）"
-    " 2=复位/停止 100=开门(OPEN_DOOR=1) 101=关门(COHSE_DOOR=1)。"
+    "按 Oven_CmdType 执行 OPC 指令（opcua_gn1.3.7）。"
+    "1=启动：写 Oven_TempSet←temperature、Oven_TimeHourSet←hours、"
+    "Oven_TimeMinuteSet←minutes，再触发 Oven_CmdTrig。"
+    "2=复位/停止。"
+    "开关门请调用 open_door / close_door（OPEN_DOOR / COHSE_DOOR=1）。"
     "启动 wait=True 时等待 CompleteFB；timeout 默认 program_timeout=设定时长+300。"
 )
+
+_OPEN_DOOR_DOC = "烘箱开门：写 OPEN_DOOR(bool)=1（独立节点，非 Oven_CmdType）。"
+_CLOSE_DOOR_DOC = "烘箱关门：写 COHSE_DOOR(bool)=1（独立节点，非 Oven_CmdType）。"
 
 
 @device(
@@ -112,6 +139,7 @@ class StandardOvenDevice(GNStationClient):
         )
         self._connection_check_interval = 5.0
         self._command_lock = threading.Lock()
+        self.register_node_list(list(_DOOR_OPC_NODES))
 
     @action(auto_prefix=True, description=_EXECUTE_CMD_DOC)
     def execute_command(
@@ -123,12 +151,14 @@ class StandardOvenDevice(GNStationClient):
         wait: bool = True,
         timeout: Optional[float] = None,
     ) -> dict:
-        """唯一注册动作：写参 → CmdType → CmdTrig → 互锁/等待 CompleteFB；或开关门。"""
+        """Oven_CmdType 指令：1=启动 2=复位/停止（写参 → CmdType → CmdTrig → 互锁/CompleteFB）。"""
         cmd = int(cmd_type)
-        label = OVEN_CMD_LABELS.get(cmd, f"CmdType={cmd}")
-
-        if cmd in (OvenCommand.OPEN_DOOR, OvenCommand.CLOSE_DOOR):
-            return self._run_door(cmd, label)
+        if cmd not in OVEN_CMD_LABELS:
+            raise ValueError(
+                f"常规烘箱 Oven_CmdType 仅支持 {sorted(OVEN_CMD_LABELS)}，"
+                f"开关门请用 open_door / close_door，收到 cmd_type={cmd}"
+            )
+        label = OVEN_CMD_LABELS[cmd]
 
         setpoints = self._build_setpoints(
             cmd_type=cmd,
@@ -154,6 +184,16 @@ class StandardOvenDevice(GNStationClient):
             program_timeout=program_timeout,
             ack_timeout=ack_timeout,
         )
+
+    @action(auto_prefix=True, description=_OPEN_DOOR_DOC)
+    def open_door(self) -> dict:
+        """写 OPEN_DOOR=1 开门。"""
+        return self._run_door(OvenCommand.OPEN_DOOR, "开门")
+
+    @action(auto_prefix=True, description=_CLOSE_DOOR_DOC)
+    def close_door(self) -> dict:
+        """写 COHSE_DOOR=1 关门。"""
+        return self._run_door(OvenCommand.CLOSE_DOOR, "关门")
 
     @not_action
     def _build_setpoints(

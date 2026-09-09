@@ -29,6 +29,43 @@ from pylabrobot.resources import (
 )
 from typing_extensions import TypedDict
 
+# region agent log
+import json as _json_dbg
+import os as _os_dbg
+
+_DBG_CFA825_LOG = _os_dbg.path.normpath(
+    _os_dbg.path.join(_os_dbg.path.dirname(__file__), "..", "..", "..", "..", "..", "debug-cfa825.log")
+)
+
+
+def _dbg_cfa825(hypothesis_id: str, location: str, message: str, data: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        entry = {
+            "sessionId": "cfa825",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DBG_CFA825_LOG, "a", encoding="utf-8") as f:
+            f.write(_json_dbg.dumps(entry, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        pass
+
+
+def _dbg_rack_info(rack: Any) -> Dict[str, Any]:
+    if rack is None:
+        return {}
+    extra = getattr(rack, "unilabos_extra", None) or {}
+    return {
+        "name": getattr(rack, "name", None),
+        "model": getattr(rack, "model", None),
+        "obj_id": id(rack),
+        "update_resource_site": extra.get("update_resource_site"),
+    }
+# endregion
+
 from unilabos.devices.workstation.GN.liquid_handling.liquid_history import (
     LiquidHistoryEntry,
     append_liquid_history as _append_liquid_history,
@@ -47,6 +84,55 @@ from unilabos.resources.resource_tracker import (
     EXTRA_UNILABOS_SAMPLE_UUID,
 )
 from unilabos.ros.nodes.base_device_node import BaseROS2DeviceNode, ROS2DeviceNode
+
+
+def _scalar_seq_first(val: Any) -> Any:
+    if val is None:
+        return None
+    if isinstance(val, (list, tuple)):
+        if len(val) == 0:
+            return None
+        return val[0]
+    return val
+
+
+def _build_dispense_hover_kwargs(
+    *,
+    liquid_height: Any = None,
+    dispensing_method: Any = None,
+    hover_below_liquid_level: Any = None,
+    z_start_point_offset_height: Any = None,
+    post_discharge_pause_time_ms: Any = None,
+    dis_flow_rates: Any = None,
+) -> Dict[str, Any]:
+    """组装 dispense 悬停滴液参数，供 PRCXI handler 经 backend context 下发。"""
+    extras: Dict[str, Any] = {}
+    dm = _scalar_seq_first(dispensing_method)
+    if dm is not None and str(dm).strip():
+        extras["dispensing_method"] = str(dm).strip()
+    hb = _scalar_seq_first(hover_below_liquid_level)
+    if hb is None:
+        lh = _scalar_seq_first(liquid_height)
+        if lh is not None:
+            try:
+                hb = int(float(lh))
+            except (TypeError, ValueError):
+                hb = None
+    if hb is not None:
+        extras["hover_below_liquid_level"] = int(hb)
+    zs = _scalar_seq_first(z_start_point_offset_height)
+    if zs is not None:
+        extras["z_start_point_offset_height"] = int(zs)
+    pause = _scalar_seq_first(post_discharge_pause_time_ms)
+    if pause is not None:
+        extras["post_discharge_pause_time_ms"] = int(pause)
+    speed = _scalar_seq_first(dis_flow_rates)
+    if speed is not None:
+        try:
+            extras["dispense_speed"] = int(float(speed))
+        except (TypeError, ValueError):
+            pass
+    return extras
 
 
 class SimpleReturn(TypedDict):
@@ -170,6 +256,10 @@ class LiquidHandlerMiddleware(LiquidHandler):
 
         if self._simulator:
             return await self._simulate_handler.pick_up_tips(tip_spots, use_channels, offsets, **backend_kwargs)
+        # 云端/历史物料树常把 TipSpot 同步为 tip:null（has_tip=False），与台面上满盒物理状态不一致；
+        # 取头前按 make_tip 补全软件态，pick 后 update_resource 会把 consumed 状态再推回云端。
+        for tip_spot in tip_spots:
+            self._ensure_tip_spot_stocked(tip_spot)
         # 让 PLR 走标准链路：tracker.remove_tip -> 成功 commit / 失败 rollback，
         # 由此 TipSpot.has_tip() 自动反映为 False，符合 LiquidHandler 规范。
         result = await super().pick_up_tips(tip_spots, use_channels, offsets, **backend_kwargs)
@@ -985,6 +1075,8 @@ class LiquidHandlerMiddleware(LiquidHandler):
     async def pick_up_tips96(self, tip_rack: TipRack, offset: Coordinate = Coordinate.zero(), **backend_kwargs):
         if self._simulator:
             return await self._simulate_handler.pick_up_tips96(tip_rack, offset, **backend_kwargs)
+        # 整板取头由真机执行；不在软件侧对 96 孔逐个 empty，也不推进扁平池游标，
+        # 否则同盒多次 transfer（或后续走 _get_next_tip）会误判 Tip rack exhausted。
         return await super().pick_up_tips96(tip_rack, offset, **backend_kwargs)
 
     async def drop_tips96(
@@ -2381,6 +2473,7 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         liquid_height: Optional[List[Optional[float]]] = None,
         blow_out_air_volume: Optional[List[Optional[float]]] = None,
         blow_out_air_volume_before: Optional[List[Optional[float]]] = None,
+        post_air_volume: Optional[List[Optional[float]]] = None,
         spread: Literal["wide", "tight", "custom"] = "wide",
         is_96_well: bool = False,
         mix_stage: Optional[Literal["none", "before", "after", "both"]] = "none",
@@ -2390,6 +2483,10 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         mix_liquid_height: Optional[float] = None,
         delays: Optional[List[int]] = None,
         pre_aspirate_from_target: Optional[float] = None,
+        dispensing_method: Optional[List[Optional[str]]] = None,
+        hover_below_liquid_level: Optional[List[Optional[int]]] = None,
+        z_start_point_offset_height: Optional[List[Optional[int]]] = None,
+        post_discharge_pause_time_ms: Optional[List[Optional[int]]] = None,
         none_keys: List[str] = [],
     ) -> TransferLiquidReturn:
         """Transfer liquid with automatic mode detection.
@@ -2477,11 +2574,16 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
                 touch_tip=touch_tip,
                 liquid_height=liquid_height,
                 blow_out_air_volume=blow_out_air_volume,
+                post_air_volume=post_air_volume,
                 mix_stage=mix_stage,
                 mix_times=mix_times,
                 mix_vol=mix_vol,
                 mix_rate=mix_rate,
                 mix_liquid_height=mix_liquid_height,
+                dispensing_method=dispensing_method,
+                hover_below_liquid_level=hover_below_liquid_level,
+                z_start_point_offset_height=z_start_point_offset_height,
+                post_discharge_pause_time_ms=post_discharge_pause_time_ms,
             )
         # 转换体积参数为列表
         if isinstance(asp_vols, (int, float)):
@@ -2573,6 +2675,8 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
                     kwargs['blow_out_air_volume'] = safe_get(blow_out_air_volume, i)
                 if blow_out_air_volume_before is not None:
                     kwargs['blow_out_air_volume_before'] = safe_get(blow_out_air_volume_before, i)
+                if post_air_volume is not None:
+                    kwargs['post_air_volume'] = safe_get(post_air_volume, i)
                 if spread is not None:
                     kwargs['spread'] = spread
                 if mix_stage is not None:
@@ -2589,6 +2693,14 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
                     kwargs['delays'] = safe_get(delays, i)
                 if pre_aspirate_from_target is not None:
                     kwargs['pre_aspirate_from_target'] = safe_get(pre_aspirate_from_target, i)
+                if dispensing_method is not None:
+                    kwargs['dispensing_method'] = safe_get(dispensing_method, i)
+                if hover_below_liquid_level is not None:
+                    kwargs['hover_below_liquid_level'] = safe_get(hover_below_liquid_level, i, wrap=False)
+                if z_start_point_offset_height is not None:
+                    kwargs['z_start_point_offset_height'] = safe_get(z_start_point_offset_height, i, wrap=False)
+                if post_discharge_pause_time_ms is not None:
+                    kwargs['post_discharge_pause_time_ms'] = safe_get(post_discharge_pause_time_ms, i, wrap=False)
 
                 cur_source = sources[i % num_sources]
                 cur_target = targets[i % num_targets]
@@ -2728,8 +2840,13 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
                     ('liquid_height', liquid_height),
                     ('blow_out_air_volume', blow_out_air_volume),
                     ('blow_out_air_volume_before', blow_out_air_volume_before),
+                    ('post_air_volume', post_air_volume),
                     ('delays', delays),
                     ('pre_aspirate_from_target', pre_aspirate_from_target),
+                    ('dispensing_method', dispensing_method),
+                    ('hover_below_liquid_level', hover_below_liquid_level),
+                    ('z_start_point_offset_height', z_start_point_offset_height),
+                    ('post_discharge_pause_time_ms', post_discharge_pause_time_ms),
                 ):
                     rv = _resolve_per_channel(src)
                     if rv is not None:
@@ -2768,6 +2885,105 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             targets=ResourceTreeSet.from_plr_resources(list(targets), known_newly_created=False).dump(),  # type: ignore
         )
 
+    async def titration_liquid(
+        self,
+        sources: Sequence[Union[Container, Dict[str, Any]]],
+        targets: Sequence[Union[Container, Dict[str, Any]]],
+        tip_racks: Sequence[Union[TipRack, Dict[str, Any]]],
+        *,
+        use_channels: Optional[List[int]] = None,
+        asp_vols: Union[List[float], float],
+        dis_vols: Union[List[float], float],
+        asp_flow_rates: Optional[List[Optional[float]]] = None,
+        dis_flow_rates: Optional[List[Optional[float]]] = None,
+        offsets: Optional[List[Coordinate]] = None,
+        liquid_height: Optional[List[Optional[float]]] = None,
+        blow_out_air_volume: Optional[List[Optional[float]]] = None,
+        blow_out_air_volume_before: Optional[List[Optional[float]]] = None,
+        post_air_volume: Optional[List[Optional[float]]] = None,
+        repeat_count: int = 1,
+        cycle_delay_s: Union[float, List[float], None] = 0,
+        dispensing_method: Optional[List[Optional[str]]] = None,
+        hover_below_liquid_level: Optional[List[Optional[int]]] = None,
+        z_start_point_offset_height: Optional[List[Optional[int]]] = None,
+        post_discharge_pause_time_ms: Optional[List[Optional[int]]] = None,
+        is_96_well: bool = False,
+        none_keys: List[str] = [],
+    ) -> TransferLiquidReturn:
+        """滴定/重复移液：一次取枪头 → repeat_count 轮 A→B 吸放 → 退枪头。
+
+        与 transfer_liquid 不同：中间循环不重复取/退枪头；循环间隔由 cycle_delay_s（秒）控制，
+        通过 pause_step_action（V04 Pause / Timing）写入协议，而非 custom_delay 软件 sleep。
+        首版仅实现 is_96_well=True 的整板路径。
+        """
+        sources = await self._resolve_to_plr_resources(sources)
+        targets = await self._resolve_to_plr_resources(targets)
+        tip_racks = list(await self._resolve_to_plr_resources(tip_racks))
+
+        if len(sources) == 0:
+            raise ValueError("titration_liquid requires non-empty sources.")
+        if len(targets) == 0:
+            raise ValueError("titration_liquid requires non-empty targets.")
+        if len(tip_racks) == 0:
+            raise ValueError("titration_liquid requires at least one tip rack.")
+
+        try:
+            repeat_count = int(repeat_count)
+        except (TypeError, ValueError):
+            raise ValueError(f"titration_liquid repeat_count must be int, got {repeat_count!r}")
+        if repeat_count < 1:
+            raise ValueError(f"titration_liquid repeat_count must be >= 1, got {repeat_count}")
+
+        if dispensing_method is None:
+            dispensing_method = ["BottleNeck"]
+
+        if is_96_well:
+            return await self._titration_liquid_96well(
+                sources,
+                targets,
+                tip_racks,
+                asp_vols=asp_vols,
+                dis_vols=dis_vols,
+                asp_flow_rates=asp_flow_rates,
+                dis_flow_rates=dis_flow_rates,
+                offsets=offsets,
+                liquid_height=liquid_height,
+                blow_out_air_volume=blow_out_air_volume,
+                blow_out_air_volume_before=blow_out_air_volume_before,
+                post_air_volume=post_air_volume,
+                repeat_count=repeat_count,
+                cycle_delay_s=cycle_delay_s,
+                dispensing_method=dispensing_method,
+                hover_below_liquid_level=hover_below_liquid_level,
+                z_start_point_offset_height=z_start_point_offset_height,
+                post_discharge_pause_time_ms=post_discharge_pause_time_ms,
+            )
+
+        raise NotImplementedError(
+            "titration_liquid 当前仅支持 is_96_well=True 的整板路径；"
+            "单通道 titration 尚未实现。"
+        )
+
+    def _resolve_96_drop_target(self, tip_rack: TipRack) -> Union[TipRack, Trash]:
+        """96 孔退枪头目标：deck 上有 Trash 则丢弃，否则回收到 tip_rack。"""
+        drop_target: Union[TipRack, Trash] = tip_rack
+        for child in getattr(self.deck, "children", []) or []:
+            if isinstance(child, Trash):
+                drop_target = child
+                break
+        return drop_target
+
+    @staticmethod
+    def _cycle_param(seq: Any, i: int) -> Any:
+        """按轮次索引取参数：None→None，标量→标量，列表→seq[i % len]。"""
+        if seq is None:
+            return None
+        if isinstance(seq, (list, tuple)):
+            if len(seq) == 0:
+                return None
+            return seq[i % len(seq)]
+        return seq
+
     async def _transfer_liquid_96well(
         self,
         sources: Sequence[Container],
@@ -2782,11 +2998,16 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         touch_tip: bool = False,
         liquid_height: Optional[List[Optional[float]]] = None,
         blow_out_air_volume: Optional[List[Optional[float]]] = None,
+        post_air_volume: Optional[List[Optional[float]]] = None,
         mix_stage: Optional[Literal["none", "before", "after", "both"]] = "none",
         mix_times: Optional[List[int]] = None,
         mix_vol: Optional[int] = None,
         mix_rate: Optional[int] = None,
         mix_liquid_height: Optional[float] = None,
+        dispensing_method: Optional[List[Optional[str]]] = None,
+        hover_below_liquid_level: Optional[List[Optional[int]]] = None,
+        z_start_point_offset_height: Optional[List[Optional[int]]] = None,
+        post_discharge_pause_time_ms: Optional[List[Optional[int]]] = None,
     ) -> TransferLiquidReturn:
         """96 孔整板转移：pickup96 →[mix-before]→ aspirate96 → dispense96 →[mix-after]→ drop96。
 
@@ -2821,8 +3042,17 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         _offset = _first(offsets) or Coordinate.zero()
         _asp_rate = _first(asp_flow_rates)
         _dis_rate = _first(dis_flow_rates)
-        _blow = _first(blow_out_air_volume)
+        _post_air = _first(post_air_volume)
+        _blow_out = _first(blow_out_air_volume)
         _liquid_h = _first(liquid_height)
+        _dispense_hover_kwargs = _build_dispense_hover_kwargs(
+            liquid_height=_liquid_h,
+            dispensing_method=_first(dispensing_method),
+            hover_below_liquid_level=_first(hover_below_liquid_level),
+            z_start_point_offset_height=_first(z_start_point_offset_height),
+            post_discharge_pause_time_ms=_first(post_discharge_pause_time_ms),
+            dis_flow_rates=_dis_rate,
+        )
 
         # mix 次数可能是 list / 标量，统一收敛为 int（0 表示不 mix）。
         _mt = _first(mix_times)
@@ -2892,7 +3122,8 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             offset=_offset,
             flow_rate=_asp_rate,
             liquid_height=_liquid_h,
-            blow_out_air_volume=_blow,
+            blow_out_air_volume=_post_air,
+            post_air_volume=_post_air,
         )
 
         # 4) 整板放液
@@ -2902,7 +3133,8 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             offset=_offset,
             flow_rate=_dis_rate,
             liquid_height=_liquid_h,
-            blow_out_air_volume=_blow,
+            blow_out_air_volume=_blow_out,
+            **_dispense_hover_kwargs,
         )
 
         # 5) mix-after（对目标板整板混匀）
@@ -2919,12 +3151,7 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
                 await self.touch_tip(_tt_targets)
 
         # 7) 丢枪头：优先 deck 上的 Trash，无 trash 回收到 tip_rack。
-        drop_target: Union[TipRack, Trash] = tip_rack
-        for child in getattr(self.deck, "children", []) or []:
-            if isinstance(child, Trash):
-                drop_target = child
-                break
-        await self.drop_tips96(drop_target)
+        await self.drop_tips96(self._resolve_96_drop_target(tip_rack))
 
         # 8) 同步孔板液体状态并上报 web：整板路径下 aspirate96/dispense96 不像单通道
         #    dispense 那样回推 update_resource，且体积追踪被 no_volume_tracking 兜底关掉，
@@ -2939,6 +3166,160 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             sources=ResourceTreeSet.from_plr_resources(list(sources), known_newly_created=False).dump(),  # type: ignore
             targets=ResourceTreeSet.from_plr_resources(list(targets), known_newly_created=False).dump(),  # type: ignore
         )
+
+    async def _titration_liquid_96well(
+        self,
+        sources: Sequence[Container],
+        targets: Sequence[Container],
+        tip_racks: Sequence[TipRack],
+        *,
+        asp_vols: Union[List[float], float],
+        dis_vols: Union[List[float], float],
+        asp_flow_rates: Optional[List[Optional[float]]] = None,
+        dis_flow_rates: Optional[List[Optional[float]]] = None,
+        offsets: Optional[List[Coordinate]] = None,
+        liquid_height: Optional[List[Optional[float]]] = None,
+        blow_out_air_volume: Optional[List[Optional[float]]] = None,
+        blow_out_air_volume_before: Optional[List[Optional[float]]] = None,
+        post_air_volume: Optional[List[Optional[float]]] = None,
+        repeat_count: int = 1,
+        cycle_delay_s: Union[float, List[float], None] = 0,
+        dispensing_method: Optional[List[Optional[str]]] = None,
+        hover_below_liquid_level: Optional[List[Optional[int]]] = None,
+        z_start_point_offset_height: Optional[List[Optional[int]]] = None,
+        post_discharge_pause_time_ms: Optional[List[Optional[int]]] = None,
+    ) -> TransferLiquidReturn:
+        """96 孔滴定：pickup96 一次 → repeat_count 轮 aspirate96/dispense96 → drop96 一次。"""
+
+        def _resolve_plate(res) -> Plate:
+            if isinstance(res, Plate):
+                return res
+            parent = getattr(res, "parent", None)
+            if isinstance(parent, Plate):
+                return parent
+            return res
+
+        def _to_float(val: Any, default: float = 0.0) -> float:
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return default
+
+        source_plate = _resolve_plate(sources[0])
+        target_plate = _resolve_plate(targets[0])
+        tip_rack = tip_racks[0] if isinstance(tip_racks[0], TipRack) else tip_racks[0].parent
+
+        self.set_tiprack(tip_racks)
+
+        _offset = self._cycle_param(offsets, 0) or Coordinate.zero()
+
+        async def _asp96(plate: Plate, vol: float, **kw):
+            try:
+                await self.aspirate96(plate, vol, **kw)
+            except (TooLittleLiquidError, TooLittleVolumeError) as e:
+                if hasattr(self, "_ros_node") and self._ros_node is not None:
+                    self._ros_node.lab_logger().warning(
+                        f"[titration aspirate96] fallback no_volume_tracking. error={e}, vol={vol}"
+                    )
+                with no_volume_tracking():
+                    await self.aspirate96(plate, vol, **kw)
+
+        async def _disp96(plate: Plate, vol: float, **kw):
+            try:
+                await self.dispense96(plate, vol, **kw)
+            except (TooLittleLiquidError, TooLittleVolumeError) as e:
+                if hasattr(self, "_ros_node") and self._ros_node is not None:
+                    self._ros_node.lab_logger().warning(
+                        f"[titration dispense96] fallback no_volume_tracking. error={e}, vol={vol}"
+                    )
+                with no_volume_tracking():
+                    await self.dispense96(plate, vol, **kw)
+
+        await self.pick_up_tips96(tip_rack, offset=_offset)
+
+        for i in range(repeat_count):
+            asp_vol = _to_float(self._cycle_param(asp_vols, i))
+            dis_vol = _to_float(self._cycle_param(dis_vols, i))
+            asp_rate = self._cycle_param(asp_flow_rates, i)
+            dis_rate = self._cycle_param(dis_flow_rates, i)
+            liquid_h = self._cycle_param(liquid_height, i)
+            before_air = _to_float(self._cycle_param(blow_out_air_volume_before, i), default=0.0)
+            post_air = self._cycle_param(post_air_volume, i)
+            blow_out = self._cycle_param(blow_out_air_volume, i)
+            dm = self._cycle_param(dispensing_method, i)
+            hover = self._cycle_param(hover_below_liquid_level, i)
+            z_offset = self._cycle_param(z_start_point_offset_height, i)
+            pause_ms = self._cycle_param(post_discharge_pause_time_ms, i)
+            dispense_hover_kwargs = _build_dispense_hover_kwargs(
+                liquid_height=liquid_h,
+                dispensing_method=dm,
+                hover_below_liquid_level=hover,
+                z_start_point_offset_height=z_offset,
+                post_discharge_pause_time_ms=pause_ms,
+                dis_flow_rates=dis_rate,
+            )
+
+            if before_air > 0:
+                await _asp96(
+                    source_plate,
+                    0.0,
+                    offset=_offset,
+                    flow_rate=asp_rate,
+                    liquid_height=liquid_h,
+                    blow_out_air_volume=before_air,
+                )
+
+            await _asp96(
+                source_plate,
+                asp_vol,
+                offset=_offset,
+                flow_rate=asp_rate,
+                liquid_height=liquid_h,
+                post_air_volume=post_air,
+            )
+
+            await _disp96(
+                target_plate,
+                dis_vol,
+                offset=_offset,
+                flow_rate=dis_rate,
+                liquid_height=liquid_h,
+                blow_out_air_volume=blow_out,
+                **dispense_hover_kwargs,
+            )
+
+            try:
+                self._reflect_96well_transfer(source_plate, target_plate, dis_vol)
+            except Exception as _e:
+                if hasattr(self, "_ros_node") and self._ros_node is not None:
+                    self._ros_node.lab_logger().warning(
+                        f"[titration96] 反映孔板状态/上报失败：{_e}"
+                    )
+
+            if i < repeat_count - 1:
+                delay_s = _to_float(self._cycle_param(cycle_delay_s, i), default=0.0)
+                await self._titration_cycle_pause(delay_s)
+
+        await self.drop_tips96(self._resolve_96_drop_target(tip_rack))
+
+        return TransferLiquidReturn(
+            sources=ResourceTreeSet.from_plr_resources(list(sources), known_newly_created=False).dump(),  # type: ignore
+            targets=ResourceTreeSet.from_plr_resources(list(targets), known_newly_created=False).dump(),  # type: ignore
+        )
+
+    async def _titration_cycle_pause(self, delay_s: float) -> None:
+        """滴定循环间隔：优先 pause_step_action（协议 Pause），无则回退 custom_delay。"""
+        if delay_s <= 0:
+            return
+        pause_fn = getattr(self, "pause_step_action", None)
+        if callable(pause_fn):
+            # PRCXI V04 PauseStep：PauseEnum=Timing，PauseTime 为秒数字符串。
+            pause_time = str(int(delay_s)) if float(delay_s).is_integer() else str(delay_s)
+            await pause_fn(pause_enum="Timing", pause_time=pause_time)
+            return
+        await self.custom_delay(seconds=delay_s)
 
     @staticmethod
     def _plate_wells(plate) -> List[Well]:
@@ -3045,6 +3426,7 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         liquid_height = kwargs.get('liquid_height')
         blow_out_air_volume = kwargs.get('blow_out_air_volume')
         blow_out_air_volume_before = kwargs.get('blow_out_air_volume_before')
+        post_air_volume = kwargs.get('post_air_volume')
         spread = kwargs.get('spread', 'wide')
         mix_stage = kwargs.get('mix_stage')
         mix_times = kwargs.get('mix_times')
@@ -3053,6 +3435,10 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         mix_liquid_height = kwargs.get('mix_liquid_height')
         delays = kwargs.get('delays')
         pre_aspirate_from_target = kwargs.get('pre_aspirate_from_target')
+        dispensing_method = kwargs.get('dispensing_method')
+        hover_below_liquid_level = kwargs.get('hover_below_liquid_level')
+        z_start_point_offset_height = kwargs.get('z_start_point_offset_height')
+        post_discharge_pause_time_ms = kwargs.get('post_discharge_pause_time_ms')
 
         # P1 v4 多通道：当 use_channels 长度 > 1（如 8 通道）时，下层
         # PLR aspirate/dispense 接受「N 个 resources + N 个 vols + N
@@ -3123,16 +3509,39 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             # 列式硬件（_pickup_column_aligned）会做列对齐：当前列剩余不足整列时跳过残余、
             # 从下一整列开头取，保证 8 通道每次都是完整列。
             tip = self._acquire_tip_column(n_ch)
+            # region agent log
+            _dbg_cfa825(
+                "C",
+                "liquid_handler_abstract.py:_transfer_base_method:before_pick_up",
+                "acquired tips before pick_up_tips",
+                {
+                    "pick_up": pick_up,
+                    "n_ch": n_ch,
+                    "tips": [
+                        {
+                            "tip_name": getattr(t, "name", None),
+                            "rack": _dbg_rack_info(getattr(t, "parent", None)),
+                        }
+                        for t in tip
+                    ],
+                },
+            )
+            # endregion
             await self.pick_up_tips(tip,use_channels=use_channels)
         # P1 v4：blow_before / blow_after 是每通道独立的，列表长度应为 n_ch。
         # 标量化处理（取 first 非零）用于决定是否触发 before-aspirate；下发到
         # PLR 时仍按通道列表传递。
         blow_before_list = _pad_to_n(blow_out_air_volume_before, n_ch) if blow_out_air_volume_before else None
-        blow_after_list = _pad_to_n(blow_out_air_volume, n_ch) if blow_out_air_volume else None
+        post_air_list = _pad_to_n(post_air_volume, n_ch) if post_air_volume else None
+        blow_out_list = _pad_to_n(blow_out_air_volume, n_ch) if blow_out_air_volume else None
         blow_out_air_volume_before_vol = float(blow_before_list[0] or 0.0) if blow_before_list else 0.0
-        blow_out_air_volume_vol = float(blow_after_list[0] or 0.0) if blow_after_list else 0.0
-        # PLR 的 blow_out_air_volume 是空气参数，不计入液体体积。
-        # before 空气通过单独预吸实现，after 空气通过 blow_out_air_volume 参数实现。
+        # post_air_volume → V04 PostAirVolume；blow_out_air_volume → V04 BlowVolume（二者独立）。
+        # before 空气仍通过 vol=0 预吸实现。
+
+        def _post_air_for_aspirate():
+            if post_air_list and any((v or 0) > 0 for v in post_air_list):
+                return post_air_list if multi_channel else [float(post_air_list[0] or 0.0)]
+            return None
 
         if mix_stage in ["before", "both"] and mix_times is not None and mix_times > 0:
             await self.mix(
@@ -3174,32 +3583,33 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             flow_rates=asp_flow_arg,
             offsets=asp_offsets,
             liquid_height=asp_liquid_h,
-            blow_out_air_volume=(
-                blow_after_list if (multi_channel and blow_after_list and any((v or 0) > 0 for v in blow_after_list))
-                else ([blow_out_air_volume_vol] if blow_out_air_volume_vol > 0 else None)
-            ),
+            blow_out_air_volume=_post_air_for_aspirate(),
+            post_air_volume=_post_air_for_aspirate(),
             spread=spread,
         )
         if delays is not None and len(delays) > 0:
             await self.custom_delay(seconds=delays[0])
-        # 合并 before/after 空气体积逐通道；dispense 时一次性吐回。
-        if multi_channel:
-            blow_for_dispense = [
-                float(((blow_after_list[k] if blow_after_list else 0) or 0)
-                      + ((blow_before_list[k] if blow_before_list else 0) or 0))
-                for k in range(n_ch)
-            ]
-        else:
-            blow_for_dispense = [blow_out_air_volume_vol + blow_out_air_volume_before_vol]
+        dispense_hover_kwargs = _build_dispense_hover_kwargs(
+            liquid_height=dis_liquid_h,
+            dispensing_method=dispensing_method,
+            hover_below_liquid_level=hover_below_liquid_level,
+            z_start_point_offset_height=z_start_point_offset_height,
+            post_discharge_pause_time_ms=post_discharge_pause_time_ms,
+            dis_flow_rates=dis_flow_arg,
+        )
         await self.dispense(
             resources=dis_resources,
             vols=dis_vols_arg,
             use_channels=use_channels,
             flow_rates=dis_flow_arg,
             offsets=dis_offsets,
-            blow_out_air_volume=blow_for_dispense,
+            blow_out_air_volume=(
+                blow_out_list if multi_channel
+                else ([float(blow_out_list[0])] if blow_out_list else None)
+            ),
             liquid_height=dis_liquid_h,
             spread=spread,
+            **dispense_hover_kwargs,
         )
         if delays is not None and len(delays) > 1:
             await self.custom_delay(seconds=delays[1])
@@ -3261,7 +3671,12 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
             "liquid_height",
             "blow_out_air_volume",
             "blow_out_air_volume_before",
+            "post_air_volume",
             "delays",
+            "dispensing_method",
+            "hover_below_liquid_level",
+            "z_start_point_offset_height",
+            "post_discharge_pause_time_ms",
         )
 
         for idx in range(n):
@@ -3452,25 +3867,105 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
                         self._tip_next_index[key] = idx + (ny - rem)
         return [self._get_next_tip() for _ in range(n_ch)]
 
+    @staticmethod
+    def _tip_spot_has_tip(tip_spot: Resource) -> bool:
+        has_tip = getattr(tip_spot, "has_tip", None)
+        if callable(has_tip):
+            try:
+                return bool(has_tip())
+            except Exception:
+                return True
+        return True
+
+    def _ensure_tip_spot_stocked(self, tip_spot: Resource) -> None:
+        """TipSpot 在云端常为 tip:null；取头前用 make_tip 补全软件态（满盒/换盒后仍可正常 pick）。"""
+        if self._tip_spot_has_tip(tip_spot):
+            return
+        make_tip = getattr(tip_spot, "make_tip", None)
+        if not callable(make_tip):
+            return
+        try:
+            tip_obj = make_tip()
+        except Exception:
+            return
+        assign = getattr(tip_spot, "assign_tip", None)
+        if callable(assign):
+            try:
+                assign(tip_obj)
+                return
+            except Exception:
+                pass
+        tracker = getattr(tip_spot, "tracker", None)
+        add_tip = getattr(tracker, "add_tip", None) if tracker is not None else None
+        if callable(add_tip):
+            try:
+                add_tip(tip_obj)
+            except Exception:
+                pass
+
     def _get_next_tip(self):
         """从按型号分组的扁平枪头池取下一孔；耗尽时抛出明确错误而非 StopIteration。"""
+        active_flat = getattr(self, "_active_transfer_flat", None)
+        if active_flat is not None and len(active_flat) > 0:
+            idx = getattr(self, "_active_transfer_tip_index", 0)
+            if idx >= len(active_flat):
+                raise RuntimeError(
+                    "Tip rack exhausted: no more tips in workflow-specified tip rack(s). "
+                    f"Diagnostics: rack_sig={getattr(self, '_active_transfer_rack_sig', None)}, "
+                    f"next_index={idx}, pool_len={len(active_flat)}"
+                )
+            tip_spot = active_flat[idx]
+            self._active_transfer_tip_index = idx + 1
+            # region agent log
+            _dbg_cfa825(
+                "A",
+                "liquid_handler_abstract.py:_get_next_tip",
+                "picked from workflow-specified transfer flat pool",
+                {
+                    "index": idx,
+                    "tip_name": getattr(tip_spot, "name", None),
+                    "rack": _dbg_rack_info(getattr(tip_spot, "parent", None)),
+                    "rack_sig": getattr(self, "_active_transfer_rack_sig", None),
+                },
+            )
+            # endregion
+            return tip_spot
+
         key = getattr(self, "_active_tip_type_key", None)
         flat_map = getattr(self, "_tip_flat_spots", None)
         if key is not None and flat_map is not None:
             flat = flat_map.get(key)
             if flat is not None and len(flat) > 0:
                 idx = self._tip_next_index.get(key, 0)
-                if idx < len(flat):
-                    self._tip_next_index[key] = idx + 1
-                    return flat[idx]
-                diag = (
-                    f"active_type_key={key}, next_index={idx}, pool_len={len(flat)}; "
-                    f"_tip_racks_by_type[{key}] count={len(self._tip_racks_by_type.get(key, []))}"
+                if idx >= len(flat):
+                    diag = (
+                        f"active_type_key={key}, next_index={idx}, pool_len={len(flat)}; "
+                        f"_tip_racks_by_type[{key}] count={len(self._tip_racks_by_type.get(key, []))}"
+                    )
+                    raise RuntimeError(
+                        "Tip rack exhausted: no more tips available for this tip type. "
+                        f"Diagnostics: {diag}"
+                    )
+                tip_spot = flat[idx]
+                self._tip_next_index[key] = idx + 1
+                # region agent log
+                _dbg_cfa825(
+                    "A",
+                    "liquid_handler_abstract.py:_get_next_tip",
+                    "picked from global flat pool",
+                    {
+                        "active_key": key,
+                        "index": idx,
+                        "tip_name": getattr(tip_spot, "name", None),
+                        "rack": _dbg_rack_info(getattr(tip_spot, "parent", None)),
+                        "pool_rack_names": [
+                            getattr(r, "name", None)
+                            for r in (getattr(self, "_tip_racks_by_type", {}) or {}).get(key, [])
+                        ],
+                    },
                 )
-                raise RuntimeError(
-                    "Tip rack exhausted: no more tips available for this tip type. "
-                    f"Diagnostics: {diag}"
-                )
+                # endregion
+                return tip_spot
 
         if not hasattr(self, "current_tip"):
             raise RuntimeError(
@@ -3571,6 +4066,37 @@ class LiquidHandlerAbstract(LiquidHandlerMiddleware):
         if not valid_racks:
             valid_racks = [r for racks in self._tip_racks_by_type.values() for r in racks]
         self.current_tip = self.iter_tips(valid_racks)
+
+        # 本次 transfer 只从 workflow 指定的枪头盒取 tip（不用 deck 全型号扁平池）。
+        rack_sig = tuple(getattr(r, "name", str(id(r))) for r in valid_racks)
+        if valid_racks:
+            active_flat: List[Resource] = []
+            for rack in valid_racks:
+                active_flat.extend(self._flatten_tips_from_one(rack))
+            self._active_transfer_flat = active_flat
+            if getattr(self, "_active_transfer_rack_sig", None) != rack_sig:
+                self._active_transfer_tip_index = 0
+                self._active_transfer_rack_sig = rack_sig
+        else:
+            self._active_transfer_flat = None
+            self._active_transfer_rack_sig = None
+            self._active_transfer_tip_index = 0
+        # region agent log
+        _dbg_cfa825(
+            "D",
+            "liquid_handler_abstract.py:set_tiprack",
+            "set_tiprack finished",
+            {
+                "requested_racks": [_dbg_rack_info(r) for r in tip_racks],
+                "active_tip_type_key": self._active_tip_type_key,
+                "pool_racks": [
+                    _dbg_rack_info(r)
+                    for r in (self._tip_racks_by_type or {}).get(self._active_tip_type_key or "", [])
+                ],
+                "current_tip_racks_param": [_dbg_rack_info(r) for r in (self.tip_racks or [])],
+            },
+        )
+        # endregion
 
     async def move_to(self, well: Well, dis_to_top: float = 0, channel: int = 0):
         """

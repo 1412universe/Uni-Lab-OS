@@ -528,23 +528,43 @@ liquid_handler.prcxi:
         type: UniLabJsonCommandAsync
       auto-heater_action:
         feedback: {}
-        goal: {}
+        goal:
+          temperature: temperature
+          time: time
+          module_no: module_no
+          is_wait: is_wait
         goal_default:
-          temperature: null
-          time: null
+          temperature: 37
+          time: 60
+          module_no: 1
+          is_wait: true
         handles: {}
         placeholder_keys: {}
         result: {}
         schema:
-          description: ''
+          description: 加热模块温控（V04 TempSetStep，追加到 steps_todo_list，由 create_protocol + run_protocol 执行）
           properties:
             feedback: {}
             goal:
               properties:
                 temperature:
                   type: number
+                  title: temperature
+                  description: 目标温度（℃）
                 time:
                   type: integer
+                  title: time
+                  description: 保温时长（秒）
+                module_no:
+                  type: integer
+                  default: 1
+                  title: module_no
+                  description: 温控模块编号（Number）
+                is_wait:
+                  type: boolean
+                  default: true
+                  title: is_wait
+                  description: 是否等待该步完成后再继续
               required:
               - temperature
               - time
@@ -553,6 +573,83 @@ liquid_handler.prcxi:
           required:
           - goal
           title: heater_action参数
+          type: object
+        type: UniLabJsonCommandAsync
+      auto-liquid_cool_action:
+        feedback: {}
+        goal:
+          temperature: temperature
+          module_no: module_no
+        goal_default:
+          temperature: 4
+          module_no: 1
+        handles: {}
+        placeholder_keys: {}
+        result: {}
+        schema:
+          description: 液冷模块（V04 LiquidCoolSetStep，追加到 steps_todo_list，由 create_protocol + run_protocol 执行）
+          properties:
+            feedback: {}
+            goal:
+              properties:
+                temperature:
+                  type: number
+                  title: temperature
+                  description: 目标温度（℃）
+                module_no:
+                  type: integer
+                  default: 1
+                  title: module_no
+                  description: 液冷模块编号（Number）
+              required:
+              - temperature
+              type: object
+            result: {}
+          required:
+          - goal
+          title: liquid_cool_action参数
+          type: object
+        type: UniLabJsonCommandAsync
+      auto-pause_step_action:
+        feedback: {}
+        goal:
+          pause_enum: pause_enum
+          pause_time: pause_time
+          remarks: remarks
+        goal_default:
+          pause_enum: Timing
+          pause_time: '60'
+          remarks: ''
+        handles: {}
+        placeholder_keys: {}
+        result: {}
+        schema:
+          description: 方案内暂停（V04 PauseStep；Timing 时需 pause_time 秒数字符串；与 custom_delay 软件 sleep 不同）
+          properties:
+            feedback: {}
+            goal:
+              properties:
+                pause_enum:
+                  type: string
+                  default: Timing
+                  title: pause_enum
+                  description: None / Timing / Manual
+                pause_time:
+                  type: string
+                  default: '60'
+                  title: pause_time
+                  description: PauseEnum=Timing 时的等待秒数（字符串）
+                remarks:
+                  type: string
+                  default: ''
+                  title: remarks
+                  description: 暂停提示语
+              required: []
+              type: object
+            result: {}
+          required:
+          - goal
+          title: pause_step_action参数
           type: object
         type: UniLabJsonCommandAsync
       auto-iter_tips:
@@ -585,29 +682,43 @@ liquid_handler.prcxi:
         type: UniLabJsonCommand
       auto-magnetic_action:
         feedback: {}
-        goal: {}
+        goal:
+          time: time
+          module_no: module_no
+          height: height
+          is_wait: is_wait
         goal_default:
-          height: null
-          is_wait: null
-          module_no: null
-          time: null
+          time: 60
+          module_no: 1
+          height: 0
+          is_wait: true
         handles: {}
         placeholder_keys: {}
         result: {}
         schema:
-          description: ''
+          description: 磁力架模块（V04 MagneticStandStep，追加到 steps_todo_list，由 create_protocol + run_protocol 执行）
           properties:
             feedback: {}
             goal:
               properties:
                 height:
                   type: integer
+                  title: height
+                  description: 磁吸高度
                 is_wait:
                   type: boolean
+                  default: true
+                  title: is_wait
+                  description: 是否等待该步完成
                 module_no:
                   type: integer
+                  default: 1
+                  title: module_no
+                  description: 磁力模块编号（Number）
                 time:
                   type: integer
+                  title: time
+                  description: 磁吸时长（秒）
               required:
               - time
               - module_no
@@ -766,29 +877,43 @@ liquid_handler.prcxi:
         type: UniLabJsonCommand
       auto-shaker_action:
         feedback: {}
-        goal: {}
+        goal:
+          time: time
+          module_no: module_no
+          amplitude: amplitude
+          is_wait: is_wait
         goal_default:
-          amplitude: null
-          is_wait: null
-          module_no: null
-          time: null
+          time: 60
+          module_no: 1
+          amplitude: 1200
+          is_wait: true
         handles: {}
         placeholder_keys: {}
         result: {}
         schema:
-          description: ''
+          description: 振荡模块（V04 OscSetStep，追加到 steps_todo_list，由 create_protocol + run_protocol 执行）
           properties:
             feedback: {}
             goal:
               properties:
                 amplitude:
                   type: integer
+                  title: amplitude
+                  description: 振荡速率（rpm，OscRate）
                 is_wait:
                   type: boolean
+                  default: true
+                  title: is_wait
+                  description: 是否等待该步完成
                 module_no:
                   type: integer
+                  default: 1
+                  title: module_no
+                  description: 振荡模块编号（Number）
                 time:
                   type: integer
+                  title: time
+                  description: 振荡时长（秒，OscTime）
               required:
               - time
               - module_no
@@ -803,32 +928,49 @@ liquid_handler.prcxi:
         type: UniLabJsonCommandAsync
       auto-shaking_incubation_action:
         feedback: {}
-        goal: {}
+        goal:
+          time: time
+          module_no: module_no
+          amplitude: amplitude
+          is_wait: is_wait
+          temperature: temperature
         goal_default:
-          amplitude: null
-          is_wait: null
-          module_no: null
-          temperature: null
-          time: null
+          time: 60
+          module_no: 1
+          amplitude: 1200
+          is_wait: true
+          temperature: 37
         handles: {}
         placeholder_keys: {}
         result: {}
         schema:
-          description: ''
+          description: 加热振荡模块（V04 TempAndOscStep，追加到 steps_todo_list，由 create_protocol + run_protocol 执行）
           properties:
             feedback: {}
             goal:
               properties:
                 amplitude:
                   type: integer
+                  title: amplitude
+                  description: 振荡速率（rpm，OscRate）
                 is_wait:
                   type: boolean
+                  default: true
+                  title: is_wait
+                  description: 是否等待该步完成
                 module_no:
                   type: integer
+                  default: 1
+                  title: module_no
+                  description: 模块编号（Number）
                 temperature:
                   type: integer
+                  title: temperature
+                  description: 目标温度（℃）
                 time:
                   type: integer
+                  title: time
+                  description: 保温振荡时长（秒）
               required:
               - time
               - module_no
@@ -2913,7 +3055,12 @@ liquid_handler.prcxi:
           asp_vols: null
           blow_out_air_volume: null
           blow_out_air_volume_before: null
+          post_air_volume: null
           delays: null
+          dispensing_method: null
+          hover_below_liquid_level: null
+          z_start_point_offset_height: null
+          post_discharge_pause_time_ms: null
           dis_flow_rates: null
           dis_vols: null
           is_96_well: false
@@ -2988,6 +3135,26 @@ liquid_handler.prcxi:
                 blow_out_air_volume_before:
                   items:
                     type: number
+                  type: array
+                post_air_volume:
+                  items:
+                    type: number
+                  type: array
+                dispensing_method:
+                  items:
+                    type: string
+                  type: array
+                hover_below_liquid_level:
+                  items:
+                    type: integer
+                  type: array
+                z_start_point_offset_height:
+                  items:
+                    type: integer
+                  type: array
+                post_discharge_pause_time_ms:
+                  items:
+                    type: integer
                   type: array
                 delays:
                   items:
@@ -3493,6 +3660,596 @@ liquid_handler.prcxi:
           required:
           - goal
           title: transfer_liquid参数
+          type: object
+        type: UniLabJsonCommandAsync
+      titration_liquid:
+        feedback: {}
+        goal: {}
+        goal_default:
+          asp_flow_rates: null
+          asp_vols: null
+          blow_out_air_volume: null
+          blow_out_air_volume_before: null
+          post_air_volume: null
+          cycle_delay_s: 0
+          dispensing_method:
+          - BottleNeck
+          hover_below_liquid_level: null
+          z_start_point_offset_height: null
+          post_discharge_pause_time_ms: null
+          dis_flow_rates: null
+          dis_vols: null
+          is_96_well: true
+          liquid_height: null
+          none_keys: []
+          offsets: null
+          repeat_count: 1
+          sources: null
+          targets: null
+          tip_racks: null
+          use_channels: []
+        handles:
+          input:
+          - data_key: sources
+            data_source: handle
+            data_type: resource
+            handler_key: sources_identifier
+            label: 待移动液体
+          - data_key: targets
+            data_source: handle
+            data_type: resource
+            handler_key: targets_identifier
+            label: 转移目标
+          - data_key: tip_racks
+            data_source: handle
+            data_type: resource
+            handler_key: tip_rack_identifier
+            label: 枪头盒
+          output:
+          - data_key: sources.@flatten
+            data_source: executor
+            data_type: resource
+            handler_key: sources_out
+            label: 移液后源孔
+          - data_key: targets.@flatten
+            data_source: executor
+            data_type: resource
+            handler_key: targets_out
+            label: 移液后目标孔
+        placeholder_keys:
+          sources: unilabos_resources
+          targets: unilabos_resources
+          tip_racks: unilabos_resources
+        result:
+          return_info: return_info
+          success: success
+        schema:
+          description: ''
+          properties:
+            feedback: {}
+            goal:
+              additionalProperties: false
+              properties:
+                asp_flow_rates:
+                  items:
+                    type: number
+                  type: array
+                asp_vols:
+                  items:
+                    type: number
+                  type: array
+                blow_out_air_volume:
+                  items:
+                    type: number
+                  type: array
+                blow_out_air_volume_before:
+                  items:
+                    type: number
+                  type: array
+                post_air_volume:
+                  items:
+                    type: number
+                  type: array
+                dispensing_method:
+                  items:
+                    type: string
+                  type: array
+                hover_below_liquid_level:
+                  items:
+                    type: integer
+                  type: array
+                z_start_point_offset_height:
+                  items:
+                    type: integer
+                  type: array
+                post_discharge_pause_time_ms:
+                  items:
+                    type: integer
+                  type: array
+                cycle_delay_s:
+                  default: 0
+                  description: 循环之间暂停秒数（下发为 pause_step_action / V04 Pause Timing）
+                  type: number
+                repeat_count:
+                  default: 1
+                  maximum: 2147483647
+                  minimum: 1
+                  type: integer
+                dis_flow_rates:
+                  items:
+                    type: number
+                  type: array
+                dis_vols:
+                  items:
+                    type: number
+                  type: array
+                is_96_well:
+                  default: true
+                  type: boolean
+                liquid_height:
+                  items:
+                    type: number
+                  type: array
+                none_keys:
+                  default: []
+                  items:
+                    type: string
+                  type: array
+                offsets:
+                  items:
+                    properties:
+                      x:
+                        type: number
+                      y:
+                        type: number
+                      z:
+                        type: number
+                    required:
+                    - x
+                    - y
+                    - z
+                    type: object
+                  type: array
+                sources:
+                  items:
+                    properties:
+                      category:
+                        type: string
+                      children:
+                        items:
+                          type: string
+                        type: array
+                      config:
+                        type: string
+                      data:
+                        type: string
+                      id:
+                        type: string
+                      name:
+                        type: string
+                      parent:
+                        type: string
+                      pose:
+                        properties:
+                          orientation:
+                            properties:
+                              w:
+                                type: number
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              z:
+                                type: number
+                            required:
+                            - x
+                            - y
+                            - z
+                            - w
+                            title: orientation
+                            type: object
+                          position:
+                            properties:
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              z:
+                                type: number
+                            required:
+                            - x
+                            - y
+                            - z
+                            title: position
+                            type: object
+                        required:
+                        - position
+                        - orientation
+                        title: pose
+                        type: object
+                      sample_id:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                    - id
+                    - name
+                    - sample_id
+                    - children
+                    - parent
+                    - type
+                    - category
+                    - pose
+                    - config
+                    - data
+                    type: object
+                  type: array
+                targets:
+                  items:
+                    properties:
+                      category:
+                        type: string
+                      children:
+                        items:
+                          type: string
+                        type: array
+                      config:
+                        type: string
+                      data:
+                        type: string
+                      id:
+                        type: string
+                      name:
+                        type: string
+                      parent:
+                        type: string
+                      pose:
+                        properties:
+                          orientation:
+                            properties:
+                              w:
+                                type: number
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              z:
+                                type: number
+                            required:
+                            - x
+                            - y
+                            - z
+                            - w
+                            title: orientation
+                            type: object
+                          position:
+                            properties:
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              z:
+                                type: number
+                            required:
+                            - x
+                            - y
+                            - z
+                            title: position
+                            type: object
+                        required:
+                        - position
+                        - orientation
+                        title: pose
+                        type: object
+                      sample_id:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                    - id
+                    - name
+                    - sample_id
+                    - children
+                    - parent
+                    - type
+                    - category
+                    - pose
+                    - config
+                    - data
+                    type: object
+                  type: array
+                tip_racks:
+                  items:
+                    properties:
+                      category:
+                        type: string
+                      children:
+                        items:
+                          type: string
+                        type: array
+                      config:
+                        type: string
+                      data:
+                        type: string
+                      id:
+                        type: string
+                      name:
+                        type: string
+                      parent:
+                        type: string
+                      pose:
+                        properties:
+                          orientation:
+                            properties:
+                              w:
+                                type: number
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              z:
+                                type: number
+                            required:
+                            - x
+                            - y
+                            - z
+                            - w
+                            title: orientation
+                            type: object
+                          position:
+                            properties:
+                              x:
+                                type: number
+                              y:
+                                type: number
+                              z:
+                                type: number
+                            required:
+                            - x
+                            - y
+                            - z
+                            title: position
+                            type: object
+                        required:
+                        - position
+                        - orientation
+                        title: pose
+                        type: object
+                      sample_id:
+                        type: string
+                      type:
+                        type: string
+                    required:
+                    - id
+                    - name
+                    - sample_id
+                    - children
+                    - parent
+                    - type
+                    - category
+                    - pose
+                    - config
+                    - data
+                    type: object
+                  type: array
+                use_channels:
+                  items:
+                    type: integer
+                  type: array
+              required:
+              - sources
+              - targets
+              - tip_racks
+              - asp_vols
+              - dis_vols
+              type: object
+            result:
+              $defs:
+                ResourceDict:
+                  properties:
+                    class:
+                      description: Resource class name
+                      title: Class
+                      type: string
+                    config:
+                      additionalProperties: true
+                      description: Resource configuration
+                      title: Config
+                      type: object
+                    data:
+                      additionalProperties: true
+                      description: 'Resource data, eg: container liquid data'
+                      title: Data
+                      type: object
+                    description:
+                      default: ''
+                      description: Resource description
+                      title: Description
+                      type: string
+                    extra:
+                      additionalProperties: true
+                      description: 'Extra data, eg: slot index'
+                      title: Extra
+                      type: object
+                    icon:
+                      default: ''
+                      description: Resource icon
+                      title: Icon
+                      type: string
+                    id:
+                      description: Resource ID
+                      title: Id
+                      type: string
+                    model:
+                      additionalProperties: true
+                      description: Resource model
+                      title: Model
+                      type: object
+                    name:
+                      description: Resource name
+                      title: Name
+                      type: string
+                    parent:
+                      anyOf:
+                      - $ref: '#/$defs/ResourceDict'
+                      - type: 'null'
+                      default: null
+                      description: Parent resource object
+                    parent_uuid:
+                      anyOf:
+                      - type: string
+                      - type: 'null'
+                      default: null
+                      description: Parent resource uuid
+                      title: Parent Uuid
+                    pose:
+                      $ref: '#/$defs/ResourceDictPosition'
+                      description: Resource position
+                    schema:
+                      additionalProperties: true
+                      description: Resource schema
+                      title: Schema
+                      type: object
+                    type:
+                      anyOf:
+                      - const: device
+                        type: string
+                      - type: string
+                      description: Resource type
+                      title: Type
+                    uuid:
+                      description: Resource UUID
+                      title: Uuid
+                      type: string
+                  required:
+                  - id
+                  - uuid
+                  - name
+                  - type
+                  - class
+                  - config
+                  - data
+                  - extra
+                  title: ResourceDict
+                  type: object
+                ResourceDictPosition:
+                  properties:
+                    cross_section_type:
+                      default: rectangle
+                      description: Cross section type
+                      enum:
+                      - rectangle
+                      - circle
+                      - rounded_rectangle
+                      title: Cross Section Type
+                      type: string
+                    layout:
+                      default: x-y
+                      description: Resource layout
+                      enum:
+                      - 2d
+                      - x-y
+                      - z-y
+                      - x-z
+                      title: Layout
+                      type: string
+                    position:
+                      $ref: '#/$defs/ResourceDictPositionObject'
+                      description: Resource position
+                    position3d:
+                      $ref: '#/$defs/ResourceDictPositionObject'
+                      description: Resource position in 3D space
+                    rotation:
+                      $ref: '#/$defs/ResourceDictPositionObject'
+                      description: Resource rotation
+                    scale:
+                      $ref: '#/$defs/ResourceDictPositionScale'
+                      description: Resource scale
+                    size:
+                      $ref: '#/$defs/ResourceDictPositionSize'
+                      description: Resource size
+                  title: ResourceDictPosition
+                  type: object
+                ResourceDictPositionObject:
+                  properties:
+                    x:
+                      default: 0.0
+                      description: X coordinate
+                      title: X
+                      type: number
+                    y:
+                      default: 0.0
+                      description: Y coordinate
+                      title: Y
+                      type: number
+                    z:
+                      default: 0.0
+                      description: Z coordinate
+                      title: Z
+                      type: number
+                  title: ResourceDictPositionObject
+                  type: object
+                ResourceDictPositionScale:
+                  properties:
+                    x:
+                      default: 0.0
+                      description: x scale
+                      title: X
+                      type: number
+                    y:
+                      default: 0.0
+                      description: y scale
+                      title: Y
+                      type: number
+                    z:
+                      default: 0.0
+                      description: z scale
+                      title: Z
+                      type: number
+                  title: ResourceDictPositionScale
+                  type: object
+                ResourceDictPositionSize:
+                  properties:
+                    depth:
+                      default: 0.0
+                      description: Depth
+                      title: Depth
+                      type: number
+                    height:
+                      default: 0.0
+                      description: Height
+                      title: Height
+                      type: number
+                    width:
+                      default: 0.0
+                      description: Width
+                      title: Width
+                      type: number
+                  title: ResourceDictPositionSize
+                  type: object
+              properties:
+                sources:
+                  items:
+                    items:
+                      $ref: '#/$defs/ResourceDict'
+                    type: array
+                  title: Sources
+                  type: array
+                targets:
+                  items:
+                    items:
+                      $ref: '#/$defs/ResourceDict'
+                    type: array
+                  title: Targets
+                  type: array
+              required:
+              - sources
+              - targets
+              title: TransferLiquidReturn
+              type: object
+          required:
+          - goal
+          title: titration_liquid参数
           type: object
         type: UniLabJsonCommandAsync
     module: unilabos.devices.workstation.GN.liquid_handling.prcxi.prcxi:PRCXI9300Handler

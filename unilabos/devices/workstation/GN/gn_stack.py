@@ -82,6 +82,15 @@ _COMPLETE_FB_ONLY_CMDS = frozenset({
     int(StackCommand.RESET),
 })
 
+# 转动/复位：下发前与完成后各等待 3s（与离心机 execute_command 持锁间隔同构，间隔改为 3s）
+_ROTATE_RESET_CMDS = frozenset({
+    int(StackCommand.ROTATE_LEFT),
+    int(StackCommand.ROTATE_RIGHT),
+    int(StackCommand.ROTATE_TO_TARGET),
+    int(StackCommand.RESET),
+})
+_COMMAND_INTERVAL_S = 3.0
+
 # 本地测试流程预设
 TEST_FLOW_PRESETS = [
     ("1.复位", StackCommand.RESET, dict(timeout=120.0)),
@@ -135,6 +144,8 @@ class StackDevice(GNStationClient):
         "Stack_ZPosSet": "Stack_ZPosFB",
     }
     _COMPLETE_FB_ONLY_CMDS = _COMPLETE_FB_ONLY_CMDS
+    _ROTATE_RESET_CMDS = _ROTATE_RESET_CMDS
+    _COMMAND_INTERVAL_S = _COMMAND_INTERVAL_S
 
     def __init__(
         self,
@@ -174,7 +185,11 @@ class StackDevice(GNStationClient):
         z_speed: Optional[int] = None,
         timeout: float = 180.0,
     ) -> dict:
-        """唯一通用动作：写参 → CmdType → CmdTrig → 等 CompleteFB。"""
+        """唯一通用动作：写参 → CmdType → CmdTrig → 等 CompleteFB。
+
+        转动/复位（CmdType 1/2/5/7）在 ``_command_lock`` 内先 ``sleep(3)`` 再写 OPC，
+        完成后额外 ``sleep(3)``，避免连续 job 时上一条未到位即下发下一条。
+        """
         cmd = int(cmd_type)
         if timeout is None or float(timeout) <= 0:
             timeout = 180.0
@@ -187,6 +202,11 @@ class StackDevice(GNStationClient):
             detect = self._opc_read(self.DETECT_RESULT_NODE, force_read=True)
             result["detect_result"] = detect
             result["message"] = f"{label}完成，检测结果={detect}"
+        if cmd in self._ROTATE_RESET_CMDS and result.get("success"):
+            logger.info(
+                f"旋转堆栈：{label}完成，等待 {self._COMMAND_INTERVAL_S:.0f} 秒后再继续后续操作..."
+            )
+            time.sleep(self._COMMAND_INTERVAL_S)
         return result
 
     @action(description="复位建立 R0 基准（旋转/抓取前应先复位）")
@@ -266,6 +286,8 @@ class StackDevice(GNStationClient):
         timeout: float = 180.0,
     ) -> dict:
         with self._command_lock:
+            if int(cmd_type) in self._ROTATE_RESET_CMDS:
+                time.sleep(self._COMMAND_INTERVAL_S)
             logger.info(f"旋转堆栈：{description} (CmdType={cmd_type})")
             if setpoints:
                 for node, value in setpoints.items():

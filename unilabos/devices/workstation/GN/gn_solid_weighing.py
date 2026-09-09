@@ -1,7 +1,7 @@
 """
 固体加样 设备驱动
 
-协议：OPC_UA协议1.3.4(1).xlsx「固体加样」（前缀 Solid_）。
+协议：opcua_gn1.3.9.csv「固体加样」（前缀 Solid_）。
 
 对外仅暴露 execute_command（Solid_CmdType + 写参）；测试流程 yaml 预设供本地调试。
 """
@@ -21,10 +21,13 @@ from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
 DEFAULT_XLSX_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.6.csv",
+    "opcua_gn1.3.9.csv",
 )
 
-# OPC UA 1.3.4 Solid_CmdType
+# 加料(CmdType=11) 重量容差：目标 ±5% 视为完成
+DISPENSE_WEIGHT_TOLERANCE = 0.05
+
+# opcua_gn1.3.9 Solid_CmdType
 SOLID_CMD_LABELS = {
     1: "X向左",
     2: "X向右",
@@ -49,6 +52,8 @@ SOLID_CMD_LABELS = {
     21: "夹爪夹紧",
     22: "夹爪松开",
     23: "xyz回原点",
+    24: "除静电",
+    25: "关静电",
 }
 
 
@@ -78,6 +83,8 @@ class SolidCommand(int, Enum):
     GRIPPER_CLAMP = 21
     GRIPPER_RELEASE = 22
     HOME_XYZ = 23
+    REMOVE_STATIC_ON = 24
+    REMOVE_STATIC_OFF = 25
 
 
 # 固体加样测试流程 yaml 预设（本地 run_test_flow，非注册动作）
@@ -127,12 +134,15 @@ TEST_FLOW_PRESETS = [
 
 
 _EXECUTE_CMD_DOC = (
-    "按 Solid_CmdType 执行 OPC UA 1.3.4 指令。"
+    "按 Solid_CmdType 执行 opcua_gn1.3.9 指令。"
     "1=X左 2=X右 3=Y向里 4=Y向外 5=夹爪Z上 6=夹爪Z下 7=D开门 8=D关门 "
     "9=取料筒Y向里 10=取料筒Y向外 11=加料 12=夹爪夹料 13=夹爪放料 "
     "14=天枰去皮 15=天枰称重 16=料筒Z上 17=料筒Z下 18=放料筒Y向里 19=放料筒Y向外 "
-    "20=复位 21=夹爪夹紧 22=夹爪松开 23=xyz回原点。"
+    "20=复位 21=夹爪夹紧 22=夹爪松开 23=xyz回原点 "
+    "24=除静电 25=关静电。"
     "可选写参：x/y/material_z/gripper_z/door 位置与速度、volune_weight。"
+    "除静电请使用 CmdType=24，关静电请使用 CmdType=25。"
+    "加料(CmdType=11) 以 Solid_WeightFB 在目标±5% 内或 Solid_CompleteFB=1 判定完成。"
 )
 
 
@@ -140,7 +150,7 @@ _EXECUTE_CMD_DOC = (
     id="gn_solid_weighing",
     display_name="固体加样",
     category=["workstation"],
-    description="GN 固体加样：OPC UA 1.3.4，按完成反馈边沿执行命令",
+    description="GN 固体加样：opcua_gn1.3.9，按完成反馈边沿执行命令",
     icon="",
     version="2.0.0",
 )
@@ -151,6 +161,7 @@ class SolidWeighingDevice(GNStationClient):
     CMD_TYPE_NODE = "Solid_CmdType"
     CMD_TRIG_NODE = "Solid_CmdTrig"
     COMPLETE_NODE = "Solid_CompleteFB"
+    WEIGHT_FB_NODE = "Solid_WeightFB"
     RESET_POSITION_NODES = {
         "Solid_XPosSet": "Solid_XPosFB",
         "Solid_YPosSet": "Solid_YPosFB",
@@ -158,9 +169,8 @@ class SolidWeighingDevice(GNStationClient):
         "Solid_GripperZPosSet": "Solid_GripperZPosFB",
         "Solid_DoorPosSet": "Solid_DoorPosFB",
     }
-    # 仅等 CompleteFB 的命令（11/14/15）
+    # 仅等 CompleteFB 的命令（14/15）；加料(11) 另按重量±5% 判定
     _COMPLETE_FB_ONLY_CMDS = frozenset({
-        int(SolidCommand.DISPENSE),
         int(SolidCommand.BALANCE_TARE),
         int(SolidCommand.BALANCE_WEIGH),
     })
@@ -206,9 +216,12 @@ class SolidWeighingDevice(GNStationClient):
         material_z_speed: Optional[int] = None,
         gripper_z_speed: Optional[int] = None,
         door_speed: Optional[int] = None,
+        remove_static: int = 0,  # 已废弃，仅兼容旧工作流入参，不下发 OPC
         timeout: float = 180.0,
+        **kwargs,
     ) -> dict:
         """唯一注册动作：写参 → CmdType → CmdTrig → 等 CompleteFB。"""
+        _ = (remove_static, kwargs)
         setpoints = self._build_setpoints(
             x_pos=x_pos, y_pos=y_pos,
             material_z_pos=material_z_pos, gripper_z_pos=gripper_z_pos,
@@ -299,9 +312,16 @@ class SolidWeighingDevice(GNStationClient):
                 timeout=timeout,
             )
             if cmd_type == int(SolidCommand.BALANCE_WEIGH):
-                weight = self._opc_read("Solid_WeightFB", force_read=True)
+                weight = self._opc_read(self.WEIGHT_FB_NODE, force_read=True)
                 result["weight"] = weight
                 result["message"] = f"称重完成，重量={weight}"
+            elif cmd_type == int(SolidCommand.DISPENSE):
+                weight = self._opc_read(self.WEIGHT_FB_NODE, force_read=True)
+                target = (setpoints or {}).get("Solid_VoluneWeightSet")
+                result["weight"] = weight
+                if target is not None:
+                    result["target_weight"] = int(target)
+                result["message"] = f"加料完成，重量={weight}"
             return result
 
     @not_action
@@ -322,7 +342,14 @@ class SolidWeighingDevice(GNStationClient):
 
         completed = False
         try:
-            if int(cmd_type) in self._COMPLETE_FB_ONLY_CMDS:
+            if int(cmd_type) == int(SolidCommand.DISPENSE):
+                target = (setpoints or {}).get("Solid_VoluneWeightSet")
+                completed = self._wait_dispense_complete(
+                    target_weight=int(target) if target is not None else None,
+                    timeout=timeout,
+                    description=f"{description}完成",
+                )
+            elif int(cmd_type) in self._COMPLETE_FB_ONLY_CMDS:
                 completed = self._wait_complete_value(
                     expected=1,
                     timeout=timeout,
@@ -471,6 +498,80 @@ class SolidWeighingDevice(GNStationClient):
         complete = self._opc_read(self.COMPLETE_NODE, force_read=True)
         logger.error(
             f"✗ 等待 {description} 超时（{timeout}s，{self.COMPLETE_NODE}={complete!r}）"
+        )
+        return False
+
+    @not_action
+    def _dispense_weight_in_tolerance(
+        self,
+        target_weight: int,
+        actual_weight: int,
+        tolerance: float = DISPENSE_WEIGHT_TOLERANCE,
+    ) -> bool:
+        """加料重量是否在目标 ±tolerance 范围内。"""
+        if target_weight <= 0:
+            return False
+        low = target_weight * (1 - tolerance)
+        high = target_weight * (1 + tolerance)
+        return low <= int(actual_weight) <= high
+
+    @not_action
+    def _wait_dispense_complete(
+        self,
+        target_weight: Optional[int],
+        timeout: float,
+        interval: float = 0.05,
+        description: str = "",
+        tolerance: float = DISPENSE_WEIGHT_TOLERANCE,
+    ) -> bool:
+        """加料完成：Solid_WeightFB 在目标±5% 内，或 Solid_CompleteFB=1。"""
+        tol_pct = tolerance * 100
+        if target_weight is not None and target_weight > 0:
+            low = target_weight * (1 - tolerance)
+            high = target_weight * (1 + tolerance)
+            logger.info(
+                f"等待 {description}（目标={target_weight}，容差±{tol_pct:.0f}%"
+                f"=[{low:.0f},{high:.0f}] 或 {self.COMPLETE_NODE}=1）..."
+            )
+        else:
+            logger.info(
+                f"等待 {description}（{self.COMPLETE_NODE}=1，未指定目标重量）..."
+            )
+        start = time.monotonic()
+        read_fail_streak = 0
+        last_weight = None
+        while time.monotonic() - start < timeout:
+            complete = self._opc_read(self.COMPLETE_NODE, force_read=True)
+            if complete == 1:
+                logger.info(f"✓ {description}（{self.COMPLETE_NODE}=1）")
+                return True
+
+            if target_weight is not None and target_weight > 0:
+                weight = self._opc_read(self.WEIGHT_FB_NODE, force_read=True)
+                if weight is None:
+                    read_fail_streak += 1
+                    if read_fail_streak >= 3:
+                        logger.error(
+                            f"✗ {description}中止：{self.WEIGHT_FB_NODE} 连续读取失败，"
+                            "OPC 连接已断开，请退出并重启脚本"
+                        )
+                        return False
+                else:
+                    read_fail_streak = 0
+                    last_weight = int(weight)
+                    if self._dispense_weight_in_tolerance(target_weight, last_weight, tolerance):
+                        logger.info(
+                            f"✓ {description}（重量={last_weight}，目标={target_weight}，"
+                            f"容差±{tol_pct:.0f}%）"
+                        )
+                        return True
+            time.sleep(interval)
+
+        complete = self._opc_read(self.COMPLETE_NODE, force_read=True)
+        logger.error(
+            f"✗ 等待 {description} 超时（{timeout}s，"
+            f"{self.COMPLETE_NODE}={complete!r}，"
+            f"目标={target_weight}，当前重量={last_weight!r}）"
         )
         return False
 
