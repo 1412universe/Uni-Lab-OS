@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { Boxes, Cpu, Focus, GripVertical, Minus, Plus, RotateCcw, X } from 'lucide-react'
 import { EDGE_API_BASE } from '../lib/edgeClient'
-import { deviceTaskIds, layoutMaterialCanvas, locateCanvasResource } from '../lib/materialCanvasLayout'
-import type { CanvasPoint } from '../lib/materialCanvasLayout'
+import { CANVAS_FRAME_SIZE, CANVAS_SITE_SIZE, canvasBlockSize, deviceTaskIds, layoutMaterialCanvas, locateCanvasResource } from '../lib/materialCanvasLayout'
+import type { CanvasBlock, CanvasPoint, SiteSection } from '../lib/materialCanvasLayout'
 import { taskColor, usageNeedsAttention } from '../lib/resourceUsage'
 import type { ResourceUsageModel } from '../lib/resourceUsage'
 import type { MaterialUsageContext } from './MaterialUsagePanel'
@@ -35,7 +35,11 @@ export function MaterialResourceCanvas({ model, context, selection, onSelect, on
   const positionsRef = useRef(positions)
   const [sections, setSections] = useState<Record<string, string>>({})
   const drag = useRef<{ id?: string; client: CanvasPoint; origin: CanvasPoint; scale: number; moved: boolean } | null>(null)
-  const blocks = useMemo(() => layoutMaterialCanvas(model), [model])
+  const layout = useMemo(() => layoutMaterialCanvas(model), [model])
+  const blocks = useMemo(() => layout.map((block) => {
+    const section = block.sections.find((entry) => entry.uuid === sections[block.uuid]) || block.sections[0]
+    return { ...block, ...canvasBlockSize(section), section }
+  }), [layout, sections])
   const devices = new Map(model.devices.map((device) => [device.uuid, device]))
   const shown = blocks.filter((block) => !visibleIds || visibleIds.has(block.uuid) || devices.get(block.uuid)!.sites.some((site) => visibleIds.has(site.ownerUuid) || Boolean(site.materialUuid && visibleIds.has(site.materialUuid))))
   const located = locateCanvasResource(model, selection?.materialUuid, selection?.siteUuid)
@@ -56,6 +60,14 @@ export function MaterialResourceCanvas({ model, context, selection, onSelect, on
     const rect = viewport.current.getBoundingClientRect()
     const scale = Math.max(.15, Math.min(1, (rect.width - 70) / width, (rect.height - 85) / height))
     setView({ x: (rect.width - width * scale) / 2 - x * scale, y: (rect.height - height * scale) / 2 - y * scale, scale })
+  }
+  function focusBlock(block: CanvasBlock, section?: SiteSection) {
+    const point = positionsRef.current[block.uuid] || block
+    const size = canvasBlockSize(section)
+    const rect = viewport.current?.getBoundingClientRect()
+    if (!rect?.width) return
+    const scale = Math.min(1, (rect.width - 60) / size.width, (rect.height - 80) / size.height)
+    setView({ x: (rect.width - size.width * scale) / 2 - point.x * scale, y: (rect.height - size.height * scale) / 2 - point.y * scale, scale })
   }
   useEffect(() => {
     if (initialFit.current || !shown.length) return
@@ -79,12 +91,7 @@ export function MaterialResourceCanvas({ model, context, selection, onSelect, on
     if (section) {
       setSections((current) => ({ ...current, [block.uuid]: section.uuid }))
     }
-    const point = positionsRef.current[block.uuid] || block
-    const rect = viewport.current?.getBoundingClientRect()
-    if (rect?.width) {
-      const scale = Math.min(1, (rect.width - 60) / block.width, (rect.height - 80) / block.height)
-      setView({ x: (rect.width - block.width * scale) / 2 - point.x * scale, y: (rect.height - block.height * scale) / 2 - point.y * scale, scale })
-    }
+    focusBlock(block, section)
   // 只响应显式选择或所选物料的实际位置变化。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection?.request, located.device?.uuid, located.site?.uuid])
@@ -139,7 +146,15 @@ export function MaterialResourceCanvas({ model, context, selection, onSelect, on
     })
   }
 
-  return <section className="resource-canvas-shell" aria-label="设备与库位画布">
+  return <section className="resource-canvas-shell" aria-label="设备与库位画布" style={{
+    '--device-border': `${CANVAS_FRAME_SIZE.border}px`,
+    '--device-head-height': `${CANVAS_FRAME_SIZE.headerHeight}px`,
+    '--device-padding-x': `${CANVAS_FRAME_SIZE.paddingX}px`,
+    '--device-padding-y': `${CANVAS_FRAME_SIZE.paddingY}px`,
+    '--device-section-height': `${CANVAS_FRAME_SIZE.sectionHeight}px`,
+    '--device-section-gap': `${CANVAS_FRAME_SIZE.sectionGap}px`,
+    '--device-empty-height': `${CANVAS_SITE_SIZE.height}px`,
+  } as CSSProperties}>
     <div className="resource-canvas-legend"><span><Cpu size={15} />设备：Task 使用时点亮</span><span><Boxes size={15} />库位：有物料时点亮</span><span><i className="task" />Task 色标</span><span><i className="stock" />有料 · 未绑定 Task</span><span><i />空闲 / 空库位</span></div>
     <div className="resource-canvas-viewport" ref={viewport} onPointerDown={(event) => startDrag(event)} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag}>
       {!shown.length ? <div className="resource-canvas-empty"><Boxes size={32} /><strong>暂无匹配资源</strong><span>可清除筛选，或在左侧选择物料查看详情。</span></div> : null}
@@ -148,7 +163,7 @@ export function MaterialResourceCanvas({ model, context, selection, onSelect, on
           const device = devices.get(block.uuid)!
           const taskIds = deviceTaskIds(device)
           const attention = device.holdings.some(usageNeedsAttention)
-          const section = block.sections.find((entry) => entry.uuid === sections[block.uuid]) || block.sections[0]
+          const section = block.section
           const point = positions[block.uuid] || block
           return <article key={block.uuid} aria-label={`设备组 ${device.name}`} className={`resource-device-block ${located.device?.uuid === block.uuid ? 'selected' : ''}`} style={{ left: point.x, top: point.y, width: block.width, height: block.height }}>
             <header className={`resource-device-head ${taskIds.length ? 'lit' : ''}`} data-in-use={Boolean(taskIds.length)} style={{ '--usage-color': taskColor(taskIds[0] || '') } as CSSProperties}>
@@ -161,14 +176,23 @@ export function MaterialResourceCanvas({ model, context, selection, onSelect, on
               <span className="resource-device-state">{attention ? '⚠' : <i />}{taskIds.length ? '使用中' : attention ? '待确认' : '空闲'}</span>
             </header>
             <div className="resource-device-sites">
-              <div className="resource-site-section"><select aria-label={`${device.name} 库位分组`} value={section?.uuid || ''} disabled={!section} onChange={(event) => setSections((current) => ({ ...current, [block.uuid]: event.target.value }))}>{block.sections.map((entry) => <option key={entry.uuid} value={entry.uuid}>{entry.name}</option>)}{!section ? <option>未配置库位</option> : null}</select><span>{device.sites.filter((site) => site.materialUuid).length}/{device.sites.length} 有料</span></div>
-              {section ? <div className="resource-site-cells" style={{ gridTemplateColumns: `repeat(${section.columns}, minmax(0, 1fr))`, gridTemplateRows: `repeat(${section.rows}, 54px)` }}>{section.sites.map(({ site, column, row }) => {
+              <div className="resource-site-section"><select aria-label={`${device.name} 库位分组`} value={section?.uuid || ''} disabled={!section} onChange={(event) => {
+                const uuid = event.target.value
+                setSections((current) => ({ ...current, [block.uuid]: uuid }))
+                focusBlock(block, block.sections.find((entry) => entry.uuid === uuid))
+              }}>{block.sections.map((entry) => <option key={entry.uuid} value={entry.uuid}>{entry.name}</option>)}{!section ? <option>未配置库位</option> : null}</select><span>{device.sites.filter((site) => site.materialUuid).length}/{device.sites.length} 有料</span></div>
+              {section ? <div className="resource-site-cells" style={{ gridTemplateColumns: `repeat(${section.columns}, ${CANVAS_SITE_SIZE.width}px)`, gridTemplateRows: `${section.layerLabels?.length ? `${CANVAS_FRAME_SIZE.layerLabelHeight}px ` : ''}repeat(${section.rows}, ${CANVAS_SITE_SIZE.height}px)`, gap: CANVAS_SITE_SIZE.gap }}>
+                {section.layerLabels?.map((layer) => <span key={layer.column} className="resource-site-layer-label" style={{ gridColumn: layer.column + 1, gridRow: 1 }} title={layer.name}>{layer.name}</span>)}
+                {section.sites.map(({ site, column, row }) => {
                 const ids = [...new Set(site.bindings.map((binding) => binding.workflow_task_uuid))]
                 const color = ids.length ? taskColor(ids[0]) : '#069c91'
                 const transfers = site.transfers || []
                 const warning = transfers.some((transfer) => transfer.uncertain) || site.holdings.some(usageNeedsAttention)
                 const marker = warning ? '位置待确认' : transfers.some((transfer) => transfer.direction === 'out') ? '转移中' : transfers.some((transfer) => transfer.direction === 'in') ? '待放入' : site.holdings.length ? '已锁定' : ''
-                return <button key={site.uuid} aria-label={`库位 ${site.ownerName} / ${site.name}`} data-site-uuid={site.uuid} data-usage-site={site.uuid} data-occupied={Boolean(site.materialUuid)} className={`resource-site-cell ${site.materialUuid ? 'lit' : ''} ${located.site?.uuid === site.uuid ? 'selected' : ''} ${warning ? 'attention' : ''}`} style={{ gridColumn: column + 1, gridRow: row + 1, '--usage-color': color } as CSSProperties} onClick={() => onSelect(site.ownerUuid, site.uuid)}><strong>{site.name}</strong><span data-usage-material={site.materialUuid}>{site.materialName || '空'}</span>{marker ? <small>{marker}</small> : site.materialUuid ? <small>{ids.length ? `Task ${ids[0].slice(0, 8)}${ids.length > 1 ? ` +${ids.length - 1}` : ''}` : '未绑定 Task'}</small> : null}</button>
+                const binding = ids.length ? `关联 Task：${ids.join('、')}` : site.materialUuid ? '未绑定 Task' : ''
+                const description = [`当前物料：${site.materialName || '空库位'}`, marker, binding].filter(Boolean).join('；')
+                const status = warning ? '待确认' : marker || (site.materialUuid ? '有料' : '空')
+                return <button key={site.uuid} aria-label={`库位 ${site.ownerName} / ${site.name}`} aria-description={description} data-site-uuid={site.uuid} data-usage-site={site.uuid} data-occupied={Boolean(site.materialUuid)} className={`resource-site-cell ${site.materialUuid ? 'lit' : ''} ${located.site?.uuid === site.uuid ? 'selected' : ''} ${warning ? 'attention' : ''}`} style={{ gridColumn: column + 1, gridRow: row + (section.layerLabels?.length ? 2 : 1), '--usage-color': color } as CSSProperties} onClick={() => onSelect(site.ownerUuid, site.uuid)}><strong>{site.name}</strong><small>{status}</small></button>
               })}</div> : <p className="resource-device-no-sites">该设备未配置库位</p>}
             </div>
           </article>

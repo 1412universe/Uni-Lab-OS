@@ -1,36 +1,74 @@
 import type { ResourceUsageModel, UsageDevice, UsageGraphNode, UsageSite } from './resourceUsage'
 
 export interface CanvasPoint { x: number; y: number }
-export interface SiteSection { uuid: string; name: string; columns: number; rows: number; sites: Array<{ site: UsageSite; column: number; row: number }> }
+export interface SiteSection {
+  uuid: string; name: string; columns: number; rows: number
+  sites: Array<{ site: UsageSite; column: number; row: number }>
+  layerLabels?: Array<{ name: string; column: number }>
+  stackedRows?: number
+}
 export interface CanvasBlock extends CanvasPoint { uuid: string; width: number; height: number; sections: SiteSection[] }
+
+// 库位使用固定尺寸，避免少列设备把单个库位拉伸到整张设备卡片的宽度。
+export const CANVAS_SITE_SIZE = { width: 48, height: 48, gap: 4 } as const
+export const CANVAS_FRAME_SIZE = { minWidth: 180, border: 1, headerHeight: 55, paddingX: 8, paddingY: 7, sectionHeight: 24, sectionGap: 6, layerLabelHeight: 18 } as const
+
+/** 外框贴合当前分组；少库位设备保留标题和分组选择器的最小宽度。 */
+export function canvasBlockSize(section?: Pick<SiteSection, 'columns' | 'rows' | 'layerLabels'>) {
+  const columns = Math.max(1, section?.columns || 1), rows = Math.max(1, section?.rows || 1)
+  const gridWidth = columns * CANVAS_SITE_SIZE.width + (columns - 1) * CANVAS_SITE_SIZE.gap
+  const gridHeight = rows * CANVAS_SITE_SIZE.height + (rows - 1) * CANVAS_SITE_SIZE.gap
+    + (section?.layerLabels?.length ? CANVAS_FRAME_SIZE.layerLabelHeight + CANVAS_SITE_SIZE.gap : 0)
+  return {
+    width: Math.max(CANVAS_FRAME_SIZE.minWidth, gridWidth + 2 * (CANVAS_FRAME_SIZE.paddingX + CANVAS_FRAME_SIZE.border)),
+    height: gridHeight + CANVAS_FRAME_SIZE.headerHeight + CANVAS_FRAME_SIZE.sectionHeight + CANVAS_FRAME_SIZE.sectionGap + 2 * (CANVAS_FRAME_SIZE.paddingY + CANVAS_FRAME_SIZE.border),
+  }
+}
 
 const number = (value: number | undefined, fallback = 0) => Number.isFinite(value) ? value! : fallback
 const coordinate = (value?: number) => Math.round(number(value) * 1000) / 1000
 
-/** 规则阵列按实际行列排布；不同高度的阵列接续展示，全部库位同时可见，不推断业务层数。 */
+/** 层内保持实际行列；单列的多层阵列利用外框留白并排展示，其余阵列纵向接续。 */
 export function siteSections(device: UsageDevice): SiteSection[] {
   const owners = new Map<string, UsageSite[]>()
   for (const site of device.sites) owners.set(site.ownerUuid, [...(owners.get(site.ownerUuid) || []), site])
   return [...owners].map(([uuid, sites]) => {
     const heights = [...new Set(sites.map((site) => coordinate(site.pose?.position_z)))].sort((a, b) => a - b)
-    let rows = 0
-    let columns = 0
-    const placements = heights.flatMap((z) => {
+    const layers = heights.map((z) => {
       const layer = sites.filter((site) => coordinate(site.pose?.position_z) === z)
       const xs = [...new Set(layer.map((site) => coordinate(site.pose?.position_x)))].sort((a, b) => a - b)
       const ys = [...new Set(layer.map((site) => coordinate(site.pose?.position_y)))].sort((a, b) => b - a)
       const unique = new Set(layer.map((site) => `${coordinate(site.pose?.position_x)}:${coordinate(site.pose?.position_y)}`))
       const grid = unique.size === layer.length && xs.length <= 6 && ys.length <= 6 && xs.length * ys.length <= layer.length * 1.5
       const count = grid ? xs.length : Math.min(4, layer.length)
-      const rowOffset = rows
-      columns = Math.max(columns, count)
-      rows += grid ? ys.length : Math.ceil(layer.length / count)
-      return [...layer].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name, 'zh-CN', { numeric: true })).map((site, i) => ({ site,
+      const placements = [...layer].sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0) || a.name.localeCompare(b.name, 'zh-CN', { numeric: true })).map((site, i) => ({ site,
         column: grid ? xs.indexOf(coordinate(site.pose?.position_x)) : i % count,
-        row: rowOffset + (grid ? ys.indexOf(coordinate(site.pose?.position_y)) : Math.floor(i / count)),
+        row: grid ? ys.indexOf(coordinate(site.pose?.position_y)) : Math.floor(i / count),
       }))
+      return { z, columns: count, rows: grid ? ys.length : Math.ceil(layer.length / count), sites: placements }
     })
-    return { uuid, name: sites[0].ownerName, columns, rows, sites: placements }
+    const stackedRows = layers.reduce((sum, layer) => sum + layer.rows, 0)
+    const parallelWidth = layers.length * CANVAS_SITE_SIZE.width + (layers.length - 1) * CANVAS_SITE_SIZE.gap
+      + 2 * (CANVAS_FRAME_SIZE.paddingX + CANVAS_FRAME_SIZE.border)
+    const parallel = layers.length > 1 && layers.every((layer) => layer.columns === 1) && parallelWidth <= CANVAS_FRAME_SIZE.minWidth
+    let rowOffset = 0
+    const placements = layers.flatMap((layer, column) => {
+      const result = layer.sites.map((entry) => ({ ...entry, column: parallel ? column : entry.column, row: entry.row + (parallel ? 0 : rowOffset) }))
+      rowOffset += layer.rows
+      return result
+    })
+    // 只有整层名称共享同一个明确前缀时才使用 L1/L2，否则直接显示实际高度。
+    const names = layers.map((layer) => {
+      const prefixes = layer.sites.map(({ site }) => site.name.match(/^(L\d+)(?=[A-Za-z]|$)/i)?.[1].toUpperCase())
+      return prefixes[0] && prefixes.every((prefix) => prefix === prefixes[0]) ? prefixes[0] : undefined
+    })
+    const namedLayers = names.every(Boolean) && new Set(names).size === layers.length
+    return { uuid, name: sites[0].ownerName,
+      columns: parallel ? layers.length : Math.max(...layers.map((layer) => layer.columns)),
+      rows: parallel ? Math.max(...layers.map((layer) => layer.rows)) : stackedRows,
+      sites: placements,
+      ...(parallel ? { stackedRows, layerLabels: layers.map((layer, column) => ({ column, name: namedLayers ? names[column]! : `高度 ${layer.z}` })) } : {}),
+    }
   })
 }
 
@@ -62,23 +100,26 @@ export function layoutMaterialCanvas(model: ResourceUsageModel): CanvasBlock[] {
   const items = model.devices.map((device) => {
     const sections = siteSections(device).sort((a, b) => depth(a.uuid) - depth(b.uuid) || a.name.localeCompare(b.name, 'zh-CN', { numeric: true }))
     const columns = Math.max(2, ...sections.map((section) => section.columns))
-    const rows = Math.max(1, ...sections.map((section) => section.rows))
+    const rows = Math.max(1, ...sections.map((section) => section.stackedRows ?? section.rows))
     const node = nodes.get(device.uuid)
-    return { uuid: device.uuid, sections, width: Math.max(260, columns * 76 + 20), height: 104 + rows * 58,
+    // 旧占地只用于初始避让，保持未拖动设备的位置，兼容浏览器已保存的局部排布。
+    return { uuid: device.uuid, sections, ...canvasBlockSize(sections[0]), footprint: { width: Math.max(260, columns * 76 + 20), height: 104 + rows * 58 },
       point: node ? worldPosition(node, nodes) : { x: 0, y: 0 } }
   }).sort((a, b) => b.point.y - a.point.y || a.point.x - b.point.x || a.uuid.localeCompare(b.uuid))
   const minX = Math.min(0, ...items.map((item) => item.point.x))
   const maxY = Math.max(0, ...items.map((item) => item.point.y))
   const blocks: CanvasBlock[] = []
+  const footprints: Array<CanvasPoint & { width: number; height: number }> = []
   for (const item of items) {
     const x = 40 + (item.point.x - minX) * .65
     let y = 40 + (maxY - item.point.y) * .65
     // 只在初始排布时避让；状态刷新不会推动其它设备，拖动坐标由展示配置保留。
-    let collision: CanvasBlock | undefined
+    let collision: typeof footprints[number] | undefined
     do {
-      collision = blocks.find((block) => x < block.x + block.width + 40 && x + item.width + 40 > block.x && y < block.y + block.height + 40 && y + item.height + 40 > block.y)
+      collision = footprints.find((block) => x < block.x + block.width + 40 && x + item.footprint.width + 40 > block.x && y < block.y + block.height + 40 && y + item.footprint.height + 40 > block.y)
       if (collision) y = collision.y + collision.height + 40
     } while (collision)
+    footprints.push({ ...item.footprint, x, y })
     blocks.push({ uuid: item.uuid, sections: item.sections, width: item.width, height: item.height, x, y })
   }
   return blocks

@@ -1,11 +1,72 @@
 import { describe, expect, it } from 'vitest'
 import { buildResourceUsage, materialsFromUsage } from './resourceUsage'
-import { deviceTaskIds, layoutMaterialCanvas, locateCanvasResource } from './materialCanvasLayout'
+import { canvasBlockSize, deviceTaskIds, layoutMaterialCanvas, locateCanvasResource } from './materialCanvasLayout'
 import { transferSnapshot, usageLock, usageSnapshot, usageTask } from '../test/resourceUsageFixtures'
+
+function singleColumnLayers(layerCount = 2) {
+  const snapshot = structuredClone(usageSnapshot())
+  snapshot.nodes[1].material.name = 'S1 上料过渡仓'
+  snapshot.nodes[1].sites = Array.from({ length: layerCount * 3 }, (_, index) => ({
+    uuid: `s1-${index}`, name: `L${Math.floor(index / 3) + 1}C${index % 3 + 1}`,
+    position_x: 6, position_y: 58 + index % 3 * 120, position_z: 70 + Math.floor(index / 3) * 190,
+    occupied_material_uuid: index === 0 ? 'sample' : null,
+  }))
+  snapshot.nodes[2].current_site_uuid = 's1-0'
+  return snapshot
+}
 
 describe('设备与库位画布布局', () => {
   it('does not select an arbitrary empty site before the user selects anything', () => {
     expect(locateCanvasResource(buildResourceUsage(usageSnapshot(), []))).toEqual({ device: undefined, site: undefined })
+  })
+  it('places the two real S1 layers beside each other while preserving Y order and default device positions', () => {
+    const snapshot = singleColumnLayers()
+    snapshot.nodes.push({ material: { uuid: 'z-device', name: '后方设备', type: 'device' }, sites: [] })
+    const blocks = layoutMaterialCanvas(buildResourceUsage(snapshot, []))
+    const section = blocks.find((block) => block.uuid === 'robot')!.sections[0]
+    expect(section).toMatchObject({ columns: 2, rows: 3, layerLabels: [{ name: 'L1', column: 0 }, { name: 'L2', column: 1 }] })
+    expect(section.sites.map(({ site, column, row }) => ({ name: site.name, column, row }))).toEqual([
+      { name: 'L1C1', column: 0, row: 2 }, { name: 'L1C2', column: 0, row: 1 }, { name: 'L1C3', column: 0, row: 0 },
+      { name: 'L2C1', column: 1, row: 2 }, { name: 'L2C2', column: 1, row: 1 }, { name: 'L2C3', column: 1, row: 0 },
+    ])
+    expect(blocks.map(({ uuid, x, y }) => ({ uuid, x, y }))).toEqual([
+      { uuid: 'camera', x: 40, y: 40 }, { uuid: 'robot', x: 40, y: 242 }, { uuid: 'z-device', x: 40, y: 734 },
+    ])
+  })
+
+  it.each(['missing', 'duplicate'])('uses measured heights instead of ambiguous layer labels when a prefix is %s', (kind) => {
+    const snapshot = singleColumnLayers()
+    if (kind === 'missing') snapshot.nodes[1].sites[1].name = '未编号库位'
+    else snapshot.nodes[1].sites.slice(3).forEach((site) => { site.name = site.name.replace('L2', 'L1') })
+    const section = layoutMaterialCanvas(buildResourceUsage(snapshot, [])).find((block) => block.uuid === 'robot')!.sections[0]
+    expect(section).toMatchObject({ layerLabels: [{ name: '高度 70', column: 0 }, { name: '高度 260', column: 1 }] })
+  })
+
+  it.each([{ layers: 3, columns: 3, rows: 3 }, { layers: 4, columns: 1, rows: 12 }])('only places $layers single-column layers beside each other when they fit the existing frame width', ({ layers, columns, rows }) => {
+    const blocks = layoutMaterialCanvas(buildResourceUsage(singleColumnLayers(layers), []))
+    expect(blocks.find((block) => block.uuid === 'robot')!.sections[0]).toMatchObject({ columns, rows })
+  })
+  it('shrinks the initial frame while preserving historical default positions and room for larger sections', () => {
+    const snapshot = structuredClone(usageSnapshot())
+    snapshot.nodes[1].material.name = '01 转运仓'
+    snapshot.nodes.push({
+      material: { uuid: 'bulk-warehouse', name: '02 扩展仓', type: 'warehouse', parent_uuid: 'robot' },
+      sites: Array.from({ length: 24 }, (_, index) => ({ uuid: `bulk-${index}`, name: `B${index + 1}`, position_x: index % 6, position_y: Math.floor(index / 6) })),
+    }, { material: { uuid: 'z-device', name: '后方设备', type: 'device' }, sites: [] })
+    const blocks = layoutMaterialCanvas(buildResourceUsage(snapshot, []))
+    const robot = blocks.find((block) => block.uuid === 'robot')!
+    const next = blocks.find((block) => block.uuid === 'z-device')!
+    expect(robot.sections[0].uuid).toBe('warehouse')
+    const expanded = canvasBlockSize(robot.sections.find((section) => section.uuid === 'bulk-warehouse'))
+    expect(robot.width).toBeLessThan(expanded.width)
+    expect(robot.height).toBeLessThan(expanded.height)
+    // 缩小外框后仍沿用已有排布坐标，切换大分组也不会覆盖后方设备。
+    expect(blocks.map(({ uuid, x, y }) => ({ uuid, x, y }))).toEqual([
+      { uuid: 'camera', x: 40, y: 40 },
+      { uuid: 'robot', x: 40, y: 242 },
+      { uuid: 'z-device', x: 40, y: 618 },
+    ])
+    expect(robot.y + expanded.height).toBeLessThan(next.y)
   })
   it('keeps all blocks fixed as the beaker moves across devices and follows the new site', () => {
     const snapshot = transferSnapshot()
