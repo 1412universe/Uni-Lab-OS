@@ -950,9 +950,8 @@ def test_pre_dispatch_persists_actual_device_binding_with_parameters(
 ) -> None:
     """动态选择的实际设备必须与最终参数一起保存在工站调度库。
 
-    参数：``store`` 是隔离工作流权威。返回：无；断言作业 ``control_data`` 和
-    ``job.dispatched`` 事务发件箱都包含同一设备业务 ID、设备物料 UUID 与实际
-    参数。异常：参数或执行器快照无法编码时生产投影失败，测试不得只靠内存观察。
+    参数：``store`` 是隔离工作流权威。返回：无；断言作业持久保存实际参数与
+    执行器快照，且不再向旧 Backend 发件箱写入重复事实。
     """
 
     (job_uuid,) = _seed_task(store, job_count=1)
@@ -973,13 +972,7 @@ def test_pre_dispatch_persists_actual_device_binding_with_parameters(
     job = store.get_job(job_uuid)
     assert job["param"] == actual_param
     assert job["control_data"]["actual_executor"] == actual_executor
-    dispatched = next(
-        event
-        for event in StationEventOutboxStore(store).list_pending()
-        if event["event_type"] == "job.dispatched"
-    )
-    assert dispatched["payload"]["actual_param"] == actual_param
-    assert dispatched["payload"]["actual_executor"] == actual_executor
+    assert StationEventOutboxStore(store).list_pending() == []
 
 
 def test_capacity_gate_wait_persists_reason_without_fake_resource_waiter(
@@ -1391,14 +1384,10 @@ def test_execution_process_restart_fails_inflight_and_cancels_pending_nodes(
     assert aggregate["task"]["status"] == "failed"
     assert aggregate["task"]["cleanup_status"] == "pending"
     assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "released"
-    events = StationEventOutboxStore(store).list_pending()
-    assert [event["event_type"] for event in events] == [
-        "task.running",
-        "job.dispatched",
-        "job.running",
-        "job.outcome_committed",
-        "job.canceled",
-        "task.failed",
-    ]
-    assert events[3]["payload"]["outcome"] == "failed"
-    assert events[5]["payload"]["cleanup_status"] == "pending"
+    assert StationEventOutboxStore(store).list_pending() == []
+    with store.read() as connection:
+        result = connection.execute(
+            "SELECT outcome FROM workflow_node_job_result WHERE workflow_node_job_uuid = ?",
+            (first_job_uuid,),
+        ).fetchone()
+    assert result["outcome"] == "failed"

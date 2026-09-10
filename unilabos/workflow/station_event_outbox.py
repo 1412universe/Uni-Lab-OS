@@ -1,20 +1,13 @@
-"""工站调度进程向 Backend 投影事实的事务发件箱。"""
+"""旧 Backend 事务发件箱：保留历史读取与 ACK，停止新增事件。"""
 
 from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping
 from typing import Any
-from uuid import uuid4
 
-from unilabos.workflow.json_codec import decode_json_bytes, encode_json
+from unilabos.workflow.json_codec import decode_json_bytes
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
-
-
-def _json(value: Any) -> str:
-    """把发件箱载荷编码为稳定 JSON 文本。"""
-
-    return encode_json(value, sort_keys=True).decode("utf-8")
 
 
 def _load(value: str) -> Any:
@@ -69,84 +62,17 @@ def append_station_event(
     source_uuid: str,
     idempotency_key: str,
     payload: Mapping[str, Any],
-) -> dict[str, Any]:
-    """在业务事实的同一事务内幂等追加一个 Backend 投影事件。
+) -> None:
+    """保留旧 Backend 事件调用接口，不再向发件箱追加记录。
 
     参数：身份字段共同描述事件来源；``payload`` 是已经在工站库落盘的事实快照。
-    返回带 ``event_uuid`` 和单调 ``station_sequence`` 的事件。异常：必填身份为空或
-    同一幂等键内容不同抛 ``StoreConflict``；数据库异常由调用方事务处理。
+    返回无。Backend 控制面已移除，所有进程角色统一使用本地 Scheduler；继续
+    入箱会在没有发布器的情况下永久积累重复事实。因此本接口不再编码载荷或
+    访问数据库。本地任务、反馈、结果与运行日志仍由各自业务写入路径持久化，
+    发件箱表结构及历史记录保持兼容。
     """
 
-    normalized = {
-        "event_type": str(event_type or "").strip(),
-        "aggregate_type": str(aggregate_type or "").strip(),
-        "aggregate_uuid": str(aggregate_uuid or "").strip(),
-        "source_kind": str(source_kind or "").strip(),
-        "source_uuid": str(source_uuid or "").strip(),
-        "idempotency_key": str(idempotency_key or "").strip(),
-    }
-    if not all(normalized.values()) or not isinstance(payload, Mapping):
-        raise StoreConflict("工站事件身份或载荷不完整")
-    payload_json = _json(dict(payload))
-    existing = connection.execute(
-        """
-        SELECT * FROM workflow_station_event_outbox
-        WHERE idempotency_key = ?
-        """,
-        (normalized["idempotency_key"],),
-    ).fetchone()
-    if existing is not None:
-        expected = (
-            normalized["event_type"],
-            normalized["aggregate_type"],
-            normalized["aggregate_uuid"],
-            normalized["source_kind"],
-            normalized["source_uuid"],
-            payload_json,
-        )
-        actual = (
-            existing["event_type"],
-            existing["aggregate_type"],
-            existing["aggregate_uuid"],
-            existing["source_kind"],
-            existing["source_uuid"],
-            existing["payload"],
-        )
-        if actual != expected:
-            raise StoreConflict(
-                f"工站事件幂等键对应的内容冲突：{normalized['idempotency_key']}"
-            )
-        return _event_row(existing)
-
-    now = utc_now()
-    event_uuid = str(uuid4())
-    connection.execute(
-        """
-        INSERT INTO workflow_station_event_outbox(
-            event_uuid, create_time, update_time, event_type, aggregate_type,
-            aggregate_uuid, source_kind, source_uuid, idempotency_key, payload,
-            delivery_attempts, last_attempt_at, acked_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL)
-        """,
-        (
-            event_uuid,
-            now,
-            now,
-            normalized["event_type"],
-            normalized["aggregate_type"],
-            normalized["aggregate_uuid"],
-            normalized["source_kind"],
-            normalized["source_uuid"],
-            normalized["idempotency_key"],
-            payload_json,
-        ),
-    )
-    row = connection.execute(
-        "SELECT * FROM workflow_station_event_outbox WHERE event_uuid = ?",
-        (event_uuid,),
-    ).fetchone()
-    assert row is not None
-    return _event_row(row)
+    return None
 
 
 class StationEventOutboxStore:
