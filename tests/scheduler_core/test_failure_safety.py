@@ -25,7 +25,7 @@ def outcome(state: str, *, unknown: list[str] | None = None) -> CommittedJobOutc
 
 @pytest.mark.parametrize(
     ("terminal", "expected_task"),
-    [("failed", "failed"), ("timeout", "timeout")],
+    [("failed", "running"), ("timeout", "running")],
 )
 def test_terminal_failure_stops_successors_and_releases_permit(
     core_runtime: CoreRuntime,
@@ -95,7 +95,7 @@ def test_restart_keeps_prior_failed_transfer_reconciliation_claim(
     core_runtime.scheduler.on_job_outcome(transfer_job_uuid, outcome("failed"))
 
     projection = TaskRuntimeProjection(core_runtime.workflow_store)
-    assert core_runtime.workflow_store.get_task(task_uuid)["status"] == "failed"
+    assert core_runtime.workflow_store.get_task(task_uuid)["control_status"] == "error_waiting"
     assert core_runtime.workflow_store.get_job(sibling_job_uuid)["status"] == "running"
     assert core_runtime.workflow_store.get_job(transfer_job_uuid)[
         "uncertainty_reason"
@@ -110,18 +110,17 @@ def test_restart_keeps_prior_failed_transfer_reconciliation_claim(
 
     failed_task = core_runtime.workflow_store.get_task(task_uuid)
     assert failed_task["cleanup_status"] == "requires_attention"
-    assert failed_task["control_status"] == "waiting_reconciliation"
+    assert failed_task["control_status"] == "error_waiting"
     assert failed_task["attention_reason"] == (
-        "material_transfer_inventory_reconciliation_required"
+        "execution_connection_lost"
     )
-    assert core_runtime.workflow_store.get_job(sibling_job_uuid)["error_info"][0][
-        "code"
-    ] == "execution_process_restarted"
+    assert core_runtime.workflow_store.get_job(sibling_job_uuid)["status"] == "running"
+    assert core_runtime.workflow_store.get_job(sibling_job_uuid)["uncertainty_reason"] == "execution_connection_lost"
     assert projection.get_execution_claim(transfer_job_uuid)["state"] == "uncertain"
     assert {
         lock["state"] for lock in projection.list_execution_locks(transfer_job_uuid)
     } == {"uncertain"}
-    assert projection.get_execution_claim(sibling_job_uuid)["state"] == "released"
+    assert projection.get_execution_claim(sibling_job_uuid)["state"] == "uncertain"
     assert core_runtime.inventory_store.query_one(
         "SELECT state FROM station_execution_claim WHERE job_uuid=?",
         (transfer_job_uuid,),
@@ -129,7 +128,7 @@ def test_restart_keeps_prior_failed_transfer_reconciliation_claim(
     assert core_runtime.inventory_store.query_one(
         "SELECT state FROM station_execution_claim WHERE job_uuid=?",
         (sibling_job_uuid,),
-    ) == {"state": "released"}
+    ) == {"state": "uncertain"}
 
     blocked = core_runtime.submit(
         task_name="restart-transfer-reconciliation-waiter",
@@ -139,10 +138,8 @@ def test_restart_keeps_prior_failed_transfer_reconciliation_claim(
     assert next(job for job in blocked["jobs"] if job["uuid"] == blocked_job_uuid)[
         "status"
     ] == "pending"
-    assert core_runtime.bridge.active_or_uncertain_job_ids() == {transfer_job_uuid}
-    assert core_runtime.scheduler.begin_drain()["active_device_job_ids"] == [
-        transfer_job_uuid
-    ]
+    assert core_runtime.bridge.active_or_uncertain_job_ids() == {transfer_job_uuid, sibling_job_uuid}
+    assert set(core_runtime.scheduler.begin_drain()["active_device_job_ids"]) == {transfer_job_uuid, sibling_job_uuid}
 
 
 def test_unknown_then_certain_result_never_replays_physical_dispatch(
@@ -175,7 +172,7 @@ def test_unknown_then_certain_result_never_replays_physical_dispatch(
     assert [item["job_id"] for item in core_runtime.dispatcher.dispatched] == [job_uuid]
     assert (
         core_runtime.workflow_store.get_task(aggregate["task"]["uuid"])["status"]
-        == "succeeded"
+        == "running"
     )
     assert core_runtime.workflow_store.get_job(job_uuid)["status"] == "succeeded"
 
@@ -207,7 +204,7 @@ def test_dispatch_exception_freezes_claim_and_accepts_one_late_result(
 
     core_runtime.scheduler.on_job_outcome(job_uuid, outcome("succeeded"))
 
-    assert core_runtime.workflow_store.get_task(task["uuid"])["status"] == "succeeded"
+    assert core_runtime.workflow_store.get_task(task["uuid"])["status"] == "running"
     assert core_runtime.workflow_store.get_job(job_uuid)["status"] == "succeeded"
     assert [item["job_id"] for item in core_runtime.dispatcher.dispatched] == [job_uuid]
     assert core_runtime.inventory_store.query_all(

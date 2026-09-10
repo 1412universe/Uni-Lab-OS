@@ -188,14 +188,17 @@ def ensure_task_resource_unlock_command_schema(
     """
 
     old = "type IN ('step', 'pause', 'resume', 'cancel')"
-    new = "type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources')"
+    intermediate = "type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources')"
+    new = "type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources', 'retry_node', 'execute_manual_action', 'stop_manual_action', 'resource_disposition', 'inventory_correction')"
     row = connection.execute(
         "SELECT sql FROM sqlite_schema "
         "WHERE type='table' AND name='workflow_task_command'"
     ).fetchone()
     table_sql = str(row["sql"] or "") if row is not None else ""
-    if new in table_sql and old not in table_sql:
+    if new in table_sql:
         return
+    if intermediate in table_sql:
+        old = intermediate
     if table_sql.count(old) != 1 or new in table_sql:
         raise sqlite3.OperationalError(
             "workflow_task_command 定义无法安全增加人工释放命令"
@@ -641,6 +644,13 @@ def ensure_execution_lock_schema(connection: sqlite3.Connection) -> None:
         END;
         """,
     )
+    if "release_tenancy_uuid" not in {row[1] for row in connection.execute("PRAGMA table_info(job_device_tenancy_transition)")}:
+        connection.execute("ALTER TABLE job_device_tenancy_transition ADD COLUMN release_tenancy_uuid TEXT")
+        connection.execute("""UPDATE job_device_tenancy_transition SET release_tenancy_uuid=(
+            SELECT t.uuid FROM task_device_tenancy t WHERE t.workflow_task_uuid=job_device_tenancy_transition.workflow_task_uuid
+            AND t.material_uuid=job_device_tenancy_transition.material_uuid AND t.device_lock_key=job_device_tenancy_transition.release_device_lock_key
+            AND t.acquired_at<=job_device_tenancy_transition.create_time ORDER BY t.acquired_at DESC LIMIT 1)
+            WHERE release_device_lock_key IS NOT NULL""")
     _ensure_execution_lock_resource_scope(connection)
     _backfill_execution_lock_identities(connection)
     lease_columns = {

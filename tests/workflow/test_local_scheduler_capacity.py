@@ -149,10 +149,10 @@ def test_scheduler_fair_order_uses_persisted_task_creation_time(
         store.close()
 
 
-def test_restart_aborts_ordinary_pending_task_without_dispatch(
+def test_restart_restores_not_started_task_without_new_job(
     tmp_path: Path,
 ) -> None:
-    """创建已提交、调度前崩溃的 pending Task 在重启后取消节点并失败。"""
+    """调度前重启恢复原 pending Job，在允许调度时首次执行且不创建新身份。"""
 
     store = _open_store(tmp_path)
     task_uuid = _uuid(101)
@@ -168,9 +168,11 @@ def test_restart_aborts_ordinary_pending_task_without_dispatch(
         recovered = bridge.recover_active_tasks()
 
         assert [item["task"]["uuid"] for item in recovered] == [task_uuid]
-        assert dispatcher.dispatched == []
-        assert store.get_job(job_uuid)["status"] == "canceled"
-        assert store.get_task(task_uuid)["status"] == "failed"
+        assert [item["job_id"] for item in dispatcher.dispatched] == [job_uuid]
+        bridge.recover_active_tasks()
+        assert [item["job_id"] for item in dispatcher.dispatched] == [job_uuid]
+        assert store.get_job(job_uuid)["status"] == "running"
+        assert store.get_task(task_uuid)["status"] == "running"
         assert store.count_rows("workflow_task") == 1
         assert store.count_rows("workflow_node_job") == 1
     finally:
@@ -320,15 +322,10 @@ def test_job_dispatch_capacity_is_durable_and_released_by_terminal_result(
         store.close()
 
 
-def test_restart_aborts_inflight_and_waiting_tasks_without_replay(
+def test_restart_preserves_inflight_and_waiting_tasks_without_redispatch(
     tmp_path: Path,
 ) -> None:
-    """重启失败 Job 并取消等待 Job，二者均不在新 runtime 重放。
-
-    参数：``tmp_path`` 提供跨实例工作流库。返回无；断言旧任务明确失败后，等待任务
-    不会被派发；旧物理资源由重启策略统一释放。异常：恢复或容量推进错误
-    会使测试失败。
-    """
+    """重启恢复在途作业与容量等待；旧执行不重发，回执到达后调度等待者。"""
 
     first_store = _open_store(tmp_path)
     first_task = _uuid(501)
@@ -372,11 +369,14 @@ def test_restart_aborts_inflight_and_waiting_tasks_without_replay(
     try:
         recovered_bridge.recover_active_tasks()
 
-        assert recovered_store.get_job(first_job)["status"] == "failed"
-        assert recovered_store.get_task(first_task)["status"] == "failed"
-        assert recovered_store.get_job(waiting_job)["status"] == "canceled"
-        assert recovered_store.get_task(waiting_task)["status"] == "failed"
+        assert recovered_store.get_job(first_job)["status"] == "running"
+        assert recovered_store.get_task(first_task)["status"] == "running"
+        assert recovered_store.get_job(waiting_job)["status"] == "pending"
+        assert recovered_store.get_task(waiting_task)["status"] == "pending"
         assert recovered_dispatcher.dispatched == []
+        recovered_bridge._scheduler.on_job_finished(first_job, True, {"late": True})
+        assert recovered_store.get_task(first_task)["status"] == "succeeded"
+        assert [item["job_id"] for item in recovered_dispatcher.dispatched] == [waiting_job]
     finally:
         recovered_bridge.close()
         recovered_store.close()

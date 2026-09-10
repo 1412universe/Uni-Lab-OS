@@ -139,6 +139,8 @@ def index_jobs(
     jobs_by_node: dict[str, Mapping[str, Any]] = {}
     seen_job_uuids: set[str] = set()
     for index, job in enumerate(raw_jobs):
+        if job.get("current_attempt") is False or (job.get("control_data") or {}).get("runtime_node_id"):
+            continue
         # ``job_uuid``/``node_uuid`` 共同证明持久执行责任的稳定归属。
         job_uuid = canonical_uuid(
             job.get("uuid"), "invalid_job_identity", f"jobs[{index}].uuid"

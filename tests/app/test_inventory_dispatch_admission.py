@@ -1969,3 +1969,37 @@ def test_split_pick_place_settles_via_gripper_and_keeps_destination(station_inve
         ]
         == identities["vessel"]
     )
+
+
+def test_late_transfer_preserves_manual_fact_after_partial_release(station_inventory):
+    """人工修正并释放部分逻辑占用后，迟到成功只能报告差异，不能覆盖位置。"""
+    store, service, ids = station_inventory
+    request = _request(ids)
+    permit = service.station_resources.acquire_dispatch_permit(request).permit
+    service.station_resources.transition_dispatch_permit(permit.claim_uuid, target_state="reserved")
+    service.station_resources.transition_dispatch_permit(permit.claim_uuid, target_state="running")
+    snapshot = service.station_resources.error_handling_inventory()
+    instance = next(item for item in snapshot["instances"] if item["edge_uuid"] == ids["vessel"])
+    site = next(item for item in snapshot["sites"] if item["uuid"] == GRIPPER_SITE)
+    service.correct_inventory("manual-correction", {
+        "changes": [{"material_uuid": ids["vessel"], "parent_uuid": ids["robot"], "site_uuid": GRIPPER_SITE}],
+        "expected_inventory_versions": {ids["vessel"]: instance["version"], GRIPPER_SITE: str(site["update_time"])},
+        "operator_id": "tester", "reason": "实物已放在夹爪", "session_id": "session", "source_job_uuid": request.job_uuid,
+    })
+    released_fence = permit.fences[0]
+    service.station_resources.release_error_occupancies([{
+        "claim_uuid": permit.claim_uuid, "lock_key": released_fence.lock_key,
+        "fencing_token": released_fence.fencing_token,
+    }])
+    with pytest.raises(StationResourceError) as error:
+        service.station_resources.settle_material_transfer(MaterialTransferCommand(
+            material_uuid=ids["vessel"], target_owner_material_uuid=ids["target_device"],
+            target_site_uuid=TARGET_SITE, target_site_name="IN", actor="test", causation_id=request.job_uuid,
+            effect_uuid=permit.effect_uuid, claim_uuid=permit.claim_uuid, job_uuid=request.job_uuid,
+            attempt=request.attempt, parameter_hash=request.parameter_hash,
+            expected_change_set=request.expected_change_set, fences=permit.fences,
+        ))
+    assert error.value.code == "inventory_fact_changed"
+    service.station_resources.transition_dispatch_permit(permit.claim_uuid, target_state="uncertain")
+    assert store.query_one("SELECT state FROM station_execution_lock_lease WHERE claim_uuid=? AND lock_key=?", (permit.claim_uuid, released_fence.lock_key))["state"] == "released"
+    assert next(item for item in service.station_resources.error_handling_inventory()["instances"] if item["edge_uuid"] == ids["vessel"])["parent_uuid"] == ids["robot"]

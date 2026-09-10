@@ -152,6 +152,12 @@ class MaterialAliquotCommand:
 class StationResourceInventory(Protocol):
     """向调度器隐藏库存表、SQL 和资源树遍历的深模块接口。"""
 
+    def error_handling_inventory(self) -> dict[str, Any]: ...
+
+    def correct_inventory(self, command_uuid: str, request: dict[str, Any]) -> dict[str, Any]: ...
+
+    def release_error_occupancies(self, occupancies: Sequence[Mapping[str, Any]]) -> None: ...
+
     def plan_transfer_resources(
         self, *, owner_uuids: Sequence[str], executor_uuid: str, gripper_role: str,
     ) -> tuple[str, ...]:
@@ -323,6 +329,7 @@ class SqliteStationResourceInventory:
         store: InventoryStore,
         *,
         settle_material_transfer: Callable[[MaterialTransferCommand], dict[str, Any]],
+        correct_inventory: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
         settle_material_aliquot: Callable[[MaterialAliquotCommand], dict[str, Any]]
         | None = None,
     ) -> None:
@@ -334,8 +341,42 @@ class SqliteStationResourceInventory:
         """
 
         self._store = store
+        self._correct_inventory = correct_inventory
         self._settle_material_transfer = settle_material_transfer
         self._settle_material_aliquot = settle_material_aliquot
+
+    def error_handling_inventory(self) -> dict[str, Any]:
+        """返回人工登记所需的真实物料、库位及版本。"""
+        return {"instances": self._store.query_all("SELECT i.*,m.name FROM material_instance i JOIN material m ON m.uuid=i.edge_uuid WHERE m.deleted_at IS NULL"),
+                "sites": self._store.query_all("SELECT uuid,material_uuid,name,occupied_material_uuid,update_time FROM site WHERE deleted_at IS NULL")}
+
+    def correct_inventory(self, command_uuid: str, request: dict[str, Any]) -> dict[str, Any]:
+        if self._correct_inventory is None:
+            raise StationResourceError("inventory_correction_unavailable", "库存人工登记入口未装配")
+        return self._correct_inventory(command_uuid, request)
+
+    def release_error_occupancies(self, occupancies: Sequence[Mapping[str, Any]]) -> None:
+        """按已冻结的 Claim、键和 Fence 释放指定占用；不推断物理停止。"""
+        from unilabos.workflow.store import utc_now
+        with self._store.transaction() as conn:
+            now = utc_now()
+            for item in occupancies:
+                if item.get("occupancy_kind") == "device_tenancy":
+                    continue
+                row = conn.execute("SELECT * FROM station_execution_lock_lease WHERE claim_uuid=? AND lock_key=?", (item["claim_uuid"], item["lock_key"])).fetchone()
+                if row is None or int(row["fencing_token"]) != int(item["fencing_token"]):
+                    raise StationResourceError("occupancy_version_conflict", "库存占用身份已变化")
+                # 同一任务词法共享范围共用 Fence；工作流投影只显示一个逻辑占用，
+                # 库存的每个参与 Claim 都要释放该同代键，不能遗留隐形阻塞者。
+                shared = conn.execute("""SELECT l.claim_uuid FROM station_execution_lock_lease l
+                    JOIN station_execution_claim c ON c.claim_uuid=l.claim_uuid
+                    WHERE c.task_uuid=(SELECT task_uuid FROM station_execution_claim WHERE claim_uuid=?) AND l.lock_key=? AND l.fencing_token=?""",
+                    (item["claim_uuid"],item["lock_key"],item["fencing_token"])).fetchall()
+                for holder in shared:
+                    conn.execute("UPDATE station_execution_lock_lease SET state='released',released_at=?,update_time=? WHERE claim_uuid=? AND lock_key=?", (now,now,holder["claim_uuid"],item["lock_key"]))
+                    remaining = conn.execute("SELECT 1 FROM station_execution_lock_lease WHERE claim_uuid=? AND state!='released' LIMIT 1", (holder["claim_uuid"],)).fetchone()
+                    if remaining is None:
+                        conn.execute("UPDATE station_execution_claim SET state='released',released_at=?,update_time=? WHERE claim_uuid=?", (now,now,holder["claim_uuid"]))
 
     def describe_wait_resources(
         self,

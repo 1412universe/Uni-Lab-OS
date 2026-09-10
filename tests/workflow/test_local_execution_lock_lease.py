@@ -6,6 +6,7 @@ import json
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -1297,14 +1298,10 @@ def test_persistent_waiter_aging_eventually_beats_fresh_priority(
     assert blocked["jobs"][0]["wait_reason"]["blocking_job_uuid"] == JOB_UUID
 
 
-def test_restart_fails_inflight_job_and_releases_old_lease(
+def test_restart_restores_inflight_job_and_retains_lease(
     store: WorkflowStore,
 ) -> None:
-    """执行进程重启必须失败在途作业，并释放旧 runtime 的执行权。
-
-    参数：``store`` 是隔离工作流写模型。返回无；断言 Job/Task 使用明确失败状态，
-    且清除旧 Claim/Fence。异常：恢复实现冲突会使测试失败。
-    """
+    """调度器重启恢复在途路由和原执行占用，不伪造设备失败或重发动作。"""
 
     _seed_task(store, with_material=False)
     projection = TaskRuntimeProjection(store)
@@ -1317,9 +1314,10 @@ def test_restart_fails_inflight_job_and_releases_old_lease(
     )
     projection.project_dispatch_accepted(JOB_UUID)
 
+    dispatcher = RecordingDispatcher()
     bridge = TaskSchedulerBridge(
         store,
-        scheduler=EdgeScheduler(dispatcher=RecordingDispatcher()),
+        scheduler=EdgeScheduler(dispatcher=dispatcher),
     )
     try:
         recovered = bridge.recover_active_tasks()
@@ -1328,14 +1326,13 @@ def test_restart_fails_inflight_job_and_releases_old_lease(
 
     assert [aggregate["task"]["uuid"] for aggregate in recovered] == [TASK_UUID]
     job = store.get_job(JOB_UUID)
-    assert job["status"] == "failed"
-    assert job["error_info"][0]["code"] == "execution_process_restarted"
+    assert job["status"] == "running"
+    assert dispatcher.dispatched == []
     task = store.get_task(TASK_UUID)
-    assert task["status"] == "failed"
+    assert task["status"] == "running"
     assert not task.get("attention_reason")
-    assert task["cleanup_status"] == "settled"
     assert {lease["state"] for lease in projection.list_execution_locks(JOB_UUID)} == {
-        "released"
+        "running"
     }
 
 
@@ -1368,7 +1365,8 @@ def test_restart_projects_edge_committed_outcome_before_marking_job_unknown(
     finally:
         bridge.close()
 
-    assert recovered == []
+    assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
+    assert bridge.error_control.snapshot()["errors"] == []
     assert store.get_job(JOB_UUID)["status"] == "succeeded"
     assert store.get_task(TASK_UUID)["status"] == "succeeded"
     assert {lease["state"] for lease in projection.list_execution_locks(JOB_UUID)} == {
@@ -1531,19 +1529,17 @@ def test_local_cancel_completion_timeout_keeps_uncertain_lock(
         bridge.close()
 
 
-def test_restart_during_local_cancel_fails_task_and_releases_old_claim(
-    store: WorkflowStore,
+@pytest.mark.parametrize("accepted", [False, True])
+def test_restart_during_cancel_restores_deadline_and_pauses_on_unknown(
+    store: WorkflowStore, accepted: bool,
 ) -> None:
-    """取消等待设备终态时重启，必须失败任务并释放旧执行占用。
-
-    参数：``store`` 是隔离工作流写模型。返回无；断言取消中的作业使用明确失败码，
-    不再创建执行未知主状态。异常：恢复或占用收敛错误会使测试失败。
-    """
-
+    """重启保留取消意图和原截止时间；超时生成独立错误，保留在途占用。"""
     task = _seed_task(store, with_material=False)
     first_bridge = TaskSchedulerBridge(
         store,
-        scheduler=EdgeScheduler(dispatcher=_SilentCancelDispatcher()),
+        scheduler=EdgeScheduler(dispatcher=(
+            _AcceptingCancelDispatcher() if accepted else _SilentCancelDispatcher()
+        )),
         cancel_ack_timeout_seconds=30.0,
         cancel_complete_timeout_seconds=60.0,
     )
@@ -1553,28 +1549,114 @@ def test_restart_during_local_cancel_fails_task_and_releases_old_claim(
             TASK_UUID,
             command_uuid="51000000-0000-4000-8000-000000000004",
         )
-        assert store.get_job(JOB_UUID)["status"] == "cancel_requested"
+        before = store.get_job(JOB_UUID)
+        assert before["status"] == "cancel_requested"
+        assert first_bridge.error_control.snapshot()["mode"] == "RUNNING"
     finally:
         first_bridge.close()
 
+    timers = []
+
+    class DeferredTimer:
+        """仅记录待触发回调；测试主动触发，无真实等待。"""
+        def __init__(self, interval, function, *, kwargs):
+            self.interval = interval
+            self.function = function
+            self.kwargs = kwargs
+            self.daemon = False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            pass
+
+    dispatcher = RecordingDispatcher()
     recovered_bridge = TaskSchedulerBridge(
         store,
-        scheduler=EdgeScheduler(dispatcher=RecordingDispatcher()),
+        scheduler=EdgeScheduler(dispatcher=dispatcher),
+        timer_factory=DeferredTimer,
     )
     try:
         recovered = recovered_bridge.recover_active_tasks()
+        assert [aggregate["task"]["uuid"] for aggregate in recovered] == [TASK_UUID]
+        job = store.get_job(JOB_UUID)
+        assert job["status"] == "cancel_requested"
+        assert dispatcher.dispatched == []
+        deadline_field = "cancel_complete_deadline_at" if accepted else "cancel_ack_deadline_at"
+        assert job[deadline_field] == before[deadline_field]
+        assert len(timers) == 1
+        assert 0 < timers[0].interval <= (60 if accepted else 30)
+        assert {
+            lease["state"]
+            for lease in recovered_bridge._projection.list_execution_locks(JOB_UUID)
+        } == {"running"}
+        timers[0].function(**timers[0].kwargs)
+        job = store.get_job(JOB_UUID)
+        assert job["status"] == "running"
+        assert job["uncertainty_reason"] == (
+            "local_cancel_completion_timeout" if accepted else "local_cancel_acceptance_timeout"
+        )
+        snapshot = recovered_bridge.error_control.snapshot()
+        assert snapshot["mode"] == "PAUSED"
+        assert snapshot["errors"][0]["error_phase"] == "cancel_unknown"
+        assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
+        assert {
+            lease["state"]
+            for lease in recovered_bridge._projection.list_execution_locks(JOB_UUID)
+        } == {"uncertain"}
+        recovered_bridge._on_job_cancel_uncertain(JOB_UUID, job["uncertainty_reason"])
+        assert recovered_bridge.error_control.snapshot()["error_epoch"] == snapshot["error_epoch"]
     finally:
         recovered_bridge.close()
 
-    assert [aggregate["task"]["uuid"] for aggregate in recovered] == [TASK_UUID]
-    job = store.get_job(JOB_UUID)
-    assert job["status"] == "failed"
-    assert not job.get("uncertainty_reason")
-    assert job["error_info"][0]["code"] == "execution_process_restarted"
-    recovered_task = store.get_task(TASK_UUID)
-    assert recovered_task["status"] == "failed"
-    assert recovered_task["cleanup_status"] == "settled"
-    assert {
-        lease["state"]
-        for lease in recovered_bridge._projection.list_execution_locks(JOB_UUID)
-    } == {"released"}
+
+def test_cancel_terminal_wins_before_queued_timeout_without_false_error(
+    store: WorkflowStore, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实取消回执先取得控制屏障时，排队的超时不能再制造 UNKNOWN 错误。"""
+    import threading
+
+    task = _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=_SilentCancelDispatcher())
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler, cancel_ack_timeout_seconds=30)
+    read_started = threading.Event()
+    allow_read = threading.Event()
+    real_get_job = store.get_job
+
+    def delayed_timeout_read(job_uuid: str) -> dict[str, Any]:
+        value = real_get_job(job_uuid)
+        if threading.current_thread().name == "cancel-timeout-race":
+            read_started.set()
+            assert allow_read.wait(2)
+        return value
+
+    timeout = threading.Thread(
+        target=bridge._on_cancel_timeout,
+        kwargs={"job_uuid": JOB_UUID, "expected_accepted": False},
+        name="cancel-timeout-race",
+    )
+    try:
+        bridge.submit(task)
+        bridge.cancel(TASK_UUID)
+        bridge._cancel_cancel_timer(JOB_UUID)
+        monkeypatch.setattr(store, "get_job", delayed_timeout_read)
+        with scheduler.execution_control_lock:
+            timeout.start()
+            # 旧实现可在控制屏障外提前读到 cancel_requested；新实现须等待回执。
+            read_started.wait(0.05)
+            scheduler.on_job_finished(JOB_UUID, False, {"stopped": True}, "canceled")
+            allow_read.set()
+        timeout.join(2)
+        assert not timeout.is_alive()
+        assert store.get_job(JOB_UUID)["status"] == "canceled"
+        assert store.get_task(TASK_UUID)["status"] == "canceled"
+        snapshot = bridge.error_control.snapshot()
+        assert snapshot["mode"] == "RUNNING"
+        assert snapshot["errors"] == []
+    finally:
+        allow_read.set()
+        if timeout.ident is not None:
+            timeout.join(2)
+        bridge.close()

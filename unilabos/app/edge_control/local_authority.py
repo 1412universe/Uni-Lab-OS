@@ -186,6 +186,7 @@ class LocalEdgeAuthorityStore:
                 ).fetchall()
             }
             for name, declaration in (
+                ("execution_source", "TEXT NOT NULL DEFAULT 'workflow'"),
                 ("claim_uuid", "TEXT"),
                 ("attempt", "INTEGER"),
                 ("fences_json", "TEXT NOT NULL DEFAULT '[]'"),
@@ -485,11 +486,17 @@ class LocalEdgeAuthorityStore:
             raise ValueError("action_args must be an object")
         device_action_key = f"/devices/{local_device_id}/{action_name}"
         command_uuid = str(uuid.UUID(_required_text(payload, "command_uuid")))
-        claim_uuid = str(uuid.UUID(_required_text(payload, "claim_uuid")))
+        execution_source = payload.get("execution_source", "workflow")
+        if execution_source not in {"workflow", "error_manual"}:
+            raise ValueError("invalid execution_source")
+        manual = execution_source == "error_manual"
+        claim_uuid = None if manual else str(uuid.UUID(_required_text(payload, "claim_uuid")))
         attempt = payload.get("attempt")
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ValueError("attempt must be a positive integer")
         fences = _validate_fences(payload.get("fences"))
+        if manual and (payload.get("claim_uuid") is not None or fences):
+            raise ValueError("手动执行不得携带虚构 Claim/Fence")
         trace_context = _current_trace_context()
         now = time.time()
         with self._lock:
@@ -504,8 +511,11 @@ class LocalEdgeAuthorityStore:
                     or existing["node_uuid"] != node_uuid
                     or existing["local_device_id"] != local_device_id
                     or existing["action_name"] != action_name
+                    or existing["action_type"] != action_type
+                    or json.loads(str(existing["param_json"])) != param
                     or existing["command_uuid"] != command_uuid
                     or existing["claim_uuid"] != claim_uuid
+                    or existing["execution_source"] != execution_source
                     or int(existing["attempt"] or 0) != attempt
                     or json.loads(str(existing["fences_json"])) != fences
                 ):
@@ -519,7 +529,7 @@ class LocalEdgeAuthorityStore:
                 """,
                 (local_device_id,),
             ).fetchone()
-            if blocked is not None:
+            if blocked is not None and not manual:
                 self._connection.rollback()
                 raise RuntimeError(
                     "device is locked by unresolved UNKNOWN job: "
@@ -533,6 +543,7 @@ class LocalEdgeAuthorityStore:
                 "node_uuid": node_uuid,
                 "job_access_token": job_token,
                 "executor_kind": "device_action",
+                "execution_source": execution_source,
                 "claim_uuid": claim_uuid,
                 "attempt": attempt,
                 "fences": fences,
@@ -565,6 +576,7 @@ class LocalEdgeAuthorityStore:
                         now,
                     ),
                 )
+                self._connection.execute("UPDATE local_edge_job SET execution_source=? WHERE job_uuid=?", (execution_source, job_uuid))
                 self._connection.execute(
                     """
                     INSERT INTO local_edge_command(
@@ -749,7 +761,8 @@ class LocalEdgeAuthorityStore:
             "task_uuid": str(row["task_uuid"]),
             "node_uuid": str(row["node_uuid"]),
             "command_uuid": normalized_command,
-            "claim_uuid": str(row["claim_uuid"]),
+            "claim_uuid": row["claim_uuid"],
+            "execution_source": row["execution_source"],
             "attempt": int(row["attempt"]),
             "fences": json.loads(str(row["fences_json"])),
             "local_device_id": str(row["local_device_id"]),
@@ -757,6 +770,12 @@ class LocalEdgeAuthorityStore:
             "action_type": str(row["action_type"]),
             "param": json.loads(str(row["param_json"])),
         }
+
+    def requeue_not_started(self, job_uuid: str) -> None:
+        """调用方持有工站开始屏障；只重置无结果命令的投递状态。"""
+        with self._lock, self._connection:
+            self._connection.execute("UPDATE local_edge_command SET status='pending', last_sent_at=NULL, acked_at=NULL WHERE command_uuid IN (SELECT command_uuid FROM local_edge_job WHERE job_uuid=? AND outcome_json IS NULL)", (job_uuid,))
+            self._connection.execute("UPDATE local_edge_job SET status='pending',unknown_command_ids_json='[]',updated_at=? WHERE job_uuid=? AND outcome_json IS NULL", (time.time(), job_uuid))
 
     def mark_job_started(self, job_uuid: str) -> None:
         with self._lock:
@@ -1454,6 +1473,13 @@ class LocalEdgeControlAuthority:
             Callable[[dict[str, Any]], None]
         ] = []
         self._error_decision_reports: dict[str, dict[str, Any]] = {}
+        self.execution_control: Any = None
+        self._execution_started: Callable[[str], None] | None = None
+        self.deferred_start = True
+
+    def bind_execution_control(self, control: Any, on_started: Callable[[str], None]) -> None:
+        self.execution_control = control
+        self._execution_started = on_started
 
     def start(self) -> None:
         return
@@ -1462,7 +1488,21 @@ class LocalEdgeControlAuthority:
         self.store.close()
 
     def dispatch(self, payload: DispatchPayload) -> None:
+        if payload.get("execution_source") == "error_manual" and (
+            self.execution_control is None or not self.execution_control.is_manual(str(payload.get("job_id", "")))
+        ):
+            raise ValueError("手动执行来源未被工站控制器授权")
         self.store.dispatch(payload)
+
+    def restore_dispatch(self, payload: DispatchPayload) -> None:
+        """工站开始权威证明未启动后，恢复同一出站命令，绝不新建尝试。"""
+        if self.execution_control is None:
+            raise ValueError("恢复命令缺少工站控制权威")
+        with self.execution_control.lock:
+            if self.execution_control.execution_start_state(str(payload["job_id"])) != "NOT_STARTED":
+                return
+            self.dispatch(payload)
+            self.store.requeue_not_started(str(payload["job_id"]))
 
     def add_error_decision_required_listener(
         self, listener: Callable[[dict[str, Any]], None]
@@ -1886,7 +1926,28 @@ def create_local_edge_control_router(
             raise HTTPException(status_code=401, detail=str(error)) from error
         if result["task_uuid"] != task_uuid or result["node_uuid"] != node_uuid:
             raise HTTPException(status_code=409, detail="Job identity changed")
+        result["station_controlled"] = authority.execution_control is not None
+        if authority.execution_control is not None:
+            result["execution_start_state"] = authority.execution_control.execution_start_state(job_uuid)
         return _envelope(result)
+
+    @router.post("/jobs/{job_uuid}/begin", summary="确认设备动作开始执行")
+    def begin_execution(job_uuid: str, x_command_uuid: str = Header(alias="X-Command-UUID"),
+                        x_job_token: str = Header(alias="X-Job-Token")) -> dict[str, Any]:
+        try:
+            authority.store.fetch_job(job_uuid, command_uuid=x_command_uuid, job_token=x_job_token)
+            if authority.execution_control is None:
+                raise HTTPException(503, "工站执行控制尚未恢复")
+            result = authority.execution_control.begin_execution(job_uuid, x_command_uuid)
+            if result == "START":
+                authority.store.mark_job_started(job_uuid)
+                if authority._execution_started is not None:
+                    authority._execution_started(job_uuid)
+        except KeyError as error:
+            raise HTTPException(404, "Job not found") from error
+        except (PermissionError, ValueError) as error:
+            raise HTTPException(409, str(error)) from error
+        return _envelope({"start": result})
 
     @router.post("/jobs/{job_uuid}/feedback")
     def commit_feedback(
@@ -2052,6 +2113,9 @@ def create_local_edge_control_router(
                     break
                 stale_generation = False
                 for command in authority.store.pending_commands():
+                    if command["type"] == "job.start" and authority.execution_control is not None:
+                        if not authority.execution_control.allows_delivery(str(command["payload"].get("job_uuid") or "")):
+                            continue
                     async with active_session_lock:
                         current_generation = (
                             active_generation == session_generation
@@ -2095,7 +2159,9 @@ def create_local_edge_control_router(
                         owns_active_generation = True
                 if owns_active_generation:
                     try:
-                        authority.store.disconnect_session(session_uuid)
+                        affected = authority.store.disconnect_session(session_uuid)
+                        if affected and authority.execution_control is not None:
+                            authority.notify_execution_process_restarted(affected)
                     except ValueError:
                         pass
 
@@ -2115,7 +2181,12 @@ async def _handle_edge_event(
     if event_type == "command.ack":
         authority.store.acknowledge_command(_required_text(payload, "command_uuid"))
     elif event_type == "job.started":
-        authority.store.mark_job_started(_required_text(payload, "job_uuid"))
+        job_uuid = _required_text(payload, "job_uuid")
+        # 新协议只有持久 begin 才能宣布开始；排队或 ROS 接受不是运行事实。
+        if authority.execution_control is None or authority.execution_control.execution_start_state(job_uuid) == "START_COMMITTED":
+            authority.store.mark_job_started(job_uuid)
+            if authority._execution_started is not None:
+                authority._execution_started(job_uuid)
     elif event_type == "job.unknown_resolution_committed":
         authority.resolve_unknown_committed(_required_text(payload, "job_uuid"))
     elif event_type not in {
@@ -2161,6 +2232,13 @@ def _normalize_edge_hello(
     last_ack = payload.get("last_ack_command_sequence", 0)
     if isinstance(last_ack, bool) or not isinstance(last_ack, int) or last_ack < 0:
         raise ValueError("last_ack_command_sequence is invalid")
+    individual_ack = payload.get("individual_command_ack", False)
+    if not isinstance(individual_ack, bool):
+        raise ValueError("individual_command_ack is invalid")
+    # 工站暂停允许手动命令越过普通命令，最大序号不再证明前缀均已收到。
+    # 新执行端逐条可靠重放 command.ack，兼容旧执行端的连续投递游标。
+    if individual_ack:
+        last_ack = 0
     raw_running_jobs = payload.get("running_jobs")
     running_jobs = [] if raw_running_jobs is None else raw_running_jobs
     if not isinstance(running_jobs, list) or any(
@@ -2287,7 +2365,8 @@ def _job_projection(row: sqlite3.Row) -> dict[str, Any]:
         "task_uuid": str(row["task_uuid"]),
         "node_uuid": str(row["node_uuid"]),
         "command_uuid": str(row["command_uuid"]),
-        "claim_uuid": str(row["claim_uuid"]),
+        "claim_uuid": row["claim_uuid"],
+            "execution_source": row["execution_source"],
         "attempt": int(row["attempt"]),
         "fences": json.loads(str(row["fences_json"])),
         "local_device_id": str(row["local_device_id"]),
@@ -2341,9 +2420,18 @@ def _validate_job_attempt_identity(
         "task_uuid": str(row["task_uuid"]),
         "node_uuid": str(row["node_uuid"]),
         "command_uuid": str(uuid.UUID(command_uuid)),
-        "claim_uuid": str(row["claim_uuid"]),
+        "claim_uuid": row["claim_uuid"],
+            "execution_source": row["execution_source"],
     }
     for field, value in expected.items():
+        if field == "execution_source":
+            if payload.get(field, "workflow") != value:
+                raise ValueError("execution_source does not match persisted job")
+            continue
+        if field == "claim_uuid" and row["execution_source"] == "error_manual":
+            if payload.get(field) is not None:
+                raise ValueError("manual execution must not carry a claim")
+            continue
         try:
             actual = str(uuid.UUID(_required_text(payload, field)))
         except (TypeError, ValueError) as error:

@@ -47,6 +47,7 @@ def normalize_node_type(value: Any) -> str:
 # Edge 额外扩展：ready/dispatched（节点内部推进态）、waiting_for_material（等料）、
 # interrupted（进程重启标记，仅历史库）；上报云端时终态词汇与云端枚举一字不差。
 class NodeState(str, Enum):
+    ERROR_WAITING = "error_waiting"  # 旧 attempt 保留错误，当前节点等待人工决定
     PENDING = "pending"  # 尚有未完成的前置依赖
     READY = "ready"  # 依赖已清零，等待排序/下发
     DISPATCHED = "dispatched"  # 已下发给设备执行（对应云端 job running）
@@ -263,6 +264,7 @@ class DispatchedJob:
     # 派发意图越过 Gate 8 时冻结的七类凭据；人工确认继续真实动作时必须原样复用。
     dispatch_credentials: Dict[str, Any] = field(default_factory=dict)
     # 人工等待与批准后的设备动作始终复用同一组 Claim/Fence 与资源占用。
+    operator_released_keys: set[str] = field(default_factory=set)
     resource_lock_keys: set[str] = field(default_factory=set)
     # 连续作用域中的 reservation 可由同 Task 兄弟共享；本集合只表示当前
     # Job 正在操作的物料/设备，始终全局互斥并随 Job 终态立即释放。

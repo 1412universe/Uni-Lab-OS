@@ -246,6 +246,7 @@ def test_bridge_commit_failure_cannot_leave_a_dispatchable_scheduler_run(
             device_tenancy: dict[str, Any] | None = None,
             actual_executor: dict[str, Any] | None = None,
             dispatch_permit: dict[str, Any] | None = None,
+            dispatch_payload: dict[str, Any] | None = None,
             max_active_tasks: int = 500,
             max_tasks_per_workflow: int = 100,
             max_in_flight_jobs: int = 100,
@@ -402,6 +403,74 @@ def test_bridge_keeps_second_job_pending_until_shared_material_lock_releases(
         store.close()
 
 
+def test_error_stops_other_tasks_and_retry_uses_new_job(tmp_path: Any) -> None:
+    """节点失败冻结整站后续动作，人工重试保留原作业并恢复其他任务。"""
+    store = WorkflowStore(tmp_path / "workflow.db")
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        a = _insert_run(store, task_uuid=TASK_A_UUID, job_uuid=JOB_A_UUID,
+                        node_uuid=NODE_A_UUID, device_material_uuid=DEVICE_A_UUID)
+        b = _insert_run(store, task_uuid=TASK_B_UUID, job_uuid=JOB_B_UUID,
+                        node_uuid=NODE_B_UUID, device_material_uuid=DEVICE_B_UUID)
+        bridge.submit(a["task"])
+        scheduler.on_job_finished(JOB_A_UUID, False, {"error": "offline"})
+        bridge.submit(b["task"])
+        assert len(dispatcher.dispatched) == 1
+        assert store.get_task(TASK_A_UUID)["status"] == "running"
+        assert store.get_task(TASK_A_UUID)["control_status"] == "error_waiting"
+        snapshot = bridge.error_control.snapshot()
+        error = snapshot["errors"][0]
+        accepted = bridge.decide_error(error["decision_id"], {
+            "action": "retry_current_node", "expected_decision_version": error["decision_version"],
+            "expected_station_version": snapshot["station_version"], "observed_error_epoch": snapshot["error_epoch"],
+            "resume_requested": True, "operator_confirmed": True, "confirm_snapshot_id": snapshot["snapshot_id"],
+        }, idempotency_key="retry", operator_id="local-user")
+        retry = accepted["result"]["retry_job_uuid"]
+        assert retry != JOB_A_UUID
+        assert dispatcher.dispatched[-1]["job_id"] == retry
+        scheduler.on_job_finished(retry, True, {"done": True})
+        assert store.get_task(TASK_A_UUID)["status"] == "succeeded"
+        assert store.get_job(JOB_A_UUID)["status"] == "failed"
+        assert dispatcher.dispatched[-1]["job_id"] == JOB_B_UUID
+    finally:
+        bridge.close()
+        store.close()
+
+
+def test_error_waiting_task_can_retry_after_scheduler_restart(tmp_path: Any) -> None:
+    path = tmp_path / "workflow.db"
+    store = WorkflowStore(path)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    a = _insert_run(store, task_uuid=TASK_A_UUID, job_uuid=JOB_A_UUID,
+                    node_uuid=NODE_A_UUID, device_material_uuid=DEVICE_A_UUID)
+    bridge.submit(a["task"])
+    scheduler.on_job_finished(JOB_A_UUID, False, {"error": "offline"})
+    bridge.close()
+    store.close()
+    store = WorkflowStore(path)
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    bridge = TaskSchedulerBridge(store, scheduler=scheduler)
+    try:
+        bridge.recover_active_tasks()
+        assert store.get_task(TASK_A_UUID)["status"] == "running"
+        assert dispatcher.dispatched == []
+        snapshot = bridge.error_control.snapshot()
+        error = snapshot["errors"][0]
+        result = bridge.decide_error(error["decision_id"], {
+            "action": "retry_current_node", "expected_decision_version": error["decision_version"],
+            "expected_station_version": snapshot["station_version"], "observed_error_epoch": snapshot["error_epoch"],
+            "resume_requested": True, "operator_confirmed": True, "confirm_snapshot_id": snapshot["snapshot_id"],
+        }, idempotency_key="retry", operator_id="local-user")
+        assert [item["job_id"] for item in dispatcher.dispatched] == [result["result"]["retry_job_uuid"]]
+    finally:
+        bridge.close()
+        store.close()
+
+
 def _insert_run(
     store: WorkflowStore,
     *,
@@ -507,3 +576,32 @@ def _insert_run(
         idempotency_key=task["idempotency_key"],
         request_fingerprint=task["request_fingerprint"],
     )
+
+
+def test_restart_recovers_not_started_dispatch_with_same_identity(tmp_path: Any) -> None:
+    """意图已落库、命令尚未进入执行端时，恢复仍沿用同一作业和命令。"""
+    class DeferredDispatcher(RecordingDispatcher):
+        deferred_start = True
+
+        def restore_dispatch(self, payload):
+            self.dispatch(payload)
+
+    store = WorkflowStore(tmp_path / "workflow.db")
+    first = DeferredDispatcher()
+    bridge = TaskSchedulerBridge(store, scheduler=EdgeScheduler(dispatcher=first))
+    aggregate = _insert_run(store, task_uuid=TASK_A_UUID, job_uuid=JOB_A_UUID,
+        node_uuid=NODE_A_UUID, device_material_uuid=DEVICE_A_UUID)
+    bridge.submit(aggregate["task"])
+    expected = first.dispatched[0]
+    assert store.get_job(JOB_A_UUID)["status"] == "dispatched"
+    bridge.close()
+    restored = DeferredDispatcher()
+    bridge = TaskSchedulerBridge(store, scheduler=EdgeScheduler(dispatcher=restored))
+    try:
+        bridge.recover_active_tasks()
+        assert len(restored.dispatched) == 1
+        assert restored.dispatched[0] == expected
+        assert store.get_job(JOB_A_UUID)["start_state"] == "NOT_STARTED"
+    finally:
+        bridge.close()
+        store.close()

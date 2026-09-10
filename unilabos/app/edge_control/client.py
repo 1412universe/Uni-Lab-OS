@@ -217,6 +217,8 @@ class EdgeJobContext:
     trace_context: dict[str, str]
     task_type: str = "job_call_back_status"
     notebook_id: str = ""
+    execution_source: str = "workflow"
+    start_guard: Callable[[], str] | None = None
 
     @property
     def device_action_key(self) -> str:
@@ -273,6 +275,7 @@ class EdgeControlClient(BaseCommunicationClient):
         self._active_jobs_lock = threading.RLock()
         self._terminal_jobs: set[str] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._restart_pending_jobs = {job.job_uuid for job in self.store.list_jobs({"dispatching"})}
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -310,8 +313,41 @@ class EdgeControlClient(BaseCommunicationClient):
         self._ready.set()
 
     def publish_job_started(self, item: Any) -> None:
+        if getattr(item, "start_guard", None) is not None:
+            return  # ROS goal 受理不代表已进入驱动调用。
         job = self.store.get_job(str(item.job_id))
         if job is None:
+            return
+        self._record_job_started(job)
+        device_id = str(getattr(item, "device_id", "") or "").strip()
+        if device_id:
+            self._schedule(self._commit_device_status(device_id, {}))
+
+    def begin_execution(self, job: StoredJob) -> str:
+        """设备适配器在实际调用前获取一次开始许可，并发布真实开始事实。"""
+        try:
+            result = self.data_plane.begin_execution(job)
+            if result == "START":
+                self._record_job_started(job)
+            elif result not in {"WAIT", "CANCELED"}:
+                self._persist_start_unknown(job, "开始许可已经使用，不能重复调用")
+            return result
+        except Exception:
+            self._persist_start_unknown(job, "开始授权应答未知")
+            raise
+
+    def _persist_start_unknown(self, job: StoredJob, message: str) -> None:
+        """开始应答不明时先落库；后续 ROS 失败回调不能覆盖成明确失败。"""
+        self.store.save_pending_outcome(job.job_uuid, "failed", {}, [{"message": message}],
+            unknown_command_ids=[f"workflow-node-job:{job.job_uuid}"])
+        with self._active_jobs_lock:
+            self._terminal_jobs.add(job.job_uuid)
+        self._schedule(self._commit_pending_outcome(job.job_uuid))
+
+    def _record_job_started(self, job: StoredJob) -> None:
+        """开始事实只推进活动镜像，重复或迟到通知不能复活终态作业。"""
+        current = self.store.get_job(job.job_uuid)
+        if current is None or current.status not in {"received", "fetch_retry", "dispatching"}:
             return
         self.store.set_job_status(job.job_uuid, "running")
         with self._active_jobs_lock:
@@ -321,9 +357,6 @@ class EdgeControlClient(BaseCommunicationClient):
             {"job_uuid": job.job_uuid, "command_uuid": job.command_uuid},
             parent_carrier=_job_trace_carrier(job),
         )
-        device_id = str(getattr(item, "device_id", "") or "").strip()
-        if device_id:
-            self._schedule(self._commit_device_status(device_id, {}))
 
     def publish_job_status(
         self,
@@ -614,6 +647,7 @@ class EdgeControlClient(BaseCommunicationClient):
                 "session_uuid": self._session_uuid,
                 "process_uuid": self._process_uuid,
                 "last_ack_command_sequence": self.store.last_ack_command_sequence(),
+                "individual_command_ack": True,
                 "running_jobs": running_jobs,
             },
         )
@@ -1017,6 +1051,19 @@ class EdgeControlClient(BaseCommunicationClient):
         await self._commit_device_status(local_device_id, {})
 
     async def _resume_received_jobs(self) -> None:
+        # 只处理本次进程启动时留下的队列；同进程重连不能复制仍存活的 ROS goal。
+        for job_uuid in tuple(self._restart_pending_jobs):
+            job = self.store.get_job(job_uuid)
+            if job is None or job.status != "dispatching":
+                self._restart_pending_jobs.discard(job_uuid)
+                continue
+            payload = await asyncio.to_thread(self.data_plane.fetch_job, job)
+            if payload.get("station_controlled"):
+                if payload.get("execution_start_state") == "NOT_STARTED":
+                    self.store.defer_not_started_job(job_uuid)
+                else:
+                    self._persist_start_unknown(job, "执行进程重启，已开始命令只等待结果对账")
+                self._restart_pending_jobs.discard(job_uuid)
         for job in self.store.list_jobs({"received", "fetch_retry"}):
             self._spawn(self._execute_job(job.job_uuid))
 
@@ -1113,16 +1160,32 @@ class EdgeControlClient(BaseCommunicationClient):
                     action_type=str(payload.get("action_type") or ""),
                     action_args=action_args,
                     trace_context=action_trace_context,
+                    execution_source=job.execution_source,
+                    start_guard=(lambda: self.begin_execution(job)) if payload.get("station_controlled") else None,
                 )
-                self.store.set_job_status(job_uuid, "dispatching")
-                host_node.send_goal(
-                    context,
-                    action_type=context.action_type,
-                    action_kwargs=context.action_args,
-                    sample_material={},
-                    server_info=None,
-                )
+                from unilabos.app.edge_control.execution_start import ExecutionStartDeferred
+                while self._connected.is_set() and not self._stopping.is_set():
+                    latest = self.store.get_job(job_uuid)
+                    if latest is None or latest.status not in {"received", "fetch_retry", "dispatching"}:
+                        return
+                    self.store.set_job_status(job_uuid, "dispatching")
+                    try:
+                        host_node.send_goal(context, action_type=context.action_type,
+                            action_kwargs=context.action_args, sample_material={}, server_info=None)
+                        break
+                    except ExecutionStartDeferred:
+                        self.store.defer_not_started_job(job_uuid)
+                        await asyncio.sleep(0.5)
         except Exception as exc:
+            from unilabos.app.edge_control.execution_start import ExecutionStartCanceled, ExecutionStartUnknown
+            if isinstance(exc, ExecutionStartCanceled):
+                await self._commit_terminal_status(job_uuid, "canceled", {"cancel_reason": "local_no_send_proof"}, {})
+                return
+            if isinstance(exc, ExecutionStartUnknown):
+                self.store.save_pending_outcome(job_uuid, "failed", {}, [{"message": str(exc)}],
+                    unknown_command_ids=[f"workflow-node-job:{job_uuid}"])
+                await self._commit_pending_outcome(job_uuid)
+                return
             logger.error(f"[EdgeControl] 启动 Job {job_uuid[:8]} 失败: {exc}")
             logger.debug(traceback.format_exc())
             await self._commit_terminal_status(
@@ -1455,6 +1518,8 @@ def _validate_job_payload(job: StoredJob, payload: dict[str, Any]) -> None:
         "command_uuid": job.command_uuid,
         "claim_uuid": job.claim_uuid,
     }
+    if payload.get("execution_source", "workflow") != job.execution_source:
+        raise ValueError("HTTP Job execution_source does not match job.start")
     for field, value in expected.items():
         if str(payload.get(field) or "") != value:
             raise ValueError(f"HTTP Job {field} does not match job.start")

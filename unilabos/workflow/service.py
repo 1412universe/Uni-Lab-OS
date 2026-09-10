@@ -629,6 +629,12 @@ class WorkflowService:
         # ``_task_scheduler_bridge`` 是普通任务与设备单动作共享的唯一监听器所有者；
         # 工站调度进程必须装配，纯工作流创作或隔离读取场景才允许保持空。
         self._task_scheduler_bridge = task_scheduler_bridge
+        from unilabos.workflow.error_handling import ErrorHandlingService
+
+        self.error_handling = (
+            ErrorHandlingService(store, task_scheduler_bridge, self._device_action_runs)
+            if task_scheduler_bridge is not None else None
+        )
         self._locks_guard = threading.Lock()
         self._capability_store_lock = threading.Lock()
         self._authoring_locks: dict[str, threading.RLock] = {}
@@ -5362,6 +5368,9 @@ class WorkflowService:
         """把本地设备异常报告持久化为公共工作流干预。"""
 
         try:
+            if self.error_handling is not None and report.get("station_controlled"):
+                return self.error_handling.control.report_error(str(report.get("job_id") or ""),
+                    phase="execution", message=str(report.get("error_message") or "设备动作异常"))
             return self._intervention_store().open_from_report(report)
         except StoreNotFound:
             raise WorkflowError("not_found") from None

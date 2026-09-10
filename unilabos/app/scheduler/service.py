@@ -55,6 +55,7 @@ from unilabos.app.scheduler.device_target import (
 from unilabos.app.scheduler.dispatch import (
     CancelDispatchState,
     CommittedJobOutcome,
+    DispatchPayload,
     Dispatcher,
     RecordingDispatcher,
     build_job_start_payload,
@@ -364,6 +365,7 @@ class EdgeScheduler:
         # 排空（DRAIN）只停止新的设备作业派发；已经派发的作业仍可回传结果并
         # 完成结算。状态只属于调度器权威，Workspace Host 通过 HTTP 查询。
         self._draining = False
+        self._station_control: Any = None
         # 标准 Task/Job 持久层可能保留重启后不允许重放的物理不确定作业；提供者
         # 只返回身份，排空状态在读取时合并，不复制或改写持久权威。
         self._drain_blocker_provider: Callable[[], set[str]] | None = None
@@ -400,6 +402,39 @@ class EdgeScheduler:
         """
 
         return self._inventory
+
+    @property
+    def execution_control_lock(self) -> Any:
+        """派发与错误控制共用短临界区，防止暂停后同轮候选继续开始。"""
+        return self._lock
+
+    def bind_station_control(self, control: Any) -> None:
+        with self._lock:
+            self._station_control = control
+            bind = getattr(self._dispatcher, "bind_execution_control", None)
+            if callable(bind):
+                bind(control, self._notify_job_dispatch_accepted)
+
+    def restore_not_started_dispatches(self) -> None:
+        """按原身份修复未开始出站意图；执行端仍需通过实时开始屏障。"""
+        with self._lock:
+            restore = getattr(self._dispatcher, "restore_dispatch", None)
+            if self._station_control is None or not callable(restore):
+                return
+            for payload in self._station_control.recovery_dispatch_payloads():
+                restore(DispatchPayload(payload))
+
+    def has_inflight_job(self, job_uuid: str) -> bool:
+        with self._lock:
+            return job_uuid in self._inflight
+
+    def retry_node(self, task_uuid: str, node_id: str, job_uuid: str) -> None:
+        """应用持久新 attempt；本方法本身不解除工站暂停。"""
+        with self._lock:
+            run = self._workflows.get(task_uuid)
+            if run is None:
+                raise ValueError("重试任务尚未恢复到调度器")
+            run.retry_node(node_id, job_uuid)
 
     @property
     def station_resource_inventory(self) -> StationResourceInventory | None:
@@ -778,6 +813,17 @@ class EdgeScheduler:
         投影监听器异常原样传播。持久失败事实提交后移除在途作业与本地资源锁，
         使旧 Fence 失效，后继节点不再派发。
         """
+
+        if self._station_control is not None:
+            with self._lock:
+                for listener in tuple(self._execution_process_restarted_listeners):
+                    listener(tuple(dict.fromkeys(job_uuids or tuple(self._inflight))))
+                for job_uuid in job_uuids or tuple(self._inflight):
+                    job = self._inflight.get(job_uuid)
+                    run = self._workflows.get(job.workflow_id) if job else None
+                    if run is not None and self._station_control.is_current(job_uuid) and self._station_control.awaits_decision(job_uuid):
+                        run.hold_error(job.node_id)
+            return
 
         affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
         with self._lock:
@@ -1317,7 +1363,10 @@ class EdgeScheduler:
             ],
         }
         event = self._notify_local_control(event)
-        run.commit_local_control(event)
+        if event.get("error") and self._station_control is not None:
+            run.hold_error(str(event["node_id"]))
+        else:
+            run.commit_local_control(event)
         self._release_completed_interval_holders(run.spec.workflow_id)
         return event
 
@@ -1387,6 +1436,7 @@ class EdgeScheduler:
         restored_jobs: Sequence[DispatchedJob] = (),
         skipped_nodes: Mapping[str, str] | None = None,
         restored_interval_handoffs: Sequence[Mapping[str, Any]] = (),
+        execution_facts: Sequence[Mapping[str, Any]] = (),
     ) -> dict[str, Any]:
         """从持久成功事实恢复一个未终态工作流（Workflow）。
 
@@ -1433,19 +1483,28 @@ class EdgeScheduler:
                     self._material_workflows.add(spec.workflow_id)
                     if not self._try_reserve(run):
                         run.state = WorkflowState.WAITING_MATERIAL
-                for node in spec.nodes:
+                for node in spec.nodes if not execution_facts else ():
                     if node.id in completed_results:
                         run.mark_finished(node.id, completed_results[node.id])
                     elif node.id in skipped_nodes:
                         run.mark_skipped(node.id, reason=skipped_nodes[node.id])
+                if execution_facts:
+                    run.restore_execution_facts(execution_facts)
                 self._restore_interval_handoffs(
                     spec,
                     completed_results,
                     restored_interval_handoffs,
+                    execution_facts=execution_facts,
                 )
-                nodes_by_id = {node.id: node for node in spec.nodes}
                 for restored_job in restored_jobs:
-                    node = nodes_by_id.get(restored_job.node_id)
+                    node = run.node(restored_job.node_id)
+                    if execution_facts:
+                        self._inflight[restored_job.job_id] = restored_job
+                        if restored_job.resource_lock_keys:
+                            self._job_resource_locks[restored_job.job_id] = set(restored_job.resource_lock_keys)
+                        if node is not None and restored_job.job_id == node.job_id:
+                            self._open_resource_intervals_for_job(run, restored_job)
+                        continue
                     if node is None or not node.is_manual_confirm():
                         raise ValueError("只允许恢复尚未越过设备边界的人工确认作业")
                     self._validate_restored_manual_job_identity(spec, node, restored_job)
@@ -1545,6 +1604,7 @@ class EdgeScheduler:
         spec: WorkflowSpec,
         completed_results: Mapping[str, Any],
         handoffs: Sequence[Mapping[str, Any]],
+        *, execution_facts: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         """从已持久化成功 Job 的区间元数据恢复内存连续所有权。"""
 
@@ -1555,6 +1615,7 @@ class EdgeScheduler:
             return
         intervals = {str(item.interval_id): item for item in plan.intervals}
         successful = {str(node_id) for node_id in completed_results}
+        facts_by_job = {str(job["uuid"]): job for job in execution_facts}
         resources = {item.resource_id: item for item in plan.resources}
         run = self._workflows[spec.workflow_id]
 
@@ -1588,8 +1649,17 @@ class EdgeScheduler:
                 raise ExecutionPolicyError("恢复的连续资源交接记录必须是对象")
             node_id = str(raw.get("node_id") or "").strip()
             job_id = str(raw.get("job_id") or "").strip()
-            if not node_id or not job_id or node_id not in successful:
-                raise ExecutionPolicyError("恢复的连续资源交接缺少成功 Job 身份")
+            fact = facts_by_job.get(job_id)
+            if execution_facts:
+                if (fact is None or fact["status"] not in {"succeeded", "failed", "timeout"}
+                        or fact.get("uncertainty_reason") or node_id != str((fact.get("control_data") or {}).get("runtime_node_id") or fact["workflow_node_uuid"])):
+                    raise ExecutionPolicyError("恢复的连续资源所有权缺少明确结束的执行事实")
+                template_node_id = str(fact["workflow_node_uuid"])
+            else:
+                if not node_id or not job_id or node_id not in successful:
+                    raise ExecutionPolicyError("恢复的连续资源交接缺少成功 Job 身份")
+                template_node_id = node_id
+            released_keys = set(raw.get("operator_released_keys") or [])
 
             raw_interval_ids = raw.get("resource_interval_ids")
             if not isinstance(raw_interval_ids, Sequence) or isinstance(
@@ -1605,14 +1675,14 @@ class EdgeScheduler:
                     raise ExecutionPolicyError(
                         "恢复的连续资源交接引用未计划区间：" + interval_id
                     )
-                if node_id not in interval.node_uuids:
+                if template_node_id not in interval.node_uuids:
                     raise ExecutionPolicyError(
                         f"恢复的连续资源交接节点不属于区间：{node_id}/{interval_id}"
                     )
             expected_node_interval_ids = {
                 interval_id
                 for interval_id, interval in intervals.items()
-                if node_id in interval.node_uuids
+                if template_node_id in interval.node_uuids
             }
             if interval_ids != expected_node_interval_ids:
                 raise ExecutionPolicyError("恢复的连续资源交接区间集合与冻结计划不一致")
@@ -1676,11 +1746,12 @@ class EdgeScheduler:
                     raise ExecutionPolicyError(
                         "恢复的连续资源交接资源缺少规范锁键：" + interval_id
                     )
-                expected_active_by_lock.setdefault(lock_key, set()).add(interval_id)
+                if lock_key not in released_keys:
+                    expected_active_by_lock.setdefault(lock_key, set()).add(interval_id)
             actual_active_by_lock = {
                 lock_key: mapped_ids & active_interval_ids
                 for lock_key, mapped_ids in actual_by_lock.items()
-                if mapped_ids & active_interval_ids
+                if mapped_ids & active_interval_ids and lock_key not in released_keys
             }
             if actual_active_by_lock != expected_active_by_lock:
                 raise ExecutionPolicyError("恢复的连续资源交接锁映射与冻结计划不一致")
@@ -1887,14 +1958,22 @@ class EdgeScheduler:
                 state="canceled" if canceled_by_executor else "",
             )
 
-            if success:
+            if self._station_control is not None and not self._station_control.is_current(job_id):
+                pass  # 旧 attempt 的迟到结果仅更新该作业，不能推进新 attempt。
+            elif self._station_control is not None and self._station_control.awaits_decision(job_id):
+                # 迟到成功仍需用户处置；不能提前放开后继再让重试与后继并行。
+                run.hold_error(job.node_id)
+            elif success:
                 run.mark_finished(job.node_id, ret_value)
             elif canceled_by_executor:
                 # 取消请求本身不结算节点；只有执行器返回明确取消终态后，才消费
                 # 在途节点并允许后续物理清理释放占用。
                 run.mark_canceled(job.node_id)
             else:
-                run.mark_failed(job.node_id)
+                if self._station_control is not None and self._station_control.awaits_decision(job_id):
+                    run.hold_error(job.node_id)
+                else:
+                    run.mark_failed(job.node_id)
                 # 失败工作流的未下发节点不再推进；已下发的等它们各自回调
                 logger.warning(
                     "[EdgeScheduler] node %s failed, workflow %s stops advancing",
@@ -1986,6 +2065,8 @@ class EdgeScheduler:
 
         if not job.manual_confirmation_approved or job.manual_action_dispatched:
             return None
+        if self._station_control is not None and not self._station_control.allows_task(job.workflow_id):
+            return None
         run = self._workflows.get(job.workflow_id)
         node = run.node(job.node_id) if run is not None else None
         if run is None or node is None or not node.is_manual_confirm():
@@ -2066,7 +2147,8 @@ class EdgeScheduler:
         job.manual_action_dispatched = True
         try:
             self._dispatcher.dispatch(payload)
-            self._notify_job_dispatch_accepted(job.job_id)
+            if not getattr(self._dispatcher, "deferred_start", False):
+                self._notify_job_dispatch_accepted(job.job_id)
         except BaseException:
             self._notify_job_dispatch_uncertain(
                 job.job_id,
@@ -2190,6 +2272,52 @@ class EdgeScheduler:
             )
             return dispatched
 
+    def _fail_prepared_node(self, run: WorkflowRun, node: WorkflowNode) -> None:
+        """把准备失败接入同一暂停入口，保留具体异常供用户处理。"""
+        import sys
+        if self._station_control is None:
+            run.mark_failed(node.id)
+            return
+        self._station_control.report_error(node.job_id, phase="prepare", message=str(sys.exception() or "节点准备失败"))
+        run.hold_error(node.id)
+
+    def _dispatch_error_manual_locked(self) -> list[dict[str, Any]]:
+        """错误处置单动作复用执行适配器与结果路由，独立于普通资源排序。"""
+        dispatched = []
+        if self._station_control is None:
+            return dispatched
+        for run in tuple(self._workflows.values()):
+            if run.state is not WorkflowState.RUNNING:
+                continue
+            for node in run.ready_nodes():
+                if not self._station_control.is_manual(node.job_id):
+                    continue
+                payload = build_job_start_payload(job_id=node.job_id, task_id=run.spec.task_id,
+                    workflow_id=run.spec.workflow_id, node_id=node.id, device_id=node.device_id,
+                    action_name=node.action_name, action_type=node.action_type, action_args=node.param, always_free=True)
+                credentials = self._station_control.prepare_manual_dispatch(node.job_id, payload)
+                if credentials is None:
+                    continue
+                payload.update(credentials)
+                run.mark_dispatched(node.id)
+                self._inflight[node.job_id] = DispatchedJob(job_id=node.job_id, workflow_id=run.spec.workflow_id,
+                    node_id=node.id, device_action_key=node.device_action_key, device_id=node.device_id,
+                    device_material_uuid=node.device_material_uuid, action_name=node.action_name, resolved_args=dict(node.param))
+                workflow_trace = self._workflow_spans.get(run.spec.workflow_id)
+                action_trace = start_detached_span("action.manual", parent_context=workflow_trace.context if workflow_trace else None,
+                    attributes={"workflow.job.uuid": node.job_id, "workflow.task.uuid": run.spec.task_id})
+                self._job_spans[node.job_id] = action_trace
+                try:
+                    with action_trace.activate():
+                        self._dispatcher.dispatch(payload)
+                    if not getattr(self._dispatcher, "deferred_start", False):
+                        self._notify_job_dispatch_accepted(node.job_id)
+                except Exception:
+                    self._notify_job_dispatch_uncertain(node.job_id, "local_dispatch_acceptance_unknown")
+                    raise
+                dispatched.append({"job_id": node.job_id, "workflow_id": run.spec.workflow_id, "node_id": node.id})
+        return dispatched
+
     def _reschedule_impl(self) -> list[dict[str, Any]]:
         """执行一轮完整重排，并下发当前能够安全执行的作业（Job）。
 
@@ -2205,16 +2333,19 @@ class EdgeScheduler:
 
         self._reschedule_count += 1
 
+        manual_dispatched = self._dispatch_error_manual_locked()
+
         continued = [
             item
             for job in tuple(self._inflight.values())
+            if self._station_control is None or self._station_control.allows_task(job.workflow_id)
             if (item := self._try_dispatch_approved_manual_locked(job)) is not None
         ]
 
         # 排空期间不接纳新的 Job；已准入并经人工批准的同一 Job 属于在途继续，
         # 必须允许越过物理边界，否则 drain 会永久阻塞。
         if self._draining:
-            return continued
+            return manual_dispatched + continued
 
         if self.physical_dispatch_enabled and self._dispatch_admission_authority is None:
             raise ExecutionPolicyError("持久派发准入权威未装配")
@@ -2252,6 +2383,8 @@ class EdgeScheduler:
         for run in self._workflows.values():
             if run.state is not WorkflowState.RUNNING:
                 continue
+            if self._station_control is not None and not self._station_control.allows_task(run.spec.task_id):
+                continue
             step_target = self._step_targets.get(run.spec.workflow_id)
             stepped_local_control = False
             while True:
@@ -2265,6 +2398,8 @@ class EdgeScheduler:
                 # 监听器可以把“物化失败”原子改写为同一控制节点的失败决定；
                 # 提交已投影的事件副本，保证持久状态与内存 DAG 不会分叉。
                 self._commit_prepared_local_control_locked(run, evaluation)
+                if self._station_control is not None and not self._station_control.allows_task(run.spec.task_id):
+                    break
                 if step_target is not None:
                     stepped_local_control = True
                     break
@@ -2301,8 +2436,12 @@ class EdgeScheduler:
             )
         )
 
-        dispatched: list[dict[str, Any]] = list(continued)
+        dispatched: list[dict[str, Any]] = manual_dispatched + list(continued)
         for task in ordered:
+            if self._station_control is not None and self._station_control.is_manual(task.node.job_id):
+                continue
+            if self._station_control is not None and not self._station_control.allows_task(task.workflow_id):
+                continue
             # 人工确认必须先占完整设备/物料/Site 资源，即使底层动作声明
             # always_free 也不能绕过设备互斥；这是人员到场确认的安全边界。
             manual_confirm = task.node.is_manual_confirm()
@@ -2331,7 +2470,7 @@ class EdgeScheduler:
                     if not identity:
                         continue
                     key = device_lock_key(identity)
-                    if key not in shared_keys:
+                    if key not in shared_keys and key not in job.operator_released_keys:
                         nonshareable_active_keys.add(key)
             # 默认连续区间只能由一个在途后继接管。只有显式共同 scope 才允许
             # 同 Task 的并行 Job 复用同一资源；层级 Material/Site 锁也按真实
@@ -2388,7 +2527,7 @@ class EdgeScheduler:
                     task.node.id,
                     exc,
                 )
-                run.mark_failed(task.node.id)
+                self._fail_prepared_node(run, task.node)
                 continue
 
             # Schema 或库位解析失败必须关闭执行，不能退化为“没有资源锁”。
@@ -2633,7 +2772,7 @@ class EdgeScheduler:
                     error.code,
                     error.message,
                 )
-                run.mark_failed(task.node.id)
+                self._fail_prepared_node(run, task.node)
                 continue
             except TransferResourceSetError as error:
                 if is_temporary_resource_condition(error.code):
@@ -2659,7 +2798,7 @@ class EdgeScheduler:
                     error.code,
                     error.message,
                 )
-                run.mark_failed(task.node.id)
+                self._fail_prepared_node(run, task.node)
                 continue
             except StationResourceError as error:
                 if is_temporary_resource_condition(error.code):
@@ -2685,7 +2824,7 @@ class EdgeScheduler:
                     error.code,
                     error.message,
                 )
-                run.mark_failed(task.node.id)
+                self._fail_prepared_node(run, task.node)
                 continue
             except (
                 ExecutionPolicyError,
@@ -2700,7 +2839,7 @@ class EdgeScheduler:
                     getattr(error, "path", "/"),
                     getattr(error, "message", str(error)),
                 )
-                run.mark_failed(task.node.id)
+                self._fail_prepared_node(run, task.node)
                 continue
             try:
                 (
@@ -2736,7 +2875,7 @@ class EdgeScheduler:
                     task.node.id,
                     error,
                 )
-                run.mark_failed(task.node.id)
+                self._fail_prepared_node(run, task.node)
                 continue
             continuation_job_uuids = self._continuation_resource_job_uuids(
                 task.workflow_id,
@@ -2928,6 +3067,7 @@ class EdgeScheduler:
                         "job_id": job_id,
                         "workflow_id": task.workflow_id,
                         "node_id": task.node.id,
+                        "dispatch_payload": deepcopy(payload),
                         "device_action_key": action_key,
                         "estimated_s": round(estimated_s, 3),
                         "estimate_source": estimate_source,
@@ -3087,7 +3227,8 @@ class EdgeScheduler:
                         held_resource_locks |= lock_keys
                     if not manual_confirm:
                         self._dispatcher.dispatch(payload)
-                        self._notify_job_dispatch_accepted(job_id)
+                        if not getattr(self._dispatcher, "deferred_start", False):
+                            self._notify_job_dispatch_accepted(job_id)
             except BaseException as exc:
                 action_trace.fail(exc)
                 action_trace.end()
@@ -3611,6 +3752,8 @@ class EdgeScheduler:
                 )
                 or (candidate_device and candidate_device == other_device)
             )
+            if device_lock_key(other_device) in other.operator_released_keys:
+                device_conflict = False
             active_conflicts = conflicting_resource_lock_keys(
                 candidate.active_resource_lock_keys,
                 other.active_resource_lock_keys,
@@ -3638,7 +3781,7 @@ class EdgeScheduler:
             if i.interval_id in shared_ids
         }
         return {
-            job.job_id: {keys[i] for i in shared_ids & set(job.resource_interval_ids)}
+            job.job_id: {keys[i] for i in shared_ids & set(job.resource_interval_ids)} - job.operator_released_keys
             for job in self._inflight.values()
             if job.workflow_id == workflow_id and shared_ids & set(job.resource_interval_ids)
         }
@@ -4256,8 +4399,10 @@ class EdgeScheduler:
             if device_key is not None:
                 busy.add(device_key)
         for job in self._inflight.values():
-            busy.add(job.device_action_key)
-            busy.add(device_lock_key(job.device_material_uuid or job.device_id))
+            key = device_lock_key(job.device_material_uuid or job.device_id)
+            if key not in job.operator_released_keys:
+                busy.add(job.device_action_key)
+                busy.add(key)
         for keys in self._interval_resource_holders.values():
             busy |= keys
         return busy
@@ -4555,7 +4700,41 @@ class EdgeScheduler:
             "drain": self._resolve_drain_status(drain_snapshot),
         }
 
-    def cancel_workflow(self, workflow_id: str) -> bool:
+    def release_error_occupancies(self, occupancies: Sequence[Mapping[str, Any]]) -> None:
+        """人工释放指定逻辑占用，保留实际在途执行以接收迟到回执。"""
+        with self._lock:
+            for item in occupancies:
+                identity, key = str(item["workflow_node_job_uuid"]), str(item["lock_key"])
+                for job in self._inflight.values():
+                    same_fence = any(
+                        fence.get("lock_key") == key and fence.get("fencing_token") == item.get("fencing_token")
+                        for fence in job.dispatch_credentials.get("fences", [])
+                    )
+                    if job.workflow_id != item["workflow_task_uuid"] or not (job.job_id == identity or same_fence):
+                        continue
+                    job.operator_released_keys.add(key)
+                    job.resource_lock_keys.discard(key)
+                    job.active_resource_lock_keys.discard(key)
+                    self._job_resource_locks.get(job.job_id, set()).discard(key)
+                for (task_id, _), keys in self._interval_resource_holders.items():
+                    if task_id == item["workflow_task_uuid"]:
+                        keys.discard(key)
+
+    def settle_canceled_before_start(self, job_uuid: str) -> None:
+        """持久开始屏障已撤销命令后，清理对应内存等待，不伪造设备停止。"""
+        with self._lock:
+            job = self._inflight.pop(job_uuid, None)
+            if job is None:
+                return
+            run = self._workflows.get(job.workflow_id)
+            if run is not None:
+                run.mark_canceled(job.node_id)
+            self._job_resource_locks.pop(job_uuid, None)
+            span = self._job_spans.pop(job_uuid, None)
+            if span is not None:
+                span.end()
+
+    def cancel_workflow(self, workflow_id: str, *, execution_job_uuid: str | None = None, cancel_current: bool = True) -> bool:
         """停止后续派发并请求执行器取消全部在途设备作业。
 
         参数：``workflow_id`` 是本地工作流任务（WorkflowTask）身份。返回：找到
@@ -4569,13 +4748,15 @@ class EdgeScheduler:
 
         with self._lock:
             run = self._workflows.get(workflow_id)
-            if run is None:
+            if run is None and execution_job_uuid not in self._inflight:
                 return False
-            run.cancel()
+            if cancel_current and run is not None:
+                run.cancel()
             canceling_jobs = [
                 job_id
                 for job_id, j in self._inflight.items()
                 if j.workflow_id == workflow_id
+                and (execution_job_uuid is None or job_id == execution_job_uuid)
             ]
             cancel_method = getattr(self._dispatcher, "cancel", None)
             for job_id in canceling_jobs:
@@ -4602,7 +4783,8 @@ class EdgeScheduler:
                     action_trace = self._job_spans.pop(job_id, None)
                     if action_trace is not None:
                         action_trace.end()
-                    current_run.mark_canceled(current_job.node_id)
+                    if cancel_current:
+                        current_run.mark_canceled(current_job.node_id)
                     self._record_timeline(
                         current_job,
                         success=False,
@@ -4610,7 +4792,8 @@ class EdgeScheduler:
                         state="canceled",
                     )
                     self._notify_job_settled(job_id, False, None, "canceled")
-                    self._clear_interval_holders(workflow_id)
+                    if cancel_current:
+                        self._clear_interval_holders(workflow_id)
                     continue
                 try:
                     state = (
@@ -4653,7 +4836,8 @@ class EdgeScheduler:
                         )
                         action_trace.end()
                     if job is not None:
-                        run.mark_canceled(job.node_id)
+                        if cancel_current and run is not None:
+                            run.mark_canceled(job.node_id)
                         self._record_timeline(
                             job,
                             success=False,

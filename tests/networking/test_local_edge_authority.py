@@ -1092,3 +1092,24 @@ def test_fail_restarted_jobs_clears_unknown_busy_key(tmp_path: Path) -> None:
         assert authority.fail_restarted_jobs((payload["job_id"],)) == []
     finally:
         authority.stop()
+
+
+def test_individual_ack_does_not_ack_paused_earlier_command(tmp_path: Path) -> None:
+    """手动命令越过普通等待命令后，重连不能用最大序号吞掉未送达命令。"""
+    authority = _authority(tmp_path / "authority.db")
+    try:
+        registration = authority.store.register_session({"edge_key": "local", "instance_uuid": str(uuid.uuid4()), "devices": []})
+        first = _payload(device_id="first")
+        second = _payload(device_id="second")
+        authority.dispatch(first)
+        authority.dispatch(second)
+        commands = authority.store.pending_commands()
+        authority.store.acknowledge_command(commands[1]["message_uuid"])
+        authority.store.reconcile_hello({
+            "edge_uuid": registration["edge_uuid"], "session_uuid": registration["session_uuid"],
+            "process_uuid": str(uuid.uuid4()), "last_ack_command_sequence": commands[1]["sequence"],
+            "individual_command_ack": True, "running_jobs": [],
+        })
+        assert [item["message_uuid"] for item in authority.store.pending_commands()] == [commands[0]["message_uuid"]]
+    finally:
+        authority.store.close()

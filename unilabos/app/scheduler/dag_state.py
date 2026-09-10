@@ -13,6 +13,7 @@ service 层在每次触发点统一执行，本类只维护图状态，无并发
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
@@ -280,6 +281,83 @@ class WorkflowRun:
             )
         else:
             self.state = WorkflowState.FAILED
+
+    def hold_error(self, node_id: str) -> None:
+        """消费失败的本次执行但保留依赖，任务不提前进入终态。"""
+        owner = self._round_owner(node_id)
+        if owner is not None:
+            owner.hold_error(node_id)
+            return
+        if node_id not in self._nodes:
+            raise ValueError("错误节点不属于当前运行")
+        self._consumed.add(node_id)
+        self._node_states[node_id] = NodeState.ERROR_WAITING
+
+    def retry_node(self, node_id: str, job_id: str) -> None:
+        """只为具体节点实例替换 attempt，保留前置结果与当前执行模式。"""
+        owner = self._round_owner(node_id)
+        if owner is not None:
+            owner.retry_node(node_id, job_id)
+            return
+        node = self._nodes.get(node_id)
+        if node is None:
+            raise ValueError("重试节点不属于当前运行")
+        if node.job_id == job_id:
+            return
+        node.job_id = job_id
+        self._consumed.discard(node_id)
+        self._failed_nodes.discard(node_id)
+        self._node_errors.pop(node_id, None)
+        self._node_states[node_id] = NodeState.PENDING
+
+    def restore_execution_facts(self, jobs: Sequence[Mapping[str, Any]]) -> None:
+        """仅重建已落盘的有效执行事实；循环物化不提交任何设备动作。"""
+        facts = {
+            str((job.get("control_data") or {}).get("runtime_node_id") or job["workflow_node_uuid"]): job
+            for job in jobs if job.get("current_attempt", True)
+        }
+        restored: set[str] = set()
+        while True:
+            progressed = False
+            for node_id, job in facts.items():
+                node = self.node(node_id)
+                if node is None or node_id in restored:
+                    continue
+                node.job_id = str(job["uuid"])
+                status = job["status"]
+                if job.get("awaiting_error_decision"):
+                    self.hold_error(node_id)
+                    restored.add(node_id)
+                    progressed = True
+                    continue
+                if node.executor_kind == "repeat_until" and status not in {"succeeded", "skipped", "failed", "timeout", "canceled"}:
+                    continue
+                if status == "succeeded":
+                    self.mark_finished(node_id, job.get("return_info") or {})
+                elif status == "skipped":
+                    self.mark_skipped(node_id, reason="persisted_branch_decision")
+                elif status in {"failed", "timeout"}:
+                    self.hold_error(node_id)
+                elif status == "canceled":
+                    self.mark_canceled(node_id)
+                elif status in {"dispatched", "running", "cancel_requested"} or job.get("manual_continuation_pending"):
+                    self.mark_dispatched(node_id)
+                restored.add(node_id)
+                progressed = True
+            evaluation = self.prepare_local_control()
+            if evaluation is not None and evaluation.get("control_type") == "repeat_until":
+                control = facts.get(str(evaluation["node_id"]))
+                can_replay = False
+                if evaluation["phase"] == "materialize":
+                    can_replay = all(item["runtime_node_id"] in facts for item in evaluation["iteration_jobs"])
+                elif control is not None:
+                    data = control.get("control_data") or {}
+                    can_replay = "condition_result" in data and int(data.get("iteration_index", -1)) >= evaluation["iteration_index"]
+                if can_replay:
+                    self.commit_local_control(evaluation)
+                    progressed = True
+            if not progressed:
+                break
 
     def advance_local_controls(self) -> list[dict[str, Any]]:
         """连续求值当前就绪的条件节点，不越过物理执行边界。"""

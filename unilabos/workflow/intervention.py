@@ -230,7 +230,7 @@ class WorkflowInterventionStore:
             rows = connection.execute(
                 """
                 SELECT * FROM workflow_intervention
-                WHERE status = ? AND deleted_at IS NULL
+                WHERE status = ? AND deleted_at IS NULL AND decision_kind='device_intervention'
                 ORDER BY opened_at ASC, uuid ASC LIMIT ?
                 """,
                 (normalized, limit),
@@ -275,7 +275,7 @@ class WorkflowInterventionStore:
             row = connection.execute(
                 """
                 SELECT * FROM workflow_intervention
-                WHERE uuid = ? AND deleted_at IS NULL
+                WHERE uuid = ? AND deleted_at IS NULL AND decision_kind='device_intervention'
                 """,
                 (intervention_uuid,),
             ).fetchone()
@@ -364,7 +364,7 @@ class WorkflowInterventionStore:
             rows = connection.execute(
                 """
                 SELECT * FROM workflow_intervention
-                WHERE status='selected'
+                WHERE status='selected' AND decision_kind='device_intervention'
                   AND delivery_status IN ('pending','unknown')
                   AND deleted_at IS NULL
                 ORDER BY decided_at ASC,uuid ASC LIMIT ?
@@ -429,6 +429,7 @@ def settle_intervention_for_job(
         UPDATE workflow_intervention
         SET status = 'superseded', update_time = ?
         WHERE workflow_node_job_uuid = ? AND status IN ('open', 'selected')
+            AND decision_kind='device_intervention'
         """,
         (now, job_uuid),
     )

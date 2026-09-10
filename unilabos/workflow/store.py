@@ -707,6 +707,9 @@ class WorkflowStore:
                     ensure_execution_lock_schema(self._conn)
                     ensure_local_cancellation_schema(self._conn)
                     ensure_workflow_inventory_schema(self._conn)
+                    from unilabos.workflow.error_control import ensure_error_control_schema
+
+                    ensure_error_control_schema(self._conn)
                     if self._persist_workflow_definitions:
                         columns = {
                             row["name"]
@@ -2916,7 +2919,7 @@ class WorkflowStore:
         with self._lock:
             rows = self._conn.execute(
                 f"""
-                SELECT
+                SELECT current_attempt, retry_of_job_uuid, execution_source, start_state,
                     uuid,
                     create_time,
                     update_time,
@@ -3054,6 +3057,8 @@ class WorkflowStore:
             if row["status"] in {"succeeded", "failed", "canceled", "timeout"}:
                 raise StoreConflict("终态任务不能修改控制状态")
             previous = str(row["control_status"])
+            if previous == "error_waiting":
+                control_status = "error_waiting"
             if previous != control_status:
                 conn.execute(
                     """
@@ -3097,6 +3102,9 @@ class WorkflowStore:
                 raise StoreNotFound(f"workflow task {task_uuid} not found")
             if row["status"] in {"succeeded", "failed", "canceled", "timeout"}:
                 raise StoreConflict("终态任务不能修改执行模式")
+            # 用户执行模式与未决错误各自保存；旧 pause/resume 不解除错误闸门。
+            if row["control_status"] == "error_waiting":
+                control_status = "error_waiting"
             if (
                 str(row["execution_mode"]) != execution_mode
                 or str(row["control_status"]) != control_status
@@ -3660,6 +3668,16 @@ class WorkflowStore:
         if row is None:
             raise StoreNotFound(f"workflow node template {template_uuid} not found")
         return self._node_template_row(row)
+
+    def list_device_action_templates(self, resource_template_uuid: str) -> list[dict[str, Any]]:
+        """从当前权威目录读取设备类型的全部动作，不按运行占用过滤。"""
+        if self._template_snapshot_provider is not None:
+            templates = [entry.detached_template() for entry in self._template_snapshot_provider.snapshot().actions]
+        else:
+            with self.read() as conn:
+                templates = [self._node_template_row(row) for row in conn.execute(
+                    "SELECT * FROM workflow_node_template WHERE resource_template_uuid=? AND deleted_at IS NULL", (resource_template_uuid,))]
+        return [item for item in templates if item.get("resource_template_uuid") == resource_template_uuid and str(item.get("node_type", "")).lower() == "ilab"]
 
     # Authoring ----------------------------------------------------------
 
@@ -4873,6 +4891,11 @@ class WorkflowStore:
             "status": row["status"],
             "attempt": row["attempt"],
             "param": _load(row["param"], {}),
+            "current_attempt": bool(row["current_attempt"]),
+            "start_state": row["start_state"],
+            "execution_source": row["execution_source"],
+            "retry_of_job_uuid": row["retry_of_job_uuid"],
+            "definition_fingerprint": row["definition_fingerprint"],
             "feedback_data": _load(row["feedback_data"], {}),
             "return_info": _load(row["return_info"], {}),
             "control_data": _load(row["control_data"], {}),
@@ -4914,6 +4937,10 @@ class WorkflowStore:
             "executor_kind": row["executor_kind"],
             "status": row["status"],
             "attempt": row["attempt"],
+            "current_attempt": bool(row["current_attempt"]),
+            "retry_of_job_uuid": row["retry_of_job_uuid"],
+            "execution_source": row["execution_source"],
+            "start_state": row["start_state"],
             "control_data": _load(row["control_data"], {}),
             "error_info": _load(row["error_info"], []),
             "wait_reason": _load(row["wait_reason"], {}),

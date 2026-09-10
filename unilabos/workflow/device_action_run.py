@@ -198,6 +198,40 @@ class DeviceActionRunService:
         return material
 
     @staticmethod
+    def action_fingerprint(template: Mapping[str, Any]) -> str:
+        """以完整动作内容生成版本，稳定模板 UUID 不能代替版本。"""
+        definition = {key: value for key, value in template.items() if key not in {"create_time", "update_time"}}
+        return "sha256:" + hashlib.sha256(encode_json(definition, sort_keys=True)).hexdigest()
+
+    def list_manual_actions(self, material_uuid: str) -> list[dict[str, Any]]:
+        material = self._resolve_material(validate_uuid(material_uuid))
+        binding = {"material_uuid": material["uuid"], "edge_local_id": self._edge_local_id(material)}
+        return [{"action_id": template["uuid"], "template_uuid": template["uuid"],
+                 "name": template["name"], "display_name": template.get("display_name") or template["name"],
+                 "action_version": self.action_fingerprint(template),
+                 "parameter_schema": template.get("meta_data", {}).get("unilab", {}).get("action_contract_schema", {}).get("properties", {}).get("goal", {}),
+                 "defaults": template.get("goal_default") or template.get("goal") or {}, "device_binding": binding}
+                for template in self._workflow_store.list_device_action_templates(str(material["resource_template_uuid"]))]
+
+    def prepare_manual(self, request: Mapping[str, Any], *, idempotency_key: str, metadata: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        """冻结任意已提供动作及输入，不经过占用、Site 选择或资源合同准入。"""
+        material_uuid = validate_uuid(str(request["device_id"]))
+        template = self._workflow_store.get_node_template(validate_uuid(str(request["action_id"])))
+        material = self._resolve_material(material_uuid)
+        if template.get("resource_template_uuid") != material["resource_template_uuid"] or self._canonical_node_kind(template.get("node_type")) != "device_action":
+            raise DeviceActionRunInputError("设备与动作不匹配")
+        if request.get("action_version") != self.action_fingerprint(template):
+            raise StoreConflict("action_definition_changed")
+        param = self._normalize_object(request.get("parameters"), field="parameters")
+        self._validate_action_param(template, param)
+        executor_kind, contract = self._action_execution_contract(template)
+        return self._build_execution(material_uuid=material_uuid, edge_local_id=self._edge_local_id(material),
+            template=template, executor_kind="device_action", action_resource_contract={},
+            param=param, execution_policy={}, idempotency_key=idempotency_key,
+            request_fingerprint=hashlib.sha256(encode_json(dict(request), sort_keys=True)).hexdigest(),
+            description="错误处置手动动作", meta_data=metadata)
+
+    @staticmethod
     def _action_execution_contract(
         template: Mapping[str, Any],
     ) -> tuple[str, dict[str, Any]]:

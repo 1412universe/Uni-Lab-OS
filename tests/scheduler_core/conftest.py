@@ -313,6 +313,43 @@ class CoreRuntime:
     bridge: TaskSchedulerBridge
     device_materials: dict[str, str]
 
+    def restart_scheduler(self) -> None:
+        """重建控制器和 DAG，保留两个数据库与仍在运行的测试设备。"""
+        self.bridge.close()
+        self.scheduler = EdgeScheduler(
+            dispatcher=self.dispatcher, inventory=self.inventory,
+            station_resources=self.inventory.station_resources,
+            device_target_resolver=lambda selector, _action, _busy: ResolvedDeviceTarget(
+                selector["local_device_id"], self.device_materials[selector["local_device_id"]]),
+            clock=self.clock.time,
+        )
+        self.bridge = TaskSchedulerBridge(self.workflow_store, scheduler=self.scheduler,
+            clock=self.clock.now, timer_factory=self.clock.timer)
+        self.bridge.recover_active_tasks()
+
+    def release_error_resources_and_resume(self, task_uuid: str, *, command_uuid: str, reason: str) -> dict[str, Any]:
+        """从公开占用快照精确释放选中任务，再由测试操作者明确恢复工站。"""
+        control = self.bridge.error_control
+        snapshot = control.snapshot()
+        errors = [item for item in snapshot["errors"] if item["source_task_uuid"] == task_uuid]
+        if not errors:
+            return self.bridge.unlock_resources(task_uuid, command_uuid=command_uuid, reason=reason)
+        occupancies = [item for item in control.occupancies() if item["workflow_task_uuid"] == task_uuid]
+        if occupancies:
+            result = self.bridge.apply_auxiliary(f"resource:{errors[0]['decision_id']}", {
+                "decision_id": errors[0]["decision_id"], "expected_station_version": snapshot["station_version"],
+                "occupancy_ids": [item["uuid"] for item in occupancies],
+                "expected_versions": {item["uuid"]: item["version"] for item in occupancies},
+                "operation": "release", "reason": reason,
+            }, idempotency_key=command_uuid, operator_id="test-operator")
+            assert result["status"] == "APPLIED", result
+        snapshot = control.snapshot()
+        result = control.resume({"expected_station_version": snapshot["station_version"],
+            "observed_error_epoch": snapshot["error_epoch"], "operator_confirmed": True,
+            "confirm_snapshot_id": snapshot["snapshot_id"]}, idempotency_key=command_uuid + ":resume", operator_id="test-operator")
+        self.bridge.reschedule()
+        return result
+
     def close(self) -> None:
         """按组合根逆序关闭桥与两个 SQLite Store。"""
 

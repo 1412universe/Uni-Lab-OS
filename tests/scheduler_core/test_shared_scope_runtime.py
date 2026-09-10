@@ -173,7 +173,9 @@ def test_shared_scope_abnormal_branch_requires_operator_release(
         )
         if position == 0:
             assert len(runtime.dispatcher.dispatched) == 2, "另一个物理命令未结算就释放共同范围"
-    assert runtime.workflow_store.get_task(task_uuid)["status"] == terminal_outcome
+    assert runtime.workflow_store.get_task(task_uuid)["status"] == ("running" if terminal_outcome == "failed" else terminal_outcome)
+    if terminal_outcome == "failed":
+        assert runtime.workflow_store.get_task(task_uuid)["control_status"] == "error_waiting"
     assert waiter_id not in {
         payload["job_id"] for payload in runtime.dispatcher.dispatched
     }
@@ -189,7 +191,7 @@ def test_shared_scope_abnormal_branch_requires_operator_release(
             (task_uuid,),
         ).fetchall()
 
-    runtime.bridge.unlock_resources(
+    runtime.release_error_resources_and_resume(
         task_uuid,
         command_uuid=stable_uuid(
             f"command:unlock-{terminal_outcome}-{completion_order}"
@@ -217,12 +219,13 @@ def test_shared_scope_unknown_peer_keeps_claim_until_certain_result(
     runtime.scheduler.on_job_outcome(jobs[1], outcome("succeeded"))
     waiter_id = stable_uuid("job:scope-waiter:0")
     if peer_outcome == "succeeded":
+        runtime.release_error_resources_and_resume(owner["task"]["uuid"], command_uuid=stable_uuid("resume-known-unknown"), reason="人工确认已知未知结果可恢复")
         assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_id
     else:
         assert waiter_id not in {
             payload["job_id"] for payload in runtime.dispatcher.dispatched
         }
-        runtime.bridge.unlock_resources(
+        runtime.release_error_resources_and_resume(
             owner["task"]["uuid"],
             command_uuid=stable_uuid("command:unlock-resolved-unknown-scope"),
             reason="操作员确认失败分支与曾不确定分支均已完成现场核对",
@@ -255,7 +258,8 @@ def test_shared_scope_failure_keeps_every_lock_until_operator_unlocks(
     failed_job_uuid = dispatched_owner_jobs[0]
     runtime.scheduler.on_job_finished(failed_job_uuid, False, {}, "failed")
 
-    assert runtime.workflow_store.get_task(task_uuid)["status"] == "failed"
+    assert runtime.workflow_store.get_task(task_uuid)["status"] == "running"
+    assert runtime.workflow_store.get_task(task_uuid)["control_status"] == "error_waiting"
     assert waiter_job_uuid not in {
         payload["job_id"] for payload in runtime.dispatcher.dispatched
     }
@@ -279,20 +283,20 @@ def test_shared_scope_failure_keeps_every_lock_until_operator_unlocks(
         payload["job_id"] for payload in runtime.dispatcher.dispatched
     }
 
-    result = runtime.bridge.unlock_resources(
+    result = runtime.release_error_resources_and_resume(
         task_uuid,
         command_uuid=stable_uuid("command:unlock-failed-shared-scope"),
         reason="操作员已确认设备停止并完成物料与库位核对",
     )
 
-    assert result["cleanup_status"] == "settled"
+    assert result["status"] == "APPLIED"
     assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_job_uuid
 
 
 def test_execution_process_restart_also_latches_continuous_scope(
     core_runtime: CoreRuntime,
 ) -> None:
-    """执行进程重启属于失败，不能绕过连续区间的人工释放闩锁。"""
+    """执行断连保留实际未知执行，仍须人工明确释放逻辑占用。"""
 
     runtime = core_runtime
     owner, jobs = submit_shared_scope(runtime)
@@ -302,7 +306,8 @@ def test_execution_process_restart_also_latches_continuous_scope(
     runtime.scheduler.on_execution_process_restarted((jobs[0],))
     runtime.submit(task_name="scope-waiter", devices=["warehouse-a"], priority="high")
 
-    assert runtime.workflow_store.get_task(task_uuid)["status"] == "failed"
+    assert runtime.workflow_store.get_task(task_uuid)["status"] == "running"
+    assert runtime.workflow_store.get_task(task_uuid)["control_status"] == "error_waiting"
     assert waiter_job_uuid not in {
         payload["job_id"] for payload in runtime.dispatcher.dispatched
     }
@@ -318,7 +323,7 @@ def test_execution_process_restart_also_latches_continuous_scope(
             (task_uuid,),
         ).fetchall()
 
-    runtime.bridge.unlock_resources(
+    runtime.release_error_resources_and_resume(
         task_uuid,
         command_uuid=stable_uuid("command:unlock-restarted-shared-scope"),
         reason="操作员确认执行进程重启后所有动作停止且现场资源安全",

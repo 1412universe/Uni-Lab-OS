@@ -61,7 +61,7 @@ def test_certain_failure_latches_interval_with_unstarted_successor(core_runtime)
     assert waiter_job_uuid not in {
         payload["job_id"] for payload in core_runtime.dispatcher.dispatched
     }
-    core_runtime.bridge.unlock_resources(
+    core_runtime.release_error_resources_and_resume(
         owner["task"]["uuid"],
         command_uuid=stable_uuid("command:review-failed-sequence-unlock"),
         reason="操作员确认失败动作已停止且连续区间资源安全",

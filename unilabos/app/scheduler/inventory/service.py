@@ -136,6 +136,7 @@ class InventoryService:
                 store,
                 settle_material_aliquot=self._settle_claimed_material_aliquot,
                 settle_material_transfer=self._settle_claimed_material_transfer,
+                correct_inventory=self.correct_inventory,
             )
         )
 
@@ -1682,6 +1683,71 @@ class InventoryService:
             )
         return inst
 
+    def correct_inventory(self, command_uuid: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        """人工登记物料位置，按既有实例版本和台账幂等写入，不检查执行锁。"""
+        with self._tx() as conn:
+            existing = conn.execute("SELECT result_json FROM processed_command WHERE command_id=?", (command_uuid,)).fetchone()
+            if existing is not None:
+                return json.loads(existing["result_json"])
+            changes = request.get("changes") or []
+            versions = request.get("expected_inventory_versions") or {}
+            if not changes or len({item["material_uuid"] for item in changes}) != len(changes):
+                raise CommandRejected("物料修正必须非空且每项物料只出现一次")
+            planned_parents = {item["edge_uuid"]: str(item["parent_uuid"] or "") for item in conn.execute("SELECT edge_uuid,parent_uuid FROM material_instance")}
+            planned_parents.update({item["material_uuid"]: str(item.get("parent_uuid") or "") for item in changes})
+            for identity in planned_parents:
+                seen, current = set(), identity
+                while current:
+                    if current in seen:
+                        raise CommandRejected("人工位置修正会产生父级环")
+                    seen.add(current)
+                    current = planned_parents.get(current, "")
+            facts = []
+            for change in changes:
+                identity = change["material_uuid"]
+                inst = self._tx_get_instance(conn, identity)
+                if identity not in versions:
+                    raise CommandRejected("缺少人工修正的实例版本")
+                self._tx_check_version(inst, versions[identity])
+                parent_uuid, site_uuid = str(change.get("parent_uuid") or ""), str(change.get("site_uuid") or "")
+                target = None
+                if parent_uuid:
+                    self._tx_get_instance(conn, parent_uuid)
+                    if parent_uuid == identity:
+                        raise CommandRejected("物料不能装入自身")
+                if site_uuid:
+                    target = conn.execute("SELECT * FROM site WHERE uuid=? AND deleted_at IS NULL", (site_uuid,)).fetchone()
+                    if target is None or target["material_uuid"] != parent_uuid:
+                        raise CommandRejected("库位与目标父物料不匹配")
+                    if versions.get(site_uuid) != str(target["update_time"]):
+                        raise VersionConflict("库位版本已变化")
+                old = conn.execute("SELECT * FROM resource_relation WHERE child_uuid=?", (identity,)).fetchone()
+                facts.append((change, inst, dict(old) if old else None, target))
+            # 同批变更先移出来源，可原子表达交换与卸载，不以旧占用作为准入。
+            for change, inst, old, target in facts:
+                clear_site_occupancy(conn, material_uuid=change["material_uuid"])
+                conn.execute("DELETE FROM resource_relation WHERE child_uuid=?", (change["material_uuid"],))
+                conn.execute("UPDATE material_instance SET parent_uuid='' WHERE edge_uuid=?", (change["material_uuid"],))
+            results = []
+            for change, inst, old, target in facts:
+                identity = change["material_uuid"]
+                parent_uuid = str(change.get("parent_uuid") or "")
+                if parent_uuid:
+                    result = self._tx_move_instance(conn, inst=inst, old=None, parent_uuid=parent_uuid,
+                        slot_id=str(target["name"]) if target is not None else "", actor=request["operator_id"], causation_id=command_uuid)
+                else:
+                    conn.execute("UPDATE material_instance SET version=version+1 WHERE edge_uuid=?", (identity,))
+                    result = self._tx_get_instance(conn, identity)
+                # 保留独立人工事实，不把动作成功猜成自动上下料。
+                self._emit(conn, self._now_ms(), "instance", identity, result["version"], "instance.manual_correction",
+                    {"before": inst, "before_relation": old, "after": result, "session_id": request["session_id"],
+                     "source_job_uuid": request["source_job_uuid"], "related_manual_command_id": request.get("related_manual_command_id")},
+                    actor=request["operator_id"], reason=request["reason"], causation_id=command_uuid)
+                results.append(result)
+            result = {"instances": results}
+            conn.execute("INSERT INTO processed_command(command_id,result_json) VALUES(?,?)", (command_uuid,json.dumps(result,ensure_ascii=False)))
+            return result
+
     @_traced_operation("move")
     def move_instance(
         self, edge_uuid: str, parent_uuid: str, slot_id: str = "",
@@ -1814,6 +1880,7 @@ class InventoryService:
                 expected_change_set=expected_change,
                 fences=fences,
                 allow_released_replay=True,
+                evidence_only=True,
             )
             persisted = conn.execute(
                 "SELECT delta_json,causation_id,workflow_node_job_uuid "
@@ -1846,6 +1913,21 @@ class InventoryService:
                         "转运结算重放台账结果不是对象",
                     )
                 return result
+            corrected = conn.execute("""SELECT l.causation_id,l.occurred_at FROM inventory_ledger l
+                JOIN station_execution_claim c ON c.claim_uuid=?
+                WHERE l.aggregate_id=? AND l.op_type='instance.manual_correction'
+                AND l.occurred_at >= CAST((julianday(c.acquired_at)-2440587.5)*86400000 AS INTEGER)
+                ORDER BY l.occurred_at DESC LIMIT 1""", (command.claim_uuid, command.material_uuid)).fetchone()
+            if corrected is not None:
+                raise StationResourceError("inventory_fact_changed", "派发后存在人工库存修正，保留动作证据供核对",
+                    resources=[{"material_uuid": command.material_uuid,
+                        "correction_command_uuid": str(corrected["causation_id"]),
+                        "expected_target_site_uuid": command.target_site_uuid}])
+            # 以上只读取历史证据。首次位置写入仍要求全部租约当前有效。
+            validate_physical_settlement_credentials(conn, effect_uuid=command.effect_uuid,
+                claim_uuid=command.claim_uuid, job_uuid=command.job_uuid, attempt=command.attempt,
+                parameter_hash=command.parameter_hash, expected_change_set=expected_change,
+                fences=fences, allow_released_replay=True)
             if claim_state == "released":
                 raise DispatchAdmissionConflict(
                     "已释放 Claim 没有已提交的转运结算证据，禁止首次修改库存"

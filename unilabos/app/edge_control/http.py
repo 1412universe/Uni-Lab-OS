@@ -147,6 +147,12 @@ class EdgeDataPlane:
             headers=_job_headers(job),
         )
 
+    def begin_execution(self, job: StoredJob) -> str:
+        """由 HostNode 在真正调用动作前同步确认工站开始屏障。"""
+        result = self._request("POST", f"{self.scheduler_api}/edge/jobs/{job.job_uuid}/begin",
+            span_name="edge.http.job.begin", http_route="/api/v1/edge/jobs/:job_uuid/begin", headers=_job_headers(job))
+        return str(result["start"])
+
     def commit_feedback(
         self,
         job: StoredJob,
@@ -288,7 +294,8 @@ def _job_attempt_identity(job: StoredJob) -> Dict[str, Any]:
         "task_uuid": job.task_uuid,
         "node_uuid": job.node_uuid,
         "command_uuid": job.command_uuid,
-        "claim_uuid": job.claim_uuid,
+        "claim_uuid": job.claim_uuid or None,
+        **({"execution_source": "error_manual"} if job.execution_source == "error_manual" else {}),
         "attempt": job.attempt,
         "fences": [
             {"lock_key": lock_key, "fencing_token": fencing_token}

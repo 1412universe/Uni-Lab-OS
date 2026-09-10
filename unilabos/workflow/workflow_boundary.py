@@ -67,7 +67,7 @@ def project_ready_workflow_output(
     output_jobs = connection.execute(
         """
         SELECT * FROM workflow_node_job
-        WHERE workflow_task_uuid = ? AND executor_kind = 'workflow_output'
+        WHERE workflow_task_uuid = ? AND executor_kind = 'workflow_output' AND current_attempt=1
           AND deleted_at IS NULL
         ORDER BY topological_index, uuid
         """,
@@ -118,7 +118,7 @@ def project_ready_workflow_output(
         source_job = connection.execute(
             """
             SELECT * FROM workflow_node_job
-            WHERE workflow_task_uuid = ? AND workflow_node_uuid = ?
+            WHERE workflow_task_uuid = ? AND workflow_node_uuid = ? AND current_attempt=1
               AND deleted_at IS NULL
             """,
             (task_uuid, source_node_uuid),
@@ -190,7 +190,7 @@ def project_ready_workflow_output(
             connection.execute(
                 """
                 SELECT COUNT(*) FROM workflow_node_job
-                WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+                WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND current_attempt=1
                   AND status != 'succeeded'
                 """,
                 (task_uuid,),

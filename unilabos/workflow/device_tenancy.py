@@ -236,15 +236,19 @@ def prepare_device_tenancy(
                     now,
                 ),
             )
+    release_tenancy = connection.execute(
+        "SELECT uuid FROM task_device_tenancy WHERE workflow_task_uuid=? AND material_uuid=? AND device_lock_key=? AND state='active'",
+        (task_uuid, normalized["material_uuid"], normalized["release_device_lock_key"]),
+    ).fetchone()
     connection.execute(
         """
         INSERT INTO job_device_tenancy_transition(
             workflow_node_job_uuid, workflow_task_uuid, material_uuid,
             acquire_device_lock_key, release_device_lock_key, status,
-            create_time, update_time, settled_at
-        ) VALUES (?, ?, ?, ?, ?, 'prepared', ?, ?, NULL)
+            create_time, update_time, settled_at, release_tenancy_uuid
+        ) VALUES (?, ?, ?, ?, ?, 'prepared', ?, ?, NULL, ?)
         """,
-        (job_uuid, *expected, now, now),
+        (job_uuid, *expected, now, now, release_tenancy["uuid"] if release_tenancy else None),
     )
 
 
@@ -286,20 +290,20 @@ def settle_device_tenancy(
                 UPDATE task_device_tenancy
                 SET state = 'released', released_by_job_uuid = ?,
                     released_at = ?, update_time = ?
-                WHERE state = 'active' AND workflow_task_uuid = ?
-                  AND material_uuid = ? AND device_lock_key = ?
+                WHERE state = 'active' AND uuid = ?
                 """,
                 (
                     job_uuid,
                     now,
                     now,
-                    transition["workflow_task_uuid"],
-                    transition["material_uuid"],
-                    release_key,
+                    transition["release_tenancy_uuid"],
                 ),
             ).rowcount
             if changed != 1:
-                raise StoreConflict("设备托管释放事实不存在或已变化")
+                released = connection.execute("SELECT state FROM task_device_tenancy WHERE uuid=?", (transition["release_tenancy_uuid"],)).fetchone()
+                if released is None or released["state"] != "released":
+                    raise StoreConflict("设备托管释放事实不存在或已变化")
+                # 已人工释放的同一托管行只保留结果；不能释放之后新取得的托管。
         status = "settled"
     else:
         status = "retained"

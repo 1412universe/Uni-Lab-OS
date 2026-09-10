@@ -100,7 +100,7 @@ class DeviceActionRunStore:
                                 "develop_task_conflict:"
                                 f"{occupied['uuid']}:{occupied['status']}"
                             )
-                    self._insert(connection, task=task, job=job)
+                    self.insert_prepared(connection, task=task, job=job)
                     created = True
         except sqlite3.IntegrityError as error:
             raise StoreConflict("设备单动作持久化身份冲突") from error
@@ -112,7 +112,7 @@ class DeviceActionRunStore:
         }
 
     @staticmethod
-    def _insert(
+    def insert_prepared(
         connection: sqlite3.Connection,
         *,
         task: dict[str, Any],

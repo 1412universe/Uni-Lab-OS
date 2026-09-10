@@ -39,6 +39,7 @@ class StoredJob:
     status: str
     feedback_sequence: int
     claim_uuid: str = ""
+    execution_source: str = "workflow"
     attempt: int = 1
     fences: tuple[tuple[str, int], ...] = ()
     traceparent: str = ""
@@ -199,6 +200,7 @@ class EdgeControlStore:
                     self._migrate_legacy_column(
                         table, "trace_id", "TEXT NOT NULL DEFAULT ''"
                     )
+            self._migrate_legacy_column("edge_job_runtime", "execution_source", "TEXT NOT NULL DEFAULT 'workflow'")
             # Pong only answers a ping from the current WebSocket session. Older
             # versions persisted it as a durable business event, which allowed a
             # stale pong to be replayed into a new session and closed by the
@@ -730,12 +732,18 @@ class EdgeControlStore:
             "claim_uuid",
             "job_access_token",
         )
-        if any(not str(payload.get(field) or "").strip() for field in required):
+        execution_source = payload.get("execution_source", "workflow")
+        if execution_source not in {"workflow", "error_manual"}:
+            raise ValueError("invalid execution_source")
+        manual = execution_source == "error_manual"
+        if any(not str(payload.get(field) or "").strip() for field in required if not (manual and field == "claim_uuid")):
             raise ValueError("job.start identity, Claim and token are required")
         attempt = payload.get("attempt")
         if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
             raise ValueError("job.start attempt must be a positive integer")
         fences = _normalize_fences(payload.get("fences"))
+        if manual and (payload.get("claim_uuid") is not None or fences):
+            raise ValueError("手动执行不得携带 Claim/Fence")
         trace_context = trace_context or {}
         trace_id = str(trace_context.get("trace_id") or "")
         traceparent = str(trace_context.get("traceparent") or "")
@@ -745,7 +753,7 @@ class EdgeControlStore:
             str(uuid.UUID(str(payload["task_uuid"]))),
             str(uuid.UUID(str(payload["node_uuid"]))),
             str(uuid.UUID(command_uuid)),
-            str(uuid.UUID(str(payload["claim_uuid"]))),
+            "" if manual else str(uuid.UUID(str(payload["claim_uuid"]))),
             attempt,
             json.dumps(fences, separators=(",", ":")),
             str(payload["job_access_token"]),
@@ -796,7 +804,7 @@ class EdgeControlStore:
                     values[6],
                     values[7],
                 )
-                if actual != expected:
+                if actual != expected or existing["execution_source"] != execution_source:
                     raise ValueError("duplicate job.start identity or Claim changed")
                 return False
             for fence in fences:
@@ -841,6 +849,7 @@ class EdgeControlStore:
                 """,
                 values,
             )
+            self._connection.execute("UPDATE edge_job_runtime SET execution_source=? WHERE job_uuid=?", (execution_source, values[0]))
             if cursor.rowcount == 0 and (trace_id or traceparent or tracestate):
                 self._connection.execute(
                     """
@@ -868,7 +877,7 @@ class EdgeControlStore:
             row = self._connection.execute(
                 """
                 SELECT job_uuid, task_uuid, node_uuid, command_uuid,
-                       claim_uuid, attempt, fences_json,
+                       claim_uuid, attempt, fences_json, execution_source,
                        job_access_token, status, feedback_sequence,
                        trace_id, traceparent, tracestate
                 FROM edge_job_runtime WHERE job_uuid = ?
@@ -892,7 +901,7 @@ class EdgeControlStore:
             rows = self._connection.execute(
                 f"""
                 SELECT job_uuid, task_uuid, node_uuid, command_uuid,
-                       claim_uuid, attempt, fences_json,
+                       claim_uuid, attempt, fences_json, execution_source,
                        job_access_token, status, feedback_sequence,
                        trace_id, traceparent, tracestate
                 FROM edge_job_runtime WHERE status IN ({placeholders})
@@ -908,6 +917,12 @@ class EdgeControlStore:
                 "UPDATE edge_job_runtime SET status = ?, updated_at = ? WHERE job_uuid = ?",
                 (status, time.time(), job_uuid),
             )
+            self._connection.commit()
+
+    def defer_not_started_job(self, job_uuid: str) -> None:
+        """只撤回本次尚未开始的 dispatching，不覆盖并发取消或真实终态。"""
+        with self._lock:
+            self._connection.execute("UPDATE edge_job_runtime SET status='received',updated_at=? WHERE job_uuid=? AND status='dispatching'", (time.time(),job_uuid))
             self._connection.commit()
 
     def next_feedback_sequence(self, job_uuid: str) -> int:
@@ -1170,6 +1185,7 @@ def _stored_job(row: sqlite3.Row) -> StoredJob:
         node_uuid=str(row["node_uuid"]),
         command_uuid=str(row["command_uuid"]),
         claim_uuid=str(row["claim_uuid"]),
+        execution_source=str(row["execution_source"]),
         attempt=int(row["attempt"]),
         fences=tuple(
             (str(item["lock_key"]), int(item["fencing_token"]))

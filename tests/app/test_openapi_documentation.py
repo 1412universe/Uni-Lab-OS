@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 from fastapi import FastAPI
@@ -34,6 +35,8 @@ from unilabos.app.workflow_template_api import (
     create_workflow_template_router,
 )
 from unilabos.workflow.service import WorkflowService
+from unilabos.workflow.error_handling import ErrorHandlingService
+from unilabos.app.error_handling_api import create_error_handling_router
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 FORBIDDEN_DESCRIPTION_TERMS = (
@@ -228,6 +231,20 @@ def test_inventory_and_material_swagger_is_plain_chinese() -> None:
     assert "数据类型：字符串（UUID），可以为空" in str(
         template_parameter["description"]
     )
+
+
+def test_station_error_handling_swagger_is_plain_chinese() -> None:
+    """工站错误、手动动作和人工恢复接口需要独立且可读的中文说明。"""
+    application = FastAPI()
+    install_openapi_documentation(application)
+    service = cast(
+        ErrorHandlingService,
+        SimpleNamespace(control=SimpleNamespace(station_id="local")),
+    )
+    application.include_router(create_error_handling_router(service))
+    schema = application.openapi()
+    _assert_every_public_item_is_documented(schema)
+    assert len(schema["paths"]) == 16
 
 
 def test_device_task_communication_swagger_is_plain_chinese(tmp_path: Path) -> None:

@@ -429,6 +429,7 @@ def validate_physical_settlement_credentials(
     expected_change_set: Mapping[str, Any],
     fences: Mapping[str, int],
     allow_released_replay: bool = False,
+    evidence_only: bool = False,
 ) -> str:
     """验证 Scheduler PhysicalSettlement 携带的是当前完整 Permit。
 
@@ -481,9 +482,9 @@ def validate_physical_settlement_credentials(
         str(lock_key): int(token) for lock_key, token in fences.items()
     }
     allowed_lease_states = {"released"} if claim_state == "released" else active_states
-    if normalized_fences != persisted_fences or any(
+    if normalized_fences != persisted_fences or (not evidence_only and any(
         str(row["state"]) not in allowed_lease_states for row in leases
-    ):
+    )):
         raise DispatchAdmissionConflict(
             "PhysicalSettlement Fence 缺失、过期或状态不一致"
         )
@@ -892,6 +893,8 @@ def transition_dispatch_permit(
     if row is None:
         raise DispatchAdmissionConflict(f"库存 Claim 不存在：{claim_uuid}")
     current = str(row["state"])
+    if current == "released" and target_state == "uncertain":
+        return  # 人工释放是独立事实，迟到结果不能复活占用。
     if current not in allowed[target_state]:
         raise DispatchAdmissionConflict(
             f"库存 Claim 不能从 {current} 进入 {target_state}：{claim_uuid}"
@@ -914,7 +917,7 @@ def transition_dispatch_permit(
         """
         UPDATE station_execution_lock_lease
         SET state=?, released_at=?, update_time=?
-        WHERE claim_uuid=?
+        WHERE claim_uuid=? AND state!='released'
         """,
         (target_state, released_at, now, claim_uuid),
     )

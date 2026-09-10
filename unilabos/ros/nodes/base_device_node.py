@@ -5,6 +5,7 @@ import threading
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 
 from unilabos.utils.tools import fast_dumps_str as _fast_dumps_str, fast_loads as _fast_loads
 from typing import (
@@ -2304,6 +2305,9 @@ class BaseROS2DeviceNode(Node, Generic[T]):
         task_id: str,
         action_name: str,
         trace_context: Optional[Dict[str, str]] = None,
+        station_controlled: bool = False,
+        execution_source: str = "workflow",
+        start_guard: Any = None,
     ) -> None:
         """Register HostNode context before the ROS goal with UUID=job_id is sent."""
 
@@ -2314,6 +2318,9 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                 "job_id": job_id,
                 "task_id": task_id,
                 "action_name": action_name,
+                "station_controlled": station_controlled,
+                "execution_source": execution_source,
+                "start_guard": start_guard,
             }
             if trace_context:
                 context["trace_context"] = dict(trace_context)
@@ -2332,6 +2339,9 @@ class BaseROS2DeviceNode(Node, Generic[T]):
             "task_id": context.get("task_id", ""),
             "action_name": context.get("action_name", action_name),
             "trace_context": context.get("trace_context") or {},
+            "station_controlled": context.get("station_controlled", False),
+            "execution_source": context.get("execution_source", "workflow"),
+            "start_guard": context.get("start_guard"),
         }
 
     def _resolve_runtime_error_policy(
@@ -2571,6 +2581,18 @@ class BaseROS2DeviceNode(Node, Generic[T]):
         """Resolve an action exception through retry, skip, or operator intervention."""
 
         exc = initial_exc
+        if context.get("station_controlled"):
+            # Edge 统一三选一，驱动不再自动重试、超时替选或创建第二个处置会话。
+            self._publish_error_decision_report({
+                **{key: value for key, value in context.items() if key != "start_guard"}, "station_controlled": True, "decision_id": str(uuid.uuid4()),
+                "error_message": str(initial_exc), "exception_type": type(initial_exc).__name__,
+                "device_id": self.device_id, "action_name": action_name,
+            })
+            if wait_for_timed_out_action is not None:
+                settled = await wait_for_timed_out_action()
+                if isinstance(settled, ActionDecisionOutcome):
+                    return settled
+            raise initial_exc
         retries = 0
         max_retries = int(policy.get("max_retries", 3))
         timeout_seconds = float(policy.get("decision_timeout_seconds", 300.0))
@@ -2793,6 +2815,7 @@ class BaseROS2DeviceNode(Node, Generic[T]):
             # 一个 action 在任意时刻最多只有一个不可取消的执行实例。首次调用和
             # retry 共用这个槽位；一旦超时，后续任何决策都会先等该实例收束。
             in_flight_future = None
+            actual_start = {"at": None}
 
             async def _await_action_until_deadline(
                 action_future,
@@ -2807,7 +2830,8 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                 while not action_future.done():
                     if (
                         timeout is not None
-                        and time.monotonic() - started_at >= timeout
+                        and (not job_context.get("station_controlled") or actual_start["at"] is not None)
+                        and time.monotonic() - (actual_start["at"] or started_at) >= timeout
                     ):
                         in_flight_future = action_future
                         return TimeoutException(
@@ -2973,6 +2997,42 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                             execution_exception = e
                             break
 
+            if job_context.get("station_controlled"):
+                from types import SimpleNamespace
+                from unilabos.app.edge_control.execution_start import confirm_execution_start, ExecutionStartDeferred
+                raw_action = ACTION
+                guard_item = SimpleNamespace(start_guard=job_context.get("start_guard"))
+                if not callable(guard_item.start_guard):
+                    raise RuntimeError("实际动作缺少工站开始屏障")
+
+                def _confirm_driver_start():
+                    confirm_execution_start(guard_item)
+                    actual_start["at"] = time.monotonic()
+
+                json_wrapper = action_name in {"_execute_driver_command", "_execute_driver_command_async"}
+
+                def _guarded_sync(**values):
+                    if json_wrapper:
+                        return raw_action(**values, _execution_start=_confirm_driver_start)
+                    _confirm_driver_start()
+                    return raw_action(**values)
+
+                async def _station_action(**values):
+                    while True:
+                        try:
+                            if asyncio.iscoroutinefunction(raw_action):
+                                if json_wrapper:
+                                    return await raw_action(**values, _execution_start=_confirm_driver_start)
+                                _confirm_driver_start()
+                                return await raw_action(**values)
+                            submitted = submit_with_context(self._executor, _guarded_sync, **values)
+                            while not submitted.done():
+                                await asyncio.sleep(0.05)
+                            return submitted.result()
+                        except ExecutionStartDeferred:
+                            await asyncio.sleep(0.1)
+                ACTION = _station_action
+
             time_start = time.time()
             action_started_at = time.monotonic()
             timeout_seconds, timeout_kind = _timeout_limit()
@@ -3075,6 +3135,13 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                     action_started_at,
                 )
 
+                from unilabos.app.edge_control.execution_start import ExecutionStartCanceled
+                if isinstance(_raw_result, ExecutionStartCanceled):
+                    if _feedback_timer is not None:
+                        _feedback_timer.cancel()
+                    goal_handle.canceled()
+                    return action_type.Result()
+
                 # 确保 execution_error/success 被正确设置（不依赖 done callback 时序）
                 if isinstance(_raw_result, BaseException):
                     if not execution_error:
@@ -3102,7 +3169,7 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                         action_return_value = _raw_result
                         execution_exception = _raw_result
 
-                if isinstance(_raw_result, BaseException) and exception_handling and error_policy:
+                if isinstance(_raw_result, BaseException) and (job_context.get("station_controlled") or (exception_handling and error_policy)):
                     try:
                         decision_outcome = await self._resolve_action_exception(
                             _raw_result,
@@ -3284,7 +3351,7 @@ class BaseROS2DeviceNode(Node, Generic[T]):
 
         return execute_callback
 
-    def _execute_driver_command(self, string: str) -> Any:
+    def _execute_driver_command(self, string: str, *, _execution_start: Callable[[], None] | None = None) -> Any:
         try:
             target = json.loads(string)
         except Exception as ex:
@@ -3412,7 +3479,17 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                                 raise JsonCommandInitError(f"ResourceSlot列表参数转换失败: {arg_name}")
 
             # todo: 默认反报送
-            result = function(**function_args)
+            # 资源水合属于可撤销准备。异步驱动须在目标事件循环真正执行时才承诺开始。
+            if asyncio.iscoroutinefunction(function):
+                async def invoke_driver() -> Any:
+                    if _execution_start is not None:
+                        _execution_start()
+                    return await function(**function_args)
+                result = invoke_driver()
+            else:
+                if _execution_start is not None:
+                    _execution_start()
+                result = function(**function_args)
             if not inspect.isawaitable(result):
                 return result
 
@@ -3631,7 +3708,7 @@ class BaseROS2DeviceNode(Node, Generic[T]):
             root_reference_uuid,
         )
 
-    async def _execute_driver_command_async(self, string: str):
+    async def _execute_driver_command_async(self, string: str, *, _execution_start: Callable[[], None] | None = None):
         try:
             target = json.loads(string)
         except Exception as ex:
@@ -3732,6 +3809,8 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                                 )
                                 raise JsonCommandInitError(f"ResourceSlot列表参数转换失败: {arg_name}")
 
+            if _execution_start is not None:
+                _execution_start()
             return await function(**function_args)
         except KeyError as ex:
             raise JsonCommandInitError(

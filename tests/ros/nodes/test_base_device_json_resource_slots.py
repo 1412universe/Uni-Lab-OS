@@ -660,3 +660,29 @@ def test_async_json_command_resolves_uuid_and_runtime_uuid_resource_slots() -> N
     assert observed_uuids == [inventory_uuid, mount_uuid]
     assert driver.received == (resolved_resource, resolved_mount)
     assert result == (resolved_resource, resolved_mount)
+
+
+def test_json_start_guard_runs_after_resource_hydration_and_before_driver() -> None:
+    """开始屏障不能在阻塞的资源解析之前提前签发；拒绝时驱动不得被调用。"""
+    from unilabos.app.edge_control.execution_start import ExecutionStartDeferred
+    observed = []
+    class Driver:
+        def pick(self, resource: ResourceSlot):
+            observed.append("driver")
+            return resource
+    node = object.__new__(BaseROS2DeviceNode)
+    node.driver_instance = Driver()
+    node.resource_tracker = None
+    node._resolve_driver_method_name = lambda name: name
+    node.lab_logger = lambda: _Logger()
+    def hydrate(*_ids):
+        observed.append("hydrated")
+        return [object()]
+    def begin():
+        observed.append("guard")
+        raise ExecutionStartDeferred()
+    node._convert_resources_sync = hydrate
+    command = {"function_name": "pick", "function_args": {"resource": {"uuid": "50000000-0000-4000-8000-000000000001"}}, JSON_UNILABOS_PARAM: {PARAM_SAMPLE_UUIDS: {}}}
+    with pytest.raises(ExecutionStartDeferred):
+        node._execute_driver_command(json.dumps(command), _execution_start=begin)
+    assert observed == ["hydrated", "guard"]

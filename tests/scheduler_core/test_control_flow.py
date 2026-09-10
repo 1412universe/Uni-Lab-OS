@@ -1034,7 +1034,7 @@ def test_repeat_tail_reconciles_or_latches_persistent_resource_interval(
     if repeat_status == "failed":
         assert core_runtime.workflow_store.get_job(waiter_job)["status"] == "pending"
         core_runtime.scheduler.on_job_finished(parallel_job, True, {})
-        core_runtime.bridge.unlock_resources(
+        core_runtime.release_error_resources_and_resume(
             owner_task_uuid,
             command_uuid=stable_uuid("command:repeat-tail-failure-unlock"),
             reason="操作员确认循环失败后的设备、物料和库位均已核对",

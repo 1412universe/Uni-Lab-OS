@@ -452,3 +452,30 @@ def test_failed_load_retains_tenancy_for_manual_physical_settlement(
 
     assert store.get_task(TASK_A_UUID)["cleanup_status"] == "requires_attention"
     assert projection.list_device_tenancies(task_uuid=TASK_A_UUID)
+
+
+def test_late_unload_does_not_release_new_tenancy_after_manual_disposition(store):
+    """人工释放后重新取得设备，旧卸载成功只能结算它原本关联的托管行。"""
+    from unilabos.workflow.device_tenancy import prepare_device_tenancy, settle_device_tenancy
+    from unilabos.workflow.error_control import StationExecutionControl
+    store.create_workflow(workflow_uuid=WORKFLOW_UUID, name="人工释放托管", tags=[], description=None, meta_data={})
+    _seed_task(store, task_uuid=TASK_A_UUID, job_uuids=TASK_A_JOBS)
+    with store.transaction() as connection:
+        prepare_device_tenancy(connection, task_uuid=TASK_A_UUID, job_uuid=TASK_A_JOBS[0], transition=_transition(acquire_device_uuid=DEVICE_A_UUID))
+        prepare_device_tenancy(connection, task_uuid=TASK_A_UUID, job_uuid=TASK_A_JOBS[1], transition=_transition(release_device_uuid=DEVICE_A_UUID))
+    control = StationExecutionControl(store)
+    decision = control.report_error(TASK_A_JOBS[1], phase="execution_unknown", message="卸载结果未知")
+    before = control.occupancies()[0]
+    command = control.accept_auxiliary("resource:release", {
+        "expected_station_version": control.snapshot()["station_version"], "decision_id": decision["decision_id"],
+        "occupancy_ids": [before["uuid"]], "expected_versions": {before["uuid"]: before["version"]},
+        "operation": "release", "reason": "人工确认已取走物料",
+    }, idempotency_key="release", operator_id="tester")
+    control.apply_resource_facts(command)
+    with store.transaction() as connection:
+        prepare_device_tenancy(connection, task_uuid=TASK_A_UUID, job_uuid=TASK_A_JOBS[2], transition=_transition(acquire_device_uuid=DEVICE_A_UUID))
+        settle_device_tenancy(connection, job_uuid=TASK_A_JOBS[1], succeeded=True)
+    active = TaskRuntimeProjection(store).list_device_tenancies(task_uuid=TASK_A_UUID)
+    assert len(active) == 1
+    assert active[0]["uuid"] != before["uuid"]
+    assert active[0]["acquired_by_job_uuid"] == TASK_A_JOBS[2]

@@ -246,6 +246,53 @@ def _client(
     )
 
 
+def test_error_manual_action_runs_on_busy_device_and_keeps_source_trace(tmp_path: Any) -> None:
+    """已有动作在途时仍可手动执行同一设备，完成时撤销未开始命令。"""
+    client, store, template_uuid, dispatcher, bridge = _client(tmp_path, with_scheduler=True)
+    dispatcher.deferred_start = True  # 记录投递但由测试显式确认实际开始。
+    try:
+        created = client.post("/api/v1/device-action-runs", json=_request(template_uuid)).json()["data"]
+        source_job = created["job"]["uuid"]
+        from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
+        TaskRuntimeProjection(store).project_trace_context(created["task"]["uuid"], {
+            "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"})
+        error = bridge.error_control.report_error(source_job, phase="execution", message="测试设备异常")
+        base = "/api/v1/stations/local"
+        snapshot = client.get(base + "/error-handling").json()["data"]
+        entered = client.post(base + f"/errors/{error['decision_id']}/decision", headers={"Idempotency-Key": "enter"}, json={
+            "action": "enter_manual_handling", "expected_decision_version": error["decision_version"],
+            "expected_station_version": snapshot["station_version"], "observed_error_epoch": snapshot["error_epoch"],
+        })
+        assert entered.status_code == 202, entered.text
+        station = entered.json()["data"]["station"]
+        session = station["active_session"]
+        actions = client.get(base + f"/sessions/{session['session_id']}/devices/{DEVICE_MATERIAL_UUID}/actions").json()["data"]
+        request = {"device_id": DEVICE_MATERIAL_UUID, "action_id": template_uuid,
+            "action_version": actions[0]["action_version"], "parameters": {"duration_seconds": 2},
+            "expected_station_version": station["station_version"], "expected_session_version": session["version"]}
+        manual_url = base + f"/sessions/{session['session_id']}/manual-actions"
+        manual = client.post(manual_url, json=request, headers={"Idempotency-Key": "manual"})
+        assert manual.status_code == 202, manual.text
+        action = manual.json()["data"]["manual_action"]
+        assert action["execution_job"]["uuid"] != source_job
+        assert action["execution_job"]["execution_source"] == "error_manual"
+        assert action["execution_task"]["trace_context"]["trace_id"] == store.get_task(created["task"]["uuid"])["trace_context"]["trace_id"]
+        assert len(dispatcher.dispatched) == 2
+        assert dispatcher.dispatched[-1]["claim_uuid"] is None
+        replay = client.post(manual_url, json=request, headers={"Idempotency-Key": "manual"})
+        assert replay.json()["data"]["manual_action"]["manual_command_id"] == action["manual_command_id"]
+        assert len(dispatcher.dispatched) == 2
+        current = client.get(base + "/error-handling").json()["data"]
+        completed = client.post(base + f"/sessions/{session['session_id']}/complete", headers={"Idempotency-Key": "complete"}, json={
+            "expected_station_version": current["station_version"], "expected_session_version": session["version"], "summary": "已调整"})
+        assert completed.status_code == 200, completed.text
+        assert action["manual_command_id"] in completed.json()["data"]["result"]["canceled_before_start"]
+        assert bridge.error_control.begin_execution(action["execution_job"]["uuid"], action["manual_command_id"]) == "CANCELED"
+    finally:
+        bridge.close()
+        store.close()
+
+
 def _request(template_uuid: str) -> dict[str, Any]:
     """构造与 Backend 完全同名的设备单动作运行请求。
 
@@ -540,5 +587,63 @@ def test_device_action_run_api_submits_only_created_job_to_edge_scheduler(
         assert len(dispatcher.dispatched) == 1
     finally:
         client.close()
+        bridge.close()
+        store.close()
+
+
+def test_manual_command_recovery_and_pending_retry_stop_keep_execution_identity(tmp_path, monkeypatch):
+    """提交失败复用原命令；手动 UNKNOWN 的排队重试可停止且不影响旧执行。"""
+    from unilabos.app.scheduler.dispatch import CommittedJobOutcome
+    client, store, template_uuid, dispatcher, bridge = _client(tmp_path, with_scheduler=True)
+    base = "/api/v1/stations/local"
+    snapshot = lambda: client.get(base + "/error-handling").json()["data"]
+    def decide(error, action, key, **extra):
+        current = snapshot()
+        response = client.post(base + f"/errors/{error['decision_id']}/decision", headers={"Idempotency-Key": key}, json={
+            "action": action, "expected_decision_version": error["decision_version"], "expected_station_version": current["station_version"],
+            "observed_error_epoch": current["error_epoch"], **extra})
+        assert response.status_code == 202, response.text
+        return response.json()["data"]
+    try:
+        source = client.post("/api/v1/device-action-runs", json=_request(template_uuid)).json()["data"]
+        root_error = bridge.error_control.report_error(source["job"]["uuid"], phase="execution", message="源节点错误")
+        station = decide(root_error, "enter_manual_handling", "enter")["station"]
+        session = station["active_session"]
+        actions = client.get(base + f"/sessions/{session['session_id']}/devices/{DEVICE_MATERIAL_UUID}/actions").json()["data"]
+        original_submit = bridge.submit
+        failures = []
+        def transient(task):
+            if not failures:
+                failures.append(task["uuid"])
+                raise RuntimeError("temporary submission failure")
+            return original_submit(task)
+        monkeypatch.setattr(bridge, "submit", transient)
+        accepted = client.post(base + f"/sessions/{session['session_id']}/manual-actions", headers={"Idempotency-Key": "manual"}, json={
+            "device_id": DEVICE_MATERIAL_UUID, "action_id": template_uuid, "action_version": actions[0]["action_version"],
+            "parameters": {"duration_seconds": 2}, "expected_station_version": station["station_version"], "expected_session_version": session["version"]}).json()["data"]
+        assert accepted["dispatch_error"] == "temporary submission failure"
+        command_id = accepted["command_uuid"]
+        assert next(item for item in snapshot()["control_commands"] if item["command_uuid"] == command_id)["needs_apply"]
+        replay = client.post(base + f"/control-commands/{command_id}/apply").json()["data"]
+        assert replay["command_uuid"] == command_id
+        old = replay["manual_action"]["execution_job"]
+        current = snapshot()
+        completed = client.post(base + f"/sessions/{session['session_id']}/complete", headers={"Idempotency-Key": "complete"}, json={
+            "expected_station_version": current["station_version"], "expected_session_version": session["version"], "summary": "人工处理完成"}).json()["data"]["station"]
+        root_error = next(item for item in completed["errors"] if item["source_job_uuid"] == source["job"]["uuid"])
+        decide(root_error, "cancel_task", "cancel-root", session_id=session["session_id"], expected_session_version=completed["active_session"]["version"], resume_requested=True, operator_confirmed=True, confirm_snapshot_id=completed["snapshot_id"])
+        bridge._scheduler.on_job_outcome(old["uuid"], CommittedJobOutcome("failed", {}, [], [old["edge_command_uuid"]]))
+        manual_error = next(item for item in snapshot()["errors"] if item["source_job_uuid"] == old["uuid"])
+        retried = decide(manual_error, "retry_current_node", "retry-manual", resume_requested=False)
+        retry_id = retried["result"]["retry_job_uuid"]
+        retry = next(item for item in snapshot()["manual_actions"] if item["uuid"] == retry_id)
+        assert retry["status"] == "pending"
+        assert retry["edge_command_uuid"] and retry["edge_command_uuid"] != old["edge_command_uuid"]
+        stopped = client.post(base + f"/manual-actions/{retry['edge_command_uuid']}/stop", json={}, headers={"Idempotency-Key": "stop-retry"})
+        assert stopped.status_code == 202, stopped.text
+        assert stopped.json()["data"]["status"] == "APPLIED"
+        assert store.get_job(retry_id)["status"] == "canceled"
+        assert store.get_job(old["uuid"])["status"] == "running"
+    finally:
         bridge.close()
         store.close()

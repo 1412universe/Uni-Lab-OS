@@ -378,7 +378,7 @@ def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
     """派发器异常后必须保守保留在途作业、物料锁和结果路由。
 
     参数：``store`` 是隔离任务权威。返回无；断言不调用取消，迟到明确结果仍可
-    投影成功并在完成后释放内存锁。
+    记录成功并在完成后释放内存锁，但不会替代用户的错误决定。
     """
 
     task = _locked_task(store)
@@ -406,7 +406,7 @@ def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
         assert store.get_job(JOB_UUID)["uncertainty_reason"] == (
             "local_dispatch_acceptance_unknown"
         )
-        assert store.get_task(TASK_UUID)["control_status"] == "waiting_reconciliation"
+        assert store.get_task(TASK_UUID)["control_status"] == "error_waiting"
         assert store.get_task(TASK_UUID)["cleanup_status"] == "requires_attention"
         assert {
             lease["state"]
@@ -419,7 +419,10 @@ def test_dispatcher_failure_preserves_inflight_lock_and_late_result(
 
         scheduler.on_job_finished(JOB_UUID, True, {"late": True})
 
-        assert store.get_task(TASK_UUID)["status"] == "succeeded"
+        assert store.get_task(TASK_UUID)["status"] == "running"
+        assert store.get_task(TASK_UUID)["control_status"] == "error_waiting"
+        assert bridge.error_control.awaits_decision(JOB_UUID)
+        assert store.get_job(JOB_UUID)["status"] == "succeeded"
         assert store.get_job(JOB_UUID)["return_info"] == {"late": True}
         assert scheduler.snapshot()["inflight_jobs"] == {}
     finally:
@@ -452,6 +455,7 @@ class _FailOnceProjection:
         device_tenancy: Mapping[str, Any] | None = None,
         actual_executor: Mapping[str, Any] | None = None,
         dispatch_permit: Mapping[str, Any] | None = None,
+        dispatch_payload: Mapping[str, Any] | None = None,
         max_active_tasks: int = 500,
         max_tasks_per_workflow: int = 100,
         max_in_flight_jobs: int = 100,
@@ -467,6 +471,7 @@ class _FailOnceProjection:
             device_tenancy=device_tenancy,
             actual_executor=actual_executor,
             dispatch_permit=dispatch_permit,
+            dispatch_payload=dispatch_payload,
             max_active_tasks=max_active_tasks,
             max_tasks_per_workflow=max_tasks_per_workflow,
             max_in_flight_jobs=max_in_flight_jobs,

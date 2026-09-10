@@ -352,8 +352,9 @@ def test_parallel_scopes_merge_complete_sets_to_eliminate_incremental_cycle():
 
 
 @pytest.mark.parametrize("outer_scope", [False, True])
+@pytest.mark.parametrize("restart_during_first_round", [False, True])
 def test_repeat_second_iteration_keeps_persisted_resource_claim(
-    core_runtime, monkeypatch, outer_scope
+    core_runtime, monkeypatch, outer_scope, restart_during_first_round
 ):
     """旧轮次的 adjust 完成记录不能使第二轮 measure 提前释放真实库存租约。"""
     from tests.scheduler_core.conftest import stable_uuid
@@ -479,6 +480,10 @@ def test_repeat_second_iteration_keeps_persisted_resource_claim(
         assert claim["claim_uuid"] in kept_claims
         second = runtime.dispatcher.dispatched[-1]
         assert second["action"] == "adjust"
+        if restart_during_first_round and iteration == 0:
+            dispatched_count = len(runtime.dispatcher.dispatched)
+            runtime.restart_scheduler()
+            assert len(runtime.dispatcher.dispatched) == dispatched_count
         runtime.scheduler.on_job_finished(second["job_id"], True, {})
     assert runtime.dispatcher.dispatched[-1]["job_id"] == final_job
     runtime.scheduler.on_job_finished(final_job, True, {})

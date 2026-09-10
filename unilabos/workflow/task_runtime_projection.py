@@ -576,9 +576,8 @@ class TaskRuntimeProjection:
         connection.execute(
             """
             UPDATE workflow_task
-            SET control_status = COALESCE(
-                    reconciliation_resume_control_status, 'active'
-                ),
+            SET control_status = CASE WHEN control_status='error_waiting' THEN 'error_waiting'
+                    ELSE COALESCE(reconciliation_resume_control_status, 'active') END,
                 cleanup_status = ?, attention_reason = NULL,
                 reconciliation_resume_control_status = NULL,
                 update_time = ?
@@ -670,6 +669,8 @@ class TaskRuntimeProjection:
             # ``aggregate`` 是首次提交后可公开给 Backend-shaped 接口的标准事实。
             aggregate = self._aggregate(connection, task_uuid)
             task_status = aggregate["task"]["status"]
+            if aggregate["task"]["control_status"] == "error_waiting" and task_status == "running":
+                return aggregate
             job_statuses = {job["status"] for job in aggregate["jobs"]}
             # 协调器会在普通动作提交前完成 MaterialSource 作业，因此暂停的调试
             # 任务可以合法呈现 ``pending task + succeeded sources + pending actions``。
@@ -1001,6 +1002,7 @@ class TaskRuntimeProjection:
         ack_deadline_at: str,
         complete_deadline_at: str,
         reason: str = "task_canceled",
+        execution_job_uuid: str | None = None,
     ) -> dict[str, Any]:
         """原子记录 Local 模式取消请求并区分未发送与在途作业。
 
@@ -1026,9 +1028,14 @@ class TaskRuntimeProjection:
         with self._store.transaction() as connection:
             task_row = self._task_row(connection, task_uuid)
             job_rows = self._job_rows(connection, task_uuid)
-            if task_row["status"] == "canceled":
+            if execution_job_uuid is not None:
+                job_rows = [row for row in job_rows if row["uuid"] == execution_job_uuid]
+                if not job_rows:
+                    raise StoreConflict("停止执行身份不属于指定任务")
+            targets_current = execution_job_uuid is None or bool(job_rows[0]["current_attempt"])
+            if targets_current and task_row["status"] == "canceled":
                 return self._aggregate(connection, task_uuid)
-            if task_row["status"] in {"succeeded", "failed", "timeout"}:
+            if targets_current and task_row["status"] in {"succeeded", "failed", "timeout"}:
                 raise StoreConflict(f"终态任务不能取消：{task_uuid}")
 
             in_flight = False
@@ -1176,6 +1183,9 @@ class TaskRuntimeProjection:
                     continue
                 raise StoreConflict(f"作业状态不能取消：{job_uuid}/{status}")
 
+            if execution_job_uuid is not None and not job_rows[0]["current_attempt"]:
+                self._append_invalidation(connection, task_uuid=task_uuid, now=requested_at)
+                return self._aggregate(connection, task_uuid)
             target_status = "canceling" if in_flight else "canceled"
             cleanup_status = (
                 "requires_attention"
@@ -1983,6 +1993,7 @@ class TaskRuntimeProjection:
         required_device_tenancy: Mapping[str, Any] | None = None,
         actual_executor: Mapping[str, Any] | None = None,
         dispatch_permit: Mapping[str, Any] | None = None,
+        dispatch_payload: Mapping[str, Any] | None = None,
         resource_plan_id: str | None = None,
         resource_interval_ids: Sequence[str] = (),
         resource_acquire_set_id: str | None = None,
@@ -2190,6 +2201,19 @@ class TaskRuntimeProjection:
             if not isinstance(control_data, Mapping):
                 raise StoreConflict(f"作业 control_data 已损坏：{job_uuid}")
             updated_control_data = dict(control_data)
+            if dispatch_payload is not None:
+                # 与作业派发意图同事务冻结完整重放载荷，覆盖跨进程出站前崩溃窗口。
+                claim = permit if permit else get_execution_claim(connection, job_uuid=job_uuid)
+                updated_control_data["dispatch_payload"] = {
+                    **dict(dispatch_payload), "action_args": actual_param,
+                    "attempt": int(job_row["attempt"]), "command_uuid": dispatch_command_uuid,
+                    "claim_uuid": claim["claim_uuid"] if claim else None,
+                    "fences": ([{"lock_key": key, "fencing_token": value}
+                        for key, value in sorted(permit["fencing_tokens"].items())] if permit else (claim["fences"] if claim else [])),
+                    "effect_uuid": permit["effect_uuid"] if permit else "",
+                    "parameter_hash": permit["parameter_hash"] if permit else "",
+                    "expected_change_set": permit["expected_change_set"] if permit else {},
+                }
             if actual_executor_snapshot:
                 updated_control_data["actual_executor"] = actual_executor_snapshot
             updated_control_data["execution_locks"] = [
@@ -2431,6 +2455,7 @@ class TaskRuntimeProjection:
                 """
                 UPDATE workflow_node_job
                 SET status = 'running', started_at = COALESCE(started_at, ?),
+                    start_state = CASE WHEN start_state='NOT_STARTED' THEN 'START_COMMITTED' ELSE start_state END,
                     update_time = ?
                 WHERE uuid = ? AND status = 'dispatched' AND deleted_at IS NULL
                 """,
@@ -2453,7 +2478,7 @@ class TaskRuntimeProjection:
                 now=accepted_at,
             )
             claim = get_execution_claim(connection, job_uuid=job_uuid)
-            if claim is None:
+            if claim is None and job_row["execution_source"] != "error_manual":
                 raise StoreConflict(f"运行中作业缺少持久 Claim：{job_uuid}")
             append_job_state_event(
                 connection,
@@ -2461,8 +2486,8 @@ class TaskRuntimeProjection:
                 status="running",
                 details={
                     "command_uuid": str(job_row["edge_command_uuid"]),
-                    "claim_uuid": str(claim["claim_uuid"]),
-                    "fences": [dict(fence) for fence in claim["fences"]],
+                    "claim_uuid": str(claim["claim_uuid"]) if claim else None,
+                    "fences": [dict(fence) for fence in claim["fences"]] if claim else [],
                     "started_at": accepted_at,
                 },
             )
@@ -2528,7 +2553,8 @@ class TaskRuntimeProjection:
             connection.execute(
                 """
                 UPDATE workflow_task
-                SET control_status = 'waiting_reconciliation',
+                SET control_status = CASE WHEN control_status='error_waiting'
+                    THEN 'error_waiting' ELSE 'waiting_reconciliation' END,
                     cleanup_status = 'requires_attention',
                     attention_reason = ?,
                     reconciliation_resume_control_status = ?,
@@ -3364,7 +3390,7 @@ class TaskRuntimeProjection:
                     SELECT * FROM workflow_node_job
                     WHERE workflow_task_uuid = ? AND workflow_node_uuid = ?
                       AND json_extract(meta_data, '$.unilab.control_path') = ?
-                      AND json_extract(meta_data, '$.unilab.iteration_index') = ?
+                      AND json_extract(meta_data, '$.unilab.iteration_index') = ? AND current_attempt=1
                       AND deleted_at IS NULL
                     """,
                     (task_uuid, template_uuid, control_path, iteration_index),
@@ -3545,7 +3571,7 @@ class TaskRuntimeProjection:
                     SELECT * FROM workflow_node_job
                     WHERE workflow_task_uuid = ? AND deleted_at IS NULL
                       AND json_extract(meta_data, '$.unilab.control_path') = ?
-                      AND json_extract(meta_data, '$.unilab.iteration_index') = ?
+                      AND json_extract(meta_data, '$.unilab.iteration_index') = ? AND current_attempt=1
                     """,
                     (task_uuid, control_path, iteration_index),
                 ).fetchall()
@@ -3827,6 +3853,7 @@ class TaskRuntimeProjection:
         return_info: Mapping[str, Any] | None = None,
         error_info: Sequence[Any] | None = None,
         manual_confirmation_status: str | None = None,
+        inventory_reconciliation: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """投影工作流节点作业（WorkflowNodeJob）的明确业务结果。
 
@@ -3902,12 +3929,17 @@ class TaskRuntimeProjection:
                     raise StoreConflict(str(error)) from error
                 updated_control_data = settlement.control_data
                 uncertainty_reason = settlement.uncertainty_reason
+            inventory_difference = inventory_reconciliation or control_data.get("inventory_reconciliation")
+            if inventory_difference:
+                if target_job_status != "succeeded" or not isinstance(inventory_difference, Mapping):
+                    raise StoreConflict("库存差异只能附加到已知成功的物理结果")
+                updated_control_data["inventory_reconciliation"] = dict(inventory_difference)
+                uncertainty_reason = "inventory_fact_changed"
             requires_inventory_reconciliation = uncertainty_reason is not None
-            retained_tenancy = settle_device_tenancy(
-                connection,
-                job_uuid=job_uuid,
-                succeeded=target_job_status == "succeeded",
-                not_started=no_send_proof,
+            retained_tenancy = (
+                bool(active_task_device_tenancies(connection, task_uuid=task_uuid)) if inventory_difference
+                else settle_device_tenancy(connection, job_uuid=job_uuid,
+                    succeeded=target_job_status == "succeeded", not_started=no_send_proof)
             )
             if current_job_status == target_job_status:
                 same_return_info = (
@@ -4069,12 +4101,12 @@ class TaskRuntimeProjection:
                     now=finished_at,
                 )
             # ``job_statuses`` 是决定父任务业务终态的完整兄弟作业状态集合。
-            job_statuses = [row["status"] for row in job_rows]
+            job_statuses = [row["status"] for row in job_rows if row["current_attempt"]]
             target_task_status: str | None = None
             if task_row["status"] == "canceling":
                 if all(status in _TERMINAL_JOB_STATES for status in job_statuses):
                     target_task_status = "canceled"
-            elif task_row["status"] not in {"failed", "canceled", "timeout"}:
+            elif task_row["status"] not in {"failed", "canceled", "timeout"} and task_row["control_status"] != "error_waiting":
                 if "timeout" in job_statuses:
                     target_task_status = "timeout"
                 elif "failed" in job_statuses:
@@ -4090,7 +4122,7 @@ class TaskRuntimeProjection:
                     connection,
                     task_uuid=task_uuid,
                 )
-                if target_task_status == "succeeded" and active_tenancies:
+                if target_task_status == "succeeded" and active_tenancies and not inventory_difference:
                     target_task_status = "failed"
                     retained_tenancy = True
                 updated_tasks = connection.execute(
@@ -4140,7 +4172,8 @@ class TaskRuntimeProjection:
                 connection.execute(
                     """
                     UPDATE workflow_task
-                    SET control_status = 'waiting_reconciliation',
+                    SET control_status = CASE WHEN ? THEN control_status WHEN control_status='error_waiting'
+                        THEN 'error_waiting' ELSE 'waiting_reconciliation' END,
                         cleanup_status = 'requires_attention',
                         attention_reason =
                             ?,
@@ -4149,6 +4182,7 @@ class TaskRuntimeProjection:
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
                     (
+                        bool(inventory_difference),
                         uncertainty_reason,
                         resume_control,
                         finished_at,

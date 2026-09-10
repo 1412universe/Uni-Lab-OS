@@ -1773,3 +1773,38 @@ def test_terminal_job_token_rejection_retires_pending_outcome(
         store.close()
 
     asyncio.run(scenario())
+
+
+def test_controlled_goal_acceptance_is_not_physical_start(tmp_path: Path) -> None:
+    """ROS 受理可早于工站开始许可；只有实际 START 才发布 running。"""
+    from types import SimpleNamespace
+
+    class ControlledPlane(FakeDataPlane):
+        next_start = "WAIT"
+
+        def begin_execution(self, job: StoredJob) -> str:
+            return self.next_start
+
+    plane = ControlledPlane()
+    store = EdgeControlStore(str(tmp_path / "runtime.db"))
+    client = EdgeControlClient(_settings(tmp_path / "runtime.db"), store=store, data_plane=plane)
+    job_uuid, command_uuid = str(uuid.uuid4()), str(uuid.uuid4())
+    try:
+        store.save_job_start({"job_uuid": job_uuid, "task_uuid": str(uuid.uuid4()),
+            "node_uuid": str(uuid.uuid4()), "job_access_token": "token", **_claim_fields()}, command_uuid)
+        store.set_job_status(job_uuid, "dispatching")
+        job = store.get_job(job_uuid)
+        item = SimpleNamespace(job_id=job_uuid, start_guard=lambda: client.begin_execution(job))
+        client.publish_job_started(item)
+        assert store.get_job(job_uuid).status == "dispatching"
+        assert item.start_guard() == "WAIT"
+        assert store.pending_events(float("inf")) == []
+        plane.next_start = "START"
+        assert item.start_guard() == "START"
+        assert store.get_job(job_uuid).status == "running"
+        assert [event.event_type for event in store.pending_events(float("inf"))] == ["job.started"]
+        plane.next_start = "ALREADY_STARTED"
+        assert item.start_guard() == "ALREADY_STARTED"
+        assert len(store.pending_events(float("inf"))) == 1
+    finally:
+        store.close()

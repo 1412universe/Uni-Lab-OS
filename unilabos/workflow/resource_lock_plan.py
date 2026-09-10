@@ -1836,7 +1836,7 @@ def completed_resource_nodes_for_job(
 
     current_scope = iteration_scope(job)
     aborted = any(
-        candidate.get("status") in {"failed", "canceled", "timeout"} for candidate in jobs
+        candidate.get("status") in {"failed", "canceled", "timeout"} for candidate in jobs if candidate.get("current_attempt") is not False
     )
     stopped_states = {"succeeded", "skipped", "failed", "canceled", "timeout"}
     if aborted:
@@ -1862,7 +1862,7 @@ def completed_resource_nodes_for_job(
             scope = parent_scope_by_runtime.get(str(scope[0]))
         return False
 
-    relevant = [candidate for candidate in jobs if belongs_to_current(candidate)]
+    relevant = [candidate for candidate in jobs if candidate.get("current_attempt") is not False and belongs_to_current(candidate)]
     by_template: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
     for candidate in relevant:
         by_template[str(candidate["workflow_node_uuid"])].append(candidate)
@@ -1949,6 +1949,7 @@ def failed_explicit_resource_interval_ids(
         str(job.get("workflow_node_uuid") or "")
         for job in jobs
         if isinstance(job, Mapping)
+        and job.get("current_attempt") is not False
         and (
             job.get("status") in {"failed", "canceled", "timeout"}
             or bool(str(job.get("uncertainty_reason") or "").strip())

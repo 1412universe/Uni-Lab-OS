@@ -845,31 +845,41 @@ def test_successful_material_task_releases_source_reservations(
     assert inventory.release_calls == [(TASK_UUID, "workflow_succeeded")]
 
 
-def test_failed_material_task_releases_source_reservations(
+def test_failed_material_task_retains_reservations_until_user_cancels(
     store: WorkflowStore,
 ) -> None:
-    """带来源任务失败后也必须释放协调器持有的短期预留。
-
-    参数：``store`` 是隔离任务权威。返回无；断言普通设备动作明确失败并把父任务
-    推进到失败终态后，调度桥以同一工作流任务（WorkflowTask）身份释放物料来源
-    （MaterialSource）预留，避免一次设备故障永久占住自动分配候选。
-    """
+    """节点失败暂停并保留预留；用户取消当前任务后才结算来源预留。"""
 
     task = _seed_task(store, with_action=True, automatic=True)
     inventory = _ToggleInventory(available=True)
-    scheduler = EdgeScheduler(
-        dispatcher=RecordingDispatcher(),
-        inventory=inventory,
-    )
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher(), inventory=inventory)
     bridge = TaskSchedulerBridge(store, scheduler=scheduler)
     try:
         bridge.submit(task)
         scheduler.on_job_finished(ACTION_JOB_UUID, False, {"success": False})
+        assert store.get_task(TASK_UUID)["status"] == "running"
+        assert store.get_task(TASK_UUID)["control_status"] == "error_waiting"
+        assert inventory.release_calls == []
+        snapshot = bridge.error_control.snapshot()
+        assert snapshot["mode"] == "PAUSED"
+        decision = snapshot["errors"][0]
+        bridge.decide_error(
+            decision["decision_id"],
+            {
+                "action": "cancel_task",
+                "expected_decision_version": decision["decision_version"],
+                "expected_station_version": snapshot["station_version"],
+                "observed_error_epoch": snapshot["error_epoch"],
+                "resume_requested": False,
+            },
+            idempotency_key="cancel-source-task",
+            operator_id="tester",
+        )
+        assert store.get_task(TASK_UUID)["status"] == "canceled"
+        assert inventory.release_calls == [(TASK_UUID, "workflow_canceled")]
+        assert bridge.error_control.snapshot()["mode"] == "PAUSED"
     finally:
         bridge.close()
-
-    assert store.get_task(TASK_UUID)["status"] == "failed"
-    assert inventory.release_calls == [(TASK_UUID, "workflow_failed")]
 
 
 def test_shared_source_action_lock_serializes_across_workflow_tasks() -> None:

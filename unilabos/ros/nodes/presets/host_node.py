@@ -1237,6 +1237,8 @@ class HostNode(BaseROS2DeviceNode):
             mock_return = self._build_simulated_action_return(
                 device_id, action_name, action_kwargs
             )
+            from unilabos.app.edge_control.execution_start import confirm_execution_start
+            confirm_execution_start(item)
             self._handle_simulated_action_result(item, action_id, mock_return)
             return
 
@@ -1272,6 +1274,9 @@ class HostNode(BaseROS2DeviceNode):
                 item.task_id,
                 item.action_name,
                 trace_context=item.trace_context,
+                station_controlled=getattr(item, "start_guard", None) is not None,
+                execution_source=getattr(item, "execution_source", "workflow"),
+                start_guard=getattr(item, "start_guard", None),
             )
 
         # self.lab_logger().trace(f"[Host Node] Sending goal for {action_id}: {str(goal_msg)[:1000]}")
@@ -1279,6 +1284,9 @@ class HostNode(BaseROS2DeviceNode):
         self.lab_logger().trace(f"[Host Node] Sending goal for {action_id}: {goal_msg}")
         action_client.wait_for_server()
         goal_uuid_obj = UUID(uuid=list(u.bytes))
+
+        if getattr(item, "start_guard", None) is not None and target_node is None:
+            raise RuntimeError("设备适配器未提供实际动作开始屏障")
 
         future = action_client.send_goal_async(
             goal_msg,

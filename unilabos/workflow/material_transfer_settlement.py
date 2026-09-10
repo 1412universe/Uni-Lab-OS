@@ -16,6 +16,15 @@ from unilabos.utils.tracing import span
 from unilabos.workflow.store import StoreConflict
 
 
+class InventoryFactConflict(StoreConflict):
+    """物理结果已知，但不能用旧预期覆盖人工库存事实。"""
+
+    def __init__(self, error: StationResourceError) -> None:
+        super().__init__(error.message)
+        self.details = {"code": error.code, "message": error.message,
+                        "resources": [dict(item) for item in error.resources]}
+
+
 class MaterialTransferSettlement:
     """把成功的物料转移 Job 收敛为本地父级与库位事实。"""
 
@@ -158,6 +167,8 @@ class MaterialTransferSettlement:
                     )
                 )
         except StationResourceError as error:
+            if error.code == "inventory_fact_changed":
+                raise InventoryFactConflict(error) from error
             raise StoreConflict(error.message) from error
 
 
