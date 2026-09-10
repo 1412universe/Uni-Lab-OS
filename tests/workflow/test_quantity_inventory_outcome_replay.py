@@ -7,10 +7,13 @@ from typing import Any, NoReturn
 from uuid import uuid4
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from unilabos.app.edge_control.local_authority import (
     LocalEdgeAuthorityStore,
     LocalEdgeControlAuthority,
+    create_local_edge_control_router,
 )
 from unilabos.app.scheduler.backend import create_edge_stack
 from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
@@ -203,10 +206,24 @@ def test_local_edge_outcome_replay_settles_quantity_once_with_in_memory_catalog(
         )
         bridge.submit(task)
         assert workflow_store.count_rows("workflow") == 0
-        assert workflow_store.get_job(JOB_UUID)["status"] == "running"
+        assert workflow_store.get_job(JOB_UUID)["status"] == "dispatched"
 
         command = authority.store.pending_commands()[0]
         command_payload = command["payload"]
+        # 命令入队不是设备已开始；先通过真实执行开始协议，再验证数量结算重放。
+        application = FastAPI()
+        application.include_router(create_local_edge_control_router(authority))
+        with TestClient(application) as client:
+            started = client.post(
+                f"/api/v1/edge/jobs/{JOB_UUID}/begin",
+                headers={
+                    "X-Command-UUID": command["message_uuid"],
+                    "X-Job-Token": command_payload["job_access_token"],
+                },
+            )
+            assert started.status_code == 200, started.text
+            assert started.json()["data"]["start"] == "START"
+        assert workflow_store.get_job(JOB_UUID)["status"] == "running"
         original_project_job_finished = bridge._projection.project_job_finished
 
         def fail_first_projection(**_values: Any) -> NoReturn:
