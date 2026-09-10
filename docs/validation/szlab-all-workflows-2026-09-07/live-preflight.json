@@ -1,0 +1,4556 @@
+[
+  {
+    "workflow_uuid": "67da810c-34f6-59c6-94ba-7e73dcc06207",
+    "source": "szlab_poly_studio/workflows/magnetic_stirring.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "67da810c-34f6-59c6-94ba-7e73dcc06207",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.259956Z",
+        "summary": {
+          "execution_node_count": 1,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 3,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 1
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "194ed35e-9c30-5a2d-9da5-9e70ff3992e4",
+            "node_name": "run_stirring"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "194ed35e-9c30-5a2d-9da5-9e70ff3992e4",
+            "node_name": "run_stirring"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "ab421e20-1c93-529b-b715-38737edf343b",
+    "source": "szlab_poly_studio/workflows/photoshotting.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "ab421e20-1c93-529b-b715-38737edf343b",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.289278Z",
+        "summary": {
+          "execution_node_count": 1,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 3,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 1
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "692b3746-83cc-53e2-836c-e8b201b95184",
+            "node_name": "take_photo"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "692b3746-83cc-53e2-836c-e8b201b95184",
+            "node_name": "take_photo"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "25166c6a-2e85-5008-ba3c-03d742ef9b1a",
+    "source": "szlab_poly_studio/workflows/robot_action.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "25166c6a-2e85-5008-ba3c-03d742ef9b1a",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.324627Z",
+        "summary": {
+          "execution_node_count": 2,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 5,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 2
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1ab6e8b9-0e11-59d9-aa11-2213fbd43a1b",
+            "node_name": "submit_place_to_s04"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "1ab6e8b9-0e11-59d9-aa11-2213fbd43a1b",
+            "node_name": "submit_place_to_s04"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "16d36efa-a735-5a13-bb9d-23658f3f53cd",
+            "node_name": "submit_pick_from_s04"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "16d36efa-a735-5a13-bb9d-23658f3f53cd",
+            "node_name": "submit_pick_from_s04"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "1bc5a151-445a-5a53-b24a-7a4b521ac60c",
+    "source": "szlab_poly_studio/workflows/s04_robot_stirring.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "1bc5a151-445a-5a53-b24a-7a4b521ac60c",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.370862Z",
+        "summary": {
+          "execution_node_count": 3,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 5,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 3
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "789a288f-28ad-55d9-a8a8-d018d24dfb78",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7c686f7b-60de-521d-9fe2-b6daf7533616",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "2acdc328-6d38-52f2-abbb-badc6664370c",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "2acdc328-6d38-52f2-abbb-badc6664370c",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "0b4e6fce-14bc-5866-a373-16ad25c7f8cf",
+    "source": "szlab_poly_studio/workflows/s06_robot.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "0b4e6fce-14bc-5866-a373-16ad25c7f8cf",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.423435Z",
+        "summary": {
+          "execution_node_count": 3,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 3
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "d22f090e-63c7-513e-89eb-6a634dbec638",
+            "node_name": "submit_place_to_s06"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "d22f090e-63c7-513e-89eb-6a634dbec638",
+            "node_name": "submit_place_to_s06"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "a31553c3-8a3d-5c1c-aa16-b759faf6894e",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "a31553c3-8a3d-5c1c-aa16-b759faf6894e",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "2be817c5-3147-5199-b93d-be6e2ce045f8",
+            "node_name": "submit_pick_from_s06"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "2be817c5-3147-5199-b93d-be6e2ce045f8",
+            "node_name": "submit_pick_from_s06"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "f372fd2d-447e-5f97-85e4-f90628e9f472",
+    "source": "szlab_poly_studio/workflows/s06_material.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "f372fd2d-447e-5f97-85e4-f90628e9f472",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "temporarily_unavailable",
+        "can_run": false,
+        "checked_at": "2026-09-06T16:15:48.555650Z",
+        "summary": {
+          "execution_node_count": 3,
+          "passed_check_count": 1,
+          "blocking_check_count": 1,
+          "deferred_check_count": 5,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "blocked",
+            "code": "quantity_inventory_unavailable",
+            "message": "计划目标输入存在多个提供者",
+            "blocking": true,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 3
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "27001d16-d1e8-541a-832b-6e23660bcb12",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9c35ad8e-dbb9-5824-af71-34a81a6bb1d0",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "fd5fc6bf-a26b-54af-8bb0-68fd377a7394",
+            "node_name": "add_solvent_to_beaker"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "fd5fc6bf-a26b-54af-8bb0-68fd377a7394",
+            "node_name": "add_solvent_to_beaker"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "4f6ec98a-d3e1-580b-a72e-8ce4fe9d5def",
+    "source": "szlab_poly_studio/workflows/s07_robot.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "4f6ec98a-d3e1-580b-a72e-8ce4fe9d5def",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.592555Z",
+        "summary": {
+          "execution_node_count": 3,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 3
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "204657ba-491b-5e6a-bbf2-f6ddd1d720ec",
+            "node_name": "submit_place_to_s071"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "204657ba-491b-5e6a-bbf2-f6ddd1d720ec",
+            "node_name": "submit_place_to_s071"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9c5505ab-bd02-5c84-ae7e-744aaea8cd5e",
+            "node_name": "submit_place_to_s072"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "9c5505ab-bd02-5c84-ae7e-744aaea8cd5e",
+            "node_name": "submit_place_to_s072"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f71f4aca-fa51-54c0-a385-1d77a83f6f27",
+            "node_name": "submit_pick_from_s072"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a81766c9-9221-54e0-928b-990577f58470"
+            },
+            "node_uuid": "f71f4aca-fa51-54c0-a385-1d77a83f6f27",
+            "node_name": "submit_pick_from_s072"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "b1370434-7eb7-553a-ac93-b25f3b3ef742",
+    "source": "szlab_poly_studio/workflows/s07_solid_addition.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "b1370434-7eb7-553a-ac93-b25f3b3ef742",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.628818Z",
+        "summary": {
+          "execution_node_count": 3,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 3
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8f12aaee-28d9-5688-90f9-d02827c93a07",
+            "node_name": "S07 粉桶扫码盘点"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "8f12aaee-28d9-5688-90f9-d02827c93a07",
+            "node_name": "S07 粉桶扫码盘点"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b5c96f65-75c2-504c-86b9-c18bc2bf138c",
+            "node_name": "rotate_powder_cartridge_to_feed"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "b5c96f65-75c2-504c-86b9-c18bc2bf138c",
+            "node_name": "rotate_powder_cartridge_to_feed"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "2ee5cc4d-6e1b-57f9-8a7b-6721ec5640b5",
+            "node_name": "dose_powder"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "2ee5cc4d-6e1b-57f9-8a7b-6721ec5640b5",
+            "node_name": "dose_powder"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "230df44a-c725-551d-b43b-303ab5bd90ea",
+    "source": "szlab_poly_studio/workflows/s08_cap.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "230df44a-c725-551d-b43b-303ab5bd90ea",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.693631Z",
+        "summary": {
+          "execution_node_count": 2,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 5,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 2
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b50cb6c7-539b-5b0c-8a02-61037a1fb3bc",
+            "node_name": "process_cap_with_sample_parts"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "b50cb6c7-539b-5b0c-8a02-61037a1fb3bc",
+            "node_name": "process_cap_with_sample_parts"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6baa8854-31d0-55ac-8d48-9f1fb8dedfa0",
+            "node_name": "process_cap_with_sample_parts"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "6baa8854-31d0-55ac-8d48-9f1fb8dedfa0",
+            "node_name": "process_cap_with_sample_parts"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "d176a938-5e34-511b-9e28-68540833559b",
+    "source": "szlab_poly_studio/workflows/s09_pipetting.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "d176a938-5e34-511b-9e28-68540833559b",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.746623Z",
+        "summary": {
+          "execution_node_count": 4,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 9,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 4
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "78f5737a-694c-56fd-b6dd-fcd35a6dcedc",
+            "node_name": "prepare_liquid_station"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "78f5737a-694c-56fd-b6dd-fcd35a6dcedc",
+            "node_name": "prepare_liquid_station"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b316e4f0-8cf8-5457-a723-7b67ad5b8758",
+            "node_name": "bind_sample_to_station"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "b316e4f0-8cf8-5457-a723-7b67ad5b8758",
+            "node_name": "bind_sample_to_station"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7a6cb117-2f8a-5696-93f3-83d2d348da98",
+            "node_name": "add_liquid"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "7a6cb117-2f8a-5696-93f3-83d2d348da98",
+            "node_name": "add_liquid"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "61b329f0-4476-555c-8286-bf8bf29dd824",
+            "node_name": "release_station"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "61b329f0-4476-555c-8286-bf8bf29dd824",
+            "node_name": "release_station"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "335da2e9-024b-562f-8bf8-35dba0b52a90",
+    "source": "szlab_poly_studio/workflows/stack_s05_s06.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "335da2e9-024b-562f-8bf8-35dba0b52a90",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.798174Z",
+        "summary": {
+          "execution_node_count": 3,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 3
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7cc804f2-86e3-5a87-9db9-06ecacdf711a",
+            "node_name": "get_stack_status"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "a1c96bb9-a304-5409-807b-881bdeed64dd"
+            },
+            "node_uuid": "7cc804f2-86e3-5a87-9db9-06ecacdf711a",
+            "node_name": "get_stack_status"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6d6d1ca1-c85d-5c3b-9bac-aa6ecc9651c8",
+            "node_name": "take_photo"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "6d6d1ca1-c85d-5c3b-9bac-aa6ecc9651c8",
+            "node_name": "take_photo"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "68fb2497-e52e-545c-9cb4-109de4eb8365",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "68fb2497-e52e-545c-9cb4-109de4eb8365",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "33930b26-2780-555f-8668-e56462846716",
+    "source": "szlab_poly_studio/workflows/szlab_mixer.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "33930b26-2780-555f-8668-e56462846716",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.835907Z",
+        "summary": {
+          "execution_node_count": 1,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 3,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 1
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b6568882-960a-539f-b70a-63194267b086",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "b6568882-960a-539f-b70a-63194267b086",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "127cf68e-43b3-58ab-932f-984f2b57019e",
+    "source": "szlab_poly_studio/workflows/szlab_mixer_pump_production.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "127cf68e-43b3-58ab-932f-984f2b57019e",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.870099Z",
+        "summary": {
+          "execution_node_count": 1,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 3,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 1
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "958e8abc-1cb6-5d75-b1cb-eaf0524b3a54",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "958e8abc-1cb6-5d75-b1cb-eaf0524b3a54",
+            "node_name": "run_solvent_addition"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "5e7ce142-bf5a-5d30-8666-fdf5374941f1",
+    "source": "szlab_poly_studio/workflows/s07_material_dosing.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "5e7ce142-bf5a-5d30-8666-fdf5374941f1",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:48.920424Z",
+        "summary": {
+          "execution_node_count": 6,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 9,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 6
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "af599d17-1d6c-5f34-a2f1-dc5239d1275d",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f7969031-098d-52eb-9193-92e41de3f3da",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "4058067c-18e2-5b35-90eb-ddf04694c040",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9f67e05d-020a-5e8d-bf86-ae812aac7c01",
+            "node_name": "S07 粉桶转位"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "9f67e05d-020a-5e8d-bf86-ae812aac7c01",
+            "node_name": "S07 粉桶转位"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "45ffc4a3-ab9e-5805-a2f6-673c35989d2f",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "58198f7a-eec4-5276-9bc5-5dd5b54c4b06",
+            "node_name": "dose_powder_with_materials"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "58198f7a-eec4-5276-9bc5-5dd5b54c4b06",
+            "node_name": "dose_powder_with_materials"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "e7c53119-9fde-5250-9bf5-264f23d157a8",
+    "source": "szlab_poly_studio/workflows/material_transfer.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "e7c53119-9fde-5250-9bf5-264f23d157a8",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "temporarily_unavailable",
+        "can_run": false,
+        "checked_at": "2026-09-06T16:15:48.963778Z",
+        "summary": {
+          "execution_node_count": 1,
+          "passed_check_count": 1,
+          "blocking_check_count": 1,
+          "deferred_check_count": 2,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "blocked",
+            "code": "quantity_inventory_unavailable",
+            "message": "工作流任务缺少必填输入",
+            "blocking": true,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 1
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "bdc83251-7aaa-5fd2-903f-fd2446e25c50",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "6d9fb3e2-4dcb-5f23-93b4-74d1b6083393",
+    "source": "szlab_poly_studio/workflows/single_sample_atomic_material.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "6d9fb3e2-4dcb-5f23-93b4-74d1b6083393",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:49.247045Z",
+        "summary": {
+          "execution_node_count": 31,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 43,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 31
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "0164a018-80c0-52ac-9350-47e8b5cdec01",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5f3ee9e8-6790-527b-80a8-40f4c5f51cbf",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "70fa686c-4f15-43b9-851f-7080949de0ec",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "71e3add0-cc3b-5657-8763-2ce15d823077",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9c7e0a7c-8b6a-448a-a910-84c4fd628e74",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "bf46be1e-2743-4fac-864c-bfbc41df3fd9",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c6551edc-856a-55f8-91a3-d9c7243fb636",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "cf96d8b4-e160-4755-9c33-73f364c43ceb",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b46df2d0-42b8-5460-b192-aaf53537579e",
+            "node_name": "S07 粉桶扫码盘点"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "b46df2d0-42b8-5460-b192-aaf53537579e",
+            "node_name": "S07 粉桶扫码盘点"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "671c77fc-56a4-5512-82f9-de6ce25d4e8a",
+            "node_name": "S07 粉桶转位"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "671c77fc-56a4-5512-82f9-de6ce25d4e8a",
+            "node_name": "S07 粉桶转位"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "a522d335-ccc7-5942-a7eb-669cfc6942a9",
+            "node_name": "S07 粉桶转位"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "a522d335-ccc7-5942-a7eb-669cfc6942a9",
+            "node_name": "S07 粉桶转位"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "fc86f243-0c93-552a-931b-64f1dfe9aabd",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "4df1a1a8-8a30-59f1-89ad-23d388ac707b",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "46c62e4e-2ef1-537e-999c-77ab94a843c5",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "64cae18e-a070-5ceb-bc09-997c53e35e1f",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "64cae18e-a070-5ceb-bc09-997c53e35e1f",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5ea3f38d-900b-5321-8789-0b8f0d48b286",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "00e72600-5c9c-5afd-9c70-338d6eddc102",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "00e72600-5c9c-5afd-9c70-338d6eddc102",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "68a5fd54-a668-5d2a-af33-3190515cbfc2",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7fffecbc-dcec-54ef-b336-81eb71fe18fd",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "38c2603a-0dac-5930-a26e-966138075939",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "38c2603a-0dac-5930-a26e-966138075939",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8da3d96d-6396-5fa9-bb93-0c1ad80aedec",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c535cf80-22f3-5f92-9222-020d66f8b3ea",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "c535cf80-22f3-5f92-9222-020d66f8b3ea",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "079c9d7f-6eec-56f2-984f-b52cf5203bf1",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ffa0066c-b9c2-5d37-aff3-bfac6481b01c",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "ffa0066c-b9c2-5d37-aff3-bfac6481b01c",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "cabc349a-1cc7-5941-8a48-31cbcb0a7668",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "14b81e19-280b-5a30-9056-9e039bf924f3",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "05fcfaa8-f511-519e-b29b-b6035086fd93",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "05fcfaa8-f511-519e-b29b-b6035086fd93",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ea651e5f-bbdd-580c-a3ce-75ff7f30da7c",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "ea651e5f-bbdd-580c-a3ce-75ff7f30da7c",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c3305a3e-c047-5c64-be13-18fd07c85436",
+            "node_name": "原子取料倒液放料"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f7a8bda7-0ebf-5752-9598-1ef2c7f90fe3",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "f7a8bda7-0ebf-5752-9598-1ef2c7f90fe3",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "88578057-0548-572c-8319-0793c29d2dda",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "0a6b3005-833d-491b-9fd4-fe6545846dab",
+    "source": "szlab_poly_studio/workflows/beaker_transfer_chain.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "0a6b3005-833d-491b-9fd4-fe6545846dab",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "temporarily_unavailable",
+        "can_run": false,
+        "checked_at": "2026-09-06T16:15:49.670522Z",
+        "summary": {
+          "execution_node_count": 6,
+          "passed_check_count": 1,
+          "blocking_check_count": 1,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "blocked",
+            "code": "quantity_inventory_unavailable",
+            "message": "工作流任务库位选择解析失败",
+            "blocking": true,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 6
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "08f74d07-4815-56ff-9694-1283c127388b",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8c015cd6-0493-553e-a8af-cebfa4f40aa3",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "35fb20df-a3a9-5e04-be71-67d3cc605fd4",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "3906740d-43b7-5478-b7f4-d1053b563997",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "37fbb33d-d91e-5a05-8c52-0c524cc483b5",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7f29a3ee-30b7-5680-8140-ffb3405f15a9",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "7e1122f3-3889-546c-b8f8-49dc8a0121c3",
+    "source": "szlab_poly_studio/workflows/single_sample_atomic_attachment_flow.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "7e1122f3-3889-546c-b8f8-49dc8a0121c3",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:49.976898Z",
+        "summary": {
+          "execution_node_count": 28,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 38,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 28
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1d2a9659-22a5-5c37-993f-ed265600341d",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "26735694-d70a-5712-b202-c8279bb65f58",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "36536ad7-6667-5c53-ae75-f1c4f8108151",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "3ea4bbb2-821a-5366-aa30-23f9de22f41a",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "a255674e-6a05-5ac6-99ea-1201b8a88c5d",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "aba86866-cb94-5b94-bf6f-8100ea320fc1",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "cc0d3f3d-bdaa-5eb6-90ec-0055d2380495",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e6444c8f-14a1-56d1-9d4c-6a40e8185d6b",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "515ca25e-4fca-5e2a-8346-dd0ca24e72e3",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "644ae679-2d60-53a7-82bf-6d9af9a82011",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "644ae679-2d60-53a7-82bf-6d9af9a82011",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "374c4285-fc01-589a-96da-c6c8dd2a07c7",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "850a69ac-f7eb-5a26-afa9-52c9407cfb6a",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "850a69ac-f7eb-5a26-afa9-52c9407cfb6a",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "924c8d7a-eeb1-5a94-b3d9-fbcfdd776071",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9aa6360f-a6df-5e4e-91d2-1178e831a3ba",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b8e086c7-6c9d-5335-8df8-6870511084c3",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "b8e086c7-6c9d-5335-8df8-6870511084c3",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8a9d8323-8a1e-5c7c-9973-782b1ff9b226",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "132f0db3-4f8e-5749-862e-dd1d7fc36596",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "132f0db3-4f8e-5749-862e-dd1d7fc36596",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "bffcaf41-e6dd-5e58-897b-09389fb9200a",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e0a9f55d-bd53-5f9f-9cef-bb2d99a8800c",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "e0a9f55d-bd53-5f9f-9cef-bb2d99a8800c",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5f7d2ce7-9c55-5831-88d5-20e63d1edbd3",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7ea59c77-f4d2-5747-acf7-423721c33d03",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "7ea59c77-f4d2-5747-acf7-423721c33d03",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "36bf0f13-3d1d-5116-854d-9823a27decb2",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "57753560-b04d-5a60-b29e-bcb43c131ad0",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5ad40253-2fd9-5869-8d39-d92c75905d08",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "5ad40253-2fd9-5869-8d39-d92c75905d08",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c466dd2b-66b8-559f-a664-eb358128cde1",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "c466dd2b-66b8-559f-a664-eb358128cde1",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e21f2a7a-aad6-571a-8227-845f0d40ee14",
+            "node_name": "原子取料倒液放料"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "4af0aeb9-b92c-534c-9bf8-7d7c4770f3cd",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "4af0aeb9-b92c-534c-9bf8-7d7c4770f3cd",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "3516cdfc-8411-5d86-be56-d9d86bca84c6",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "e0c3103a-ac8a-555e-9dee-44c8d6083901",
+    "source": "szlab_poly_studio/workflows/single_sample_atomic_attachment_robot_atomic.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "e0c3103a-ac8a-555e-9dee-44c8d6083901",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:50.489861Z",
+        "summary": {
+          "execution_node_count": 33,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 44,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "共享数量库存当前可完成整任务准入",
+            "blocking": false,
+            "details": {
+              "allocation_count": 3
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 33
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "0525c6ca-d47a-57af-a22c-34d229fbd07c",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "3c72fb58-e157-595c-b9ce-8b390fc495d5",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "56471f7e-a619-5fde-8c0a-2d8daa1eed89",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "99f6ed1b-3b1d-5ee4-9b44-38c12c71ea21",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "bd28c858-e4fe-5db6-8d64-8ee11e27ff8b",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c2e9e44f-f171-539d-9be9-3e54d70bc540",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "dcdcd1c1-601f-5a92-b3d4-f0ee5fffe7cc",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e6598072-1fa9-5cf1-bf91-4c516b84e9c5",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "110bd5eb-2ce8-57be-b6fb-e1ff740ab268",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8cc7a58c-4be9-50e2-824f-467c417b76d5",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "8cc7a58c-4be9-50e2-824f-467c417b76d5",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "23608c8b-8a4e-5277-9df4-ac119049d9d8",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5b79c214-a7a6-517c-841e-b1f53de49b6c",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "5b79c214-a7a6-517c-841e-b1f53de49b6c",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e01150b3-d43d-57cc-9708-2dcb30373354",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "66975ca0-075d-56e8-bde9-15e18dc69086",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9cdb1170-37f8-5f56-acda-0a37ef127355",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "9cdb1170-37f8-5f56-acda-0a37ef127355",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "96cd957a-265e-560c-bbf5-b8a2a2b2a501",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "53ea9406-065d-577a-b666-18f6b8c090c3",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "53ea9406-065d-577a-b666-18f6b8c090c3",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e73b9843-f6de-5c12-b52d-7a9212b8498d",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "d19778cc-f498-5d42-bca3-a122341ab62e",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "d19778cc-f498-5d42-bca3-a122341ab62e",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "25b3ddfc-0dfd-5f66-ac7f-1fd1ed8c21d6",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "4af1a1ed-d5ec-5479-9976-e1f507f4b9a8",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5669d2bd-72c3-5506-a2d1-4327456f97d2",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "5669d2bd-72c3-5506-a2d1-4327456f97d2",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7e0e9f11-f1a0-541a-97e2-e48bd52e849e",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f22ff09e-9fcd-5be1-bc7d-7979db825655",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "f22ff09e-9fcd-5be1-bc7d-7979db825655",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c1a49d48-6383-5eba-a72d-6465a591c38b",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "7e963f7c-457d-59c9-a916-191eaee92f54",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "94106950-b772-5bbd-98d9-1a8688060fa5",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "94106950-b772-5bbd-98d9-1a8688060fa5",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c689af8b-45a6-53a5-b779-64b13fd6b4da",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "c689af8b-45a6-53a5-b779-64b13fd6b4da",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "2b9d5045-fec4-50d3-8dd2-a230a467e947",
+            "node_name": "原子取料倒液放料"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "cd8710ba-7557-5e44-82d0-0a24dd6f07a7",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "cd8710ba-7557-5e44-82d0-0a24dd6f07a7",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c7cc6f1d-1dbd-5ef3-ad2e-1e2df515b0b1",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "a4590ba9-3fd8-4a38-8fbf-32d7293cd679",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e95152b5-9b5f-4dba-b5ed-535e386d42f6",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "6133476e-2210-5b6b-bcdc-102ac5025344",
+    "source": "szlab_poly_studio/workflows/single_sample_atomic_attachment_robot_atomic_task_b.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "6133476e-2210-5b6b-bcdc-102ac5025344",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:51.038215Z",
+        "summary": {
+          "execution_node_count": 33,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 44,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 33
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "06cdd559-dc8f-40dd-b624-d348be6803f8",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "4fea1e2b-c21c-480d-84dd-284c77dde8c4",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "55489da8-faac-4d29-9d52-72b209458c52",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "62adb1bf-657f-429c-865c-0ef4f1d2d1d5",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "879be1e4-fedb-4da4-817a-1189ee45b9d1",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "cf174309-7c4e-484b-b8a2-849596105c95",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f6993bcc-3fc5-4275-9804-3ae5da649215",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "fcce90b8-70b9-4b25-89ed-2b361f4c05b9",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "918d7e41-56e5-476b-98fe-a972e4d0e289",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e7595309-dbab-431c-a7cc-520a52689bc2",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "e7595309-dbab-431c-a7cc-520a52689bc2",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "2554f9f2-6524-46e7-9f6f-3a0666822581",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1908c9e4-fb47-4546-8c60-1be53985a0d8",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "1908c9e4-fb47-4546-8c60-1be53985a0d8",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e0041db2-f98a-4b94-845e-7c3ff03704a8",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "bcb03052-c196-4f56-a463-f833a42abf4d",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1f857234-e7fe-4cf3-8fc2-acc32c0a1a99",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "1f857234-e7fe-4cf3-8fc2-acc32c0a1a99",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "249a6eb1-d239-4a20-bbdf-535128f22a64",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "552c02e6-3c55-491a-ba74-9c2038660d2b",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "552c02e6-3c55-491a-ba74-9c2038660d2b",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "31232a38-052c-4222-8fb0-ad6369862863",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6262af06-b16e-4abb-ab2d-6e407c672ecf",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "6262af06-b16e-4abb-ab2d-6e407c672ecf",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ebf4e9d8-9a96-4b12-bc7a-cfc7d4db26d4",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "feee9a5b-2174-49bf-af13-526f87353590",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6e6171a2-1dd1-43f7-8a79-1102205f4d47",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "6e6171a2-1dd1-43f7-8a79-1102205f4d47",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "3b672f63-c24b-4908-a79c-252c201fd3d0",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "0e55c4bc-bec1-4840-95fc-12a05012689b",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "0e55c4bc-bec1-4840-95fc-12a05012689b",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "07eb39f4-b68f-417b-a590-fb1f36159c81",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "348d147b-d413-489c-8bee-cf88cfac0478",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "63f75496-c1f1-4f64-a278-816a25a87c8b",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "63f75496-c1f1-4f64-a278-816a25a87c8b",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9fcbe214-71ff-43f3-b197-3a2b3500e33a",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "9fcbe214-71ff-43f3-b197-3a2b3500e33a",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "63ac1231-042f-48e5-b440-73e9c20e6cdd",
+            "node_name": "原子取料倒液放料"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1ca042ff-b3f9-4891-9037-49cf5830a030",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "1ca042ff-b3f9-4891-9037-49cf5830a030",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1fa46e7f-5d19-4617-a726-dc302b85b429",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "cfdeb99d-6e30-427b-856b-c28076b1a6d1",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "89fd0f8b-aaaa-4fc7-9cbe-654c7b45049e",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "21c7b6d8-2938-43fd-9db7-4f8db24a6dca",
+    "source": "szlab_poly_studio/workflows/single_sample_atomic_attachment_robot_atomic_select_sites.py",
+    "http_status": 200,
+    "input": {
+      "beaker_source_site": "L1B2",
+      "sample_vial_source_site": "L1A2",
+      "coarse_powder_source_site": "P03",
+      "fine_powder_source_site": "P04",
+      "reagent_source_site": "R1C2"
+    },
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "21c7b6d8-2938-43fd-9db7-4f8db24a6dca",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:51.662364Z",
+        "summary": {
+          "execution_node_count": 33,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 44,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "共享数量库存当前可完成整任务准入",
+            "blocking": false,
+            "details": {
+              "allocation_count": 3
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 33
+            }
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "536d7f1a-3ad3-4e7c-a58a-1594069160ba",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "63c6916e-0880-478e-80b4-89cb9a6c8aa3",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6d6f20cd-e609-40ab-b3fa-171283da1cff",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b5086428-9606-440e-ba83-4231407faa60",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "d58228e2-9d75-475d-ac3c-951e3521be47",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ebb8d775-7da1-412f-8dbf-1653d01e1a50",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ec6d4d28-6fb0-45c0-80cf-739561067508",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "material_source",
+            "status": "deferred",
+            "code": "material_source_checked_at_admission",
+            "message": "物料来源将在任务准入时按同一冻结条件重新解析",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f6bed7e9-ac3b-46da-a856-58c5713d9845",
+            "node_name": "Material Source"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "202bd126-027e-493e-97de-84e2f6b4009d",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ff481cef-d78e-43bf-b1e9-56c556b31cfe",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+            },
+            "node_uuid": "ff481cef-d78e-43bf-b1e9-56c556b31cfe",
+            "node_name": "S07 双粉桶注粉"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "d3aa8d4e-87c5-4ed0-9308-6ee08ee58f90",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "997b00c0-c5b1-4079-91a0-b76ff070dfd3",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+            },
+            "node_uuid": "997b00c0-c5b1-4079-91a0-b76ff070dfd3",
+            "node_name": "S06 双路溶剂加液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "3477c5bf-6faf-4fd2-a210-c41664f27e32",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e1a7d3ae-b1e7-481d-ba57-71684163fc7e",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8e4fc75c-929a-49a7-831a-098b867b617f",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "8e4fc75c-929a-49a7-831a-098b867b617f",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "a30e6f92-53d8-4150-a8f8-a1112f6326a8",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8bf61067-b4f5-4dcc-b3aa-87519c6b1d53",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "8bf61067-b4f5-4dcc-b3aa-87519c6b1d53",
+            "node_name": "S09 试剂移液"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "63d950f9-cb5c-4100-bcd1-5e3123fb020d",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "de048c55-0a07-456e-883b-e7a7e32562b6",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "de048c55-0a07-456e-883b-e7a7e32562b6",
+            "node_name": "S08 试剂瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "b7d7cb9d-8fc5-44c4-b76c-b369980e5a1e",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "40634fbd-566c-4817-8e7a-2af9d0700f66",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "452ab228-aa8f-4c77-bf5a-0c87394498b5",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+            },
+            "node_uuid": "452ab228-aa8f-4c77-bf5a-0c87394498b5",
+            "node_name": "S04 烧杯磁搅"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ab136262-a4e2-47b7-a037-904b5914777a",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f065cf40-e80f-45d7-9568-fe6d8cfff715",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+            },
+            "node_uuid": "f065cf40-e80f-45d7-9568-fe6d8cfff715",
+            "node_name": "S09 烧杯测密度"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "fb66ac6f-7664-4920-b685-8879962a4fcf",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8ba3765a-6c43-46e1-9d6d-2d9966fa42ff",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6c9b451d-d6a0-468b-88ce-899f83ff428c",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "6c9b451d-d6a0-468b-88ce-899f83ff428c",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f132ee6f-0701-4f7e-8aee-175801c46cf1",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+            },
+            "node_uuid": "f132ee6f-0701-4f7e-8aee-175801c46cf1",
+            "node_name": "S05 烧杯拍照检测"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "ac3dd32e-8c28-4995-bbdb-661c445b7a95",
+            "node_name": "原子取料倒液放料"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5124dc85-ae7a-4e3f-9969-801c6dc4be9d",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+            },
+            "node_uuid": "5124dc85-ae7a-4e3f-9969-801c6dc4be9d",
+            "node_name": "S08 样品瓶开关盖"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9f04fd0e-80f8-4722-9a87-e55c7c15a011",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "6b3a8106-0c01-4ce4-bec6-0a1634c80074",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f1482870-c771-4f27-8506-db8c8f26897f",
+            "node_name": "原子物料搬运"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "a679a3c6-0eb3-4c34-960f-9931e7e35c0f",
+    "source": "szlab_poly_studio/workflows/control_flow_condition.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "a679a3c6-0eb3-4c34-960f-9931e7e35c0f",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:51.927983Z",
+        "summary": {
+          "execution_node_count": 4,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 4
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "e2737703-ed07-4d8d-9e66-ec0f1e478a4c",
+            "node_name": "观察布尔条件"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "e2737703-ed07-4d8d-9e66-ec0f1e478a4c",
+            "node_name": "观察布尔条件"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "5b867034-42c0-4442-a9ac-fa22989934c6",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "5b867034-42c0-4442-a9ac-fa22989934c6",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "9f2d1466-db25-421c-a0a0-d3c2f63718f3",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "9f2d1466-db25-421c-a0a0-d3c2f63718f3",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "b3391d43-aba4-5e68-94a9-12792dfb58ee",
+    "source": "szlab_poly_studio/workflows/control_flow_repeat.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "b3391d43-aba4-5e68-94a9-12792dfb58ee",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:52.017678Z",
+        "summary": {
+          "execution_node_count": 4,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 4
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "c00fee26-22b7-549e-934f-97d22b76e10e",
+            "node_name": "准备循环轮次"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "c00fee26-22b7-549e-934f-97d22b76e10e",
+            "node_name": "准备循环轮次"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "0ef93d91-e6bc-5be1-9b2f-2b4d3f7f7d0c",
+            "node_name": "执行循环轮次"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "0ef93d91-e6bc-5be1-9b2f-2b4d3f7f7d0c",
+            "node_name": "执行循环轮次"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "f29d242f-ebf6-5211-b2f6-b24f7447c559",
+            "node_name": "判断循环退出"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "f29d242f-ebf6-5211-b2f6-b24f7447c559",
+            "node_name": "判断循环退出"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "64544c62-3435-5de8-a409-71d37e11db0e",
+    "source": "szlab_poly_studio/workflows/control_flow_condition_repeat.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "64544c62-3435-5de8-a409-71d37e11db0e",
+        "workflow_revision": 2,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:52.053543Z",
+        "summary": {
+          "execution_node_count": 5,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 7,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 5
+            }
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "1e51cf6b-542b-5104-b467-8fe7dca1dcda",
+            "node_name": "判断循环退出"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "1e51cf6b-542b-5104-b467-8fe7dca1dcda",
+            "node_name": "判断循环退出"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "8af7b463-e6b3-5c75-a163-58aab31e01dc",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "8af7b463-e6b3-5c75-a163-58aab31e01dc",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "device_selection",
+            "status": "deferred",
+            "code": "device_instance_selected_at_dispatch",
+            "message": "未装配设备注册读取端口，将在派发门禁复核",
+            "blocking": false,
+            "details": {},
+            "node_uuid": "fdfc4824-639c-5838-8a90-c034bc2e0fb4",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "device",
+            "status": "deferred",
+            "code": "device_dispatch_recheck_required",
+            "message": "设备在线状态与动作能力将在派发时原子复核",
+            "blocking": false,
+            "details": {
+              "material_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f"
+            },
+            "node_uuid": "fdfc4824-639c-5838-8a90-c034bc2e0fb4",
+            "node_name": "记录条件分支"
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "70000000-0000-4000-8000-000000000001",
+    "source": "szlab_poly_studio/workflows/scheduler_composite_a.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "70000000-0000-4000-8000-000000000001",
+        "workflow_revision": 1,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:52.077624Z",
+        "summary": {
+          "execution_node_count": 0,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 1,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 0
+            }
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  },
+  {
+    "workflow_uuid": "70000000-0000-4000-8000-000000000002",
+    "source": "szlab_poly_studio/workflows/scheduler_composite_b.py",
+    "http_status": 200,
+    "input": {},
+    "result": {
+      "code": 0,
+      "data": {
+        "workflow_uuid": "70000000-0000-4000-8000-000000000002",
+        "workflow_revision": 1,
+        "run_mode": "normal",
+        "status": "runnable_now",
+        "can_run": true,
+        "checked_at": "2026-09-06T16:15:52.099979Z",
+        "summary": {
+          "execution_node_count": 0,
+          "passed_check_count": 2,
+          "blocking_check_count": 0,
+          "deferred_check_count": 1,
+          "confirmation_required_count": 0
+        },
+        "checks": [
+          {
+            "type": "quantity_inventory",
+            "status": "passed",
+            "code": "quantity_inventory_ready",
+            "message": "工作流本次运行没有活动数量库存需求",
+            "blocking": false,
+            "details": {
+              "allocation_count": 0
+            }
+          },
+          {
+            "type": "execution_plan",
+            "status": "passed",
+            "code": "execution_plan_ready",
+            "message": "工作流执行计划可以生成",
+            "blocking": false,
+            "details": {
+              "execution_node_count": 0
+            }
+          },
+          {
+            "type": "resource_lock",
+            "status": "deferred",
+            "code": "resource_admission_at_dispatch",
+            "message": "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在派发门禁的库存事务中原子复核",
+            "blocking": false,
+            "details": {}
+          }
+        ]
+      }
+    }
+  }
+]

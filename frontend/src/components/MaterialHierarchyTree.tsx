@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { ChevronRight, Search } from 'lucide-react'
 import type { MaterialRecord } from '../types'
 
@@ -77,16 +78,32 @@ function filterTree(nodes: TreeNode[], query: string): TreeNode[] {
  * @param onSelect 选择物料时触发的回调。
  * @returns 物料目录侧栏。
  */
-export function MaterialHierarchyTree({ materials, selectedId, onSelect }: { materials: MaterialRecord[]; selectedId?: string; onSelect: (uuid: string) => void }) {
+export function MaterialHierarchyTree({ materials, selectedId, onSelect, onSelectSite, renderBadge, visibleMaterialIds }: { materials: MaterialRecord[]; selectedId?: string; onSelect: (uuid: string) => void; onSelectSite?: (owner: string, site: string) => void; renderBadge?: (uuid: string) => ReactNode; visibleMaterialIds?: Set<string> }) {
   const roots = useMemo(() => buildTree(materials), [materials])
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(roots.map((node) => node.material.uuid)))
-  const visible = useMemo(() => filterTree(roots, query), [roots, query])
+  useEffect(() => {
+    if (!selectedId) return
+    const ancestors = new Set<string>()
+    let parent = materials.find((material) => material.uuid === selectedId)?.parentUuid
+    while (parent && !ancestors.has(parent)) {
+      ancestors.add(parent)
+      parent = materials.find((material) => material.uuid === parent)?.parentUuid
+    }
+    setExpanded((current) => [...ancestors].every((uuid) => current.has(uuid)) ? current : new Set([...current, ...ancestors]))
+  }, [selectedId, materials])
+  const visible = useMemo(() => {
+    const filterIds = (nodes: TreeNode[]): TreeNode[] => nodes.flatMap((node) => {
+      const children = filterIds(node.children)
+      return !visibleMaterialIds || visibleMaterialIds.has(node.material.uuid) || children.length ? [{ ...node, children }] : []
+    })
+    return filterTree(filterIds(roots), query)
+  }, [roots, query, visibleMaterialIds])
   return <aside className="electron-material-tree" aria-label="物料目录">
-    <header><div><strong>物料列表</strong><span>({materials.length})</span></div></header>
+    <header><div><strong>物料列表</strong><span>({visibleMaterialIds ? `${visibleMaterialIds.size} / ${materials.length}` : materials.length})</span></div></header>
     <label><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="检索物料、设备或库位" /></label>
-    <div className="electron-tree-legend" aria-label="库位状态说明"><span><i className="occupied" />已占用</span><span><i className="empty" />未占用</span></div>
-    <div className="electron-tree-rows" role="tree">{visible.map((node) => <TreeRow key={node.material.uuid} node={node} depth={0} queryActive={Boolean(query.trim())} expanded={expanded} selectedId={selectedId} onSelect={onSelect} onToggle={(uuid) => setExpanded((current) => { const next = new Set(current); next.has(uuid) ? next.delete(uuid) : next.add(uuid); return next })} />)}</div>
+    <div className="electron-tree-legend" aria-label="库位状态说明"><span><i className="occupied" />有物料</span><span><i className="empty" />空库位</span></div>
+    <div className="electron-tree-rows" role="tree">{visible.map((node) => <TreeRow key={node.material.uuid} node={node} depth={0} queryActive={Boolean(query.trim())} expanded={expanded} selectedId={selectedId} onSelect={onSelect} renderBadge={renderBadge} onSelectSite={onSelectSite} onToggle={(uuid) => setExpanded((current) => { const next = new Set(current); next.has(uuid) ? next.delete(uuid) : next.add(uuid); return next })} />)}</div>
   </aside>
 }
 
@@ -102,7 +119,7 @@ export function MaterialHierarchyTree({ materials, selectedId, onSelect }: { mat
  * @param onToggle 展开或收起节点时触发的回调。
  * @returns 当前节点及其递归子树。
  */
-function TreeRow({ node, depth, queryActive, expanded, selectedId, onSelect, onToggle }: { node: TreeNode; depth: number; queryActive: boolean; expanded: Set<string>; selectedId?: string; onSelect: (uuid: string) => void; onToggle: (uuid: string) => void }) {
+function TreeRow({ node, depth, queryActive, expanded, selectedId, onSelect, onToggle, renderBadge, onSelectSite }: { node: TreeNode; depth: number; queryActive: boolean; expanded: Set<string>; selectedId?: string; onSelect: (uuid: string) => void; onToggle: (uuid: string) => void; renderBadge?: (uuid: string) => ReactNode; onSelectSite?: (owner: string, site: string) => void }) {
   const hasContent = node.children.length > 0 || node.sites.length > 0
   const open = hasContent && (queryActive || expanded.has(node.material.uuid))
   const occupiedSite = node.material.currentLocation.kind === 'site'
@@ -111,11 +128,11 @@ function TreeRow({ node, depth, queryActive, expanded, selectedId, onSelect, onT
   return <>
     <div className={`electron-tree-row ${selectedId === node.material.uuid ? 'selected' : ''}`} role="treeitem" aria-level={depth + 1} aria-expanded={hasContent ? open : undefined} style={{ '--tree-depth': depth } as React.CSSProperties}>
       <span className="tree-grip">⠿</span>{hasContent ? <button className={`tree-toggle ${open ? 'open' : ''}`} aria-label={`${open ? '收起' : '展开'} ${node.material.name}`} onClick={() => onToggle(node.material.uuid)}><ChevronRight size={14} /></button> : <span className="tree-toggle-spacer" />}
-      <button className="tree-label" onClick={() => onSelect(node.material.uuid)} title={node.material.name}>{node.material.name}</button>{occupiedSite ? <i className="site-dot occupied" title="已占用库位" /> : null}
+      <button className="tree-label" data-usage-material={node.material.uuid} onClick={() => onSelect(node.material.uuid)}>{node.material.name}</button>{renderBadge?.(node.material.uuid)}{occupiedSite ? <i className="site-dot occupied" title="已占用库位" /> : null}
     </div>
     {open ? <>{node.sites.map((site) => {
       const occupant = node.children.find((child) => child.material.uuid === site.occupiedMaterialUuid)
-      return occupant ? <TreeRow key={occupant.material.uuid} node={occupant} depth={depth + 1} queryActive={queryActive} expanded={expanded} selectedId={selectedId} onSelect={onSelect} onToggle={onToggle} /> : <div key={site.uuid} className="electron-tree-row site-row" role="treeitem" aria-level={depth + 2} aria-label={`${site.name}，未占用`} style={{ '--tree-depth': depth + 1 } as React.CSSProperties}><span className="tree-grip" /><span className="tree-toggle-spacer" /><span className="tree-label">{site.name}</span><i className="site-dot empty" title="未占用" /></div>
-    })}{unboundChildren.map((child) => <TreeRow key={child.material.uuid} node={child} depth={depth + 1} queryActive={queryActive} expanded={expanded} selectedId={selectedId} onSelect={onSelect} onToggle={onToggle} />)}</> : null}
+      return occupant ? <TreeRow key={occupant.material.uuid} node={occupant} depth={depth + 1} queryActive={queryActive} expanded={expanded} selectedId={selectedId} onSelect={onSelect} renderBadge={renderBadge} onSelectSite={onSelectSite} onToggle={onToggle} /> : <div key={site.uuid} className="electron-tree-row site-row" role="treeitem" aria-level={depth + 2} aria-label={`${site.name}，未占用`} style={{ '--tree-depth': depth + 1 } as React.CSSProperties}><span className="tree-grip" /><span className="tree-toggle-spacer" /><button className="tree-label" data-usage-site={site.uuid} onClick={() => onSelectSite?.(node.material.uuid, site.uuid)}>{site.name}</button>{renderBadge?.(site.uuid)}<i className="site-dot empty" title="未占用" /></div>
+    })}{unboundChildren.map((child) => <TreeRow key={child.material.uuid} node={child} depth={depth + 1} queryActive={queryActive} expanded={expanded} selectedId={selectedId} onSelect={onSelect} renderBadge={renderBadge} onSelectSite={onSelectSite} onToggle={onToggle} />)}</> : null}
   </>
 }

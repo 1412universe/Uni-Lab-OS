@@ -237,7 +237,7 @@ def test_restart_release_makes_late_stop_proof_invalid(tmp_path) -> None:
         projection = _seed_uncertain_job(store)
         projection.project_execution_process_restarted(TASK_UUID)
 
-        with pytest.raises(StoreConflict, match="已有另一份物理停止证明"):
+        with pytest.raises(StoreConflict, match="作业不是等待物理结算的失败作业"):
             projection.project_failed_job_execution_stopped(
                 JOB_UUID,
                 outcome="canceled",
@@ -253,98 +253,46 @@ def test_restart_release_makes_late_stop_proof_invalid(tmp_path) -> None:
         store.close()
 
 
-def test_restart_retains_transfer_claim_until_inventory_reconciliation(tmp_path) -> None:
-    """runtime 重启只证明动作停止；转运实际位置对账前继续冻结 Claim。"""
+@pytest.mark.parametrize(
+    "expected_change_set",
+    [
+        {
+            "kind": "material_transfer",
+            "material_uuid": "material-a",
+            "source_site_uuid": "site-a",
+            "target_site_uuid": "site-b",
+        },
+        {
+            "kind": "material_content_aliquot",
+            "source_material_uuid": "source-a",
+            "target_material_uuids": ["target-a", "target-b"],
+        },
+    ],
+)
+def test_restart_releases_transfer_and_aliquot_without_reconciliation(
+    tmp_path, expected_change_set
+) -> None:
+    """转运和分装中断统一失败，保留预期变化，不伪造停止或实际库存证据。"""
+    import json
 
-    store = WorkflowStore(tmp_path / "failed-transfer-settlement.db")
+    store = WorkflowStore(tmp_path / "interrupted-material.db")
     try:
         projection = _seed_uncertain_job(store)
         with store.transaction() as connection:
             connection.execute(
-                """
-                UPDATE workflow_node_job
-                SET expected_change_set=?
-                WHERE uuid=?
-                """,
-                (
-                    '{"kind":"material_transfer","material_uuid":"material-a",'
-                    '"source_site_uuid":"site-a","target_site_uuid":"site-b"}',
-                    JOB_UUID,
-                ),
+                "UPDATE workflow_node_job SET expected_change_set=? WHERE uuid=?",
+                (json.dumps(expected_change_set), JOB_UUID),
             )
-        first = projection.project_execution_process_restarted(TASK_UUID)
-        assert first is not None
+        assert projection.project_execution_process_restarted(TASK_UUID) is not None
+        failed_job = store.get_job(JOB_UUID)
+        assert failed_job["status"] == "failed"
+        assert not failed_job.get("uncertainty_reason")
+        assert failed_job["expected_change_set"] == expected_change_set
+        assert "physical_settlement" not in failed_job["control_data"]
+        assert {
+            item["state"] for item in projection.list_execution_locks(JOB_UUID)
+        } == {"released"}
         assert projection.project_execution_process_restarted(TASK_UUID) is None
-
-        failed_job = store.get_job(JOB_UUID)
-        assert failed_job["status"] == "failed"
-        assert failed_job["uncertainty_reason"] == (
-            "material_transfer_inventory_reconciliation_required"
-        )
-        assert failed_job["control_data"]["physical_settlement"] == {
-            "execution_stopped": True,
-            "outcome": "failed",
-            "return_info": {},
-            "error_info": [
-                {
-                    "code": "execution_process_restarted",
-                    "message": "设备执行进程重启，无法继续推进原工作流任务",
-                }
-            ],
-        }
-        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
-            "uncertain"
-        }
-
-        projection.project_failed_job_inventory_reconciled(
-            JOB_UUID,
-            actual_change_set={
-                "kind": "material_transfer",
-                "material_uuid": "material-a",
-                "target_owner_material_uuid": "owner-b",
-                "target_site_uuid": "site-b",
-            },
-            reason="现场确认物料已在目标库位",
-        )
-
-        assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
-        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
-            "released"
-        }
-    finally:
-        store.close()
-
-
-def test_restart_retains_material_aliquot_claim_until_reconciliation(tmp_path) -> None:
-    """分装动作被 runtime 中断后，来源和全部目标的占用必须保持 uncertain。"""
-
-    store = WorkflowStore(tmp_path / "failed-aliquot-settlement.db")
-    try:
-        projection = _seed_uncertain_job(store)
-        with store.transaction() as connection:
-            connection.execute(
-                """
-                UPDATE workflow_node_job
-                SET expected_change_set=?
-                WHERE uuid=?
-                """,
-                (
-                    '{"kind":"material_content_aliquot",'
-                    '"source_material_uuid":"source-a",'
-                    '"target_material_uuids":["target-a","target-b"]}',
-                    JOB_UUID,
-                ),
-            )
-
-        projection.project_execution_process_restarted(TASK_UUID)
-
-        failed_job = store.get_job(JOB_UUID)
-        assert failed_job["status"] == "failed"
-        assert failed_job["uncertainty_reason"] == (
-            "material_content_inventory_reconciliation_required"
-        )
-        assert {item["state"] for item in projection.list_execution_locks(JOB_UUID)} == {
-            "uncertain"
-        }
+        assert store.get_job(JOB_UUID) == failed_job
     finally:
         store.close()

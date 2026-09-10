@@ -86,6 +86,7 @@ export function useEdgeData() {
       }
     }
     const scheduleTaskRefresh = () => {
+      window.dispatchEvent(new Event('unilab:resource-usage-changed'))
       const state = refreshState.current
       if (!state.mounted) return
       state.taskPending = true
@@ -104,6 +105,10 @@ export function useEdgeData() {
     events?.addEventListener('manual_confirmation.required', scheduleTaskRefresh)
     events?.addEventListener('manual_confirmation.resolved', scheduleTaskRefresh)
     events?.addEventListener('workflow.runtime.changed', scheduleTaskRefresh)
+    events?.addEventListener('station.error_handling.changed', () => {
+      window.dispatchEvent(new Event('unilab:station-error-changed'))
+      scheduleTaskRefresh()
+    })
     return () => {
       events?.close()
       window.clearInterval(pollingTimer)

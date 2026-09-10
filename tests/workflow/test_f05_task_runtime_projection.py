@@ -1389,7 +1389,7 @@ def test_execution_process_restart_fails_inflight_and_cancels_pending_nodes(
         "task_aborted_by_runtime_restart"
     )
     assert aggregate["task"]["status"] == "failed"
-    assert aggregate["task"]["cleanup_status"] == "settled"
+    assert aggregate["task"]["cleanup_status"] == "pending"
     assert projection.list_execution_locks(first_job_uuid)[0]["state"] == "released"
     events = StationEventOutboxStore(store).list_pending()
     assert [event["event_type"] for event in events] == [
@@ -1401,4 +1401,4 @@ def test_execution_process_restart_fails_inflight_and_cancels_pending_nodes(
         "task.failed",
     ]
     assert events[3]["payload"]["outcome"] == "failed"
-    assert events[5]["payload"]["cleanup_status"] == "settled"
+    assert events[5]["payload"]["cleanup_status"] == "pending"

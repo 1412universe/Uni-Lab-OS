@@ -1,0 +1,3504 @@
+{
+  "code": 0,
+  "data": {
+    "items": [
+      {
+        "sequence": 1795,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "task_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "to_status": "pending"
+      },
+      {
+        "sequence": 1796,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "9ebb2a69-ab78-4e32-af22-e8841dfc6510",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "82282a1f-08bc-5b9f-b687-9da6f3e1c175",
+        "executor_kind": "workflow_input",
+        "attempt": 1,
+        "return_info": {
+          "density_measurement_count": 1,
+          "density_tip_index": 4,
+          "density_volume_raw": 10000,
+          "pipette_volume_raw": 5000,
+          "s07_target_site": "",
+          "sample_id": "parallel-final-20260907-b",
+          "target_powder_mass_g": 1.0,
+          "volume_pump_1": 10,
+          "volume_pump_2": 10
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1797,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "d191ffa0-afe7-4cda-8229-5f9b4a316b31",
+        "to_status": "pending",
+        "workflow_node_uuid": "06cdd559-dc8f-40dd-b624-d348be6803f8",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1798,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "f87fb3ff-935c-4e18-ae2d-8966e27a5d1d",
+        "to_status": "pending",
+        "workflow_node_uuid": "4fea1e2b-c21c-480d-84dd-284c77dde8c4",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1799,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "915ef67d-c38f-4179-8408-629247941a5f",
+        "to_status": "pending",
+        "workflow_node_uuid": "55489da8-faac-4d29-9d52-72b209458c52",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1800,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "c2305a2d-5450-429f-bbb3-922b7b160c69",
+        "to_status": "pending",
+        "workflow_node_uuid": "62adb1bf-657f-429c-865c-0ef4f1d2d1d5",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1801,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "60237189-d97d-4a38-843f-7008ac9e71ed",
+        "to_status": "pending",
+        "workflow_node_uuid": "879be1e4-fedb-4da4-817a-1189ee45b9d1",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1802,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "4e894744-ee79-4873-a93c-bf5a66f97307",
+        "to_status": "pending",
+        "workflow_node_uuid": "cf174309-7c4e-484b-b8a2-849596105c95",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1803,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "44e6c292-1c71-4b54-bad5-4bdc456b2253",
+        "to_status": "pending",
+        "workflow_node_uuid": "f6993bcc-3fc5-4275-9804-3ae5da649215",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1804,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "dc8ea3b2-991a-41a3-8917-e7e066fa3620",
+        "to_status": "pending",
+        "workflow_node_uuid": "fcce90b8-70b9-4b25-89ed-2b361f4c05b9",
+        "executor_kind": "material_source",
+        "attempt": 1
+      },
+      {
+        "sequence": 1805,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "d1e45679-5c37-4453-9a47-b2acc4efa060",
+        "to_status": "pending",
+        "workflow_node_uuid": "918d7e41-56e5-476b-98fe-a972e4d0e289",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1806,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "2b67f01e-7cb3-4150-ae39-d4521aeff7ad",
+        "to_status": "pending",
+        "workflow_node_uuid": "e7595309-dbab-431c-a7cc-520a52689bc2",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1807,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "fa91e1a9-ea4a-4eae-8a56-4612ed587744",
+        "to_status": "pending",
+        "workflow_node_uuid": "2554f9f2-6524-46e7-9f6f-3a0666822581",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1808,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "c276556d-d330-41dc-81a0-bf66f32f83b3",
+        "to_status": "pending",
+        "workflow_node_uuid": "1908c9e4-fb47-4546-8c60-1be53985a0d8",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1809,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "f488c4b0-0ad8-4473-b976-4dd21f0b311e",
+        "to_status": "pending",
+        "workflow_node_uuid": "e0041db2-f98a-4b94-845e-7c3ff03704a8",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1810,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "0913888b-556d-4004-a510-e602ec655560",
+        "to_status": "pending",
+        "workflow_node_uuid": "bcb03052-c196-4f56-a463-f833a42abf4d",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1811,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "f49fb0bb-faef-4f38-b1ea-1f2a61a09392",
+        "to_status": "pending",
+        "workflow_node_uuid": "1f857234-e7fe-4cf3-8fc2-acc32c0a1a99",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1812,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "b86091b2-eff2-48b0-8b29-8753b41de6f6",
+        "to_status": "pending",
+        "workflow_node_uuid": "249a6eb1-d239-4a20-bbdf-535128f22a64",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1813,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "e39fcf7b-d01d-474e-8647-c7aade36ed36",
+        "to_status": "pending",
+        "workflow_node_uuid": "552c02e6-3c55-491a-ba74-9c2038660d2b",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1814,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "d7a73abc-52cd-415a-b9b7-bd508844bd61",
+        "to_status": "pending",
+        "workflow_node_uuid": "31232a38-052c-4222-8fb0-ad6369862863",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1815,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "4fe76966-f23e-4ffe-b03a-cb145b6554ba",
+        "to_status": "pending",
+        "workflow_node_uuid": "6262af06-b16e-4abb-ab2d-6e407c672ecf",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1816,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "57bf3942-7611-4844-a1eb-80175d1b2a68",
+        "to_status": "pending",
+        "workflow_node_uuid": "ebf4e9d8-9a96-4b12-bc7a-cfc7d4db26d4",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1817,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "25411569-724e-47e3-82ab-97171880d707",
+        "to_status": "pending",
+        "workflow_node_uuid": "feee9a5b-2174-49bf-af13-526f87353590",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1818,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "bad4a788-e57b-4622-9221-f79afa276da8",
+        "to_status": "pending",
+        "workflow_node_uuid": "6e6171a2-1dd1-43f7-8a79-1102205f4d47",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1819,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "a96cc0d5-1223-434a-9c42-8164cabaa11f",
+        "to_status": "pending",
+        "workflow_node_uuid": "3b672f63-c24b-4908-a79c-252c201fd3d0",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1820,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "abc1b22c-7dd3-4b59-9131-c55519021bbd",
+        "to_status": "pending",
+        "workflow_node_uuid": "0e55c4bc-bec1-4840-95fc-12a05012689b",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1821,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "c5429ec3-407d-4713-8a13-370bac0bd8a5",
+        "to_status": "pending",
+        "workflow_node_uuid": "07eb39f4-b68f-417b-a590-fb1f36159c81",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1822,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "b31fbb8b-b979-4496-8795-df4008a0b184",
+        "to_status": "pending",
+        "workflow_node_uuid": "348d147b-d413-489c-8bee-cf88cfac0478",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1823,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "b8450160-fb9f-4bc3-99ef-1b1a0fce4ef1",
+        "to_status": "pending",
+        "workflow_node_uuid": "63f75496-c1f1-4f64-a278-816a25a87c8b",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1824,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "034b1928-5bcf-442e-b196-98485b9a5964",
+        "to_status": "pending",
+        "workflow_node_uuid": "9fcbe214-71ff-43f3-b197-3a2b3500e33a",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1825,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "bfedeb92-6ae1-4a72-8da6-8a6817ec230a",
+        "to_status": "pending",
+        "workflow_node_uuid": "63ac1231-042f-48e5-b440-73e9c20e6cdd",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1826,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "9303aa9b-cdaa-4af5-a1c9-5bded56a7263",
+        "to_status": "pending",
+        "workflow_node_uuid": "1ca042ff-b3f9-4891-9037-49cf5830a030",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1827,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "83bdef69-bf39-4cb6-b1da-8b5a08ae7864",
+        "to_status": "pending",
+        "workflow_node_uuid": "1fa46e7f-5d19-4617-a726-dc302b85b429",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1828,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "6dbf08ca-b30d-4169-8b23-741f264a3e33",
+        "to_status": "pending",
+        "workflow_node_uuid": "cfdeb99d-6e30-427b-856b-c28076b1a6d1",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1829,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "27f62f46-0b6e-453c-84ae-bd553b1fa197",
+        "to_status": "pending",
+        "workflow_node_uuid": "89fd0f8b-aaaa-4fc7-9cbe-654c7b45049e",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1830,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:45.654095Z",
+        "workflow_node_job_uuid": "19df15f7-b1f2-45fb-9e22-0d9a4cfc1da8",
+        "to_status": "pending",
+        "workflow_node_uuid": "c861b71a-a5d5-5f00-b49a-1b7ca5aebe13",
+        "executor_kind": "workflow_output",
+        "attempt": 1
+      },
+      {
+        "sequence": 1831,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "d191ffa0-afe7-4cda-8229-5f9b4a316b31",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "06cdd559-dc8f-40dd-b624-d348be6803f8",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "task_exclusive",
+            "resource_template_uuid": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1832,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "f87fb3ff-935c-4e18-ae2d-8966e27a5d1d",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "4fea1e2b-c21c-480d-84dd-284c77dde8c4",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "shared_source",
+            "resource_template_uuid": "939e3647-6c33-47a7-bcbf-a295984284e1",
+            "uuid": "bbf34691-5e80-5072-bd1f-8fcc216942f4"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1833,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "915ef67d-c38f-4179-8408-629247941a5f",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "55489da8-faac-4d29-9d52-72b209458c52",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "task_exclusive",
+            "resource_template_uuid": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1834,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "c2305a2d-5450-429f-bbb3-922b7b160c69",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "62adb1bf-657f-429c-865c-0ef4f1d2d1d5",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "task_exclusive",
+            "resource_template_uuid": "afee6011-46d3-476e-85ab-4b2219db686a",
+            "uuid": "9e496968-4972-5814-a047-b2d264fc1e09"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1835,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "60237189-d97d-4a38-843f-7008ac9e71ed",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "879be1e4-fedb-4da4-817a-1189ee45b9d1",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "task_exclusive",
+            "resource_template_uuid": "939e3647-6c33-47a7-bcbf-a295984284e1",
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1836,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "4e894744-ee79-4873-a93c-bf5a66f97307",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "cf174309-7c4e-484b-b8a2-849596105c95",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "shared_source",
+            "resource_template_uuid": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+            "uuid": "22e83372-018e-560b-991c-2a2cb8106dfe"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1837,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "44e6c292-1c71-4b54-bad5-4bdc456b2253",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "f6993bcc-3fc5-4275-9804-3ae5da649215",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "shared_source",
+            "resource_template_uuid": "939e3647-6c33-47a7-bcbf-a295984284e1",
+            "uuid": "d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1838,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.071739Z",
+        "workflow_node_job_uuid": "dc8ea3b2-991a-41a3-8917-e7e066fa3620",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "fcce90b8-70b9-4b25-89ed-2b361f4c05b9",
+        "executor_kind": "material_source",
+        "attempt": 1,
+        "return_info": {
+          "material": {
+            "custody_policy": "task_exclusive",
+            "resource_template_uuid": "afee6011-46d3-476e-85ab-4b2219db686a",
+            "uuid": "a1f5c5df-f4db-56fe-9c34-15bd49533a73"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1839,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "task_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:46.639073Z",
+        "from_status": "pending",
+        "to_status": "running"
+      },
+      {
+        "sequence": 1849,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:53.371128Z",
+        "workflow_node_job_uuid": "d1e45679-5c37-4453-9a47-b2acc4efa060",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "918d7e41-56e5-476b-98fe-a972e4d0e289",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "check_target_presence": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "L1B2",
+          "source_warehouse": {
+            "uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+          },
+          "target_device": "szlab_s07_solid_addition",
+          "target_site": "S0721",
+          "target_warehouse": {
+            "uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+          }
+        }
+      },
+      {
+        "sequence": 1850,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:53.407901Z",
+        "workflow_node_job_uuid": "d1e45679-5c37-4453-9a47-b2acc4efa060",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "918d7e41-56e5-476b-98fe-a972e4d0e289",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1852,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:55.952255Z",
+        "workflow_node_job_uuid": "d1e45679-5c37-4453-9a47-b2acc4efa060",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "918d7e41-56e5-476b-98fe-a972e4d0e289",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: L1B2 -> S0721\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"424df858-57e3-529c-b754-4f64466a2bec\"}, \"site\": \"S0721\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:d1e45679-5c37-4453-9a47-b2acc4efa060:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:d1e45679-5c37-4453-9a47-b2acc4efa060:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: L1B2 -> S0721",
+            "mount_resource": {
+              "uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+            },
+            "pick_command_id": "workflow-node-job:d1e45679-5c37-4453-9a47-b2acc4efa060:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:d1e45679-5c37-4453-9a47-b2acc4efa060:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "S0721",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1855,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:56.215340Z",
+        "workflow_node_job_uuid": "2b67f01e-7cb3-4150-ae39-d4521aeff7ad",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "e7595309-dbab-431c-a7cc-520a52689bc2",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "coarse_powder_cartridge": {
+            "uuid": "a1f5c5df-f4db-56fe-9c34-15bd49533a73"
+          },
+          "coarse_powder_site": "P03",
+          "fine_powder_cartridge": {
+            "uuid": "9e496968-4972-5814-a047-b2d264fc1e09"
+          },
+          "fine_powder_site": "P04",
+          "params_json": null,
+          "recipe_name": "default",
+          "target_mass_g": 1.0
+        }
+      },
+      {
+        "sequence": 1856,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:56.242683Z",
+        "workflow_node_job_uuid": "2b67f01e-7cb3-4150-ae39-d4521aeff7ad",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "e7595309-dbab-431c-a7cc-520a52689bc2",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1857,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:37:57.510386Z",
+        "workflow_node_job_uuid": "2b67f01e-7cb3-4150-ae39-d4521aeff7ad",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "e7595309-dbab-431c-a7cc-520a52689bc2",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S07 粗、精注粉称量流程完成；PLC 未提供实测质量\", \"commanded_mass_g\": 1.0, \"coarse_powder_cartridge\": {\"uuid\": \"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"}, \"fine_powder_cartridge\": {\"uuid\": \"9e496968-4972-5814-a047-b2d264fc1e09\"}, \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "coarse_powder_cartridge": {
+              "uuid": "a1f5c5df-f4db-56fe-9c34-15bd49533a73"
+            },
+            "commanded_mass_g": 1.0,
+            "fine_powder_cartridge": {
+              "uuid": "9e496968-4972-5814-a047-b2d264fc1e09"
+            },
+            "message": "S07 粗、精注粉称量流程完成；PLC 未提供实测质量",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1864,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:03.577686Z",
+        "workflow_node_job_uuid": "fa91e1a9-ea4a-4eae-8a56-4612ed587744",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "2554f9f2-6524-46e7-9f6f-3a0666822581",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "check_source_presence": false,
+          "check_target_presence": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "S0721",
+          "source_warehouse": {
+            "uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+          },
+          "target_device": "szlab_mixer_pump",
+          "target_site": "S061",
+          "target_warehouse": {
+            "uuid": "cea7c50c-28b0-5ac2-9283-e59399ddc25d"
+          }
+        }
+      },
+      {
+        "sequence": 1865,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:03.615969Z",
+        "workflow_node_job_uuid": "fa91e1a9-ea4a-4eae-8a56-4612ed587744",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "2554f9f2-6524-46e7-9f6f-3a0666822581",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1867,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:06.012053Z",
+        "workflow_node_job_uuid": "fa91e1a9-ea4a-4eae-8a56-4612ed587744",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "2554f9f2-6524-46e7-9f6f-3a0666822581",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: S0721 -> S061\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"cea7c50c-28b0-5ac2-9283-e59399ddc25d\"}, \"site\": \"S061\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:fa91e1a9-ea4a-4eae-8a56-4612ed587744:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:fa91e1a9-ea4a-4eae-8a56-4612ed587744:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: S0721 -> S061",
+            "mount_resource": {
+              "uuid": "cea7c50c-28b0-5ac2-9283-e59399ddc25d"
+            },
+            "pick_command_id": "workflow-node-job:fa91e1a9-ea4a-4eae-8a56-4612ed587744:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:fa91e1a9-ea4a-4eae-8a56-4612ed587744:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "S061",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1870,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:06.415066Z",
+        "workflow_node_job_uuid": "c276556d-d330-41dc-81a0-bf66f32f83b3",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "1908c9e4-fb47-4546-8c60-1be53985a0d8",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "beaker_true_means_present": true,
+          "skip_level_check": false,
+          "solvent_pump_1": {
+            "uuid": "d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9"
+          },
+          "solvent_pump_2": {
+            "uuid": "bbf34691-5e80-5072-bd1f-8fcc216942f4"
+          },
+          "volume_pump_1": 10,
+          "volume_pump_2": 10
+        }
+      },
+      {
+        "sequence": 1871,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:06.442313Z",
+        "workflow_node_job_uuid": "c276556d-d330-41dc-81a0-bf66f32f83b3",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "1908c9e4-fb47-4546-8c60-1be53985a0d8",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1872,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:07.396722Z",
+        "workflow_node_job_uuid": "c276556d-d330-41dc-81a0-bf66f32f83b3",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "1908c9e4-fb47-4546-8c60-1be53985a0d8",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S06 工艺 3 加液流程完成\", \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"solvent_pump_1\": {\"uuid\": \"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\"}, \"solvent_pump_2\": {\"uuid\": \"bbf34691-5e80-5072-bd1f-8fcc216942f4\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "message": "S06 工艺 3 加液流程完成",
+            "solvent_pump_1": {
+              "uuid": "d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9"
+            },
+            "solvent_pump_2": {
+              "uuid": "bbf34691-5e80-5072-bd1f-8fcc216942f4"
+            },
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1891,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:25.569580Z",
+        "workflow_node_job_uuid": "f488c4b0-0ad8-4473-b976-4dd21f0b311e",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "e0041db2-f98a-4b94-845e-7c3ff03704a8",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "check_source_presence": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "S061",
+          "source_warehouse": {
+            "uuid": "cea7c50c-28b0-5ac2-9283-e59399ddc25d"
+          },
+          "target_device": "szlab_mixer_pipetting_station",
+          "target_site": "BEAKER1",
+          "target_warehouse": {
+            "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+          }
+        }
+      },
+      {
+        "sequence": 1892,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:25.609378Z",
+        "workflow_node_job_uuid": "f488c4b0-0ad8-4473-b976-4dd21f0b311e",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "e0041db2-f98a-4b94-845e-7c3ff03704a8",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1893,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:29.045844Z",
+        "workflow_node_job_uuid": "f488c4b0-0ad8-4473-b976-4dd21f0b311e",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "e0041db2-f98a-4b94-845e-7c3ff03704a8",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: S061 -> BEAKER1\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"4da395d8-6553-545a-b3b1-8c348b60898c\"}, \"site\": \"BEAKER1\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:f488c4b0-0ad8-4473-b976-4dd21f0b311e:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:f488c4b0-0ad8-4473-b976-4dd21f0b311e:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: S061 -> BEAKER1",
+            "mount_resource": {
+              "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+            },
+            "pick_command_id": "workflow-node-job:f488c4b0-0ad8-4473-b976-4dd21f0b311e:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:f488c4b0-0ad8-4473-b976-4dd21f0b311e:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "BEAKER1",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1894,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:29.381853Z",
+        "workflow_node_job_uuid": "0913888b-556d-4004-a510-e602ec655560",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "bcb03052-c196-4f56-a463-f833a42abf4d",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "source_site": "R1C2",
+          "source_warehouse": {
+            "uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+          },
+          "target_device": "szlab_s08_cap_station",
+          "target_site": "S082",
+          "target_warehouse": {
+            "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+          }
+        }
+      },
+      {
+        "sequence": 1895,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:29.411962Z",
+        "workflow_node_job_uuid": "0913888b-556d-4004-a510-e602ec655560",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "bcb03052-c196-4f56-a463-f833a42abf4d",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1896,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:31.879563Z",
+        "workflow_node_job_uuid": "0913888b-556d-4004-a510-e602ec655560",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "bcb03052-c196-4f56-a463-f833a42abf4d",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: R1C2 -> S082\", \"resource\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}, \"mount_resource\": {\"uuid\": \"b20e18a5-e5d0-580d-a8ea-be6a94923d5c\"}, \"site\": \"S082\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:0913888b-556d-4004-a510-e602ec655560:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:0913888b-556d-4004-a510-e602ec655560:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: R1C2 -> S082",
+            "mount_resource": {
+              "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+            },
+            "pick_command_id": "workflow-node-job:0913888b-556d-4004-a510-e602ec655560:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:0913888b-556d-4004-a510-e602ec655560:atomic-transfer-place",
+            "resource": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "result": "转运完成",
+            "site": "S082",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1897,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:32.213286Z",
+        "workflow_node_job_uuid": "f49fb0bb-faef-4f38-b1ea-1f2a61a09392",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "1f857234-e7fe-4cf3-8fc2-acc32c0a1a99",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "container": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "operation": "open",
+          "sample_id": "parallel-final-20260907-b"
+        }
+      },
+      {
+        "sequence": 1898,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:32.239976Z",
+        "workflow_node_job_uuid": "f49fb0bb-faef-4f38-b1ea-1f2a61a09392",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "1f857234-e7fe-4cf3-8fc2-acc32c0a1a99",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1899,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:33.580489Z",
+        "workflow_node_job_uuid": "f49fb0bb-faef-4f38-b1ea-1f2a61a09392",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "1f857234-e7fe-4cf3-8fc2-acc32c0a1a99",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S08 开瓶盖 完成\", \"container\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "container": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "message": "S08 开瓶盖 完成",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1900,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:34.030638Z",
+        "workflow_node_job_uuid": "b86091b2-eff2-48b0-8b29-8753b41de6f6",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "249a6eb1-d239-4a20-bbdf-535128f22a64",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "source_site": "S082",
+          "source_warehouse": {
+            "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+          },
+          "target_device": "szlab_mixer_pipetting_station",
+          "target_site": "REAGENT1",
+          "target_warehouse": {
+            "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+          }
+        }
+      },
+      {
+        "sequence": 1901,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:34.059280Z",
+        "workflow_node_job_uuid": "b86091b2-eff2-48b0-8b29-8753b41de6f6",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "249a6eb1-d239-4a20-bbdf-535128f22a64",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1902,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:36.368766Z",
+        "workflow_node_job_uuid": "b86091b2-eff2-48b0-8b29-8753b41de6f6",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "249a6eb1-d239-4a20-bbdf-535128f22a64",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: S082 -> REAGENT1\", \"resource\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}, \"mount_resource\": {\"uuid\": \"4da395d8-6553-545a-b3b1-8c348b60898c\"}, \"site\": \"REAGENT1\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:b86091b2-eff2-48b0-8b29-8753b41de6f6:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:b86091b2-eff2-48b0-8b29-8753b41de6f6:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: S082 -> REAGENT1",
+            "mount_resource": {
+              "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+            },
+            "pick_command_id": "workflow-node-job:b86091b2-eff2-48b0-8b29-8753b41de6f6:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:b86091b2-eff2-48b0-8b29-8753b41de6f6:atomic-transfer-place",
+            "resource": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "result": "转运完成",
+            "site": "REAGENT1",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1903,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:36.841145Z",
+        "workflow_node_job_uuid": "e39fcf7b-d01d-474e-8647-c7aade36ed36",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "552c02e6-3c55-491a-ba74-9c2038660d2b",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "aspirate_volume": 5000,
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "dispense_volume": 5000,
+          "liquid_bottle_index": 1,
+          "reagent_bottle": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "skip_level_check": false,
+          "station": 1,
+          "tip_box": {
+            "uuid": "22e83372-018e-560b-991c-2a2cb8106dfe"
+          },
+          "tip_box_index": 1,
+          "tip_index": 3,
+          "volume_unit": "raw"
+        }
+      },
+      {
+        "sequence": 1904,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:36.867540Z",
+        "workflow_node_job_uuid": "e39fcf7b-d01d-474e-8647-c7aade36ed36",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "552c02e6-3c55-491a-ba74-9c2038660d2b",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1905,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:40.090472Z",
+        "workflow_node_job_uuid": "e39fcf7b-d01d-474e-8647-c7aade36ed36",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "552c02e6-3c55-491a-ba74-9c2038660d2b",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S09 单次加液完成\", \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"reagent_bottle\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}, \"tip_box\": {\"uuid\": \"22e83372-018e-560b-991c-2a2cb8106dfe\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "message": "S09 单次加液完成",
+            "reagent_bottle": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "success": true,
+            "tip_box": {
+              "uuid": "22e83372-018e-560b-991c-2a2cb8106dfe"
+            }
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1906,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:40.594662Z",
+        "workflow_node_job_uuid": "d7a73abc-52cd-415a-b9b7-bd508844bd61",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "31232a38-052c-4222-8fb0-ad6369862863",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "source_site": "REAGENT1",
+          "source_warehouse": {
+            "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+          },
+          "target_device": "szlab_s08_cap_station",
+          "target_site": "S082",
+          "target_warehouse": {
+            "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+          }
+        }
+      },
+      {
+        "sequence": 1907,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:40.623098Z",
+        "workflow_node_job_uuid": "d7a73abc-52cd-415a-b9b7-bd508844bd61",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "31232a38-052c-4222-8fb0-ad6369862863",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1908,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:43.995009Z",
+        "workflow_node_job_uuid": "d7a73abc-52cd-415a-b9b7-bd508844bd61",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "31232a38-052c-4222-8fb0-ad6369862863",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: REAGENT1 -> S082\", \"resource\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}, \"mount_resource\": {\"uuid\": \"b20e18a5-e5d0-580d-a8ea-be6a94923d5c\"}, \"site\": \"S082\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:d7a73abc-52cd-415a-b9b7-bd508844bd61:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:d7a73abc-52cd-415a-b9b7-bd508844bd61:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: REAGENT1 -> S082",
+            "mount_resource": {
+              "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+            },
+            "pick_command_id": "workflow-node-job:d7a73abc-52cd-415a-b9b7-bd508844bd61:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:d7a73abc-52cd-415a-b9b7-bd508844bd61:atomic-transfer-place",
+            "resource": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "result": "转运完成",
+            "site": "S082",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1909,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:44.540828Z",
+        "workflow_node_job_uuid": "4fe76966-f23e-4ffe-b03a-cb145b6554ba",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "6262af06-b16e-4abb-ab2d-6e407c672ecf",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "container": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "operation": "close",
+          "sample_id": "parallel-final-20260907-b"
+        }
+      },
+      {
+        "sequence": 1910,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:44.566271Z",
+        "workflow_node_job_uuid": "4fe76966-f23e-4ffe-b03a-cb145b6554ba",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "6262af06-b16e-4abb-ab2d-6e407c672ecf",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1911,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:45.647048Z",
+        "workflow_node_job_uuid": "4fe76966-f23e-4ffe-b03a-cb145b6554ba",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "6262af06-b16e-4abb-ab2d-6e407c672ecf",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S08 关瓶盖 完成\", \"container\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "container": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "message": "S08 关瓶盖 完成",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1912,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:46.570970Z",
+        "workflow_node_job_uuid": "57bf3942-7611-4844-a1eb-80175d1b2a68",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "ebf4e9d8-9a96-4b12-bc7a-cfc7d4db26d4",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "source_site": "S082",
+          "source_warehouse": {
+            "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+          },
+          "target_device": "host_node",
+          "target_site": "R1C2",
+          "target_warehouse": {
+            "uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+          }
+        }
+      },
+      {
+        "sequence": 1913,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:46.620452Z",
+        "workflow_node_job_uuid": "57bf3942-7611-4844-a1eb-80175d1b2a68",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "ebf4e9d8-9a96-4b12-bc7a-cfc7d4db26d4",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1914,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:50.104940Z",
+        "workflow_node_job_uuid": "57bf3942-7611-4844-a1eb-80175d1b2a68",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "ebf4e9d8-9a96-4b12-bc7a-cfc7d4db26d4",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: S082 -> R1C2\", \"resource\": {\"uuid\": \"2edc6fff-3c79-52e8-92e1-259013408544\"}, \"mount_resource\": {\"uuid\": \"63bda02f-6191-5d89-acbb-2e560ff95e90\"}, \"site\": \"R1C2\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:57bf3942-7611-4844-a1eb-80175d1b2a68:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:57bf3942-7611-4844-a1eb-80175d1b2a68:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: S082 -> R1C2",
+            "mount_resource": {
+              "uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+            },
+            "pick_command_id": "workflow-node-job:57bf3942-7611-4844-a1eb-80175d1b2a68:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:57bf3942-7611-4844-a1eb-80175d1b2a68:atomic-transfer-place",
+            "resource": {
+              "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+            },
+            "result": "转运完成",
+            "site": "R1C2",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1916,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:56.564676Z",
+        "workflow_node_job_uuid": "25411569-724e-47e3-82ab-97171880d707",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "feee9a5b-2174-49bf-af13-526f87353590",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "BEAKER1",
+          "source_warehouse": {
+            "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+          },
+          "target_device": "szlab_mixer_stirrer",
+          "target_site": "S042",
+          "target_warehouse": {
+            "uuid": "4a7db978-9c89-57fe-a27a-6dbba260834f"
+          }
+        }
+      },
+      {
+        "sequence": 1917,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:56.673838Z",
+        "workflow_node_job_uuid": "25411569-724e-47e3-82ab-97171880d707",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "feee9a5b-2174-49bf-af13-526f87353590",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1918,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:38:59.011048Z",
+        "workflow_node_job_uuid": "25411569-724e-47e3-82ab-97171880d707",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "feee9a5b-2174-49bf-af13-526f87353590",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: BEAKER1 -> S042\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"4a7db978-9c89-57fe-a27a-6dbba260834f\"}, \"site\": \"S042\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:25411569-724e-47e3-82ab-97171880d707:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:25411569-724e-47e3-82ab-97171880d707:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: BEAKER1 -> S042",
+            "mount_resource": {
+              "uuid": "4a7db978-9c89-57fe-a27a-6dbba260834f"
+            },
+            "pick_command_id": "workflow-node-job:25411569-724e-47e3-82ab-97171880d707:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:25411569-724e-47e3-82ab-97171880d707:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "S042",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1924,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:03.252003Z",
+        "workflow_node_job_uuid": "bad4a788-e57b-4622-9221-f79afa276da8",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "6e6171a2-1dd1-43f7-8a79-1102205f4d47",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "duration": 30.0,
+          "mode": 3,
+          "position": 2,
+          "reset": false,
+          "safe_temperature": 80,
+          "speed": 300,
+          "temperature": 25
+        }
+      },
+      {
+        "sequence": 1925,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:03.282043Z",
+        "workflow_node_job_uuid": "bad4a788-e57b-4622-9221-f79afa276da8",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "6e6171a2-1dd1-43f7-8a79-1102205f4d47",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1953,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:33.700364Z",
+        "workflow_node_job_uuid": "bad4a788-e57b-4622-9221-f79afa276da8",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "6e6171a2-1dd1-43f7-8a79-1102205f4d47",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S042 磁搅加工完成，工艺 搅拌+加热\", \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "message": "S042 磁搅加工完成，工艺 搅拌+加热",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1957,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:37.760205Z",
+        "workflow_node_job_uuid": "a96cc0d5-1223-434a-9c42-8164cabaa11f",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "3b672f63-c24b-4908-a79c-252c201fd3d0",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "S042",
+          "source_warehouse": {
+            "uuid": "4a7db978-9c89-57fe-a27a-6dbba260834f"
+          },
+          "target_device": "szlab_mixer_pipetting_station",
+          "target_site": "BEAKER1",
+          "target_site_variant": "density",
+          "target_warehouse": {
+            "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+          }
+        }
+      },
+      {
+        "sequence": 1958,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:37.787786Z",
+        "workflow_node_job_uuid": "a96cc0d5-1223-434a-9c42-8164cabaa11f",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "3b672f63-c24b-4908-a79c-252c201fd3d0",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1959,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:40.154502Z",
+        "workflow_node_job_uuid": "a96cc0d5-1223-434a-9c42-8164cabaa11f",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "3b672f63-c24b-4908-a79c-252c201fd3d0",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: S042 -> BEAKER1\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"4da395d8-6553-545a-b3b1-8c348b60898c\"}, \"site\": \"BEAKER1\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:a96cc0d5-1223-434a-9c42-8164cabaa11f:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:a96cc0d5-1223-434a-9c42-8164cabaa11f:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: S042 -> BEAKER1",
+            "mount_resource": {
+              "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+            },
+            "pick_command_id": "workflow-node-job:a96cc0d5-1223-434a-9c42-8164cabaa11f:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:a96cc0d5-1223-434a-9c42-8164cabaa11f:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "BEAKER1",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1960,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:41.182680Z",
+        "workflow_node_job_uuid": "abc1b22c-7dd3-4b59-9131-c55519021bbd",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "0e55c4bc-bec1-4840-95fc-12a05012689b",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "density_measurement_count": 1,
+          "density_volume": 10000,
+          "release_tip_box_index": 2,
+          "take_tip_box_index": 1,
+          "tip_box": {
+            "uuid": "22e83372-018e-560b-991c-2a2cb8106dfe"
+          },
+          "tip_index": 4,
+          "volume_unit": "raw"
+        }
+      },
+      {
+        "sequence": 1961,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:41.229729Z",
+        "workflow_node_job_uuid": "abc1b22c-7dd3-4b59-9131-c55519021bbd",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "0e55c4bc-bec1-4840-95fc-12a05012689b",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1962,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:43.509131Z",
+        "workflow_node_job_uuid": "abc1b22c-7dd3-4b59-9131-c55519021bbd",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "0e55c4bc-bec1-4840-95fc-12a05012689b",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S09 密度测量完成: 1 g/mL\", \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"tip_box\": {\"uuid\": \"22e83372-018e-560b-991c-2a2cb8106dfe\"}, \"density\": 1.0, \"density_unit\": \"g/mL\", \"density_measurement_count\": 1, \"steps\": [{\"step\": \"取测密度 TIP\", \"success\": true, \"message\": \"S09 工艺 5 完成：取 TIP\", \"data\": {\"process\": 5, \"process_label\": \"取 TIP\", \"tip_box_index\": 1, \"tip_index\": 4, \"liquid_bottle_index\": 0, \"station\": 1, \"aspirate_volume\": 0, \"dispense_volume\": 0, \"volume_unit\": \"raw\", \"aspirate_volume_ul\": 0.0, \"dispense_volume_ul\": 0.0, \"density_measurement_count\": 1, \"sensor_precheck\": {\"success\": true, \"phase\": \"pre\", \"conditions\": {\"传感器状态_上位机[4].NO[5]\": true}, \"values\": {\"传感器状态_上位机[4].NO[5]\": true}, \"mismatches\": {}}, \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 5 参数写入开始：取 TIP\", \"detail\": {\"process\": 5, \"process_label\": \"取 TIP\", \"params\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 5}}}, {\"message\": \"S09 工艺 5 参数写入完成\", \"detail\": {\"process\": 5, \"written_variables\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 5}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 5 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 5}}, {\"message\": \"S09 工艺 5 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 5}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}], \"sensor_postcheck\": {\"success\": true, \"phase\": \"post\", \"conditions\": {\"传感器状态_上位机[4].NO[5]\": true}, \"values\": {\"传感器状态_上位机[4].NO[5]\": true}, \"mismatches\": {}}, \"clear_process_params\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}, \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 5 参数写入开始：取 TIP\", \"detail\": {\"process\": 5, \"process_label\": \"取 TIP\", \"params\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 5}}}, {\"message\": \"S09 工艺 5 参数写入完成\", \"detail\": {\"process\": 5, \"written_variables\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 5}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 5 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 5}}, {\"message\": \"S09 工艺 5 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 5}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}]}, {\"step\": \"烧杯测密度抽排液\", \"success\": true, \"message\": \"S09 工艺 9 完成：测密度抽排液并记录天平数据\", \"data\": {\"process\": 9, \"process_label\": \"测密度抽排液并记录天平数据\", \"tip_box_index\": 1, \"tip_index\": 4, \"liquid_bottle_index\": 0, \"station\": 1, \"aspirate_volume\": 10000, \"dispense_volume\": 0, \"volume_unit\": \"raw\", \"aspirate_volume_ul\": 1000.0, \"dispense_volume_ul\": 0.0, \"density_measurement_count\": 1, \"sensor_precheck\": {\"success\": true, \"phase\": \"pre\", \"conditions\": {}, \"values\": {}, \"mismatches\": {}}, \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 9 参数写入开始：测密度抽排液并记录天平数据\", \"detail\": {\"process\": 9, \"process_label\": \"测密度抽排液并记录天平数据\", \"params\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 10000, \"S09放液量\": 0, \"S09工艺选择\": 9, \"S09测密度次数\": 1}}}, {\"message\": \"S09 工艺 9 参数写入完成\", \"detail\": {\"process\": 9, \"written_variables\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 10000, \"S09放液量\": 0, \"S09工艺选择\": 9, \"S09测密度次数\": 1}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 9 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 9}}, {\"message\": \"S09 工艺 9 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 9}}, {\"message\": \"S09 测密度天平数组读取完成\", \"detail\": {\"density_measurement_count\": 1, \"aspirate_balance_variables\": [\"S09抽液天平读数[0]\"], \"dispense_balance_variables\": [\"S09放液天平读数[0]\"], \"aspirate_balance_readings\": [1.0], \"dispense_balance_readings\": [1.0]}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09测密度次数\": 0}, \"errors\": {}}}], \"sensor_postcheck\": {\"success\": true, \"phase\": \"post\", \"conditions\": {}, \"values\": {}, \"mismatches\": {}}, \"aspirate_balance_variables\": [\"S09抽液天平读数[0]\"], \"dispense_balance_variables\": [\"S09放液天平读数[0]\"], \"aspirate_balance_readings\": [1.0], \"dispense_balance_readings\": [1.0], \"clear_process_params\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09测密度次数\": 0}, \"errors\": {}}}, \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 9 参数写入开始：测密度抽排液并记录天平数据\", \"detail\": {\"process\": 9, \"process_label\": \"测密度抽排液并记录天平数据\", \"params\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 10000, \"S09放液量\": 0, \"S09工艺选择\": 9, \"S09测密度次数\": 1}}}, {\"message\": \"S09 工艺 9 参数写入完成\", \"detail\": {\"process\": 9, \"written_variables\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 10000, \"S09放液量\": 0, \"S09工艺选择\": 9, \"S09测密度次数\": 1}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 9 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 9}}, {\"message\": \"S09 工艺 9 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 9}}, {\"message\": \"S09 测密度天平数组读取完成\", \"detail\": {\"density_measurement_count\": 1, \"aspirate_balance_variables\": [\"S09抽液天平读数[0]\"], \"dispense_balance_variables\": [\"S09放液天平读数[0]\"], \"aspirate_balance_readings\": [1.0], \"dispense_balance_readings\": [1.0]}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09测密度次数\": 0}, \"errors\": {}}}]}, {\"step\": \"弃置测密度 TIP\", \"success\": true, \"message\": \"S09 工艺 6 完成：放 TIP\", \"data\": {\"process\": 6, \"process_label\": \"放 TIP\", \"tip_box_index\": 2, \"tip_index\": 4, \"liquid_bottle_index\": 0, \"station\": 1, \"aspirate_volume\": 0, \"dispense_volume\": 0, \"volume_unit\": \"raw\", \"aspirate_volume_ul\": 0.0, \"dispense_volume_ul\": 0.0, \"density_measurement_count\": 1, \"sensor_precheck\": {\"success\": true, \"phase\": \"pre\", \"conditions\": {\"传感器状态_上位机[4].NO[6]\": true}, \"values\": {\"传感器状态_上位机[4].NO[6]\": true}, \"mismatches\": {}}, \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 6 参数写入开始：放 TIP\", \"detail\": {\"process\": 6, \"process_label\": \"放 TIP\", \"params\": {\"S09TIP盒工位编号\": 2, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 6}}}, {\"message\": \"S09 工艺 6 参数写入完成\", \"detail\": {\"process\": 6, \"written_variables\": {\"S09TIP盒工位编号\": 2, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 6}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 6 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 6}}, {\"message\": \"S09 工艺 6 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 6}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}], \"sensor_postcheck\": {\"success\": true, \"phase\": \"post\", \"conditions\": {\"传感器状态_上位机[4].NO[6]\": true}, \"values\": {\"传感器状态_上位机[4].NO[6]\": true}, \"mismatches\": {}}, \"clear_process_params\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}, \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 6 参数写入开始：放 TIP\", \"detail\": {\"process\": 6, \"process_label\": \"放 TIP\", \"params\": {\"S09TIP盒工位编号\": 2, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 6}}}, {\"message\": \"S09 工艺 6 参数写入完成\", \"detail\": {\"process\": 6, \"written_variables\": {\"S09TIP盒工位编号\": 2, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 6}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 6 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 6}}, {\"message\": \"S09 工艺 6 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 6}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}]}], \"logs\": [{\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 5 参数写入开始：取 TIP\", \"detail\": {\"process\": 5, \"process_label\": \"取 TIP\", \"params\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 5}}}, {\"message\": \"S09 工艺 5 参数写入完成\", \"detail\": {\"process\": 5, \"written_variables\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 5}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 5 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 5}}, {\"message\": \"S09 工艺 5 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 5}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}, {\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 9 参数写入开始：测密度抽排液并记录天平数据\", \"detail\": {\"process\": 9, \"process_label\": \"测密度抽排液并记录天平数据\", \"params\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 10000, \"S09放液量\": 0, \"S09工艺选择\": 9, \"S09测密度次数\": 1}}}, {\"message\": \"S09 工艺 9 参数写入完成\", \"detail\": {\"process\": 9, \"written_variables\": {\"S09TIP盒工位编号\": 1, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 10000, \"S09放液量\": 0, \"S09工艺选择\": 9, \"S09测密度次数\": 1}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 9 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 9}}, {\"message\": \"S09 工艺 9 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 9}}, {\"message\": \"S09 测密度天平数组读取完成\", \"detail\": {\"density_measurement_count\": 1, \"aspirate_balance_variables\": [\"S09抽液天平读数[0]\"], \"dispense_balance_variables\": [\"S09放液天平读数[0]\"], \"aspirate_balance_readings\": [1.0], \"dispense_balance_readings\": [1.0]}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09测密度次数\": 0}, \"errors\": {}}}, {\"message\": \"等待 S09 允许加工信号\", \"detail\": {\"variable\": \"S09允许加工\", \"expected\": true}}, {\"message\": \"S09 工艺 6 参数写入开始：放 TIP\", \"detail\": {\"process\": 6, \"process_label\": \"放 TIP\", \"params\": {\"S09TIP盒工位编号\": 2, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 6}}}, {\"message\": \"S09 工艺 6 参数写入完成\", \"detail\": {\"process\": 6, \"written_variables\": {\"S09TIP盒工位编号\": 2, \"S09TIP编号\": 4, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0, \"S09工艺选择\": 6}}}, {\"message\": \"S09 参数写入完成信号已置位，将保持至工艺结束\", \"detail\": {\"variable\": \"S09参数写入完成\", \"value\": true, \"reset_delay\": 0.1}}, {\"message\": \"等待 S09 工艺 6 完成\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 6}}, {\"message\": \"S09 工艺 6 完成信号已确认\", \"detail\": {\"variable\": \"S09工艺完成\", \"expected\": 6}}, {\"message\": \"S09 工艺参数清零开始\", \"detail\": {}}, {\"message\": \"S09 工艺参数清零完成\", \"detail\": {\"success\": true, \"written_variables\": {\"S09参数写入完成\": false, \"S09工艺选择\": 0, \"S09TIP盒工位编号\": 0, \"S09TIP编号\": 0, \"S09液体瓶编号\": 0, \"S09抽液量\": 0, \"S09放液量\": 0}, \"errors\": {}}}]}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "density": 1.0,
+            "density_measurement_count": 1,
+            "density_unit": "g/mL",
+            "logs": [
+              {
+                "detail": {
+                  "expected": true,
+                  "variable": "S09允许加工"
+                },
+                "message": "等待 S09 允许加工信号"
+              },
+              {
+                "detail": {
+                  "params": {
+                    "S09TIP盒工位编号": 1,
+                    "S09TIP编号": 4,
+                    "S09工艺选择": 5,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09液体瓶编号": 0
+                  },
+                  "process": 5,
+                  "process_label": "取 TIP"
+                },
+                "message": "S09 工艺 5 参数写入开始：取 TIP"
+              },
+              {
+                "detail": {
+                  "process": 5,
+                  "written_variables": {
+                    "S09TIP盒工位编号": 1,
+                    "S09TIP编号": 4,
+                    "S09工艺选择": 5,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09液体瓶编号": 0
+                  }
+                },
+                "message": "S09 工艺 5 参数写入完成"
+              },
+              {
+                "detail": {
+                  "reset_delay": 0.1,
+                  "value": true,
+                  "variable": "S09参数写入完成"
+                },
+                "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+              },
+              {
+                "detail": {
+                  "expected": 5,
+                  "variable": "S09工艺完成"
+                },
+                "message": "等待 S09 工艺 5 完成"
+              },
+              {
+                "detail": {
+                  "expected": 5,
+                  "variable": "S09工艺完成"
+                },
+                "message": "S09 工艺 5 完成信号已确认"
+              },
+              {
+                "detail": {},
+                "message": "S09 工艺参数清零开始"
+              },
+              {
+                "detail": {
+                  "errors": {},
+                  "success": true,
+                  "written_variables": {
+                    "S09TIP盒工位编号": 0,
+                    "S09TIP编号": 0,
+                    "S09参数写入完成": false,
+                    "S09工艺选择": 0,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09液体瓶编号": 0
+                  }
+                },
+                "message": "S09 工艺参数清零完成"
+              },
+              {
+                "detail": {
+                  "expected": true,
+                  "variable": "S09允许加工"
+                },
+                "message": "等待 S09 允许加工信号"
+              },
+              {
+                "detail": {
+                  "params": {
+                    "S09TIP盒工位编号": 1,
+                    "S09TIP编号": 4,
+                    "S09工艺选择": 9,
+                    "S09抽液量": 10000,
+                    "S09放液量": 0,
+                    "S09测密度次数": 1,
+                    "S09液体瓶编号": 0
+                  },
+                  "process": 9,
+                  "process_label": "测密度抽排液并记录天平数据"
+                },
+                "message": "S09 工艺 9 参数写入开始：测密度抽排液并记录天平数据"
+              },
+              {
+                "detail": {
+                  "process": 9,
+                  "written_variables": {
+                    "S09TIP盒工位编号": 1,
+                    "S09TIP编号": 4,
+                    "S09工艺选择": 9,
+                    "S09抽液量": 10000,
+                    "S09放液量": 0,
+                    "S09测密度次数": 1,
+                    "S09液体瓶编号": 0
+                  }
+                },
+                "message": "S09 工艺 9 参数写入完成"
+              },
+              {
+                "detail": {
+                  "reset_delay": 0.1,
+                  "value": true,
+                  "variable": "S09参数写入完成"
+                },
+                "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+              },
+              {
+                "detail": {
+                  "expected": 9,
+                  "variable": "S09工艺完成"
+                },
+                "message": "等待 S09 工艺 9 完成"
+              },
+              {
+                "detail": {
+                  "expected": 9,
+                  "variable": "S09工艺完成"
+                },
+                "message": "S09 工艺 9 完成信号已确认"
+              },
+              {
+                "detail": {
+                  "aspirate_balance_readings": [
+                    1.0
+                  ],
+                  "aspirate_balance_variables": [
+                    "S09抽液天平读数[0]"
+                  ],
+                  "density_measurement_count": 1,
+                  "dispense_balance_readings": [
+                    1.0
+                  ],
+                  "dispense_balance_variables": [
+                    "S09放液天平读数[0]"
+                  ]
+                },
+                "message": "S09 测密度天平数组读取完成"
+              },
+              {
+                "detail": {},
+                "message": "S09 工艺参数清零开始"
+              },
+              {
+                "detail": {
+                  "errors": {},
+                  "success": true,
+                  "written_variables": {
+                    "S09TIP盒工位编号": 0,
+                    "S09TIP编号": 0,
+                    "S09参数写入完成": false,
+                    "S09工艺选择": 0,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09测密度次数": 0,
+                    "S09液体瓶编号": 0
+                  }
+                },
+                "message": "S09 工艺参数清零完成"
+              },
+              {
+                "detail": {
+                  "expected": true,
+                  "variable": "S09允许加工"
+                },
+                "message": "等待 S09 允许加工信号"
+              },
+              {
+                "detail": {
+                  "params": {
+                    "S09TIP盒工位编号": 2,
+                    "S09TIP编号": 4,
+                    "S09工艺选择": 6,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09液体瓶编号": 0
+                  },
+                  "process": 6,
+                  "process_label": "放 TIP"
+                },
+                "message": "S09 工艺 6 参数写入开始：放 TIP"
+              },
+              {
+                "detail": {
+                  "process": 6,
+                  "written_variables": {
+                    "S09TIP盒工位编号": 2,
+                    "S09TIP编号": 4,
+                    "S09工艺选择": 6,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09液体瓶编号": 0
+                  }
+                },
+                "message": "S09 工艺 6 参数写入完成"
+              },
+              {
+                "detail": {
+                  "reset_delay": 0.1,
+                  "value": true,
+                  "variable": "S09参数写入完成"
+                },
+                "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+              },
+              {
+                "detail": {
+                  "expected": 6,
+                  "variable": "S09工艺完成"
+                },
+                "message": "等待 S09 工艺 6 完成"
+              },
+              {
+                "detail": {
+                  "expected": 6,
+                  "variable": "S09工艺完成"
+                },
+                "message": "S09 工艺 6 完成信号已确认"
+              },
+              {
+                "detail": {},
+                "message": "S09 工艺参数清零开始"
+              },
+              {
+                "detail": {
+                  "errors": {},
+                  "success": true,
+                  "written_variables": {
+                    "S09TIP盒工位编号": 0,
+                    "S09TIP编号": 0,
+                    "S09参数写入完成": false,
+                    "S09工艺选择": 0,
+                    "S09抽液量": 0,
+                    "S09放液量": 0,
+                    "S09液体瓶编号": 0
+                  }
+                },
+                "message": "S09 工艺参数清零完成"
+              }
+            ],
+            "message": "S09 密度测量完成: 1 g/mL",
+            "steps": [
+              {
+                "data": {
+                  "aspirate_volume": 0,
+                  "aspirate_volume_ul": 0.0,
+                  "clear_process_params": {
+                    "errors": {},
+                    "success": true,
+                    "written_variables": {
+                      "S09TIP盒工位编号": 0,
+                      "S09TIP编号": 0,
+                      "S09参数写入完成": false,
+                      "S09工艺选择": 0,
+                      "S09抽液量": 0,
+                      "S09放液量": 0,
+                      "S09液体瓶编号": 0
+                    }
+                  },
+                  "density_measurement_count": 1,
+                  "dispense_volume": 0,
+                  "dispense_volume_ul": 0.0,
+                  "liquid_bottle_index": 0,
+                  "logs": [
+                    {
+                      "detail": {
+                        "expected": true,
+                        "variable": "S09允许加工"
+                      },
+                      "message": "等待 S09 允许加工信号"
+                    },
+                    {
+                      "detail": {
+                        "params": {
+                          "S09TIP盒工位编号": 1,
+                          "S09TIP编号": 4,
+                          "S09工艺选择": 5,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09液体瓶编号": 0
+                        },
+                        "process": 5,
+                        "process_label": "取 TIP"
+                      },
+                      "message": "S09 工艺 5 参数写入开始：取 TIP"
+                    },
+                    {
+                      "detail": {
+                        "process": 5,
+                        "written_variables": {
+                          "S09TIP盒工位编号": 1,
+                          "S09TIP编号": 4,
+                          "S09工艺选择": 5,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09液体瓶编号": 0
+                        }
+                      },
+                      "message": "S09 工艺 5 参数写入完成"
+                    },
+                    {
+                      "detail": {
+                        "reset_delay": 0.1,
+                        "value": true,
+                        "variable": "S09参数写入完成"
+                      },
+                      "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+                    },
+                    {
+                      "detail": {
+                        "expected": 5,
+                        "variable": "S09工艺完成"
+                      },
+                      "message": "等待 S09 工艺 5 完成"
+                    },
+                    {
+                      "detail": {
+                        "expected": 5,
+                        "variable": "S09工艺完成"
+                      },
+                      "message": "S09 工艺 5 完成信号已确认"
+                    },
+                    {
+                      "detail": {},
+                      "message": "S09 工艺参数清零开始"
+                    },
+                    {
+                      "detail": {
+                        "errors": {},
+                        "success": true,
+                        "written_variables": {
+                          "S09TIP盒工位编号": 0,
+                          "S09TIP编号": 0,
+                          "S09参数写入完成": false,
+                          "S09工艺选择": 0,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09液体瓶编号": 0
+                        }
+                      },
+                      "message": "S09 工艺参数清零完成"
+                    }
+                  ],
+                  "process": 5,
+                  "process_label": "取 TIP",
+                  "sensor_postcheck": {
+                    "conditions": {
+                      "传感器状态_上位机[4].NO[5]": true
+                    },
+                    "mismatches": {},
+                    "phase": "post",
+                    "success": true,
+                    "values": {
+                      "传感器状态_上位机[4].NO[5]": true
+                    }
+                  },
+                  "sensor_precheck": {
+                    "conditions": {
+                      "传感器状态_上位机[4].NO[5]": true
+                    },
+                    "mismatches": {},
+                    "phase": "pre",
+                    "success": true,
+                    "values": {
+                      "传感器状态_上位机[4].NO[5]": true
+                    }
+                  },
+                  "station": 1,
+                  "tip_box_index": 1,
+                  "tip_index": 4,
+                  "volume_unit": "raw"
+                },
+                "logs": [
+                  {
+                    "detail": {
+                      "expected": true,
+                      "variable": "S09允许加工"
+                    },
+                    "message": "等待 S09 允许加工信号"
+                  },
+                  {
+                    "detail": {
+                      "params": {
+                        "S09TIP盒工位编号": 1,
+                        "S09TIP编号": 4,
+                        "S09工艺选择": 5,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09液体瓶编号": 0
+                      },
+                      "process": 5,
+                      "process_label": "取 TIP"
+                    },
+                    "message": "S09 工艺 5 参数写入开始：取 TIP"
+                  },
+                  {
+                    "detail": {
+                      "process": 5,
+                      "written_variables": {
+                        "S09TIP盒工位编号": 1,
+                        "S09TIP编号": 4,
+                        "S09工艺选择": 5,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09液体瓶编号": 0
+                      }
+                    },
+                    "message": "S09 工艺 5 参数写入完成"
+                  },
+                  {
+                    "detail": {
+                      "reset_delay": 0.1,
+                      "value": true,
+                      "variable": "S09参数写入完成"
+                    },
+                    "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+                  },
+                  {
+                    "detail": {
+                      "expected": 5,
+                      "variable": "S09工艺完成"
+                    },
+                    "message": "等待 S09 工艺 5 完成"
+                  },
+                  {
+                    "detail": {
+                      "expected": 5,
+                      "variable": "S09工艺完成"
+                    },
+                    "message": "S09 工艺 5 完成信号已确认"
+                  },
+                  {
+                    "detail": {},
+                    "message": "S09 工艺参数清零开始"
+                  },
+                  {
+                    "detail": {
+                      "errors": {},
+                      "success": true,
+                      "written_variables": {
+                        "S09TIP盒工位编号": 0,
+                        "S09TIP编号": 0,
+                        "S09参数写入完成": false,
+                        "S09工艺选择": 0,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09液体瓶编号": 0
+                      }
+                    },
+                    "message": "S09 工艺参数清零完成"
+                  }
+                ],
+                "message": "S09 工艺 5 完成：取 TIP",
+                "step": "取测密度 TIP",
+                "success": true
+              },
+              {
+                "data": {
+                  "aspirate_balance_readings": [
+                    1.0
+                  ],
+                  "aspirate_balance_variables": [
+                    "S09抽液天平读数[0]"
+                  ],
+                  "aspirate_volume": 10000,
+                  "aspirate_volume_ul": 1000.0,
+                  "clear_process_params": {
+                    "errors": {},
+                    "success": true,
+                    "written_variables": {
+                      "S09TIP盒工位编号": 0,
+                      "S09TIP编号": 0,
+                      "S09参数写入完成": false,
+                      "S09工艺选择": 0,
+                      "S09抽液量": 0,
+                      "S09放液量": 0,
+                      "S09测密度次数": 0,
+                      "S09液体瓶编号": 0
+                    }
+                  },
+                  "density_measurement_count": 1,
+                  "dispense_balance_readings": [
+                    1.0
+                  ],
+                  "dispense_balance_variables": [
+                    "S09放液天平读数[0]"
+                  ],
+                  "dispense_volume": 0,
+                  "dispense_volume_ul": 0.0,
+                  "liquid_bottle_index": 0,
+                  "logs": [
+                    {
+                      "detail": {
+                        "expected": true,
+                        "variable": "S09允许加工"
+                      },
+                      "message": "等待 S09 允许加工信号"
+                    },
+                    {
+                      "detail": {
+                        "params": {
+                          "S09TIP盒工位编号": 1,
+                          "S09TIP编号": 4,
+                          "S09工艺选择": 9,
+                          "S09抽液量": 10000,
+                          "S09放液量": 0,
+                          "S09测密度次数": 1,
+                          "S09液体瓶编号": 0
+                        },
+                        "process": 9,
+                        "process_label": "测密度抽排液并记录天平数据"
+                      },
+                      "message": "S09 工艺 9 参数写入开始：测密度抽排液并记录天平数据"
+                    },
+                    {
+                      "detail": {
+                        "process": 9,
+                        "written_variables": {
+                          "S09TIP盒工位编号": 1,
+                          "S09TIP编号": 4,
+                          "S09工艺选择": 9,
+                          "S09抽液量": 10000,
+                          "S09放液量": 0,
+                          "S09测密度次数": 1,
+                          "S09液体瓶编号": 0
+                        }
+                      },
+                      "message": "S09 工艺 9 参数写入完成"
+                    },
+                    {
+                      "detail": {
+                        "reset_delay": 0.1,
+                        "value": true,
+                        "variable": "S09参数写入完成"
+                      },
+                      "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+                    },
+                    {
+                      "detail": {
+                        "expected": 9,
+                        "variable": "S09工艺完成"
+                      },
+                      "message": "等待 S09 工艺 9 完成"
+                    },
+                    {
+                      "detail": {
+                        "expected": 9,
+                        "variable": "S09工艺完成"
+                      },
+                      "message": "S09 工艺 9 完成信号已确认"
+                    },
+                    {
+                      "detail": {
+                        "aspirate_balance_readings": [
+                          1.0
+                        ],
+                        "aspirate_balance_variables": [
+                          "S09抽液天平读数[0]"
+                        ],
+                        "density_measurement_count": 1,
+                        "dispense_balance_readings": [
+                          1.0
+                        ],
+                        "dispense_balance_variables": [
+                          "S09放液天平读数[0]"
+                        ]
+                      },
+                      "message": "S09 测密度天平数组读取完成"
+                    },
+                    {
+                      "detail": {},
+                      "message": "S09 工艺参数清零开始"
+                    },
+                    {
+                      "detail": {
+                        "errors": {},
+                        "success": true,
+                        "written_variables": {
+                          "S09TIP盒工位编号": 0,
+                          "S09TIP编号": 0,
+                          "S09参数写入完成": false,
+                          "S09工艺选择": 0,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09测密度次数": 0,
+                          "S09液体瓶编号": 0
+                        }
+                      },
+                      "message": "S09 工艺参数清零完成"
+                    }
+                  ],
+                  "process": 9,
+                  "process_label": "测密度抽排液并记录天平数据",
+                  "sensor_postcheck": {
+                    "conditions": {},
+                    "mismatches": {},
+                    "phase": "post",
+                    "success": true,
+                    "values": {}
+                  },
+                  "sensor_precheck": {
+                    "conditions": {},
+                    "mismatches": {},
+                    "phase": "pre",
+                    "success": true,
+                    "values": {}
+                  },
+                  "station": 1,
+                  "tip_box_index": 1,
+                  "tip_index": 4,
+                  "volume_unit": "raw"
+                },
+                "logs": [
+                  {
+                    "detail": {
+                      "expected": true,
+                      "variable": "S09允许加工"
+                    },
+                    "message": "等待 S09 允许加工信号"
+                  },
+                  {
+                    "detail": {
+                      "params": {
+                        "S09TIP盒工位编号": 1,
+                        "S09TIP编号": 4,
+                        "S09工艺选择": 9,
+                        "S09抽液量": 10000,
+                        "S09放液量": 0,
+                        "S09测密度次数": 1,
+                        "S09液体瓶编号": 0
+                      },
+                      "process": 9,
+                      "process_label": "测密度抽排液并记录天平数据"
+                    },
+                    "message": "S09 工艺 9 参数写入开始：测密度抽排液并记录天平数据"
+                  },
+                  {
+                    "detail": {
+                      "process": 9,
+                      "written_variables": {
+                        "S09TIP盒工位编号": 1,
+                        "S09TIP编号": 4,
+                        "S09工艺选择": 9,
+                        "S09抽液量": 10000,
+                        "S09放液量": 0,
+                        "S09测密度次数": 1,
+                        "S09液体瓶编号": 0
+                      }
+                    },
+                    "message": "S09 工艺 9 参数写入完成"
+                  },
+                  {
+                    "detail": {
+                      "reset_delay": 0.1,
+                      "value": true,
+                      "variable": "S09参数写入完成"
+                    },
+                    "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+                  },
+                  {
+                    "detail": {
+                      "expected": 9,
+                      "variable": "S09工艺完成"
+                    },
+                    "message": "等待 S09 工艺 9 完成"
+                  },
+                  {
+                    "detail": {
+                      "expected": 9,
+                      "variable": "S09工艺完成"
+                    },
+                    "message": "S09 工艺 9 完成信号已确认"
+                  },
+                  {
+                    "detail": {
+                      "aspirate_balance_readings": [
+                        1.0
+                      ],
+                      "aspirate_balance_variables": [
+                        "S09抽液天平读数[0]"
+                      ],
+                      "density_measurement_count": 1,
+                      "dispense_balance_readings": [
+                        1.0
+                      ],
+                      "dispense_balance_variables": [
+                        "S09放液天平读数[0]"
+                      ]
+                    },
+                    "message": "S09 测密度天平数组读取完成"
+                  },
+                  {
+                    "detail": {},
+                    "message": "S09 工艺参数清零开始"
+                  },
+                  {
+                    "detail": {
+                      "errors": {},
+                      "success": true,
+                      "written_variables": {
+                        "S09TIP盒工位编号": 0,
+                        "S09TIP编号": 0,
+                        "S09参数写入完成": false,
+                        "S09工艺选择": 0,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09测密度次数": 0,
+                        "S09液体瓶编号": 0
+                      }
+                    },
+                    "message": "S09 工艺参数清零完成"
+                  }
+                ],
+                "message": "S09 工艺 9 完成：测密度抽排液并记录天平数据",
+                "step": "烧杯测密度抽排液",
+                "success": true
+              },
+              {
+                "data": {
+                  "aspirate_volume": 0,
+                  "aspirate_volume_ul": 0.0,
+                  "clear_process_params": {
+                    "errors": {},
+                    "success": true,
+                    "written_variables": {
+                      "S09TIP盒工位编号": 0,
+                      "S09TIP编号": 0,
+                      "S09参数写入完成": false,
+                      "S09工艺选择": 0,
+                      "S09抽液量": 0,
+                      "S09放液量": 0,
+                      "S09液体瓶编号": 0
+                    }
+                  },
+                  "density_measurement_count": 1,
+                  "dispense_volume": 0,
+                  "dispense_volume_ul": 0.0,
+                  "liquid_bottle_index": 0,
+                  "logs": [
+                    {
+                      "detail": {
+                        "expected": true,
+                        "variable": "S09允许加工"
+                      },
+                      "message": "等待 S09 允许加工信号"
+                    },
+                    {
+                      "detail": {
+                        "params": {
+                          "S09TIP盒工位编号": 2,
+                          "S09TIP编号": 4,
+                          "S09工艺选择": 6,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09液体瓶编号": 0
+                        },
+                        "process": 6,
+                        "process_label": "放 TIP"
+                      },
+                      "message": "S09 工艺 6 参数写入开始：放 TIP"
+                    },
+                    {
+                      "detail": {
+                        "process": 6,
+                        "written_variables": {
+                          "S09TIP盒工位编号": 2,
+                          "S09TIP编号": 4,
+                          "S09工艺选择": 6,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09液体瓶编号": 0
+                        }
+                      },
+                      "message": "S09 工艺 6 参数写入完成"
+                    },
+                    {
+                      "detail": {
+                        "reset_delay": 0.1,
+                        "value": true,
+                        "variable": "S09参数写入完成"
+                      },
+                      "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+                    },
+                    {
+                      "detail": {
+                        "expected": 6,
+                        "variable": "S09工艺完成"
+                      },
+                      "message": "等待 S09 工艺 6 完成"
+                    },
+                    {
+                      "detail": {
+                        "expected": 6,
+                        "variable": "S09工艺完成"
+                      },
+                      "message": "S09 工艺 6 完成信号已确认"
+                    },
+                    {
+                      "detail": {},
+                      "message": "S09 工艺参数清零开始"
+                    },
+                    {
+                      "detail": {
+                        "errors": {},
+                        "success": true,
+                        "written_variables": {
+                          "S09TIP盒工位编号": 0,
+                          "S09TIP编号": 0,
+                          "S09参数写入完成": false,
+                          "S09工艺选择": 0,
+                          "S09抽液量": 0,
+                          "S09放液量": 0,
+                          "S09液体瓶编号": 0
+                        }
+                      },
+                      "message": "S09 工艺参数清零完成"
+                    }
+                  ],
+                  "process": 6,
+                  "process_label": "放 TIP",
+                  "sensor_postcheck": {
+                    "conditions": {
+                      "传感器状态_上位机[4].NO[6]": true
+                    },
+                    "mismatches": {},
+                    "phase": "post",
+                    "success": true,
+                    "values": {
+                      "传感器状态_上位机[4].NO[6]": true
+                    }
+                  },
+                  "sensor_precheck": {
+                    "conditions": {
+                      "传感器状态_上位机[4].NO[6]": true
+                    },
+                    "mismatches": {},
+                    "phase": "pre",
+                    "success": true,
+                    "values": {
+                      "传感器状态_上位机[4].NO[6]": true
+                    }
+                  },
+                  "station": 1,
+                  "tip_box_index": 2,
+                  "tip_index": 4,
+                  "volume_unit": "raw"
+                },
+                "logs": [
+                  {
+                    "detail": {
+                      "expected": true,
+                      "variable": "S09允许加工"
+                    },
+                    "message": "等待 S09 允许加工信号"
+                  },
+                  {
+                    "detail": {
+                      "params": {
+                        "S09TIP盒工位编号": 2,
+                        "S09TIP编号": 4,
+                        "S09工艺选择": 6,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09液体瓶编号": 0
+                      },
+                      "process": 6,
+                      "process_label": "放 TIP"
+                    },
+                    "message": "S09 工艺 6 参数写入开始：放 TIP"
+                  },
+                  {
+                    "detail": {
+                      "process": 6,
+                      "written_variables": {
+                        "S09TIP盒工位编号": 2,
+                        "S09TIP编号": 4,
+                        "S09工艺选择": 6,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09液体瓶编号": 0
+                      }
+                    },
+                    "message": "S09 工艺 6 参数写入完成"
+                  },
+                  {
+                    "detail": {
+                      "reset_delay": 0.1,
+                      "value": true,
+                      "variable": "S09参数写入完成"
+                    },
+                    "message": "S09 参数写入完成信号已置位，将保持至工艺结束"
+                  },
+                  {
+                    "detail": {
+                      "expected": 6,
+                      "variable": "S09工艺完成"
+                    },
+                    "message": "等待 S09 工艺 6 完成"
+                  },
+                  {
+                    "detail": {
+                      "expected": 6,
+                      "variable": "S09工艺完成"
+                    },
+                    "message": "S09 工艺 6 完成信号已确认"
+                  },
+                  {
+                    "detail": {},
+                    "message": "S09 工艺参数清零开始"
+                  },
+                  {
+                    "detail": {
+                      "errors": {},
+                      "success": true,
+                      "written_variables": {
+                        "S09TIP盒工位编号": 0,
+                        "S09TIP编号": 0,
+                        "S09参数写入完成": false,
+                        "S09工艺选择": 0,
+                        "S09抽液量": 0,
+                        "S09放液量": 0,
+                        "S09液体瓶编号": 0
+                      }
+                    },
+                    "message": "S09 工艺参数清零完成"
+                  }
+                ],
+                "message": "S09 工艺 6 完成：放 TIP",
+                "step": "弃置测密度 TIP",
+                "success": true
+              }
+            ],
+            "success": true,
+            "tip_box": {
+              "uuid": "22e83372-018e-560b-991c-2a2cb8106dfe"
+            }
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1963,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:44.199566Z",
+        "workflow_node_job_uuid": "c5429ec3-407d-4713-8a13-370bac0bd8a5",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "07eb39f4-b68f-417b-a590-fb1f36159c81",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "check_target_presence": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "BEAKER1",
+          "source_site_variant": "density",
+          "source_warehouse": {
+            "uuid": "4da395d8-6553-545a-b3b1-8c348b60898c"
+          },
+          "target_device": "szlab_mixer_photoshotting",
+          "target_site": "S051",
+          "target_warehouse": {
+            "uuid": "ecefa3fb-76c3-5f39-92a9-daddbb685a76"
+          }
+        }
+      },
+      {
+        "sequence": 1964,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:44.228439Z",
+        "workflow_node_job_uuid": "c5429ec3-407d-4713-8a13-370bac0bd8a5",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "07eb39f4-b68f-417b-a590-fb1f36159c81",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1965,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:46.822534Z",
+        "workflow_node_job_uuid": "c5429ec3-407d-4713-8a13-370bac0bd8a5",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "07eb39f4-b68f-417b-a590-fb1f36159c81",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: BEAKER1 -> S051\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"ecefa3fb-76c3-5f39-92a9-daddbb685a76\"}, \"site\": \"S051\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:c5429ec3-407d-4713-8a13-370bac0bd8a5:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:c5429ec3-407d-4713-8a13-370bac0bd8a5:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: BEAKER1 -> S051",
+            "mount_resource": {
+              "uuid": "ecefa3fb-76c3-5f39-92a9-daddbb685a76"
+            },
+            "pick_command_id": "workflow-node-job:c5429ec3-407d-4713-8a13-370bac0bd8a5:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:c5429ec3-407d-4713-8a13-370bac0bd8a5:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "S051",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1966,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:47.605333Z",
+        "workflow_node_job_uuid": "b31fbb8b-b979-4496-8795-df4008a0b184",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "348d147b-d413-489c-8bee-cf88cfac0478",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "source_site": "L1A2",
+          "source_warehouse": {
+            "uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+          },
+          "target_device": "szlab_s08_cap_station",
+          "target_site": "S081",
+          "target_warehouse": {
+            "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+          }
+        }
+      },
+      {
+        "sequence": 1967,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:47.634982Z",
+        "workflow_node_job_uuid": "b31fbb8b-b979-4496-8795-df4008a0b184",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "348d147b-d413-489c-8bee-cf88cfac0478",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1968,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:50.016663Z",
+        "workflow_node_job_uuid": "b31fbb8b-b979-4496-8795-df4008a0b184",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "348d147b-d413-489c-8bee-cf88cfac0478",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: L1A2 -> S081\", \"resource\": {\"uuid\": \"16317a42-6282-56a5-a328-c63776cedbe4\"}, \"mount_resource\": {\"uuid\": \"b20e18a5-e5d0-580d-a8ea-be6a94923d5c\"}, \"site\": \"S081\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:b31fbb8b-b979-4496-8795-df4008a0b184:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:b31fbb8b-b979-4496-8795-df4008a0b184:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: L1A2 -> S081",
+            "mount_resource": {
+              "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+            },
+            "pick_command_id": "workflow-node-job:b31fbb8b-b979-4496-8795-df4008a0b184:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:b31fbb8b-b979-4496-8795-df4008a0b184:atomic-transfer-place",
+            "resource": {
+              "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+            },
+            "result": "转运完成",
+            "site": "S081",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1969,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:50.831615Z",
+        "workflow_node_job_uuid": "b8450160-fb9f-4bc3-99ef-1b1a0fce4ef1",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "63f75496-c1f1-4f64-a278-816a25a87c8b",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "container": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "operation": "open",
+          "sample_id": "parallel-final-20260907-b"
+        }
+      },
+      {
+        "sequence": 1970,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:50.867362Z",
+        "workflow_node_job_uuid": "b8450160-fb9f-4bc3-99ef-1b1a0fce4ef1",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "63f75496-c1f1-4f64-a278-816a25a87c8b",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1971,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:50.983983Z",
+        "workflow_node_job_uuid": "034b1928-5bcf-442e-b196-98485b9a5964",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "9fcbe214-71ff-43f3-b197-3a2b3500e33a",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "inspection_result": "",
+          "photo_path": "",
+          "sample_id": "parallel-final-20260907-b"
+        }
+      },
+      {
+        "sequence": 1972,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:51.045096Z",
+        "workflow_node_job_uuid": "034b1928-5bcf-442e-b196-98485b9a5964",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "9fcbe214-71ff-43f3-b197-3a2b3500e33a",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1973,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:51.398714Z",
+        "workflow_node_job_uuid": "034b1928-5bcf-442e-b196-98485b9a5964",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "9fcbe214-71ff-43f3-b197-3a2b3500e33a",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S05 拍照检测完成，结果 OK\", \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"photo_path\": \"\", \"inspection_result\": \"OK\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "inspection_result": "OK",
+            "message": "S05 拍照检测完成，结果 OK",
+            "photo_path": "",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1974,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:52.683083Z",
+        "workflow_node_job_uuid": "b8450160-fb9f-4bc3-99ef-1b1a0fce4ef1",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "63f75496-c1f1-4f64-a278-816a25a87c8b",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S08 开瓶盖 完成\", \"container\": {\"uuid\": \"16317a42-6282-56a5-a328-c63776cedbe4\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "container": {
+              "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+            },
+            "message": "S08 开瓶盖 完成",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1975,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:53.654184Z",
+        "workflow_node_job_uuid": "bfedeb92-6ae1-4a72-8da6-8a6817ec230a",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "63ac1231-042f-48e5-b440-73e9c20e6cdd",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "check_gripper_payload": false,
+          "check_source_presence": false,
+          "sample_vial": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "sample_vial_site": "S081",
+          "source_site": "S051",
+          "source_warehouse": {
+            "uuid": "ecefa3fb-76c3-5f39-92a9-daddbb685a76"
+          },
+          "target_device": "host_node",
+          "target_site": "L1B2",
+          "target_warehouse": {
+            "uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+          }
+        }
+      },
+      {
+        "sequence": 1976,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:53.704326Z",
+        "workflow_node_job_uuid": "bfedeb92-6ae1-4a72-8da6-8a6817ec230a",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "63ac1231-042f-48e5-b440-73e9c20e6cdd",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1977,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:58.189652Z",
+        "workflow_node_job_uuid": "bfedeb92-6ae1-4a72-8da6-8a6817ec230a",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "63ac1231-042f-48e5-b440-73e9c20e6cdd",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子取料、倒液、放料和库存记账完成: L1B2\", \"beaker\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"sample_vial\": {\"uuid\": \"16317a42-6282-56a5-a328-c63776cedbe4\"}, \"mount_resource\": {\"uuid\": \"96f546df-8fad-5f29-9dc9-ce42366539cb\"}, \"site\": \"L1B2\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:bfedeb92-6ae1-4a72-8da6-8a6817ec230a:atomic-pick-pour-place-pick\", \"place_command_id\": \"workflow-node-job:bfedeb92-6ae1-4a72-8da6-8a6817ec230a:atomic-pick-pour-place-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "beaker": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "message": "机器人原子取料、倒液、放料和库存记账完成: L1B2",
+            "mount_resource": {
+              "uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+            },
+            "pick_command_id": "workflow-node-job:bfedeb92-6ae1-4a72-8da6-8a6817ec230a:atomic-pick-pour-place-pick",
+            "place_command_id": "workflow-node-job:bfedeb92-6ae1-4a72-8da6-8a6817ec230a:atomic-pick-pour-place-place",
+            "result": "转运完成",
+            "sample_vial": {
+              "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+            },
+            "site": "L1B2",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1978,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:59.310560Z",
+        "workflow_node_job_uuid": "9303aa9b-cdaa-4af5-a1c9-5bded56a7263",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "1ca042ff-b3f9-4891-9037-49cf5830a030",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "param": {
+          "container": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "operation": "close",
+          "sample_id": "parallel-final-20260907-b"
+        }
+      },
+      {
+        "sequence": 1979,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:39:59.417820Z",
+        "workflow_node_job_uuid": "9303aa9b-cdaa-4af5-a1c9-5bded56a7263",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "1ca042ff-b3f9-4891-9037-49cf5830a030",
+        "executor_kind": "device_action",
+        "attempt": 1
+      },
+      {
+        "sequence": 1980,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:00.563741Z",
+        "workflow_node_job_uuid": "9303aa9b-cdaa-4af5-a1c9-5bded56a7263",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "1ca042ff-b3f9-4891-9037-49cf5830a030",
+        "executor_kind": "device_action",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"S08 关瓶盖 完成\", \"container\": {\"uuid\": \"16317a42-6282-56a5-a328-c63776cedbe4\"}}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "container": {
+              "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+            },
+            "message": "S08 关瓶盖 完成",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1981,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:01.579758Z",
+        "workflow_node_job_uuid": "83bdef69-bf39-4cb6-b1da-8b5a08ae7864",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "1fa46e7f-5d19-4617-a726-dc302b85b429",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "source_site": "S081",
+          "source_warehouse": {
+            "uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c"
+          },
+          "target_device": "host_node",
+          "target_site": "L1A2",
+          "target_warehouse": {
+            "uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+          }
+        }
+      },
+      {
+        "sequence": 1982,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:01.629268Z",
+        "workflow_node_job_uuid": "83bdef69-bf39-4cb6-b1da-8b5a08ae7864",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "1fa46e7f-5d19-4617-a726-dc302b85b429",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1983,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:04.048726Z",
+        "workflow_node_job_uuid": "83bdef69-bf39-4cb6-b1da-8b5a08ae7864",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "1fa46e7f-5d19-4617-a726-dc302b85b429",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: S081 -> L1A2\", \"resource\": {\"uuid\": \"16317a42-6282-56a5-a328-c63776cedbe4\"}, \"mount_resource\": {\"uuid\": \"96f546df-8fad-5f29-9dc9-ce42366539cb\"}, \"site\": \"L1A2\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:83bdef69-bf39-4cb6-b1da-8b5a08ae7864:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:83bdef69-bf39-4cb6-b1da-8b5a08ae7864:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: S081 -> L1A2",
+            "mount_resource": {
+              "uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+            },
+            "pick_command_id": "workflow-node-job:83bdef69-bf39-4cb6-b1da-8b5a08ae7864:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:83bdef69-bf39-4cb6-b1da-8b5a08ae7864:atomic-transfer-place",
+            "resource": {
+              "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+            },
+            "result": "转运完成",
+            "site": "L1A2",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1984,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:05.038244Z",
+        "workflow_node_job_uuid": "6dbf08ca-b30d-4169-8b23-741f264a3e33",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "cfdeb99d-6e30-427b-856b-c28076b1a6d1",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          },
+          "source_site": "L1B2",
+          "source_warehouse": {
+            "uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+          },
+          "target_device": "host_node",
+          "target_site": "L1B2",
+          "target_warehouse": {
+            "uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+          }
+        }
+      },
+      {
+        "sequence": 1985,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:05.161743Z",
+        "workflow_node_job_uuid": "6dbf08ca-b30d-4169-8b23-741f264a3e33",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "cfdeb99d-6e30-427b-856b-c28076b1a6d1",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1986,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:09.045711Z",
+        "workflow_node_job_uuid": "6dbf08ca-b30d-4169-8b23-741f264a3e33",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "cfdeb99d-6e30-427b-856b-c28076b1a6d1",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: L1B2 -> L1B2\", \"resource\": {\"uuid\": \"28b09a79-7337-5e33-8123-66384418f455\"}, \"mount_resource\": {\"uuid\": \"4a0b516d-d145-5cdf-9b15-02093b1286d4\"}, \"site\": \"L1B2\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:6dbf08ca-b30d-4169-8b23-741f264a3e33:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:6dbf08ca-b30d-4169-8b23-741f264a3e33:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: L1B2 -> L1B2",
+            "mount_resource": {
+              "uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+            },
+            "pick_command_id": "workflow-node-job:6dbf08ca-b30d-4169-8b23-741f264a3e33:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:6dbf08ca-b30d-4169-8b23-741f264a3e33:atomic-transfer-place",
+            "resource": {
+              "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+            },
+            "result": "转运完成",
+            "site": "L1B2",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1987,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:10.085389Z",
+        "workflow_node_job_uuid": "27f62f46-0b6e-453c-84ae-bd553b1fa197",
+        "from_status": "pending",
+        "to_status": "dispatched",
+        "workflow_node_uuid": "89fd0f8b-aaaa-4fc7-9cbe-654c7b45049e",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "param": {
+          "check_gripper_payload": false,
+          "resource": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "source_site": "L1A2",
+          "source_warehouse": {
+            "uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+          },
+          "target_device": "host_node",
+          "target_site": "L1A2",
+          "target_warehouse": {
+            "uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+          }
+        }
+      },
+      {
+        "sequence": 1988,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:10.205877Z",
+        "workflow_node_job_uuid": "27f62f46-0b6e-453c-84ae-bd553b1fa197",
+        "from_status": "dispatched",
+        "to_status": "running",
+        "workflow_node_uuid": "89fd0f8b-aaaa-4fc7-9cbe-654c7b45049e",
+        "executor_kind": "material_transfer",
+        "attempt": 1
+      },
+      {
+        "sequence": 1989,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:12.761644Z",
+        "workflow_node_job_uuid": "27f62f46-0b6e-453c-84ae-bd553b1fa197",
+        "from_status": "running",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "89fd0f8b-aaaa-4fc7-9cbe-654c7b45049e",
+        "executor_kind": "material_transfer",
+        "attempt": 1,
+        "return_info": {
+          "error": "",
+          "result": {
+            "return_info": "{\"error\": \"\", \"suc\": true, \"return_value\": {\"success\": true, \"message\": \"机器人原子搬运和库存记账完成: L1A2 -> L1A2\", \"resource\": {\"uuid\": \"16317a42-6282-56a5-a328-c63776cedbe4\"}, \"mount_resource\": {\"uuid\": \"4a0b516d-d145-5cdf-9b15-02093b1286d4\"}, \"site\": \"L1A2\", \"result\": \"转运完成\", \"pick_command_id\": \"workflow-node-job:27f62f46-0b6e-453c-84ae-bd553b1fa197:atomic-transfer-pick\", \"place_command_id\": \"workflow-node-job:27f62f46-0b6e-453c-84ae-bd553b1fa197:atomic-transfer-place\"}, \"suc_type\": \"normal\"}",
+            "success": true
+          },
+          "return_value": {
+            "message": "机器人原子搬运和库存记账完成: L1A2 -> L1A2",
+            "mount_resource": {
+              "uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+            },
+            "pick_command_id": "workflow-node-job:27f62f46-0b6e-453c-84ae-bd553b1fa197:atomic-transfer-pick",
+            "place_command_id": "workflow-node-job:27f62f46-0b6e-453c-84ae-bd553b1fa197:atomic-transfer-place",
+            "resource": {
+              "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+            },
+            "result": "转运完成",
+            "site": "L1A2",
+            "success": true
+          },
+          "suc": true,
+          "suc_type": "normal"
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1990,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "job_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:12.761644Z",
+        "workflow_node_job_uuid": "19df15f7-b1f2-45fb-9e22-0d9a4cfc1da8",
+        "from_status": "pending",
+        "to_status": "succeeded",
+        "workflow_node_uuid": "c861b71a-a5d5-5f00-b49a-1b7ca5aebe13",
+        "executor_kind": "workflow_output",
+        "attempt": 1,
+        "return_info": {
+          "coarse_powder_cartridge": {
+            "uuid": "a1f5c5df-f4db-56fe-9c34-15bd49533a73"
+          },
+          "commanded_powder_mass_g": 1.0,
+          "density": 1.0,
+          "density_unit": "g/mL",
+          "fine_powder_cartridge": {
+            "uuid": "9e496968-4972-5814-a047-b2d264fc1e09"
+          },
+          "inspection_result": "OK",
+          "message": "S08 关瓶盖 完成",
+          "photo_path": "",
+          "product_vial": {
+            "uuid": "16317a42-6282-56a5-a328-c63776cedbe4"
+          },
+          "reagent_bottle": {
+            "uuid": "2edc6fff-3c79-52e8-92e1-259013408544"
+          },
+          "used_beaker": {
+            "uuid": "28b09a79-7337-5e33-8123-66384418f455"
+          }
+        },
+        "error_info": []
+      },
+      {
+        "sequence": 1991,
+        "workflow_task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+        "kind": "task_transition",
+        "data": {},
+        "create_time": "2026-09-06T16:40:12.761644Z",
+        "from_status": "running",
+        "to_status": "succeeded"
+      }
+    ],
+    "next_cursor": 1991,
+    "has_more": false
+  }
+}

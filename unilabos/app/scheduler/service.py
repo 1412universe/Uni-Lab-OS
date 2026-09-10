@@ -389,6 +389,9 @@ class EdgeScheduler:
         # 观察者返回 None；唯一持久投影监听器可返回经事务确认的替代决定。
         self._local_control_listeners: list[Callable[[dict[str, Any]], dict[str, Any] | None]] = []
         self._execution_process_restarted_listeners: list[Callable[[tuple[str, ...]], None]] = []
+        self._execution_connection_lost_listeners: list[
+            Callable[[tuple[str, ...]], None]
+        ] = []
         # 准入重试监听器把尚未注册为旧调度运行的来源受阻任务接到同一个公开
         # 重排触发点；监听器本身仍由工作流任务桥拥有。
         self._admission_retry_listeners: list[Callable[[], None]] = []
@@ -814,30 +817,25 @@ class EdgeScheduler:
         使旧 Fence 失效，后继节点不再派发。
         """
 
-        if self._station_control is not None:
-            with self._lock:
-                for listener in tuple(self._execution_process_restarted_listeners):
-                    listener(tuple(dict.fromkeys(job_uuids or tuple(self._inflight))))
-                for job_uuid in job_uuids or tuple(self._inflight):
-                    job = self._inflight.get(job_uuid)
-                    run = self._workflows.get(job.workflow_id) if job else None
-                    if run is not None and self._station_control.is_current(job_uuid) and self._station_control.awaits_decision(job_uuid):
-                        run.hold_error(job.node_id)
-            return
-
         affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
         with self._lock:
-            affected_workflow_ids: set[str] = set()
-            for job_uuid in affected:
-                job = self._inflight.get(job_uuid)
-                if job is None:
-                    continue
-                affected_workflow_ids.add(job.workflow_id)
-                run = self._workflows.get(job.workflow_id)
-                if run is not None:
-                    run.mark_failed(job.node_id)
             for listener in tuple(self._execution_process_restarted_listeners):
                 listener(affected)
+            affected_workflow_ids = {
+                workflow_id
+                for workflow_id, run in self._workflows.items()
+                if run.state
+                in {
+                    WorkflowState.PENDING,
+                    WorkflowState.RUNNING,
+                    WorkflowState.PAUSED,
+                    WorkflowState.WAITING_MATERIAL,
+                    WorkflowState.CANCELING,
+                }
+            } | {job.workflow_id for job in self._inflight.values()}
+            for workflow_id in affected_workflow_ids:
+                run = self._workflows[workflow_id]
+                run.abort_execution_process()
             aborted_job_ids = [
                 job_uuid
                 for job_uuid, job in self._inflight.items()
@@ -865,10 +863,35 @@ class EdgeScheduler:
             for workflow_id in affected_workflow_ids:
                 self._clear_interval_holders(
                     workflow_id,
-                    preserve_explicit=True,
+                    preserve_explicit=False,
                 )
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
+
+    @property
+    def execution_process_is_local(self) -> bool:
+        """执行器是否随当前 Runtime 进程一起退出。"""
+        return bool(getattr(self._dispatcher, "execution_process_is_local", False))
+
+    def add_execution_connection_lost_listener(
+        self, listener: Callable[[tuple[str, ...]], None]
+    ) -> None:
+        self._execution_connection_lost_listeners.append(listener)
+
+    def remove_execution_connection_lost_listener(
+        self, listener: Callable[[tuple[str, ...]], None]
+    ) -> None:
+        self._execution_connection_lost_listeners = [
+            item
+            for item in self._execution_connection_lost_listeners
+            if item != listener
+        ]
+
+    def on_execution_connection_lost(self, job_uuids: tuple[str, ...]) -> None:
+        """断线只打开待确认状态，不冒充运行进程重启。"""
+        with self._lock:
+            for listener in tuple(self._execution_connection_lost_listeners):
+                listener(job_uuids)
 
     def fail_restarted_jobs(self, job_uuids: Sequence[str]) -> list[str]:
         """工作流已失败并释放锁后，把 Edge 账本中的重启占用收成 failed。
@@ -4700,7 +4723,7 @@ class EdgeScheduler:
             "drain": self._resolve_drain_status(drain_snapshot),
         }
 
-    def release_error_occupancies(self, occupancies: Sequence[Mapping[str, Any]]) -> None:
+    def release_error_occupancies(self, occupancies: Sequence[Mapping[str, Any]], *, include_shared: bool = True) -> None:
         """人工释放指定逻辑占用，保留实际在途执行以接收迟到回执。"""
         with self._lock:
             for item in occupancies:
@@ -4710,14 +4733,17 @@ class EdgeScheduler:
                         fence.get("lock_key") == key and fence.get("fencing_token") == item.get("fencing_token")
                         for fence in job.dispatch_credentials.get("fences", [])
                     )
-                    if job.workflow_id != item["workflow_task_uuid"] or not (job.job_id == identity or same_fence):
+                    if job.workflow_id != item["workflow_task_uuid"] or not (job.job_id == identity or (include_shared and same_fence)):
                         continue
                     job.operator_released_keys.add(key)
                     job.resource_lock_keys.discard(key)
                     job.active_resource_lock_keys.discard(key)
                     self._job_resource_locks.get(job.job_id, set()).discard(key)
-                for (task_id, _), keys in self._interval_resource_holders.items():
+                for (task_id, interval_id), keys in self._interval_resource_holders.items():
                     if task_id == item["workflow_task_uuid"]:
+                        holders = self._interval_resource_holder_jobs.get((task_id, interval_id), set())
+                        if not include_shared and holders - {identity}:
+                            continue
                         keys.discard(key)
 
     def settle_canceled_before_start(self, job_uuid: str) -> None:

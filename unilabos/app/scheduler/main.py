@@ -176,7 +176,9 @@ def build_workflow_service(
             device_preflight=scheduler.preflight_device_target,
             task_scheduler_bridge=bridge,
         )
-        bridge.recover_active_tasks()
+        bridge.recover_active_tasks(
+            execution_process_restarted=scheduler.execution_process_is_local
+        )
     except BaseException:
         bridge.close()
         workflow_store.close()

@@ -24,7 +24,6 @@ from unilabos.devices.ros_dev.liquid_handler_joint_publisher import (
     LiquidHandlerJointPublisher,
 )
 from unilabos_msgs.srv import SerialCommand  # type: ignore
-from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.timer import Timer
 
@@ -35,6 +34,7 @@ from unilabos.ros.hostlink_runtime import (
     start_hostlink_server as _start_hostlink_server,
 )
 from unilabos.ros.initialize_device import initialize_device_from_dict
+from unilabos.ros.executor import RuntimeExecutor, ensure_executor_thread_running
 from unilabos.ros.logging import close_ros_logging, prepare_ros_logging
 from unilabos.ros.nodes.presets.host_node import HostNode
 from unilabos.utils import logger
@@ -87,7 +87,7 @@ def main(
         rclpy.init(args=rclpy_init_args)
     else:
         logger.info("[ROS] rclpy already initialized, reusing context")
-    executor = rclpy.__executor = MultiThreadedExecutor(
+    executor = rclpy.__executor = RuntimeExecutor(
         num_threads=max(os.cpu_count() * 4, 48)
     )
     # 创建主机节点
@@ -148,6 +148,7 @@ def main(
             if callable(getattr(bridge, "is_connected", None))
         ]
         while control_bridges and time.monotonic() < deadline:
+            ensure_executor_thread_running(thread)
             if all(bridge.is_connected() for bridge in control_bridges):
                 break
             time.sleep(0.05)
@@ -161,6 +162,7 @@ def main(
 
     while True:
         time.sleep(1)
+        ensure_executor_thread_running(thread)
 
 
 def slave(
@@ -199,7 +201,7 @@ def slave(
             rclpy.init(args=rclpy_init_args)
     executor = rclpy.__executor
     if not executor:
-        executor = rclpy.__executor = MultiThreadedExecutor(
+        executor = rclpy.__executor = RuntimeExecutor(
             num_threads=max(os.cpu_count() * 4, 48)
         )
 
@@ -344,6 +346,7 @@ def slave(
     # 7. 保持运行
     while True:
         time.sleep(1)
+        ensure_executor_thread_running(thread)
 
 
 if __name__ == "__main__":

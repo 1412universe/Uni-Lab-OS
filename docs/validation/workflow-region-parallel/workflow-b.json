@@ -1,0 +1,32 @@
+{
+  "name": "区域并行工作流 B",
+  "format": "resource-plan-authoring-graph",
+  "description": "两个串行动作在整个根资源范围内连续持有 region；由配套运行器绑定库存和 PLC。",
+  "device_id": "reactor-b",
+  "plc_channel": "S07",
+  "graph": {
+    "resources": [
+      "region"
+    ],
+    "nodes": [
+      {
+        "uuid": "5beff7dc-ffdb-5f2f-82e4-f0b8cd6cfe0a",
+        "resource_defaults": [
+          "reactor-b"
+        ]
+      },
+      {
+        "uuid": "b080f576-be02-5205-9d7e-58b787c25b11",
+        "resource_defaults": [
+          "reactor-b"
+        ]
+      }
+    ],
+    "edges": [
+      {
+        "source_node_uuid": "5beff7dc-ffdb-5f2f-82e4-f0b8cd6cfe0a",
+        "target_node_uuid": "b080f576-be02-5205-9d7e-58b787c25b11"
+      }
+    ]
+  }
+}

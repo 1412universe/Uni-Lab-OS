@@ -1808,3 +1808,58 @@ def test_controlled_goal_acceptance_is_not_physical_start(tmp_path: Path) -> Non
         assert len(store.pending_events(float("inf"))) == 1
     finally:
         store.close()
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        "received",
+        "fetch_retry",
+        "dispatching",
+        "outcome_pending",
+        "outcome_committed_unknown",
+    ],
+)
+def test_restarted_station_runtime_retires_old_mirrors_without_reconciliation(
+    tmp_path: Path, status: str
+) -> None:
+    """新动作进程不恢复工站旧命令，不产生 UNKNOWN 或待提交回执。"""
+
+    class StationDataPlane(FakeDataPlane):
+        def fetch_job(self, job: StoredJob) -> dict[str, Any]:
+            return {**super().fetch_job(job), "station_controlled": True}
+
+    path = tmp_path / "runtime.db"
+    store = EdgeControlStore(str(path))
+    job_uuid, task_uuid, node_uuid, command_uuid = (str(uuid.uuid4()) for _ in range(4))
+    try:
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": task_uuid,
+                "node_uuid": node_uuid,
+                "job_access_token": "old-token",
+                **_claim_fields(),
+            },
+            command_uuid,
+        )
+        if status == "outcome_pending":
+            store.save_pending_outcome(job_uuid, "failed", {}, [], ["old-unknown"])
+        else:
+            store.set_job_status(job_uuid, status)
+        data_plane = StationDataPlane()
+        client = EdgeControlClient(_settings(path), store=store, data_plane=data_plane)
+        asyncio.run(client._resume_received_jobs())
+        asyncio.run(client._resume_pending_outcomes())
+        assert store.get_job(job_uuid).status == "outcome_retired"
+        assert store.list_pending_outcomes() == []
+        assert client._tasks == set()
+        assert data_plane.outcomes == []
+        assert not store.save_pending_outcome(job_uuid, "succeeded", {}, [])
+        event_uuid = store.enqueue_event(
+            "job.outcome_committed", {"job_uuid": job_uuid}
+        )
+        # 默认 Host 未装配；旧 ACK 不得请求设备结算或 UNKNOWN 处置。
+        client._retire_settled_device_command(store.event_for_ack(event_uuid))
+    finally:
+        store.close()

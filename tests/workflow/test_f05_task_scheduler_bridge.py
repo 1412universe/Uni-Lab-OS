@@ -26,7 +26,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
 from unilabos.app.scheduler.service import EdgeScheduler
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
-from unilabos.workflow.store import StoreConflict, WorkflowStore
+from unilabos.workflow.store import WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
 
 WORKFLOW_UUID = "11000000-0000-4000-8000-000000000001"
@@ -1295,7 +1295,7 @@ def test_edge_http_outcome_projects_exact_terminal_evidence(
 
 @pytest.mark.parametrize(
     "outcome",
-    ["succeeded", "failed", "canceled", "timeout", "runtime_restart"],
+    ["succeeded", "failed", "canceled", "timeout", "connection_lost"],
 )
 def test_edge_material_transfer_settles_only_after_inventory_is_certain(
     store: WorkflowStore,
@@ -1474,10 +1474,10 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
     bridge = _bridge(store, scheduler)
     try:
         bridge.submit(store.get_task(TASK_UUID))
-        expected_outcome = "failed" if outcome == "runtime_restart" else outcome
-        if outcome == "runtime_restart":
-            scheduler.on_execution_process_restarted((JOB_UUID,))
-            scheduler.on_execution_process_restarted((JOB_UUID,))
+        expected_outcome = "failed" if outcome == "connection_lost" else outcome
+        if outcome == "connection_lost":
+            scheduler.on_execution_connection_lost((JOB_UUID,))
+            scheduler.on_execution_connection_lost((JOB_UUID,))
             assert store.get_job(JOB_UUID)["status"] == "running"
             scheduler.on_job_outcome(JOB_UUID, CommittedJobOutcome("failed", {"result": "stopped"}, [{"code": "grip_failed"}], []))
         else:
@@ -1505,7 +1505,7 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
                 "reserved",
                 "running",
                 "uncertain",
-                *(["uncertain"] if outcome == "runtime_restart" else []),
+                *(["uncertain"] if outcome == "connection_lost" else []),
             ]
             assert {
                 item["state"]
@@ -1551,7 +1551,7 @@ def test_edge_material_transfer_settles_only_after_inventory_is_certain(
             "reserved",
             "running",
             "uncertain",
-            *(["uncertain"] if outcome == "runtime_restart" else []),
+            *(["uncertain"] if outcome == "connection_lost" else []),
             "released",
         ]
         assert store.get_task(TASK_UUID)["control_status"] == ("error_waiting" if expected_outcome in {"failed", "timeout"} else "active")
@@ -1922,10 +1922,10 @@ def test_terminal_restart_recovery_keeps_released_claim_and_settled_cleanup(
     assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
 
 
-def test_restart_recovery_finishes_cleanup_after_reconciled_permit_release_fails(
+def test_runtime_restart_retries_failed_permit_cleanup_without_reconciliation(
     store: WorkflowStore,
 ) -> None:
-    """物料已对账但库存 Permit 释放中断时，重启补偿须完成任务级清理。"""
+    """Runtime 失败已提交但库存 Permit 释放失败时，重启只重试软件清理。"""
 
     class _FlakySettlementInventory:
         """在实际位置提交后让第一次 Permit 释放瞬时失败。"""
@@ -2035,37 +2035,22 @@ def test_restart_recovery_finishes_cleanup_after_reconciled_permit_release_fails
         ),
     )
     try:
-        with pytest.raises(
-            importlib.import_module(
-                "unilabos.workflow.task_scheduler_bridge"
-            ).TaskSchedulerBridgeError,
-            match="库存 Permit 暂时无法释放",
-        ):
-            first_bridge.settle_failed_material_transfer(
-                JOB_UUID,
-                actual_change_set={
-                    "kind": "material_transfer",
-                    "material_uuid": MATERIAL_UUID,
-                    "target_owner_material_uuid": (
-                        "52000000-0000-4000-8000-000000000095"
-                    ),
-                    "target_site_uuid": (
-                        "71000000-0000-4000-8000-000000000095"
-                    ),
-                },
-                reason="现场确认物料已在目标库位",
-            )
+        with pytest.raises(StationResourceError, match="库存 Permit 暂时无法释放"):
+            first_bridge.recover_active_tasks(execution_process_restarted=True)
     finally:
         first_bridge.close()
 
     assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
-    assert store.get_task(TASK_UUID)["cleanup_status"] == "required"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "pending"
     with store.transaction() as connection:
-        assert connection.execute(
-            "SELECT status FROM workflow_task_material_claim "
-            "WHERE workflow_task_uuid=?",
-            (TASK_UUID,),
-        ).fetchone()[0] == "active"
+        assert (
+            connection.execute(
+                "SELECT status FROM workflow_task_material_claim "
+                "WHERE workflow_task_uuid=?",
+                (TASK_UUID,),
+            ).fetchone()[0]
+            == "released"
+        )
 
     restarted_bridge = _bridge(
         store,
@@ -2163,7 +2148,7 @@ def test_late_result_after_restart_is_ignored_as_stale_execution(
     assert store.get_job(JOB_UUID).get("uncertainty_reason") is None
     assert inventory.transitions == []
     assert projection.list_execution_locks(JOB_UUID)[0]["state"] == "released"
-    assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+    assert store.get_task(TASK_UUID)["cleanup_status"] == "pending"
 
 
 def test_close_is_idempotent_and_unregisters_scheduler_listeners(
@@ -2191,10 +2176,10 @@ def test_close_is_idempotent_and_unregisters_scheduler_listeners(
     assert scheduler._execution_process_restarted_listeners == []
 
 
-def test_execution_process_restart_keeps_inflight_and_pending_nodes(
+def test_connection_loss_keeps_inflight_and_pending_nodes(
     store: WorkflowStore,
 ) -> None:
-    """动作执行进程重启必须失败整条任务并释放旧资源占用。
+    """连接中断保留原任务和占用，等待同一执行进程回连。
 
     参数：``store`` 是隔离工作流权威。返回无。异常：在途 Job 未失败、后继 Job
     未取消、内存 DAG 仍可推进，或 Claim/Fence 未释放时由断言失败。
@@ -2220,7 +2205,7 @@ def test_execution_process_restart_keeps_inflight_and_pending_nodes(
         bridge.submit(store.get_task(TASK_UUID))
         assert list(scheduler.snapshot()["inflight_jobs"]) == [JOB_UUID]
 
-        scheduler.on_execution_process_restarted((JOB_UUID,))
+        scheduler.on_execution_connection_lost((JOB_UUID,))
 
         jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
         assert jobs[JOB_UUID]["status"] == "running"
@@ -2236,10 +2221,10 @@ def test_execution_process_restart_keeps_inflight_and_pending_nodes(
         bridge.close()
 
 
-def test_execution_restart_preserves_waiting_tasks_and_existing_modes(
+def test_connection_loss_preserves_waiting_tasks_and_existing_modes(
     store: WorkflowStore,
 ) -> None:
-    """动作 Runtime 崩溃必须终止同一运行时内尚未派发的其他任务。"""
+    """短暂断线保持尚未派发任务与运行模式。"""
 
     _seed_two_node_debug_task(store)
     waiting_task_uuid = "21000000-0000-4000-8000-000000000098"
@@ -2317,12 +2302,12 @@ def test_execution_restart_preserves_waiting_tasks_and_existing_modes(
         assert waiting_task_uuid in scheduler.snapshot()["workflows"]
         dispatched_before_restart = list(dispatcher.dispatched)
 
-        scheduler.on_execution_process_restarted((JOB_UUID,))
+        scheduler.on_execution_connection_lost((JOB_UUID,))
 
         first_main_task = store.get_task(TASK_UUID)
         first_waiting_task = store.get_task(waiting_task_uuid)
         first_waiting_job = store.get_job(waiting_job_uuid)
-        scheduler.on_execution_process_restarted((JOB_UUID,))
+        scheduler.on_execution_connection_lost((JOB_UUID,))
         assert store.get_task(TASK_UUID) == first_main_task
         assert store.get_task(waiting_task_uuid) == first_waiting_task
         assert store.get_job(waiting_job_uuid) == first_waiting_job
@@ -2337,10 +2322,10 @@ def test_execution_restart_preserves_waiting_tasks_and_existing_modes(
     assert waiting_task_uuid in scheduler.snapshot()["workflows"]
 
 
-def test_execution_process_restart_preserves_running_sibling_under_failed_task(
+def test_connection_loss_preserves_running_sibling_under_failed_task(
     store: WorkflowStore,
 ) -> None:
-    """并行分支先失败父 Task 后，Runtime 崩溃仍须终结剩余在途 Job。"""
+    """并行分支先失败父 Task 后，连接中断时仍保留在途 Job。"""
 
     _seed_two_node_debug_task(store)
     task = store.get_task(TASK_UUID)
@@ -2372,7 +2357,7 @@ def test_execution_process_restart_preserves_running_sibling_under_failed_task(
                 ),
             )
 
-        scheduler.on_execution_process_restarted(())
+        scheduler.on_execution_connection_lost(())
 
         jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
         assert jobs[JOB_UUID]["status"] == "running"
@@ -2387,280 +2372,42 @@ def test_execution_process_restart_preserves_running_sibling_under_failed_task(
         bridge.close()
 
 
-def test_execution_process_restart_preserves_preexisting_uncertain_sibling(
+def test_runtime_restart_releases_claim_without_reconciling_preheld_snapshot(
     store: WorkflowStore,
 ) -> None:
-    """Runtime 崩溃保留在途 Job 与既有物料对账占用，等待真实回执。"""
-
-    class _RestartInventory:
-        """记录跨库 Claim 收敛状态，不复制库存权威。"""
-
-        def __init__(self) -> None:
-            self.transitions: list[tuple[str, str]] = []
-
-        def transition_dispatch_permit(
-            self,
-            claim_uuid: str,
-            *,
-            target_state: str,
-        ) -> None:
-            self.transitions.append((claim_uuid, target_state))
-
-    _seed_two_node_debug_task(store)
-    claim_uuid = "75000000-0000-4000-8000-000000000091"
-    lease_uuid = "76000000-0000-4000-8000-000000000091"
-    provider_claim_uuid = "75000000-0000-4000-8000-000000000092"
-    provider_lease_uuid = "76000000-0000-4000-8000-000000000092"
-    provider_ordinary_lease_uuid = "76000000-0000-4000-8000-000000000093"
-    lock_key = "material/51000000-0000-4000-8000-000000000091/exclusive"
-    provider_lock_key = (
-        "resource/51000000-0000-4000-8000-000000000092/exclusive"
-    )
-    provider_ordinary_lock_key = "device/51000000-0000-4000-8000-000000000093"
-    uncertainty_reason = "material_transfer_inventory_reconciliation_required"
-    original_error_info = [{"code": "parallel_transfer_failed"}]
-    retained_control_data = {
-        "dispatch_preheld_job_uuids": [SECOND_JOB_UUID],
-        "dispatch_preheld_lock_keys": [provider_lock_key],
-        "dispatch_fences": [
-            {"lock_key": lock_key, "fencing_token": 1},
-            {"lock_key": provider_lock_key, "fencing_token": 1},
-        ],
-    }
-    with store.transaction() as connection:
-        connection.execute(
-            """
-            UPDATE workflow_task
-            SET status='failed', control_status='waiting_reconciliation',
-                cleanup_status='requires_attention', attention_reason=?,
-                reconciliation_resume_control_status='active', error_info=?
-            WHERE uuid=?
-            """,
-            (uncertainty_reason, json.dumps(original_error_info), TASK_UUID),
-        )
-        connection.execute(
-            """
-            UPDATE workflow_node_job
-            SET status='failed', uncertainty_reason=?, control_data=?,
-                dispatch_effect_uuid=?
-            WHERE uuid=?
-            """,
-            (
-                uncertainty_reason,
-                json.dumps(retained_control_data),
-                "77000000-0000-4000-8000-000000000091",
-                JOB_UUID,
-            ),
-        )
-        connection.execute(
-            "UPDATE workflow_node_job SET status='running',start_state='UNKNOWN' WHERE uuid=?",
-            (SECOND_JOB_UUID,),
-        )
-        connection.execute(
-            """
-            INSERT INTO execution_claim(
-                claim_uuid, create_time, update_time, workflow_task_uuid,
-                workflow_node_job_uuid, attempt, resource_keys, state,
-                acquired_at, released_at
-            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'uncertain', ?, NULL)
-            """,
-            (
-                claim_uuid,
-                _CREATED_AT,
-                _CREATED_AT,
-                TASK_UUID,
-                JOB_UUID,
-                json.dumps([lock_key, provider_lock_key]),
-                _CREATED_AT,
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO execution_lock_lease(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_task_uuid, workflow_node_job_uuid,
-                lock_key, scope, material_uuid, site_uuid, state,
-                acquired_at, released_at, claim_uuid, fencing_token
-            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'material', NULL,
-                      NULL, 'uncertain', ?, NULL, ?, 1)
-            """,
-            (
-                lease_uuid,
-                _CREATED_AT,
-                _CREATED_AT,
-                json.dumps({"acquired_by_job_uuid": JOB_UUID}),
-                TASK_UUID,
-                JOB_UUID,
-                lock_key,
-                _CREATED_AT,
-                claim_uuid,
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO execution_claim(
-                claim_uuid, create_time, update_time, workflow_task_uuid,
-                workflow_node_job_uuid, attempt, resource_keys, state,
-                acquired_at, released_at
-            ) VALUES (?, ?, ?, ?, ?, 1, ?, 'running', ?, NULL)
-            """,
-            (
-                provider_claim_uuid,
-                _CREATED_AT,
-                _CREATED_AT,
-                TASK_UUID,
-                SECOND_JOB_UUID,
-                json.dumps([provider_lock_key, provider_ordinary_lock_key]),
-                _CREATED_AT,
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO execution_lock_lease(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_task_uuid, workflow_node_job_uuid,
-                lock_key, scope, material_uuid, site_uuid, state,
-                acquired_at, released_at, claim_uuid, fencing_token
-            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'resource', NULL,
-                      NULL, 'running', ?, NULL, ?, 1)
-            """,
-            (
-                provider_lease_uuid,
-                _CREATED_AT,
-                _CREATED_AT,
-                json.dumps({"acquired_by_job_uuid": SECOND_JOB_UUID}),
-                TASK_UUID,
-                SECOND_JOB_UUID,
-                provider_lock_key,
-                _CREATED_AT,
-                provider_claim_uuid,
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO execution_lock_lease(
-                uuid, create_time, update_time, deleted_at, description,
-                meta_data, workflow_task_uuid, workflow_node_job_uuid,
-                lock_key, scope, material_uuid, site_uuid, state,
-                acquired_at, released_at, claim_uuid, fencing_token
-            ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, 'device', NULL,
-                      NULL, 'running', ?, NULL, ?, 1)
-            """,
-            (
-                provider_ordinary_lease_uuid,
-                _CREATED_AT,
-                _CREATED_AT,
-                json.dumps({"acquired_by_job_uuid": SECOND_JOB_UUID}),
-                TASK_UUID,
-                SECOND_JOB_UUID,
-                provider_ordinary_lock_key,
-                _CREATED_AT,
-                provider_claim_uuid,
-            ),
-        )
-
-    # retained Claim 缺少任一自有活动 Lease 时，整笔重启投影必须回滚。
-    with store.transaction() as connection:
-        connection.execute(
-            "UPDATE execution_lock_lease SET state='released',released_at=? "
-            "WHERE uuid=?",
-            (_CREATED_AT, lease_uuid),
-        )
-    with pytest.raises(StoreConflict, match="missing_retained_leases"):
-        TaskRuntimeProjection(store).project_execution_process_restarted(TASK_UUID)
-    assert store.get_job(SECOND_JOB_UUID)["status"] == "running"
-    assert store.get_task(TASK_UUID)["error_info"] == original_error_info
-    with store.transaction() as connection:
-        connection.execute(
-            "UPDATE execution_lock_lease SET state='uncertain',released_at=NULL "
-            "WHERE uuid=?",
-            (lease_uuid,),
-        )
-
-    # 声明 provider 与实际 Lease 审计身份不一致时也必须回滚；修复测试数据后
-    # 再验证正常的精确锁保留路径。
-    with store.transaction() as connection:
-        connection.execute(
-            "UPDATE execution_lock_lease SET meta_data=? WHERE uuid=?",
-            (
-                json.dumps({"acquired_by_job_uuid": JOB_UUID}),
-                provider_lease_uuid,
-            ),
-        )
-    with pytest.raises(StoreConflict, match="preheld 权威事实损坏"):
-        TaskRuntimeProjection(store).project_execution_process_restarted(TASK_UUID)
-    assert store.get_job(SECOND_JOB_UUID)["status"] == "running"
-    assert store.get_task(TASK_UUID)["error_info"] == original_error_info
-    assert {
-        item["state"]
-        for item in TaskRuntimeProjection(store).list_execution_locks(
-            SECOND_JOB_UUID
-        )
-    } == {"running"}
-    with store.transaction() as connection:
-        connection.execute(
-            "UPDATE execution_lock_lease SET meta_data=? WHERE uuid=?",
-            (
-                json.dumps({"acquired_by_job_uuid": SECOND_JOB_UUID}),
-                provider_lease_uuid,
-            ),
-        )
-
-    inventory = _RestartInventory()
-    dispatcher = RecordingDispatcher()
-    scheduler = EdgeScheduler(
-        dispatcher=dispatcher,
-        station_resources=inventory,
-    )
+    """崩溃后旧预持有快照仅留作证据，不再阻断失败收口等待对账。"""
+    _seed_task(store, with_material=False)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
     bridge = _bridge(store, scheduler)
     try:
-        scheduler.on_execution_process_restarted(())
-
-        task = store.get_task(TASK_UUID)
-        jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
-        claim = TaskRuntimeProjection(store).get_execution_claim(JOB_UUID)
-        provider_claim = TaskRuntimeProjection(store).get_execution_claim(
-            SECOND_JOB_UUID
-        )
-        assert jobs[JOB_UUID]["status"] == "failed"
-        assert jobs[JOB_UUID]["uncertainty_reason"] == uncertainty_reason
-        assert jobs[SECOND_JOB_UUID]["status"] == "running"
-        assert jobs[SECOND_JOB_UUID]["uncertainty_reason"] == "execution_connection_lost"
-        assert task["status"] == "failed"
-        assert task["error_info"] == original_error_info
-        assert task["cleanup_status"] == "requires_attention"
-        assert task["attention_reason"] == "execution_connection_lost"
-        assert claim is not None and claim["state"] == "uncertain"
-        assert provider_claim is not None and provider_claim["state"] == "uncertain"
-        assert {
-            item["state"]
-            for item in TaskRuntimeProjection(store).list_execution_locks(JOB_UUID)
-        } == {"uncertain"}
-        provider_locks = {
-            item["lock_key"]: item["state"]
-            for item in TaskRuntimeProjection(store).list_execution_locks(
-                SECOND_JOB_UUID
+        bridge.submit(store.get_task(TASK_UUID))
+        with store.transaction() as connection:
+            connection.execute(
+                "UPDATE workflow_node_job SET control_data=?, uncertainty_reason=? WHERE uuid=?",
+                (
+                    json.dumps({"preheld_claims": {"legacy": "unavailable"}}),
+                    "material_transfer_inventory_reconciliation_required",
+                    JOB_UUID,
+                ),
             )
-        }
-        assert provider_locks == {
-            provider_lock_key: "uncertain",
-            provider_ordinary_lock_key: "uncertain",
-        }
-        assert inventory.transitions == [
-            (provider_claim_uuid, "uncertain"),
-        ]
-        assert dispatcher.failed_restarted_jobs == []
-        assert bridge.active_or_uncertain_job_ids() == {
-            JOB_UUID,
-            SECOND_JOB_UUID,
-        }
-
+        scheduler.on_execution_process_restarted(())
+        assert store.get_task(TASK_UUID)["status"] == "failed"
+        assert store.get_task(TASK_UUID)["cleanup_status"] == "settled"
+        job = store.get_job(JOB_UUID)
+        assert not job.get("uncertainty_reason")
+        assert (
+            job["control_data"]["runtime_interruption"]["previous_uncertainty_reason"]
+            == "material_transfer_inventory_reconciliation_required"
+        )
+        assert bridge.active_or_uncertain_job_ids() == set()
     finally:
         bridge.close()
 
 
-def test_execution_process_restart_retries_attention_projection(store: WorkflowStore, monkeypatch) -> None:
-    """投影瞬时失败时先关闭工站门禁，同一重启事件重放只创建一个决定。"""
+def test_connection_loss_retries_attention_projection(
+    store: WorkflowStore, monkeypatch
+) -> None:
+    """投影瞬时失败时先关闭工站门禁，同一断连事件重放只创建一个决定。"""
     task = _seed_task(store, with_material=False)
     scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
     bridge = _bridge(store, scheduler)
@@ -2675,9 +2422,9 @@ def test_execution_process_restart_retries_attention_projection(store: WorkflowS
     try:
         bridge.submit(task)
         with pytest.raises(RuntimeError, match="attention temporarily unavailable"):
-            scheduler.on_execution_process_restarted(())
+            scheduler.on_execution_connection_lost(())
         assert bridge.error_control.snapshot()["mode"] == "PAUSED"
-        scheduler.on_execution_process_restarted(())
+        scheduler.on_execution_connection_lost(())
         assert attempts == [JOB_UUID, JOB_UUID]
         assert bridge.error_control.snapshot()["error_epoch"] == 1
         assert store.get_job(JOB_UUID)["status"] == "running"
@@ -2877,11 +2624,11 @@ def test_execution_process_restart_repairs_succeeded_task_with_unfinished_jobs(
         scheduler.on_execution_process_restarted(())
 
         jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
-        assert jobs[JOB_UUID]["status"] == "running"
-        assert jobs[JOB_UUID]["uncertainty_reason"] == "execution_connection_lost"
-        assert jobs[SECOND_JOB_UUID]["status"] == "pending"
-        assert store.get_task(TASK_UUID)["status"] == "succeeded"
-        assert list(scheduler.snapshot()["inflight_jobs"]) == [JOB_UUID]
+        assert jobs[JOB_UUID]["status"] == "failed"
+        assert not jobs[JOB_UUID].get("uncertainty_reason")
+        assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
+        assert store.get_task(TASK_UUID)["status"] == "failed"
+        assert list(scheduler.snapshot()["inflight_jobs"]) == []
     finally:
         bridge.close()
 
@@ -2951,10 +2698,10 @@ def test_execution_process_restart_skips_stale_task_and_converges_active_task(
         bridge.close()
 
     jobs = {job["uuid"]: job for job in store.list_jobs(TASK_UUID)}
-    assert jobs[JOB_UUID]["status"] == "running"
-    assert jobs[JOB_UUID]["uncertainty_reason"] == "execution_connection_lost"
-    assert jobs[SECOND_JOB_UUID]["status"] == "pending"
-    assert store.get_task(TASK_UUID)["status"] == "running"
+    assert jobs[JOB_UUID]["status"] == "failed"
+    assert not jobs[JOB_UUID].get("uncertainty_reason")
+    assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
+    assert store.get_task(TASK_UUID)["status"] == "failed"
 
 
 def test_restart_missing_predecessor_output_opens_error_without_physical_replay(

@@ -1,0 +1,11 @@
+{
+  "request": {
+    "version": 1,
+    "owner_material_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1",
+    "occupant_material_uuid": "",
+    "group_key": "",
+    "exact_site_reference": "BEAKER1",
+    "strategy": "sort_order"
+  },
+  "available_sites": []
+}

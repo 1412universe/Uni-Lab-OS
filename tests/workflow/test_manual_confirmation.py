@@ -176,9 +176,9 @@ def test_runtime_restart_fails_manual_wait_but_releases_no_send_resources(
 
         assert aggregate is not None
         assert aggregate["task"]["status"] == "failed"
-        assert aggregate["task"]["cleanup_status"] == "settled"
+        assert aggregate["task"]["cleanup_status"] == "pending"
         job = next(item for item in aggregate["jobs"] if item["uuid"] == job_uuid)
-        assert job["status"] == "failed"
+        assert job["status"] == "canceled"
         assert not job.get("uncertainty_reason")
         confirmation = WorkflowService(
             runtime.workflow_store

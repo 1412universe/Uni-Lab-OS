@@ -1113,3 +1113,56 @@ def test_individual_ack_does_not_ack_paused_earlier_command(tmp_path: Path) -> N
         assert [item["message_uuid"] for item in authority.store.pending_commands()] == [commands[0]["message_uuid"]]
     finally:
         authority.store.close()
+
+
+def test_restart_terminal_job_does_not_resend_unacked_start(tmp_path: Path) -> None:
+    """失败收口作废未 ACK 的旧 job.start，不需要伪造执行端确认。"""
+    authority = _authority(tmp_path / "authority.db")
+    try:
+        payload = _payload()
+        authority.dispatch(payload)
+        assert len(authority.store.pending_commands()) == 1
+        authority.fail_restarted_jobs((payload["job_id"],))
+        assert authority.store.pending_commands() == []
+        assert authority.busy_device_action_keys() == set()
+    finally:
+        authority.stop()
+
+
+def test_restart_notification_retries_after_projection_failure(tmp_path: Path) -> None:
+    """新进程 HELLO 已落盘但任务终结失败时，同进程重连仍重试重启事件。"""
+    authority = _authority(tmp_path / "restart-retry.db")
+    registration = authority.store.register_session(
+        {
+            "edge_key": "workspace-edge",
+            "instance_uuid": str(uuid.uuid4()),
+            "devices": [],
+        }
+    )
+    hello = {
+        "edge_uuid": registration["edge_uuid"],
+        "session_uuid": registration["session_uuid"],
+        "process_uuid": str(uuid.uuid4()),
+        "last_ack_command_sequence": 0,
+        "running_jobs": [],
+    }
+    calls = []
+
+    def fail_once(job_uuids):
+        calls.append(job_uuids)
+        if len(calls) == 1:
+            raise RuntimeError("模拟失败投影中断")
+
+    try:
+        assert authority.store.reconcile_hello(hello) == (False, ())
+        hello["process_uuid"] = str(uuid.uuid4())
+        authority.add_execution_process_restarted_listener(fail_once)
+        assert authority.store.reconcile_hello(hello) == (True, ())
+        with pytest.raises(RuntimeError, match="模拟失败投影中断"):
+            authority.notify_execution_process_restarted(())
+        assert authority.store.reconcile_hello(hello) == (True, ())
+        authority.notify_execution_process_restarted(())
+        assert calls == [(), ()]
+        assert authority.store.reconcile_hello(hello) == (False, ())
+    finally:
+        authority.stop()

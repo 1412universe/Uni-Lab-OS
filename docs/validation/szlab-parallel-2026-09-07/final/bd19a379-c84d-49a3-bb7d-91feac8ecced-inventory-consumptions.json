@@ -1,0 +1,74 @@
+{
+  "code": 0,
+  "data": [
+    {
+      "uuid": "18b90d11-cf91-5679-95cc-be8672550003",
+      "workflow_task_uuid": "bd19a379-c84d-49a3-bb7d-91feac8ecced",
+      "workflow_node_job_uuid": "b977d7b9-95de-4d34-968b-c253a8c6e2c3",
+      "workflow_node_uuid": "5b79c214-a7a6-517c-841e-b1f53de49b6c",
+      "inventory_type": "reagent",
+      "inventory_uuid": "fd441b74-9856-473d-b531-3e2a0262d7cb",
+      "planned_quantity": 10.0,
+      "actual_quantity": 10.0,
+      "quantity_unit": "mL",
+      "balance_before": 100.0,
+      "balance_after": 90.0,
+      "status": "consumed",
+      "consumed_at": "2026-09-06T16:37:54.379000Z",
+      "meta_data": {
+        "planned_quantity_unit": "mL",
+        "reported_quantity_unit": "mL"
+      },
+      "display_name": "水",
+      "container_barcode": "UNILAB-GRAPH-s10_liquid_reagent__R1C4",
+      "workflow_name": "SZLab 单样品原子流程（机器人原子动作）",
+      "node_name": "S06 双路溶剂加液"
+    },
+    {
+      "uuid": "7013e981-d252-57ba-aeae-65822df79f88",
+      "workflow_task_uuid": "bd19a379-c84d-49a3-bb7d-91feac8ecced",
+      "workflow_node_job_uuid": "b977d7b9-95de-4d34-968b-c253a8c6e2c3",
+      "workflow_node_uuid": "5b79c214-a7a6-517c-841e-b1f53de49b6c",
+      "inventory_type": "reagent",
+      "inventory_uuid": "99ebf666-41e0-4e55-b17a-9328b26dabe1",
+      "planned_quantity": 10.0,
+      "actual_quantity": 10.0,
+      "quantity_unit": "mL",
+      "balance_before": 100.0,
+      "balance_after": 90.0,
+      "status": "consumed",
+      "consumed_at": "2026-09-06T16:37:54.379000Z",
+      "meta_data": {
+        "planned_quantity_unit": "mL",
+        "reported_quantity_unit": "mL"
+      },
+      "display_name": "水",
+      "container_barcode": "UNILAB-GRAPH-s10_liquid_reagent__R1C5",
+      "workflow_name": "SZLab 单样品原子流程（机器人原子动作）",
+      "node_name": "S06 双路溶剂加液"
+    },
+    {
+      "uuid": "d5e297cf-6c71-5cad-9f55-86a9c7ad3176",
+      "workflow_task_uuid": "bd19a379-c84d-49a3-bb7d-91feac8ecced",
+      "workflow_node_job_uuid": "ea664704-ec4b-44dd-88ae-9a0d01a7de5a",
+      "workflow_node_uuid": "53ea9406-065d-577a-b666-18f6b8c090c3",
+      "inventory_type": "reagent",
+      "inventory_uuid": "253f1435-7119-4edb-83fa-0856f4a982ac",
+      "planned_quantity": 0.5,
+      "actual_quantity": 0.5,
+      "quantity_unit": "mL",
+      "balance_before": 97.5,
+      "balance_after": 97.0,
+      "status": "consumed",
+      "consumed_at": "2026-09-06T16:38:13.034000Z",
+      "meta_data": {
+        "planned_quantity_unit": "mL",
+        "reported_quantity_unit": "mL"
+      },
+      "display_name": "水",
+      "container_barcode": "UNILAB-GRAPH-debug_reagent_bottle_100ml",
+      "workflow_name": "SZLab 单样品原子流程（机器人原子动作）",
+      "node_name": "S09 试剂移液"
+    }
+  ]
+}

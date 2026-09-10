@@ -1,0 +1,34 @@
+{
+  "d4255a95-7ffd-4577-a0c5-f4084d7ac181": {
+    "claims": [],
+    "leases": []
+  },
+  "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3": {
+    "claims": [
+      {
+        "state": "released",
+        "count": 25
+      }
+    ],
+    "leases": [
+      {
+        "state": "released",
+        "count": 153
+      }
+    ]
+  },
+  "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc": {
+    "claims": [
+      {
+        "state": "released",
+        "count": 25
+      }
+    ],
+    "leases": [
+      {
+        "state": "released",
+        "count": 153
+      }
+    ]
+  }
+}

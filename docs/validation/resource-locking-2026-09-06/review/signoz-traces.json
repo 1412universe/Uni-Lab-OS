@@ -1,0 +1,178 @@
+{
+	"meta":
+	[
+		{
+			"name": "trace_id",
+			"type": "FixedString(32)"
+		},
+		{
+			"name": "name",
+			"type": "LowCardinality(String)"
+		},
+		{
+			"name": "spans",
+			"type": "UInt64"
+		},
+		{
+			"name": "error_spans",
+			"type": "UInt64"
+		}
+	],
+
+	"data":
+	[
+		{
+			"trace_id": "837e50bd89798203aea180298dcc58a9",
+			"name": "action.run",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "837e50bd89798203aea180298dcc58a9",
+			"name": "workflow.job.dispatch",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "837e50bd89798203aea180298dcc58a9",
+			"name": "workflow.material.retry",
+			"spans": 7,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "837e50bd89798203aea180298dcc58a9",
+			"name": "workflow.task.reconcile",
+			"spans": 3,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "837e50bd89798203aea180298dcc58a9",
+			"name": "workflow.task.run",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "837e50bd89798203aea180298dcc58a9",
+			"name": "workflow.task.submit",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "8faac3742a542820364452d3a32eca88",
+			"name": "action.run",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "8faac3742a542820364452d3a32eca88",
+			"name": "workflow.job.dispatch",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "8faac3742a542820364452d3a32eca88",
+			"name": "workflow.material.retry",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "8faac3742a542820364452d3a32eca88",
+			"name": "workflow.task.reconcile",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "8faac3742a542820364452d3a32eca88",
+			"name": "workflow.task.run",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "8faac3742a542820364452d3a32eca88",
+			"name": "workflow.task.submit",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "9e8a5ab15941dcd927b5c0234a5fddc2",
+			"name": "action.run",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "9e8a5ab15941dcd927b5c0234a5fddc2",
+			"name": "workflow.job.dispatch",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "9e8a5ab15941dcd927b5c0234a5fddc2",
+			"name": "workflow.material.retry",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "9e8a5ab15941dcd927b5c0234a5fddc2",
+			"name": "workflow.task.reconcile",
+			"spans": 3,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "9e8a5ab15941dcd927b5c0234a5fddc2",
+			"name": "workflow.task.run",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "9e8a5ab15941dcd927b5c0234a5fddc2",
+			"name": "workflow.task.submit",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "f0d7dedb8e4bcc86c6e91ebc72696757",
+			"name": "action.run",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "f0d7dedb8e4bcc86c6e91ebc72696757",
+			"name": "workflow.job.dispatch",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "f0d7dedb8e4bcc86c6e91ebc72696757",
+			"name": "workflow.material.retry",
+			"spans": 6,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "f0d7dedb8e4bcc86c6e91ebc72696757",
+			"name": "workflow.task.reconcile",
+			"spans": 2,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "f0d7dedb8e4bcc86c6e91ebc72696757",
+			"name": "workflow.task.run",
+			"spans": 1,
+			"error_spans": 0
+		},
+		{
+			"trace_id": "f0d7dedb8e4bcc86c6e91ebc72696757",
+			"name": "workflow.task.submit",
+			"spans": 1,
+			"error_spans": 0
+		}
+	],
+
+	"rows": 24,
+
+	"statistics":
+	{
+		"elapsed": 0.012376332,
+		"rows_read": 5760,
+		"bytes_read": 1472241
+	}
+}

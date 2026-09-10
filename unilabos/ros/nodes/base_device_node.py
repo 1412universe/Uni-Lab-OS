@@ -3027,10 +3027,11 @@ class BaseROS2DeviceNode(Node, Generic[T]):
                                 return await raw_action(**values)
                             submitted = submit_with_context(self._executor, _guarded_sync, **values)
                             while not submitted.done():
-                                await asyncio.sleep(0.05)
+                                # 由 rclpy executor 推进，使用 ROS 定时器等待。
+                                await self.sleep(0.05)
                             return submitted.result()
                         except ExecutionStartDeferred:
-                            await asyncio.sleep(0.1)
+                            await self.sleep(0.1)
                 ACTION = _station_action
 
             time_start = time.time()
@@ -3976,16 +3977,16 @@ class ROS2DeviceNode:
                 error(traceback.format_exc())
 
         trace_context = capture_context()
+        # 必须在调用方 Context 内捕获，进入新的 ROS Task 后执行身份已经丢失。
+        contextual_awaitable = await_with_context(
+            trace_context,
+            ROS2DeviceNode.safe_task_wrapper(inner_trace_callback, func, **kwargs),
+        )
 
         async def _run_with_trace_context():
             # rclpy executor 可能在不同 Python Context 中逐步推进同一协程；
             # 每一步单独 attach/detach，避免跨 Context 重置 token。
-            return await await_with_context(
-                trace_context,
-                ROS2DeviceNode.safe_task_wrapper(
-                    inner_trace_callback, func, **kwargs
-                ),
-            )
+            return await contextual_awaitable
 
         future = rclpy.get_global_executor().create_task(_run_with_trace_context())
         if trace_error:

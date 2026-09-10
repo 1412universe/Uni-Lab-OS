@@ -1,0 +1,9 @@
+{
+  "code": 0,
+  "data": {
+    "workflow_task_uuid": "bd19a379-c84d-49a3-bb7d-91feac8ecced",
+    "task_status": "succeeded",
+    "locks": [],
+    "active_device_tenancy_count": 0
+  }
+}

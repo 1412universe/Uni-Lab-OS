@@ -166,3 +166,78 @@ def test_new_error_invalidates_older_resume_confirmation(tmp_path):
         assert len(control.snapshot()["errors"]) == 2
     finally:
         store.close()
+
+
+def test_cancel_settles_multiple_error_facts_for_same_job(tmp_path):
+    """取消已受理后又有取消不确定事实，原命令仍须可幂等收尾。"""
+    store = WorkflowStore(tmp_path / "workflow.db")
+    try:
+        task, job = seed_job(store)
+        control = StationExecutionControl(store)
+        error = control.report_error(job, phase="execution", message="执行失败")
+        accepted = control.decide(
+            error["decision_id"],
+            decision_request(control, error, "cancel_task"),
+            idempotency_key="cancel",
+            operator_id="tester",
+        )
+        control.report_error(
+            job, phase="cancel", event_key="cancel-unknown", message="取消回执未知"
+        )
+        assert len(control.snapshot()["errors"]) == 2
+        applied = control.mark_applied(accepted["command_uuid"])
+        assert applied["status"] == "APPLIED"
+        assert applied["station"]["errors"] == []
+        assert applied["station"]["mode"] == "PAUSED"
+        assert control.mark_applied(accepted["command_uuid"])["status"] == "APPLIED"
+        assert len(store.list_jobs(task)) == 1
+    finally:
+        store.close()
+
+
+def test_manual_transitions_with_multiple_error_facts_keep_distinct_revisions(tmp_path):
+    """同一 Job 存在多个错误事实时，较早事实仍可进入和完成手动处置。"""
+    store = WorkflowStore(tmp_path / "workflow.db")
+    try:
+        _, job = seed_job(store)
+        control = StationExecutionControl(store)
+        first = control.report_error(job, phase="execution", message="执行失败")
+        control.report_error(
+            job, phase="cancel", event_key="cancel-unknown", message="取消未知"
+        )
+        entered = control.decide(
+            first["decision_id"],
+            decision_request(control, first, "enter_manual_handling"),
+            idempotency_key="enter",
+            operator_id="tester",
+        )
+        session = entered["station"]["active_session"]
+        control.report_error(
+            job, phase="other", event_key="additional-fact", message="另一个错误事实"
+        )
+        completed = control.complete(
+            session["session_id"],
+            {
+                "expected_session_version": session["version"],
+                "expected_station_version": control.snapshot()["station_version"],
+                "summary": "已核对",
+            },
+            idempotency_key="complete",
+            operator_id="tester",
+        )
+        assert completed["station"]["active_session"]["stage"] == "DECISION_REQUIRED"
+        returned = control.return_to_manual(
+            session["session_id"],
+            {
+                "expected_session_version": completed["station"]["active_session"][
+                    "version"
+                ],
+                "expected_station_version": completed["station"]["station_version"],
+            },
+            idempotency_key="return",
+            operator_id="tester",
+        )
+        assert returned["station"]["active_session"]["stage"] == "MANUAL_HANDLING"
+        assert len(returned["station"]["errors"]) == 3
+    finally:
+        store.close()

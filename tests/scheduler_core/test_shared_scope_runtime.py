@@ -293,7 +293,7 @@ def test_shared_scope_failure_keeps_every_lock_until_operator_unlocks(
     assert runtime.dispatcher.dispatched[-1]["job_id"] == waiter_job_uuid
 
 
-def test_execution_process_restart_also_latches_continuous_scope(
+def test_connection_loss_also_latches_continuous_scope(
     core_runtime: CoreRuntime,
 ) -> None:
     """执行断连保留实际未知执行，仍须人工明确释放逻辑占用。"""
@@ -303,7 +303,7 @@ def test_execution_process_restart_also_latches_continuous_scope(
     task_uuid = str(owner["task"]["uuid"])
     waiter_job_uuid = stable_uuid("job:scope-waiter:0")
 
-    runtime.scheduler.on_execution_process_restarted((jobs[0],))
+    runtime.scheduler.on_execution_connection_lost((jobs[0],))
     runtime.submit(task_name="scope-waiter", devices=["warehouse-a"], priority="high")
 
     assert runtime.workflow_store.get_task(task_uuid)["status"] == "running"

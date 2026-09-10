@@ -72,6 +72,8 @@ _ERROR_DECISION_TTL_SECONDS = 3600.0
 class JobExecutionBackend:
     """job_start 生命周期微后端。"""
 
+    execution_process_is_local = True
+
     def __init__(
         self,
         device_manager: DeviceActionManager | None = None,
@@ -810,6 +812,11 @@ def create_edge_stack(
     )
     if callable(add_restarted_listener):
         add_restarted_listener(scheduler.on_execution_process_restarted)
+    add_disconnected_listener = getattr(
+        backend, "add_execution_connection_lost_listener", None
+    )
+    if callable(add_disconnected_listener):
+        add_disconnected_listener(scheduler.on_execution_connection_lost)
     start = getattr(backend, "start", None)
     if callable(start):
         start()

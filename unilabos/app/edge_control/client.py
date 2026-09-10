@@ -275,7 +275,18 @@ class EdgeControlClient(BaseCommunicationClient):
         self._active_jobs_lock = threading.RLock()
         self._terminal_jobs: set[str] = set()
         self._tasks: set[asyncio.Task[Any]] = set()
-        self._restart_pending_jobs = {job.job_uuid for job in self.store.list_jobs({"dispatching"})}
+        self._restart_pending_jobs = {
+            job.job_uuid
+            for job in self.store.list_jobs(
+                {
+                    "received",
+                    "fetch_retry",
+                    "dispatching",
+                    "outcome_pending",
+                    "outcome_committed_unknown",
+                }
+            )
+        }
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -615,8 +626,8 @@ class EdgeControlClient(BaseCommunicationClient):
             self._connected.set()
             logger.info(f"[EdgeControl] 已连接生产控制面: {url}")
             sender = asyncio.create_task(self._event_sender(websocket))
-            await self._resume_pending_outcomes()
             await self._resume_received_jobs()
+            await self._resume_pending_outcomes()
             try:
                 async for encoded in websocket:
                     envelope = json.loads(encoded)
@@ -759,6 +770,12 @@ class EdgeControlClient(BaseCommunicationClient):
         退役接口幂等；HostNode 适配器缺失时抛出 ``RuntimeError``，
         驱动异常向连接循环传播，事件仍保留并可安全重试。
         """
+
+        job_uuid = str(event.payload.get("job_uuid") or "")
+        job = self.store.get_job(job_uuid) if job_uuid else None
+        if job is not None and job.status == "outcome_retired":
+            # Runtime 崩溃只是软件任务终结，不能伪造设备账本的物理结算确认。
+            return
 
         # 设备命令身份是设备执行账本的稳定物理效果键；一个最终对账 ACK
         # 可能同时结算精确子命令和工作流节点作业根命令。
@@ -1051,19 +1068,17 @@ class EdgeControlClient(BaseCommunicationClient):
         await self._commit_device_status(local_device_id, {})
 
     async def _resume_received_jobs(self) -> None:
-        # 只处理本次进程启动时留下的队列；同进程重连不能复制仍存活的 ROS goal。
+        # 工站控制的旧进程任务由 EdgeScheduler 统一失败；本地镜像只退役，
+        # 不请求开始许可、不恢复未开始动作、不生成 UNKNOWN 对账回执。
         for job_uuid in tuple(self._restart_pending_jobs):
             job = self.store.get_job(job_uuid)
-            if job is None or job.status != "dispatching":
+            if job is None:
                 self._restart_pending_jobs.discard(job_uuid)
                 continue
             payload = await asyncio.to_thread(self.data_plane.fetch_job, job)
             if payload.get("station_controlled"):
-                if payload.get("execution_start_state") == "NOT_STARTED":
-                    self.store.defer_not_started_job(job_uuid)
-                else:
-                    self._persist_start_unknown(job, "执行进程重启，已开始命令只等待结果对账")
-                self._restart_pending_jobs.discard(job_uuid)
+                self.store.abort_restarted_job(job_uuid)
+            self._restart_pending_jobs.discard(job_uuid)
         for job in self.store.list_jobs({"received", "fetch_retry"}):
             self._spawn(self._execute_job(job.job_uuid))
 

@@ -1,0 +1,2835 @@
+{
+  "snapshot_sequence": 545,
+  "templates": [
+    {
+      "template_id": "00d75130-5a87-4aa3-96a1-6e4688939264",
+      "name": "szlab_poly_s3_unused_beaker_warehouse",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_poly_beaker_warehouse/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_poly_beaker_warehouse\",\"shape\":{\"entry\":\"szlab_poly_s3_unused_beaker_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "08c13b9d-23ea-4fb3-bd49-b14e1f0d8742",
+      "name": "SZLab 移液枪头",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "09ca6c09-c29f-4998-8414-2cd7c23ac5c9",
+      "name": "szlab_s09_process_warehouse",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "18a592c0-c01c-4270-9b4b-385f76396580",
+      "name": "szlab_poly_s2_tip_placeholder_warehouse",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_poly_s2_tip_placeholder_warehouse/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_poly_s2_tip_placeholder_warehouse\"}",
+      "version": 20
+    },
+    {
+      "template_id": "1b3262af-60da-44a7-9f29-bb39eb57a893",
+      "name": "szlab_poly_powder_container_placeholder_warehouse",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_poly_powder_container_placeholder_warehouse/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_poly_powder_container_placeholder_warehouse\",\"shape\":{\"entry\":\"szlab_poly_powder_container_placeholder_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "2df0a502-dd88-48de-bdcd-70a2007d40ae",
+      "name": "szlab_s04_process_warehouse",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "37391ac2-f631-4b00-b573-f47093599b60",
+      "name": "szlab_poly_s1_loading_buffer_warehouse",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_poly_s1_loading_buffer_warehouse/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_poly_s1_loading_buffer_warehouse\",\"shape\":{\"entry\":\"szlab_poly_s1_loading_buffer_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "3a7bdc42-ef26-4499-a08e-75a59a8456b0",
+      "name": "szlab_poly_s11_used_beaker_warehouse",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_poly_beaker_warehouse/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_poly_beaker_warehouse\",\"shape\":{\"entry\":\"szlab_poly_s11_used_beaker_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "5a63ae28-76ca-4a70-9306-2418d14185f1",
+      "name": "szlab_poly_studio_deck",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "64ca97bc-a31b-4954-9680-ed6a4636e46f",
+      "name": "szlab_poly_s3_unused_sample_vial_warehouse",
+      "category": "resource",
+      "spec_json": "{\"shape\":{\"entry\":\"szlab_poly_s3_unused_sample_vial_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "name": "SZLab TIP 盒组件",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_tip_box/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_tip_box\",\"shape\":{\"entry\":\"szlab_tip_box/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "6f47d3ac-6cb9-49b3-b95b-0e52469923e3",
+      "name": "szlab_poly_s10_liquid_reagent_placeholder_warehouse",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_poly_s10_liquid_reagent_placeholder_warehouse/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_poly_s10_liquid_reagent_placeholder_warehouse\",\"shape\":{\"entry\":\"szlab_poly_s10_liquid_reagent_placeholder_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "70130a5b-6aa0-4baf-9fad-9b138e8acd17",
+      "name": "szlab_s06_process_warehouse",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "70a5fada-b38f-42ee-babb-8d9b7e200ec2",
+      "name": "szlab_s07_process_warehouse",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "7a2fa837-74d2-4965-b66e-be33c271ae51",
+      "name": "szlab_s08_process_warehouse",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    },
+    {
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "name": "SZLab 500 mL 烧杯",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_beaker_500ml/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_beaker_500ml\",\"shape\":{\"entry\":\"szlab_beaker_500ml/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "8cf6ab29-1337-408c-abe1-9970b41370fe",
+      "name": "SZLab 500 mL 样品瓶",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_sample_vial_500ml/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_sample_vial_500ml\",\"shape\":{\"entry\":\"szlab_sample_vial_500ml/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "name": "SZLab 100 mL 液体试剂瓶",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_liquid_reagent_bottle_100ml/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_liquid_reagent_bottle_100ml\",\"shape\":{\"entry\":\"szlab_liquid_reagent_bottle_100ml/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "name": "SZLab 注粉瓶",
+      "category": "resource",
+      "spec_json": "{\"entry\":\"szlab_powder_container/models/resource.xacro\",\"format\":\"xacro\",\"macro\":\"szlab_powder_container\",\"shape\":{\"entry\":\"szlab_powder_container/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "cabd0c1e-3f3f-4366-b6c9-f5f21fcacef4",
+      "name": "szlab_poly_s11_used_sample_vial_warehouse",
+      "category": "resource",
+      "spec_json": "{\"shape\":{\"entry\":\"szlab_poly_s11_used_sample_vial_warehouse/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "name": "SZLab 250 mL 样品瓶",
+      "category": "resource",
+      "spec_json": "{\"shape\":{\"entry\":\"szlab_sample_vial_500ml/models/shape.yml\",\"format\":\"unilab.shape/v1\"}}",
+      "version": 20
+    },
+    {
+      "template_id": "e94dbce4-7e86-47d7-86aa-1963c55868df",
+      "name": "szlab_s05_process_warehouse",
+      "category": "resource",
+      "spec_json": "{}",
+      "version": 20
+    }
+  ],
+  "lots": [],
+  "instances": [
+    {
+      "edge_uuid": "00f2d8ea-5947-5f81-92c3-c09f0efba88a",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2B5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "03d26253-0c9a-5ecc-a6a7-5bdcaac3c378",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse__T22",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16"
+    },
+    {
+      "edge_uuid": "03da190d-c062-5c69-b38f-1e31700e9083",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2B1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "04c326bf-8365-598e-ac71-a067bd24b22f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R3C5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "0c11ce6f-1d43-520d-a00f-f465385c3e2d",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer__L1C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17"
+    },
+    {
+      "edge_uuid": "0cefe4a3-071d-5e52-9484-e43cbd2e2eb5",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3B6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "0f29c305-6c43-59ce-ac5b-f72e48018e7b",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2B1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "110dee4c-e59e-5e02-bbfe-f8e7b78eab2c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3A4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "1b3262af-60da-44a7-9f29-bb39eb57a893",
+      "barcode": "UNILAB-GRAPH-powder_container_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0"
+    },
+    {
+      "edge_uuid": "15efd25a-c9ef-51ab-98cd-a66433096289",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3B3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "16317a42-6282-56a5-a328-c63776cedbe4",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1A2",
+      "status": "warehouse",
+      "version": 35,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "1662eb86-a132-5cc8-92ce-23cbe7fa302a",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "UNILAB-GRAPH-powder_container_warehouse__L2C2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75"
+    },
+    {
+      "edge_uuid": "17efdc2f-e515-57d9-bd46-7d1ab8c82dde",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2B6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "182ce35b-a10e-5d92-bbb0-ff1a63f9f650",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R2C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "18453d39-906b-59ec-a68b-1bdea02dc353",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2A1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "1fccaa97-556f-5734-9d00-5761021ff78f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1B3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "2139d04b-4009-58e5-b9f7-58104c581d74",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3A5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "22e83372-018e-560b-991c-2a2cb8106dfe",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse__T12",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16"
+    },
+    {
+      "edge_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "cb539c65-6aae-5044-a3ab-be769250f16a",
+      "barcode": "SZLAB-DEVICE-SOLID-FEEDER-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "26ea7f24-37d8-5eaa-9924-b4e1a24835e0",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse__T31",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16"
+    },
+    {
+      "edge_uuid": "27e1385e-a3cb-57ac-a1e2-9a2a518941e5",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3A2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "28b09a79-7337-5e33-8123-66384418f455",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1B2",
+      "status": "warehouse",
+      "version": 69,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "29efe24e-b2d1-501a-92aa-75b6c737d374",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2A2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "2b49afb8-9810-5c02-ac7c-4e37d450a0d5",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2B4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "2e5862b6-2973-58dc-872d-32ffab02bba6",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer__L2C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17"
+    },
+    {
+      "edge_uuid": "2edc6fff-3c79-52e8-92e1-259013408544",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R1C2",
+      "status": "warehouse",
+      "version": 45,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "2f4de237-ef86-57d1-9176-22660c52913f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "UNILAB-GRAPH-powder_container_warehouse__L1C2",
+      "status": "warehouse",
+      "version": 7,
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+    },
+    {
+      "edge_uuid": "306e5b5e-1c04-55d9-a1b4-a8810cf261f8",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1B3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "31f7dd93-9176-5bde-80f7-8e13ca9e7ac9",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1A4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "3309cd82-3c11-576b-b61f-fbd495d28ff3",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3B2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "336d9034-4b0a-5178-a8c1-7f54eae79cd9",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1B4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "3622729a-9aa5-5427-97a7-cb00ee18c160",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3B5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "3765cd4a-e945-58b1-9950-32de0205dffd",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "UNILAB-GRAPH-powder_container_warehouse__L1C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75"
+    },
+    {
+      "edge_uuid": "3c9677f5-ea8a-5daa-a2d2-912b177f4a5c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse__T11",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16"
+    },
+    {
+      "edge_uuid": "3dda2b1f-17f6-5781-9a6d-de9c08c6e4ff",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2B3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "3e7e26d3-018a-57a4-9a43-4fb44605a3fd",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1A5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "3ef59520-17fd-5761-a2be-8f602bcd4e8b",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2B5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "416ece32-fb9e-5852-93f6-db959c68391f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R3C1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "421221ba-6da2-5366-9d95-3da9e6063a15",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2A3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "424df858-57e3-529c-b754-4f64466a2bec",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "70a5fada-b38f-42ee-babb-8d9b7e200ec2",
+      "barcode": "UNILAB-GRAPH-s07_process_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "257a6f9d-6213-5655-b03c-56514d0c6738"
+    },
+    {
+      "edge_uuid": "42634e95-ef1e-5807-8654-78914b637122",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R4C1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "48e466a0-b700-543a-aac6-a84e1b2c65ba",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3A3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "4986cf9f-8b18-587c-8e4a-047e1acbfd11",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R4C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "00d75130-5a87-4aa3-96a1-6e4688939264",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0"
+    },
+    {
+      "edge_uuid": "4a30f5b3-3b83-5978-a836-405def6f54ea",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R1C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "4a7db978-9c89-57fe-a27a-6dbba260834f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "2df0a502-dd88-48de-bdcd-70a2007d40ae",
+      "barcode": "UNILAB-GRAPH-s04_process_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831"
+    },
+    {
+      "edge_uuid": "4da395d8-6553-545a-b3b1-8c348b60898c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "09ca6c09-c29f-4998-8414-2cd7c23ac5c9",
+      "barcode": "UNILAB-GRAPH-s09_process_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1"
+    },
+    {
+      "edge_uuid": "4ef8a7a6-c133-518d-8a3b-71b6e572a6a5",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2A2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "53ca89ee-cedf-5f99-83b6-c8e527c2b28c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2A4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "573baff7-e287-5caf-81d9-3186033e8c6c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "06259194-f142-5e2b-84dc-133f38f47eb3",
+      "barcode": "UNILAB-GRAPH-host_node",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "5779e9e5-73d7-5c8d-ab4c-ae72b04fddd4",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3A2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "5b85a543-03d2-5031-a042-b1bcdfb25c4e",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-debug_beaker_500ml",
+      "status": "warehouse",
+      "version": 31,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "5bb05113-cbbd-5b6f-aa14-6b2b00e63fec",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "UNILAB-GRAPH-debug_powder_container",
+      "status": "warehouse",
+      "version": 7,
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+    },
+    {
+      "edge_uuid": "5bbba06e-ffd6-5390-b87e-b4f64aff0876",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3B2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "5fb7351e-900d-5514-af01-2cfb1fabba21",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1A6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "614ff338-7e77-595f-981b-dd7627025178",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "UNILAB-GRAPH-powder_container_warehouse__L2C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75"
+    },
+    {
+      "edge_uuid": "6395ff95-4355-5e17-8f8c-3e8a8cd05fbd",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1A1",
+      "status": "warehouse",
+      "version": 16,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6f47d3ac-6cb9-49b3-b95b-0e52469923e3",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0"
+    },
+    {
+      "edge_uuid": "6414c02a-67ab-5b02-a73c-827faa34eb5b",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-debug_reagent_bottle_100ml",
+      "status": "warehouse",
+      "version": 19,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "660d199a-f07d-5da4-a907-ee7a90ef6340",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R2C5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "68a715db-4941-5dc3-86a8-d9709d5041c6",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2B4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "6f6138e8-9576-5775-883d-0790cc26a3ce",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3A5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "5a63ae28-76ca-4a70-9306-2418d14185f1",
+      "barcode": "UNILAB-GRAPH-szlab_poly_deck",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "573af007-7613-5c08-a512-24d49a08ec4d",
+      "barcode": "SZLAB-DEVICE-CAP-STATION-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "7b02ae17-b71c-5648-8c57-5add06a2fbbe",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2B6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "7dd4bd63-3506-5587-ac9f-1c2f8feece79",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3B5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "7dfdb129-9a80-5ac1-a754-0561b53427ab",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2A4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "811bbc6e-3942-5680-9aca-def10c62f650",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3A1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "4c0114b2-36b2-5f3b-a72e-eadfc7d6ad15",
+      "barcode": "SZLAB-DEVICE-VISION-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "18a592c0-c01c-4270-9b4b-385f76396580",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0"
+    },
+    {
+      "edge_uuid": "85922835-9beb-558c-b046-2bb69c082805",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse__T21",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16"
+    },
+    {
+      "edge_uuid": "898a86f2-6263-56d7-9f0f-488a40beead3",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1A3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "8cf9272d-c435-5841-aca1-8223929dca0f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2A6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "8ff147f2-cf2f-5738-baa9-17bef483764f",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "266ac3f6-837a-54e8-9677-828c8901f769",
+      "barcode": "UNILAB-GRAPH-szlab_control_flow_probe",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "94e096c7-acc7-5614-866e-94bf40f5fc33",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3B1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "37391ac2-f631-4b00-b573-f47093599b60",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0"
+    },
+    {
+      "edge_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "3a7bdc42-ef26-4499-a08e-75a59a8456b0",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "773aad1f-cc4a-52fd-974d-2579d83115d0"
+    },
+    {
+      "edge_uuid": "98e30231-5920-50cb-8c87-1b1b572290db",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer__L2C1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17"
+    },
+    {
+      "edge_uuid": "9c63a3d7-3498-58a4-8a2b-66f13207aa11",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3A3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "9cf321ac-6246-5de5-9302-1c3f151948b5",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R4C5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "9e496968-4972-5814-a047-b2d264fc1e09",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "SZLAB-MATERIAL-S07-P04-B-FINE",
+      "status": "warehouse",
+      "version": 17,
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+    },
+    {
+      "edge_uuid": "9e4e14ce-2ad9-58ae-84ca-0e002c022e01",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3B3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "a054c520-d638-5277-ac48-13b7737023e9",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2A6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "a1c96bb9-a304-5409-807b-881bdeed64dd",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "f933a898-3ff7-579a-abab-aab16db2c1d4",
+      "barcode": "SZLAB-DEVICE-PLC-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "a1f5c5df-f4db-56fe-9c34-15bd49533a73",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "SZLAB-MATERIAL-S07-P03-B-COARSE",
+      "status": "warehouse",
+      "version": 17,
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec"
+    },
+    {
+      "edge_uuid": "a20eb987-209d-5ea2-af91-b45808cbdea6",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R3C3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "a310289d-7ebd-50d0-9ebc-9e9d56f59409",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R2C2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "a47f91ef-0f7f-5ede-8baa-01c1259b355a",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "afee6011-46d3-476e-85ab-4b2219db686a",
+      "barcode": "UNILAB-GRAPH-powder_container_warehouse__L2C1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75"
+    },
+    {
+      "edge_uuid": "a4bdc410-6408-5a0a-afad-e201ce77aacc",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer__L2C2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17"
+    },
+    {
+      "edge_uuid": "a81766c9-9221-54e0-928b-990577f58470",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "bfa26e47-7519-50f5-a3c0-61e8ad87f8c9",
+      "barcode": "SZLAB-DEVICE-ROBOT-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "a943c112-1f40-5967-8683-424290fd492d",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2A5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "b0c2598f-3507-5357-b545-0e3a515d3579",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3A1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "b14fa65f-72d5-5698-8268-0a47d06e92e1",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d276b7e1-25a2-5c75-8f28-b04c9b8e9972",
+      "barcode": "SZLAB-DEVICE-PIPETTING-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "b20e18a5-e5d0-580d-a8ea-be6a94923d5c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "7a2fa837-74d2-4965-b66e-be33c271ae51",
+      "barcode": "UNILAB-GRAPH-s08_process_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "7998668b-0584-5e01-bfc0-ddd669b4d1a2"
+    },
+    {
+      "edge_uuid": "b495721d-b555-5aee-a2cf-92a2e69c2930",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1B6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "b90726b8-da33-5445-ab26-51b826818f58",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3B1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "b991c9c9-4b00-536e-b651-75740889f50a",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3A4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "bb541f7b-abe6-5168-9923-8f44345961d5",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3B4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "bbf34691-5e80-5072-bd1f-8fcc216942f4",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R1C5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "bc5a3013-4f34-5b46-9ef2-052bc8c2d103",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3B6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "9b12d281-b8f4-5704-85bf-04d1698f3b43",
+      "barcode": "SZLAB-DEVICE-PUMP-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "c3ab84bb-a545-553d-8ef3-3978764c744e",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2B3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "c4fe6dbd-4f55-5dda-9a4b-7b3446cfad42",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1B5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "c7b9c851-6c50-5f34-ad5a-cc250ddb7f58",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R4C2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "c988789f-4337-5b4c-b7ca-369c2ea1b2dc",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R2C4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "cd41015e-8b43-55ef-9140-2fdc87a1a04e",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2A3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "cea7c50c-28b0-5ac2-9283-e59399ddc25d",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "70130a5b-6aa0-4baf-9fad-9b138e8acd17",
+      "barcode": "UNILAB-GRAPH-s06_process_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "c300b67b-5f5f-5140-9540-6a6d57dd7e96"
+    },
+    {
+      "edge_uuid": "cf345a01-0d8a-516a-a71a-79661b48db55",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer__L1C2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17"
+    },
+    {
+      "edge_uuid": "d0353a5b-3664-5912-a0fe-b449b3b0bb9c",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R2C1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "d4c1be3e-c4d5-5142-904b-0e624e184df1",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3A6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R1C4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "d8634b7e-0e16-5195-8c3d-f61f18f57ed3",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L2B2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "d9e5d145-8200-58bf-a35b-c426febd5e27",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s1_loading_buffer__L1C1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17"
+    },
+    {
+      "edge_uuid": "de743dcb-b6ac-548c-8bd6-5bdaed3db413",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1A3",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "de9f4432-d7ff-5cd4-8d01-109163ae57cd",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2B2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "df1bded7-24af-5ba5-8674-48ab7469a6eb",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1B5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "df3b19cb-6cbb-53b2-bd4b-569ec99c28b0",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L3B4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "e330ae15-a684-5bc0-ae5c-08986650d5d2",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "6b8e45af-3402-4a48-a01d-88360f19aed0",
+      "barcode": "UNILAB-GRAPH-s2_tip_warehouse__T32",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16"
+    },
+    {
+      "edge_uuid": "eb9c8320-d276-5fdf-ac3f-3ec07446f831",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "e00e638f-f728-54be-ab3e-45cbe657adbf",
+      "barcode": "SZLAB-DEVICE-STIRRER-01",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": ""
+    },
+    {
+      "edge_uuid": "ebaa6e93-a947-5719-a471-25176272848a",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1A6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "ecefa3fb-76c3-5f39-92a9-daddbb685a76",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "e94dbce4-7e86-47d7-86aa-1963c55868df",
+      "barcode": "UNILAB-GRAPH-s05_process_warehouse",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "81ab0647-6d79-596f-bb9d-232ae5e8a9e8"
+    },
+    {
+      "edge_uuid": "f11ad981-1ae0-53f7-807c-a5d2839c99cb",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2A5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "f27b2345-3050-56af-b697-d2399fdb07f3",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R3C4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "f2a98fa6-3fea-59fc-923d-c0cd43c8e6c3",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R4C4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    },
+    {
+      "edge_uuid": "f476846d-795c-50cb-9ef5-0d280a43f401",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1B6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "f4937de9-ddc5-5858-b959-3e612aecad2a",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "81534af4-2dc9-4156-b00b-93fb861fcbc2",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L1B4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "f54ef28b-1aef-58a1-ab7a-7ceba90e1e03",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L2A1",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "f5bfdc7a-e48c-55be-8181-d638d1c26ece",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1A5",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "fb7ce513-f997-5f2e-af2f-2d22daa2d009",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s3_unused_beaker__L3A6",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4"
+    },
+    {
+      "edge_uuid": "fc2188d7-3167-50f7-af91-458dbd9aaacf",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "d5a32d9c-be33-447c-83f4-a27cc9d73401",
+      "barcode": "UNILAB-GRAPH-s11_used_beaker__L1A4",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb"
+    },
+    {
+      "edge_uuid": "fe3b90fd-4844-5158-bcfa-40d6954c6563",
+      "legacy_cloud_id": "",
+      "lot_id": "",
+      "template_id": "939e3647-6c33-47a7-bcbf-a295984284e1",
+      "barcode": "UNILAB-GRAPH-s10_liquid_reagent__R3C2",
+      "status": "warehouse",
+      "version": 1,
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90"
+    }
+  ],
+  "relations": [
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2B5",
+      "child_uuid": "00f2d8ea-5947-5f81-92c3-c09f0efba88a",
+      "version": 1
+    },
+    {
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "slot_id": "T22",
+      "child_uuid": "03d26253-0c9a-5ecc-a6a7-5bdcaac3c378",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2B1",
+      "child_uuid": "03da190d-c062-5c69-b38f-1e31700e9083",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R3C5",
+      "child_uuid": "04c326bf-8365-598e-ac71-a067bd24b22f",
+      "version": 1
+    },
+    {
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "slot_id": "L1C3",
+      "child_uuid": "0c11ce6f-1d43-520d-a00f-f465385c3e2d",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3B6",
+      "child_uuid": "0cefe4a3-071d-5e52-9484-e43cbd2e2eb5",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2B1",
+      "child_uuid": "0f29c305-6c43-59ce-ac5b-f72e48018e7b",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3A4",
+      "child_uuid": "110dee4c-e59e-5e02-bbfe-f8e7b78eab2c",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3B3",
+      "child_uuid": "15efd25a-c9ef-51ab-98cd-a66433096289",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1A2",
+      "child_uuid": "16317a42-6282-56a5-a328-c63776cedbe4",
+      "version": 35
+    },
+    {
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75",
+      "slot_id": "L2C2",
+      "child_uuid": "1662eb86-a132-5cc8-92ce-23cbe7fa302a",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2B6",
+      "child_uuid": "17efdc2f-e515-57d9-bd46-7d1ab8c82dde",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R2C3",
+      "child_uuid": "182ce35b-a10e-5d92-bbb0-ff1a63f9f650",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2A1",
+      "child_uuid": "18453d39-906b-59ec-a68b-1bdea02dc353",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1B3",
+      "child_uuid": "1fccaa97-556f-5734-9d00-5761021ff78f",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3A5",
+      "child_uuid": "2139d04b-4009-58e5-b9f7-58104c581d74",
+      "version": 1
+    },
+    {
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "slot_id": "T12",
+      "child_uuid": "22e83372-018e-560b-991c-2a2cb8106dfe",
+      "version": 1
+    },
+    {
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "slot_id": "T31",
+      "child_uuid": "26ea7f24-37d8-5eaa-9924-b4e1a24835e0",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3A2",
+      "child_uuid": "27e1385e-a3cb-57ac-a1e2-9a2a518941e5",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1B2",
+      "child_uuid": "28b09a79-7337-5e33-8123-66384418f455",
+      "version": 69
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2A2",
+      "child_uuid": "29efe24e-b2d1-501a-92aa-75b6c737d374",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2B4",
+      "child_uuid": "2b49afb8-9810-5c02-ac7c-4e37d450a0d5",
+      "version": 1
+    },
+    {
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "slot_id": "L2C3",
+      "child_uuid": "2e5862b6-2973-58dc-872d-32ffab02bba6",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R1C2",
+      "child_uuid": "2edc6fff-3c79-52e8-92e1-259013408544",
+      "version": 45
+    },
+    {
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec",
+      "slot_id": "P02",
+      "child_uuid": "2f4de237-ef86-57d1-9176-22660c52913f",
+      "version": 7
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1B3",
+      "child_uuid": "306e5b5e-1c04-55d9-a1b4-a8810cf261f8",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1A4",
+      "child_uuid": "31f7dd93-9176-5bde-80f7-8e13ca9e7ac9",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3B2",
+      "child_uuid": "3309cd82-3c11-576b-b61f-fbd495d28ff3",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1B4",
+      "child_uuid": "336d9034-4b0a-5178-a8c1-7f54eae79cd9",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3B5",
+      "child_uuid": "3622729a-9aa5-5427-97a7-cb00ee18c160",
+      "version": 1
+    },
+    {
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75",
+      "slot_id": "L1C3",
+      "child_uuid": "3765cd4a-e945-58b1-9950-32de0205dffd",
+      "version": 1
+    },
+    {
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "slot_id": "T11",
+      "child_uuid": "3c9677f5-ea8a-5daa-a2d2-912b177f4a5c",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2B3",
+      "child_uuid": "3dda2b1f-17f6-5781-9a6d-de9c08c6e4ff",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1A5",
+      "child_uuid": "3e7e26d3-018a-57a4-9a43-4fb44605a3fd",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2B5",
+      "child_uuid": "3ef59520-17fd-5761-a2be-8f602bcd4e8b",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R3C1",
+      "child_uuid": "416ece32-fb9e-5852-93f6-db959c68391f",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2A3",
+      "child_uuid": "421221ba-6da2-5366-9d95-3da9e6063a15",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R4C1",
+      "child_uuid": "42634e95-ef1e-5807-8654-78914b637122",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3A3",
+      "child_uuid": "48e466a0-b700-543a-aac6-a84e1b2c65ba",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R4C3",
+      "child_uuid": "4986cf9f-8b18-587c-8e4a-047e1acbfd11",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R1C3",
+      "child_uuid": "4a30f5b3-3b83-5978-a836-405def6f54ea",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2A2",
+      "child_uuid": "4ef8a7a6-c133-518d-8a3b-71b6e572a6a5",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2A4",
+      "child_uuid": "53ca89ee-cedf-5f99-83b6-c8e527c2b28c",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3A2",
+      "child_uuid": "5779e9e5-73d7-5c8d-ab4c-ae72b04fddd4",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1B1",
+      "child_uuid": "5b85a543-03d2-5031-a042-b1bcdfb25c4e",
+      "version": 31
+    },
+    {
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec",
+      "slot_id": "P01",
+      "child_uuid": "5bb05113-cbbd-5b6f-aa14-6b2b00e63fec",
+      "version": 7
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3B2",
+      "child_uuid": "5bbba06e-ffd6-5390-b87e-b4f64aff0876",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1A6",
+      "child_uuid": "5fb7351e-900d-5514-af01-2cfb1fabba21",
+      "version": 1
+    },
+    {
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75",
+      "slot_id": "L2C3",
+      "child_uuid": "614ff338-7e77-595f-981b-dd7627025178",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1A1",
+      "child_uuid": "6395ff95-4355-5e17-8f8c-3e8a8cd05fbd",
+      "version": 16
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R1C1",
+      "child_uuid": "6414c02a-67ab-5b02-a73c-827faa34eb5b",
+      "version": 19
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R2C5",
+      "child_uuid": "660d199a-f07d-5da4-a907-ee7a90ef6340",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2B4",
+      "child_uuid": "68a715db-4941-5dc3-86a8-d9709d5041c6",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3A5",
+      "child_uuid": "6f6138e8-9576-5775-883d-0790cc26a3ce",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2B6",
+      "child_uuid": "7b02ae17-b71c-5648-8c57-5add06a2fbbe",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3B5",
+      "child_uuid": "7dd4bd63-3506-5587-ac9f-1c2f8feece79",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2A4",
+      "child_uuid": "7dfdb129-9a80-5ac1-a754-0561b53427ab",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3A1",
+      "child_uuid": "811bbc6e-3942-5680-9aca-def10c62f650",
+      "version": 1
+    },
+    {
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "slot_id": "T21",
+      "child_uuid": "85922835-9beb-558c-b046-2bb69c082805",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1A3",
+      "child_uuid": "898a86f2-6263-56d7-9f0f-488a40beead3",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2A6",
+      "child_uuid": "8cf9272d-c435-5841-aca1-8223929dca0f",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3B1",
+      "child_uuid": "94e096c7-acc7-5614-866e-94bf40f5fc33",
+      "version": 1
+    },
+    {
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "slot_id": "L2C1",
+      "child_uuid": "98e30231-5920-50cb-8c87-1b1b572290db",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3A3",
+      "child_uuid": "9c63a3d7-3498-58a4-8a2b-66f13207aa11",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R4C5",
+      "child_uuid": "9cf321ac-6246-5de5-9302-1c3f151948b5",
+      "version": 1
+    },
+    {
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec",
+      "slot_id": "P04",
+      "child_uuid": "9e496968-4972-5814-a047-b2d264fc1e09",
+      "version": 17
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3B3",
+      "child_uuid": "9e4e14ce-2ad9-58ae-84ca-0e002c022e01",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2A6",
+      "child_uuid": "a054c520-d638-5277-ac48-13b7737023e9",
+      "version": 1
+    },
+    {
+      "parent_uuid": "424df858-57e3-529c-b754-4f64466a2bec",
+      "slot_id": "P03",
+      "child_uuid": "a1f5c5df-f4db-56fe-9c34-15bd49533a73",
+      "version": 17
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R3C3",
+      "child_uuid": "a20eb987-209d-5ea2-af91-b45808cbdea6",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R2C2",
+      "child_uuid": "a310289d-7ebd-50d0-9ebc-9e9d56f59409",
+      "version": 1
+    },
+    {
+      "parent_uuid": "130aa6bf-ef22-505a-ac99-37067cc15d75",
+      "slot_id": "L2C1",
+      "child_uuid": "a47f91ef-0f7f-5ede-8baa-01c1259b355a",
+      "version": 1
+    },
+    {
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "slot_id": "L2C2",
+      "child_uuid": "a4bdc410-6408-5a0a-afad-e201ce77aacc",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2A5",
+      "child_uuid": "a943c112-1f40-5967-8683-424290fd492d",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3A1",
+      "child_uuid": "b0c2598f-3507-5357-b545-0e3a515d3579",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1B6",
+      "child_uuid": "b495721d-b555-5aee-a2cf-92a2e69c2930",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3B1",
+      "child_uuid": "b90726b8-da33-5445-ab26-51b826818f58",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3A4",
+      "child_uuid": "b991c9c9-4b00-536e-b651-75740889f50a",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3B4",
+      "child_uuid": "bb541f7b-abe6-5168-9923-8f44345961d5",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R1C5",
+      "child_uuid": "bbf34691-5e80-5072-bd1f-8fcc216942f4",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3B6",
+      "child_uuid": "bc5a3013-4f34-5b46-9ef2-052bc8c2d103",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2B3",
+      "child_uuid": "c3ab84bb-a545-553d-8ef3-3978764c744e",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1B5",
+      "child_uuid": "c4fe6dbd-4f55-5dda-9a4b-7b3446cfad42",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R4C2",
+      "child_uuid": "c7b9c851-6c50-5f34-ad5a-cc250ddb7f58",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R2C4",
+      "child_uuid": "c988789f-4337-5b4c-b7ca-369c2ea1b2dc",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2A3",
+      "child_uuid": "cd41015e-8b43-55ef-9140-2fdc87a1a04e",
+      "version": 1
+    },
+    {
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "slot_id": "L1C2",
+      "child_uuid": "cf345a01-0d8a-516a-a71a-79661b48db55",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R2C1",
+      "child_uuid": "d0353a5b-3664-5912-a0fe-b449b3b0bb9c",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3A6",
+      "child_uuid": "d4c1be3e-c4d5-5142-904b-0e624e184df1",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R1C4",
+      "child_uuid": "d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L2B2",
+      "child_uuid": "d8634b7e-0e16-5195-8c3d-f61f18f57ed3",
+      "version": 1
+    },
+    {
+      "parent_uuid": "959f2f4b-d367-5c51-9fa8-c6237b8b5c17",
+      "slot_id": "L1C1",
+      "child_uuid": "d9e5d145-8200-58bf-a35b-c426febd5e27",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1A3",
+      "child_uuid": "de743dcb-b6ac-548c-8bd6-5bdaed3db413",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2B2",
+      "child_uuid": "de9f4432-d7ff-5cd4-8d01-109163ae57cd",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1B5",
+      "child_uuid": "df1bded7-24af-5ba5-8674-48ab7469a6eb",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L3B4",
+      "child_uuid": "df3b19cb-6cbb-53b2-bd4b-569ec99c28b0",
+      "version": 1
+    },
+    {
+      "parent_uuid": "848ba891-5f72-58d4-abff-bcc01ed54d16",
+      "slot_id": "T32",
+      "child_uuid": "e330ae15-a684-5bc0-ae5c-08986650d5d2",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1A6",
+      "child_uuid": "ebaa6e93-a947-5719-a471-25176272848a",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2A5",
+      "child_uuid": "f11ad981-1ae0-53f7-807c-a5d2839c99cb",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R3C4",
+      "child_uuid": "f27b2345-3050-56af-b697-d2399fdb07f3",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R4C4",
+      "child_uuid": "f2a98fa6-3fea-59fc-923d-c0cd43c8e6c3",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1B6",
+      "child_uuid": "f476846d-795c-50cb-9ef5-0d280a43f401",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L1B4",
+      "child_uuid": "f4937de9-ddc5-5858-b959-3e612aecad2a",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L2A1",
+      "child_uuid": "f54ef28b-1aef-58a1-ab7a-7ceba90e1e03",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1A5",
+      "child_uuid": "f5bfdc7a-e48c-55be-8181-d638d1c26ece",
+      "version": 1
+    },
+    {
+      "parent_uuid": "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+      "slot_id": "L3A6",
+      "child_uuid": "fb7ce513-f997-5f2e-af2f-2d22daa2d009",
+      "version": 1
+    },
+    {
+      "parent_uuid": "96f546df-8fad-5f29-9dc9-ce42366539cb",
+      "slot_id": "L1A4",
+      "child_uuid": "fc2188d7-3167-50f7-af91-458dbd9aaacf",
+      "version": 1
+    },
+    {
+      "parent_uuid": "63bda02f-6191-5d89-acbb-2e560ff95e90",
+      "slot_id": "R3C2",
+      "child_uuid": "fe3b90fd-4844-5158-bcfa-40d6954c6563",
+      "version": 1
+    }
+  ],
+  "contents": [],
+  "reservations": [
+    {
+      "reservation_id": "0c3bc4cb-5386-53cc-b2a1-9d940c507790",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "16b8ccc9-67d2-42df-813f-8428bae10f37",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"253f1435-7119-4edb-83fa-0856f4a982ac\",\"material_source_node_uuid\":\"bd28c858-e4fe-5db6-8d64-8ee11e27ff8b\",\"material_uuid\":\"6414c02a-67ab-5b02-a73c-827faa34eb5b\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-04T09:07:01.304082Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"67a376d6-de7e-54d2-b9f3-00c82d393a8a\",\"workflow_node_job_uuid\":\"16b8ccc9-67d2-42df-813f-8428bae10f37\",\"workflow_task_uuid\":\"2af8eb93-f84a-4343-b57e-83a29b43907d\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"16b8ccc9-67d2-42df-813f-8428bae10f37\",\"workflow_task_uuid\":\"2af8eb93-f84a-4343-b57e-83a29b43907d\"}",
+      "created_at": 1788512821501,
+      "version": 2
+    },
+    {
+      "reservation_id": "1fe6c8ee-9d7b-5235-a892-b115964cfbac",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "949b2566-c4d2-4ff3-ae1c-6a187d59c558",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"dcdcd1c1-601f-5a92-b3d4-f0ee5fffe7cc\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-04T09:07:01.304082Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"bc568586-dd47-54c5-94cb-f79db060da18\",\"workflow_node_job_uuid\":\"949b2566-c4d2-4ff3-ae1c-6a187d59c558\",\"workflow_task_uuid\":\"2af8eb93-f84a-4343-b57e-83a29b43907d\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"e6598072-1fa9-5cf1-bf91-4c516b84e9c5\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-04T09:07:01.304082Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"359265f1-766b-547d-a10b-58094f32857e\",\"workflow_node_job_uuid\":\"949b2566-c4d2-4ff3-ae1c-6a187d59c558\",\"workflow_task_uuid\":\"2af8eb93-f84a-4343-b57e-83a29b43907d\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"949b2566-c4d2-4ff3-ae1c-6a187d59c558\",\"workflow_task_uuid\":\"2af8eb93-f84a-4343-b57e-83a29b43907d\"}",
+      "created_at": 1788512821501,
+      "version": 2
+    },
+    {
+      "reservation_id": "3a4cefcb-85ec-50be-9719-4b06354e2bb3",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "4c0c6b96-03c2-43cd-9979-76f5c0d17e91",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"f6bed7e9-ac3b-46da-a856-58c5713d9845\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-06T15:52:17.671120Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"d29b9cc7-3164-563e-b386-346b746fd148\",\"workflow_node_job_uuid\":\"4c0c6b96-03c2-43cd-9979-76f5c0d17e91\",\"workflow_task_uuid\":\"d4255a95-7ffd-4577-a0c5-f4084d7ac181\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"ec6d4d28-6fb0-45c0-80cf-739561067508\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-06T15:52:17.671120Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"8831d13f-661b-53f7-8bec-bfa0cb4e8932\",\"workflow_node_job_uuid\":\"4c0c6b96-03c2-43cd-9979-76f5c0d17e91\",\"workflow_task_uuid\":\"d4255a95-7ffd-4577-a0c5-f4084d7ac181\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"4c0c6b96-03c2-43cd-9979-76f5c0d17e91\",\"workflow_task_uuid\":\"d4255a95-7ffd-4577-a0c5-f4084d7ac181\"}",
+      "created_at": 1788709938088,
+      "version": 2
+    },
+    {
+      "reservation_id": "3b3f95e8-7849-5ab2-945d-10718792ec24",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "978b39db-1a47-4e48-afa2-610850204aa8",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"21855232-2b03-4b6f-81f3-3f89e80e017e\",\"material_source_node_uuid\":\"63c6916e-0880-478e-80b4-89cb9a6c8aa3\",\"material_uuid\":\"2edc6fff-3c79-52e8-92e1-259013408544\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-06T08:19:20.053053Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"866630c7-a99b-5fae-953b-390ec6d0038b\",\"workflow_node_job_uuid\":\"978b39db-1a47-4e48-afa2-610850204aa8\",\"workflow_task_uuid\":\"87f7c2b3-5f02-4018-a626-10f753dc8ce8\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"978b39db-1a47-4e48-afa2-610850204aa8\",\"workflow_task_uuid\":\"87f7c2b3-5f02-4018-a626-10f753dc8ce8\"}",
+      "created_at": 1788682760223,
+      "version": 2
+    },
+    {
+      "reservation_id": "3ba2b3f5-6675-55e3-a375-8b3b589e15d2",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "b78cab00-4ca2-4d02-a930-f119417f146b",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"f6bed7e9-ac3b-46da-a856-58c5713d9845\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-06T16:00:42.405000Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"244ce8bd-8bf7-5395-8a06-a7b7175da375\",\"workflow_node_job_uuid\":\"b78cab00-4ca2-4d02-a930-f119417f146b\",\"workflow_task_uuid\":\"d75fbc2f-56a7-4846-93bc-674fa6c4d6f3\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"ec6d4d28-6fb0-45c0-80cf-739561067508\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-06T16:00:42.405000Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"46334908-a17e-5200-829b-ef97a60ee647\",\"workflow_node_job_uuid\":\"b78cab00-4ca2-4d02-a930-f119417f146b\",\"workflow_task_uuid\":\"d75fbc2f-56a7-4846-93bc-674fa6c4d6f3\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"b78cab00-4ca2-4d02-a930-f119417f146b\",\"workflow_task_uuid\":\"d75fbc2f-56a7-4846-93bc-674fa6c4d6f3\"}",
+      "created_at": 1788710442935,
+      "version": 2
+    },
+    {
+      "reservation_id": "4d55b68c-33b6-5ec6-a1e3-d3d2de0e6ce4",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "e5f4650b-1b19-41b8-a728-af13e85d4fc1",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"253f1435-7119-4edb-83fa-0856f4a982ac\",\"material_source_node_uuid\":\"bd28c858-e4fe-5db6-8d64-8ee11e27ff8b\",\"material_uuid\":\"6414c02a-67ab-5b02-a73c-827faa34eb5b\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-04T09:01:17.751499Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"3b0159ca-8ef4-57fa-88b6-b2375d93baac\",\"workflow_node_job_uuid\":\"e5f4650b-1b19-41b8-a728-af13e85d4fc1\",\"workflow_task_uuid\":\"f113aa49-aee9-4c32-8a08-545c64f648ce\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"e5f4650b-1b19-41b8-a728-af13e85d4fc1\",\"workflow_task_uuid\":\"f113aa49-aee9-4c32-8a08-545c64f648ce\"}",
+      "created_at": 1788512477906,
+      "version": 2
+    },
+    {
+      "reservation_id": "5401dcbc-9e6c-5f89-8663-64a78d32faa7",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "e8ddd5e1-0043-4210-a382-aaef93ded6c6",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"21855232-2b03-4b6f-81f3-3f89e80e017e\",\"material_source_node_uuid\":\"63c6916e-0880-478e-80b4-89cb9a6c8aa3\",\"material_uuid\":\"2edc6fff-3c79-52e8-92e1-259013408544\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-06T16:00:42.405000Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"974c4072-85d2-583a-8ab3-87c5e75760b2\",\"workflow_node_job_uuid\":\"e8ddd5e1-0043-4210-a382-aaef93ded6c6\",\"workflow_task_uuid\":\"d75fbc2f-56a7-4846-93bc-674fa6c4d6f3\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"e8ddd5e1-0043-4210-a382-aaef93ded6c6\",\"workflow_task_uuid\":\"d75fbc2f-56a7-4846-93bc-674fa6c4d6f3\"}",
+      "created_at": 1788710442935,
+      "version": 2
+    },
+    {
+      "reservation_id": "5c7678a6-7eef-560d-a99b-d4d136a134e0",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "cf0d95f4-4e45-4aeb-b118-7c3ea40d9821",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"f6bed7e9-ac3b-46da-a856-58c5713d9845\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-06T08:19:20.053053Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"9c31deaa-486c-5dd6-b659-1fda73cdf8be\",\"workflow_node_job_uuid\":\"cf0d95f4-4e45-4aeb-b118-7c3ea40d9821\",\"workflow_task_uuid\":\"87f7c2b3-5f02-4018-a626-10f753dc8ce8\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"ec6d4d28-6fb0-45c0-80cf-739561067508\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-06T08:19:20.053053Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"f9d8de47-1eaf-57b1-ab56-23f15e718c78\",\"workflow_node_job_uuid\":\"cf0d95f4-4e45-4aeb-b118-7c3ea40d9821\",\"workflow_task_uuid\":\"87f7c2b3-5f02-4018-a626-10f753dc8ce8\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"cf0d95f4-4e45-4aeb-b118-7c3ea40d9821\",\"workflow_task_uuid\":\"87f7c2b3-5f02-4018-a626-10f753dc8ce8\"}",
+      "created_at": 1788682760223,
+      "version": 2
+    },
+    {
+      "reservation_id": "636cd96a-89dc-5a6d-ab83-c22fbe01c85d",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "5913b2c6-dd37-450a-9a68-d4267530f028",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"f6bed7e9-ac3b-46da-a856-58c5713d9845\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-06T08:34:21.268577Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"257fe66a-38cc-59f5-be15-55d99853a158\",\"workflow_node_job_uuid\":\"5913b2c6-dd37-450a-9a68-d4267530f028\",\"workflow_task_uuid\":\"6ba522e5-91b0-4619-b78e-3e06eab4cacd\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"ec6d4d28-6fb0-45c0-80cf-739561067508\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-06T08:34:21.268577Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"6ed6d2b6-789c-5b08-9660-05d0a6a7408f\",\"workflow_node_job_uuid\":\"5913b2c6-dd37-450a-9a68-d4267530f028\",\"workflow_task_uuid\":\"6ba522e5-91b0-4619-b78e-3e06eab4cacd\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"5913b2c6-dd37-450a-9a68-d4267530f028\",\"workflow_task_uuid\":\"6ba522e5-91b0-4619-b78e-3e06eab4cacd\"}",
+      "created_at": 1788683661506,
+      "version": 2
+    },
+    {
+      "reservation_id": "930d28aa-1364-55b7-8582-364e71d3d06a",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "782202bf-058b-4e7b-9a86-056505e0c289",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"dcdcd1c1-601f-5a92-b3d4-f0ee5fffe7cc\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-04T09:01:17.751499Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"6be7b2b7-9596-5ce2-af5d-4f940ce95d5a\",\"workflow_node_job_uuid\":\"782202bf-058b-4e7b-9a86-056505e0c289\",\"workflow_task_uuid\":\"f113aa49-aee9-4c32-8a08-545c64f648ce\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"e6598072-1fa9-5cf1-bf91-4c516b84e9c5\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-04T09:01:17.751499Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"ae73debb-40cc-5394-83d6-b1ef79b41389\",\"workflow_node_job_uuid\":\"782202bf-058b-4e7b-9a86-056505e0c289\",\"workflow_task_uuid\":\"f113aa49-aee9-4c32-8a08-545c64f648ce\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"782202bf-058b-4e7b-9a86-056505e0c289\",\"workflow_task_uuid\":\"f113aa49-aee9-4c32-8a08-545c64f648ce\"}",
+      "created_at": 1788512477906,
+      "version": 2
+    },
+    {
+      "reservation_id": "a7e72005-e280-5e6d-ab75-29a63b03c91a",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "ae3af6fe-9456-4edf-be66-07fc7943ad1f",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"253f1435-7119-4edb-83fa-0856f4a982ac\",\"material_source_node_uuid\":\"bd28c858-e4fe-5db6-8d64-8ee11e27ff8b\",\"material_uuid\":\"6414c02a-67ab-5b02-a73c-827faa34eb5b\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-05T05:48:44.159399Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"cda91f3c-65bd-5cf2-ad48-1095570c5a26\",\"workflow_node_job_uuid\":\"ae3af6fe-9456-4edf-be66-07fc7943ad1f\",\"workflow_task_uuid\":\"c2e24c38-7c48-4c4a-ae76-caaece24d4ed\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"ae3af6fe-9456-4edf-be66-07fc7943ad1f\",\"workflow_task_uuid\":\"c2e24c38-7c48-4c4a-ae76-caaece24d4ed\"}",
+      "created_at": 1788587324324,
+      "version": 2
+    },
+    {
+      "reservation_id": "a8a2bca3-0276-57cd-8135-c2dcb1e04923",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "ca85f0e3-33bb-47b3-aef7-3a49aa9aa831",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"21855232-2b03-4b6f-81f3-3f89e80e017e\",\"material_source_node_uuid\":\"63c6916e-0880-478e-80b4-89cb9a6c8aa3\",\"material_uuid\":\"2edc6fff-3c79-52e8-92e1-259013408544\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-06T08:34:21.268577Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"e41c666f-70d2-5836-9d85-3c1469bf0baa\",\"workflow_node_job_uuid\":\"ca85f0e3-33bb-47b3-aef7-3a49aa9aa831\",\"workflow_task_uuid\":\"6ba522e5-91b0-4619-b78e-3e06eab4cacd\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"ca85f0e3-33bb-47b3-aef7-3a49aa9aa831\",\"workflow_task_uuid\":\"6ba522e5-91b0-4619-b78e-3e06eab4cacd\"}",
+      "created_at": 1788683661506,
+      "version": 2
+    },
+    {
+      "reservation_id": "b3e5e51f-5f35-5a31-8c80-eaecebd34136",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "62e07d9f-be0a-4433-ae70-53b6e9073387",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"21855232-2b03-4b6f-81f3-3f89e80e017e\",\"material_source_node_uuid\":\"63c6916e-0880-478e-80b4-89cb9a6c8aa3\",\"material_uuid\":\"2edc6fff-3c79-52e8-92e1-259013408544\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-06T15:52:17.671120Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"b1e48d06-498a-56f1-a14d-797c9036a439\",\"workflow_node_job_uuid\":\"62e07d9f-be0a-4433-ae70-53b6e9073387\",\"workflow_task_uuid\":\"d4255a95-7ffd-4577-a0c5-f4084d7ac181\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"62e07d9f-be0a-4433-ae70-53b6e9073387\",\"workflow_task_uuid\":\"d4255a95-7ffd-4577-a0c5-f4084d7ac181\"}",
+      "created_at": 1788709938088,
+      "version": 2
+    },
+    {
+      "reservation_id": "b9a4d4cf-0954-5710-bf66-c1d8b90263f3",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "54daf9fd-9e38-4607-ac41-48643190877c",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"21855232-2b03-4b6f-81f3-3f89e80e017e\",\"material_source_node_uuid\":\"63c6916e-0880-478e-80b4-89cb9a6c8aa3\",\"material_uuid\":\"2edc6fff-3c79-52e8-92e1-259013408544\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s09_liquid_reagent\",\"reserved_at\":\"2026-09-06T16:04:46.234526Z\",\"reserved_quantity\":0.5,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"e9636ae2-7301-5d90-926e-e6cdbe70d660\",\"workflow_node_job_uuid\":\"54daf9fd-9e38-4607-ac41-48643190877c\",\"workflow_task_uuid\":\"6c8a03a6-10ea-4f1f-9635-ac8fcee471fc\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"54daf9fd-9e38-4607-ac41-48643190877c\",\"workflow_task_uuid\":\"6c8a03a6-10ea-4f1f-9635-ac8fcee471fc\"}",
+      "created_at": 1788710686668,
+      "version": 2
+    },
+    {
+      "reservation_id": "dd2c81de-2306-5815-a36c-60629308444c",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "0032c2be-fe32-450c-ba96-fba0d6aadbd2",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"dcdcd1c1-601f-5a92-b3d4-f0ee5fffe7cc\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-05T05:48:44.159399Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"662ab4c6-f89f-54c1-bc3c-ede9c6a4b973\",\"workflow_node_job_uuid\":\"0032c2be-fe32-450c-ba96-fba0d6aadbd2\",\"workflow_task_uuid\":\"c2e24c38-7c48-4c4a-ae76-caaece24d4ed\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"e6598072-1fa9-5cf1-bf91-4c516b84e9c5\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-05T05:48:44.159399Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"0550e6ea-bf00-5583-a099-68cdbae66604\",\"workflow_node_job_uuid\":\"0032c2be-fe32-450c-ba96-fba0d6aadbd2\",\"workflow_task_uuid\":\"c2e24c38-7c48-4c4a-ae76-caaece24d4ed\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"0032c2be-fe32-450c-ba96-fba0d6aadbd2\",\"workflow_task_uuid\":\"c2e24c38-7c48-4c4a-ae76-caaece24d4ed\"}",
+      "created_at": 1788587324324,
+      "version": 2
+    },
+    {
+      "reservation_id": "de8c378b-a484-5666-8341-b6cf8a49e7a0",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "8e51fab4-0a8e-470b-9025-7fc0b567b6e9",
+      "attempt": 1,
+      "status": "consumed",
+      "amounts_json": "{\"allocations\":[{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"99ebf666-41e0-4e55-b17a-9328b26dabe1\",\"material_source_node_uuid\":\"f6bed7e9-ac3b-46da-a856-58c5713d9845\",\"material_uuid\":\"bbf34691-5e80-5072-bd1f-8fcc216942f4\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_2\",\"reserved_at\":\"2026-09-06T16:04:46.234526Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"37a8bed6-f67f-509b-b638-5823a43ddc3c\",\"workflow_node_job_uuid\":\"8e51fab4-0a8e-470b-9025-7fc0b567b6e9\",\"workflow_task_uuid\":\"6c8a03a6-10ea-4f1f-9635-ac8fcee471fc\"},{\"consumed_at\":null,\"inventory_type\":\"reagent\",\"inventory_uuid\":\"fd441b74-9856-473d-b531-3e2a0262d7cb\",\"material_source_node_uuid\":\"ec6d4d28-6fb0-45c0-80cf-739561067508\",\"material_uuid\":\"d53dbdb4-06be-58d4-8c1e-b7e6f314fdf9\",\"quantity_unit\":\"mL\",\"released_at\":null,\"requirement_key\":\"s06_solvent_pump_1\",\"reserved_at\":\"2026-09-06T16:04:46.234526Z\",\"reserved_quantity\":10.0,\"revision\":1,\"status\":\"reserved\",\"uuid\":\"206d0b8e-fa27-5141-9bcb-207f2bad70a8\",\"workflow_node_job_uuid\":\"8e51fab4-0a8e-470b-9025-7fc0b567b6e9\",\"workflow_task_uuid\":\"6c8a03a6-10ea-4f1f-9635-ac8fcee471fc\"}],\"kind\":\"workflow_quantity\",\"workflow_node_job_uuid\":\"8e51fab4-0a8e-470b-9025-7fc0b567b6e9\",\"workflow_task_uuid\":\"6c8a03a6-10ea-4f1f-9635-ac8fcee471fc\"}",
+      "created_at": 1788710686668,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-1061b329f780464c",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "6d6f20cd-e609-40ab-b3fa-171283da1cff",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788683661502,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-1101f3d7365b4c58",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "3c72fb58-e157-595c-b9ce-8b390fc495d5",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"5b85a543-03d2-5031-a042-b1bcdfb25c4e\"]}",
+      "created_at": 1788587324322,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-137dd8243ca14dfe",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "c2e9e44f-f171-539d-9be9-3e54d70bc540",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"6395ff95-4355-5e17-8f8c-3e8a8cd05fbd\"]}",
+      "created_at": 1788512477903,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-15424e3737f046fa",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "63c6916e-0880-478e-80b4-89cb9a6c8aa3",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788710442931,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-188d48f62bef4bc7",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "6d6f20cd-e609-40ab-b3fa-171283da1cff",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788710686663,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-1d3a4b5a15a449db",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "63c6916e-0880-478e-80b4-89cb9a6c8aa3",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788683661502,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-2934af66d22c4785",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "63c6916e-0880-478e-80b4-89cb9a6c8aa3",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788682760217,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-2d14c875099d495c",
+      "workflow_id": "a07b8fff-5805-4516-9073-2f39bfd81104",
+      "node_id": "fcce90b8-70b9-4b25-89ed-2b361f4c05b9",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788512815178,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-3320f6fce23342fd",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "99f6ed1b-3b1d-5ee4-9b44-38c12c71ea21",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2f4de237-ef86-57d1-9176-22660c52913f\"]}",
+      "created_at": 1788512477903,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-338bcae042d64b54",
+      "workflow_id": "4c654f3b-83e5-4f42-bbb2-2883079f62a3",
+      "node_id": "fcce90b8-70b9-4b25-89ed-2b361f4c05b9",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788512386563,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-358427c7ddf64844",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "536d7f1a-3ad3-4e7c-a58a-1594069160ba",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788710442931,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-378b40e414164804",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "bd28c858-e4fe-5db6-8d64-8ee11e27ff8b",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"6414c02a-67ab-5b02-a73c-827faa34eb5b\"]}",
+      "created_at": 1788512821499,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-3da72952ff094e73",
+      "workflow_id": "a07b8fff-5805-4516-9073-2f39bfd81104",
+      "node_id": "62adb1bf-657f-429c-865c-0ef4f1d2d1d5",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788512815178,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-3e4677650b0c43d9",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "b5086428-9606-440e-ba83-4231407faa60",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788710686663,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-408c76f5c5234c2f",
+      "workflow_id": "4c654f3b-83e5-4f42-bbb2-2883079f62a3",
+      "node_id": "06cdd559-dc8f-40dd-b624-d348be6803f8",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788512386563,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-45106cfe9ca34b9a",
+      "workflow_id": "a07b8fff-5805-4516-9073-2f39bfd81104",
+      "node_id": "06cdd559-dc8f-40dd-b624-d348be6803f8",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788512815178,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-49dcd955c85f457f",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "6d6f20cd-e609-40ab-b3fa-171283da1cff",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788710442931,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-4a90960cf3ee465a",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "536d7f1a-3ad3-4e7c-a58a-1594069160ba",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788709938082,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-4dc4f6eada1449f1",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "536d7f1a-3ad3-4e7c-a58a-1594069160ba",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788682760217,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-50cdb75f68154616",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "bd28c858-e4fe-5db6-8d64-8ee11e27ff8b",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"6414c02a-67ab-5b02-a73c-827faa34eb5b\"]}",
+      "created_at": 1788587324322,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-5ad81b4b32d546ed",
+      "workflow_id": "d3ab945e-6757-42d7-978f-f31d405f74e6",
+      "node_id": "06cdd559-dc8f-40dd-b624-d348be6803f8",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788587315983,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-5bcf7de3c77b4f3d",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "99f6ed1b-3b1d-5ee4-9b44-38c12c71ea21",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2f4de237-ef86-57d1-9176-22660c52913f\"]}",
+      "created_at": 1788512821499,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-634124539a584137",
+      "workflow_id": "d3ab945e-6757-42d7-978f-f31d405f74e6",
+      "node_id": "55489da8-faac-4d29-9d52-72b209458c52",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788587315983,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-68061c7245254dac",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "d58228e2-9d75-475d-ac3c-951e3521be47",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788709938082,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-731d034965c34b2b",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "0525c6ca-d47a-57af-a22c-34d229fbd07c",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"5bb05113-cbbd-5b6f-aa14-6b2b00e63fec\"]}",
+      "created_at": 1788587324322,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-73be8ab99c004dec",
+      "workflow_id": "4c654f3b-83e5-4f42-bbb2-2883079f62a3",
+      "node_id": "55489da8-faac-4d29-9d52-72b209458c52",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788512386563,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-7b3202e889224def",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "d58228e2-9d75-475d-ac3c-951e3521be47",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788682760217,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-7b82fecf7d7e47fa",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "d58228e2-9d75-475d-ac3c-951e3521be47",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788710686663,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-7cbd90e0b5cf4154",
+      "workflow_id": "4c654f3b-83e5-4f42-bbb2-2883079f62a3",
+      "node_id": "879be1e4-fedb-4da4-817a-1189ee45b9d1",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788512386563,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-829334ae0cec4f5f",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "0525c6ca-d47a-57af-a22c-34d229fbd07c",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"5bb05113-cbbd-5b6f-aa14-6b2b00e63fec\"]}",
+      "created_at": 1788512821499,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-8499bda045b849f7",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "d58228e2-9d75-475d-ac3c-951e3521be47",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788683661502,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-86fd4fff56bb4a71",
+      "workflow_id": "a07b8fff-5805-4516-9073-2f39bfd81104",
+      "node_id": "879be1e4-fedb-4da4-817a-1189ee45b9d1",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788512815178,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-89ee66ceac5341cd",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "c2e9e44f-f171-539d-9be9-3e54d70bc540",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"6395ff95-4355-5e17-8f8c-3e8a8cd05fbd\"]}",
+      "created_at": 1788587324322,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-a075b036f725430c",
+      "workflow_id": "4c654f3b-83e5-4f42-bbb2-2883079f62a3",
+      "node_id": "62adb1bf-657f-429c-865c-0ef4f1d2d1d5",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788512386563,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-a0bc5421f9154aba",
+      "workflow_id": "d3ab945e-6757-42d7-978f-f31d405f74e6",
+      "node_id": "fcce90b8-70b9-4b25-89ed-2b361f4c05b9",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788587315983,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-a3ac038730144d66",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "b5086428-9606-440e-ba83-4231407faa60",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788709938082,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-b75758c304454bad",
+      "workflow_id": "c2e24c38-7c48-4c4a-ae76-caaece24d4ed",
+      "node_id": "99f6ed1b-3b1d-5ee4-9b44-38c12c71ea21",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2f4de237-ef86-57d1-9176-22660c52913f\"]}",
+      "created_at": 1788587324322,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-b860f0d8e942491b",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "b5086428-9606-440e-ba83-4231407faa60",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788710442931,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-ba848f318f0b46e5",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "bd28c858-e4fe-5db6-8d64-8ee11e27ff8b",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"6414c02a-67ab-5b02-a73c-827faa34eb5b\"]}",
+      "created_at": 1788512477903,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-c09834245a2e4e5c",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "0525c6ca-d47a-57af-a22c-34d229fbd07c",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"5bb05113-cbbd-5b6f-aa14-6b2b00e63fec\"]}",
+      "created_at": 1788512477903,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-c13405be52544355",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "c2e9e44f-f171-539d-9be9-3e54d70bc540",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"6395ff95-4355-5e17-8f8c-3e8a8cd05fbd\"]}",
+      "created_at": 1788512821499,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-c3579083d5124f36",
+      "workflow_id": "d3ab945e-6757-42d7-978f-f31d405f74e6",
+      "node_id": "879be1e4-fedb-4da4-817a-1189ee45b9d1",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788587315983,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-c6e432ae05c34c1e",
+      "workflow_id": "2af8eb93-f84a-4343-b57e-83a29b43907d",
+      "node_id": "3c72fb58-e157-595c-b9ce-8b390fc495d5",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"5b85a543-03d2-5031-a042-b1bcdfb25c4e\"]}",
+      "created_at": 1788512821499,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-ce9a07304b87460e",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "536d7f1a-3ad3-4e7c-a58a-1594069160ba",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788683661502,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-d16e2769c56a4a4d",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "6d6f20cd-e609-40ab-b3fa-171283da1cff",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788682760217,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-d3d1be8cc2b648df",
+      "workflow_id": "d75fbc2f-56a7-4846-93bc-674fa6c4d6f3",
+      "node_id": "d58228e2-9d75-475d-ac3c-951e3521be47",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788710442931,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-d9c1587c84034c6f",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "536d7f1a-3ad3-4e7c-a58a-1594069160ba",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"16317a42-6282-56a5-a328-c63776cedbe4\"]}",
+      "created_at": 1788710686663,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-db901677891d40f6",
+      "workflow_id": "d3ab945e-6757-42d7-978f-f31d405f74e6",
+      "node_id": "62adb1bf-657f-429c-865c-0ef4f1d2d1d5",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"9e496968-4972-5814-a047-b2d264fc1e09\"]}",
+      "created_at": 1788587315983,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-e1eeaa66bc344465",
+      "workflow_id": "87f7c2b3-5f02-4018-a626-10f753dc8ce8",
+      "node_id": "b5086428-9606-440e-ba83-4231407faa60",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788682760217,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-e71a68c2dab541da",
+      "workflow_id": "f113aa49-aee9-4c32-8a08-545c64f648ce",
+      "node_id": "3c72fb58-e157-595c-b9ce-8b390fc495d5",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"5b85a543-03d2-5031-a042-b1bcdfb25c4e\"]}",
+      "created_at": 1788512477903,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-e8ded22654614f6e",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "6d6f20cd-e609-40ab-b3fa-171283da1cff",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788709938082,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-f2a72b60bc694dac",
+      "workflow_id": "a07b8fff-5805-4516-9073-2f39bfd81104",
+      "node_id": "55489da8-faac-4d29-9d52-72b209458c52",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"28b09a79-7337-5e33-8123-66384418f455\"]}",
+      "created_at": 1788512815178,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-f32f2c29c8c9420e",
+      "workflow_id": "d4255a95-7ffd-4577-a0c5-f4084d7ac181",
+      "node_id": "63c6916e-0880-478e-80b4-89cb9a6c8aa3",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788709938082,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-f468853ac6fe47af",
+      "workflow_id": "6c8a03a6-10ea-4f1f-9635-ac8fcee471fc",
+      "node_id": "63c6916e-0880-478e-80b4-89cb9a6c8aa3",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"2edc6fff-3c79-52e8-92e1-259013408544\"]}",
+      "created_at": 1788710686663,
+      "version": 2
+    },
+    {
+      "reservation_id": "rsv-ff0688f6193b4e27",
+      "workflow_id": "6ba522e5-91b0-4619-b78e-3e06eab4cacd",
+      "node_id": "b5086428-9606-440e-ba83-4231407faa60",
+      "attempt": 1,
+      "status": "released",
+      "amounts_json": "{\"lots\": {}, \"instances\": [\"a1f5c5df-f4db-56fe-9c34-15bd49533a73\"]}",
+      "created_at": 1788683661502,
+      "version": 2
+    }
+  ]
+}

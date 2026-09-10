@@ -1,0 +1,1114 @@
+{
+  "status": "passed",
+  "endpoint": "opc.tcp://127.0.0.1:24855/xuse_sim/",
+  "cases": [
+    {
+      "case": "same-AB",
+      "status": "passed",
+      "tasks": {
+        "7b17ebd7-8cfc-5f4d-a506-132814e80e1f": "succeeded",
+        "e4ad50e0-12c3-52f8-b4e2-a037c4bfc6b5": "succeeded"
+      },
+      "peak_in_flight": 1,
+      "plc_overlap_samples": [],
+      "events": [
+        {
+          "event": "dispatch",
+          "job_id": "4ae05e79-14fe-5d5c-8a1b-5e8d11090f45",
+          "channel": "S06",
+          "monotonic": 94147.4656545,
+          "epoch": 1788694745.800229
+        },
+        {
+          "event": "completed",
+          "job_id": "4ae05e79-14fe-5d5c-8a1b-5e8d11090f45",
+          "channel": "S06",
+          "monotonic": 94147.982361708,
+          "epoch": 1788694746.316938,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "1c8b8555-0952-59c0-bc61-1a0b99371f02",
+          "channel": "S06",
+          "monotonic": 94148.050378666,
+          "epoch": 1788694746.384956
+        },
+        {
+          "event": "completed",
+          "job_id": "1c8b8555-0952-59c0-bc61-1a0b99371f02",
+          "channel": "S06",
+          "monotonic": 94148.572915875,
+          "epoch": 1788694746.907496,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "2d3615f1-a576-5ee9-b63d-b01e78c1d11f",
+          "channel": "S07",
+          "monotonic": 94148.645521875,
+          "epoch": 1788694746.9801018
+        },
+        {
+          "event": "completed",
+          "job_id": "2d3615f1-a576-5ee9-b63d-b01e78c1d11f",
+          "channel": "S07",
+          "monotonic": 94149.187769958,
+          "epoch": 1788694747.522353,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "b945feb6-f659-5307-9491-019f339f4aa8",
+          "channel": "S07",
+          "monotonic": 94149.230682833,
+          "epoch": 1788694747.565266
+        },
+        {
+          "event": "completed",
+          "job_id": "b945feb6-f659-5307-9491-019f339f4aa8",
+          "channel": "S07",
+          "monotonic": 94149.812205458,
+          "epoch": 1788694748.146791,
+          "plc_done": true
+        }
+      ],
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "case": "same-BA",
+      "status": "passed",
+      "tasks": {
+        "0801f58e-79c4-5931-a876-3505a3f3e050": "succeeded",
+        "62b618ee-2f72-5583-af27-3a4073ddebd4": "succeeded"
+      },
+      "peak_in_flight": 1,
+      "plc_overlap_samples": [],
+      "events": [
+        {
+          "event": "dispatch",
+          "job_id": "8154c9f1-4fb4-5c03-a9ca-78e2b633793e",
+          "channel": "S07",
+          "monotonic": 94149.926481791,
+          "epoch": 1788694748.261069
+        },
+        {
+          "event": "completed",
+          "job_id": "8154c9f1-4fb4-5c03-a9ca-78e2b633793e",
+          "channel": "S07",
+          "monotonic": 94150.492710625,
+          "epoch": 1788694748.8273,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "c9b15ec5-2f7f-5e78-9a37-809b9b2d04b9",
+          "channel": "S07",
+          "monotonic": 94150.665391333,
+          "epoch": 1788694748.999982
+        },
+        {
+          "event": "completed",
+          "job_id": "c9b15ec5-2f7f-5e78-9a37-809b9b2d04b9",
+          "channel": "S07",
+          "monotonic": 94151.227928791,
+          "epoch": 1788694749.5625222,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "1f7f1ffe-0c26-5e2c-8d75-a06a6cf4609d",
+          "channel": "S06",
+          "monotonic": 94151.270245916,
+          "epoch": 1788694749.6048388
+        },
+        {
+          "event": "completed",
+          "job_id": "1f7f1ffe-0c26-5e2c-8d75-a06a6cf4609d",
+          "channel": "S06",
+          "monotonic": 94151.809852541,
+          "epoch": 1788694750.144449,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "44148b5d-5b28-59a4-92f0-51c31ffe94f3",
+          "channel": "S06",
+          "monotonic": 94151.859409333,
+          "epoch": 1788694750.194006
+        },
+        {
+          "event": "completed",
+          "job_id": "44148b5d-5b28-59a4-92f0-51c31ffe94f3",
+          "channel": "S06",
+          "monotonic": 94152.422229208,
+          "epoch": 1788694750.756829,
+          "plc_done": true
+        }
+      ],
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "case": "different-AB",
+      "status": "passed",
+      "tasks": {
+        "00ead9a3-713f-56e2-bcc5-f8a3b7505846": "succeeded",
+        "74285ae7-9183-565b-b110-9807260a9b7b": "succeeded"
+      },
+      "peak_in_flight": 2,
+      "plc_overlap_samples": [
+        {
+          "monotonic": 94152.549403833,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.584326875,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.626818458,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.661502166,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.703395875,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.744140708,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.780604,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.815909458,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.850483458,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.882850291,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.915258958,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.947086041,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94152.977530416,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.010515166,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.045020541,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.247420291,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.300303416,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.341667458,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.387714291,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.430485333,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.466769125,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.502698083,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.543207916,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.581167916,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.617842375,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.64980375,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "event": "dispatch",
+          "job_id": "a95a69ac-675a-5314-bfe4-35b63e7e376a",
+          "channel": "S06",
+          "monotonic": 94152.526659166,
+          "epoch": 1788694750.861259
+        },
+        {
+          "event": "dispatch",
+          "job_id": "000441fe-360e-59ce-bf4a-82c62f2c822f",
+          "channel": "S07",
+          "monotonic": 94152.540375875,
+          "epoch": 1788694750.874976
+        },
+        {
+          "event": "completed",
+          "job_id": "a95a69ac-675a-5314-bfe4-35b63e7e376a",
+          "channel": "S06",
+          "monotonic": 94153.080278958,
+          "epoch": 1788694751.414882,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "47675a8d-84fe-532b-91a4-b6453c143680",
+          "channel": "S06",
+          "monotonic": 94153.125102791,
+          "epoch": 1788694751.459706
+        },
+        {
+          "event": "completed",
+          "job_id": "000441fe-360e-59ce-bf4a-82c62f2c822f",
+          "channel": "S07",
+          "monotonic": 94153.126991708,
+          "epoch": 1788694751.4615948,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "b121269e-aa69-5488-ace5-e7bde92d10f6",
+          "channel": "S07",
+          "monotonic": 94153.166595041,
+          "epoch": 1788694751.501198
+        },
+        {
+          "event": "completed",
+          "job_id": "47675a8d-84fe-532b-91a4-b6453c143680",
+          "channel": "S06",
+          "monotonic": 94153.689430625,
+          "epoch": 1788694752.0240371,
+          "plc_done": true
+        },
+        {
+          "event": "completed",
+          "job_id": "b121269e-aa69-5488-ace5-e7bde92d10f6",
+          "channel": "S07",
+          "monotonic": 94153.726988166,
+          "epoch": 1788694752.061594,
+          "plc_done": true
+        }
+      ],
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "case": "different-BA",
+      "status": "passed",
+      "tasks": {
+        "087f44a0-2355-54be-8f7c-fd895b4760e0": "succeeded",
+        "9d0cbd39-7771-542b-b87f-8385813075bf": "succeeded"
+      },
+      "peak_in_flight": 2,
+      "plc_overlap_samples": [
+        {
+          "monotonic": 94153.858312541,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.887645291,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.918737541,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.949600791,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94153.980557833,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.015983666,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.048112041,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.083672208,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.117717666,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.157041583,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.194363,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.227213833,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.268961458,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.306280875,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.33681925,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.51898925,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.553505416,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.585652125,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.637517125,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.676643625,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.710326333,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.740958625,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.771787666,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.813439958,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.847246333,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.881487541,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.919241583,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        },
+        {
+          "monotonic": 94154.981246166,
+          "states": {
+            "S07": {
+              "parameters_written": true,
+              "done": 0,
+              "process": 1
+            },
+            "S06": {
+              "parameters_written": true,
+              "done": false,
+              "process": 1
+            }
+          }
+        }
+      ],
+      "events": [
+        {
+          "event": "dispatch",
+          "job_id": "c9a218d3-f5d6-56d8-b33d-577cd72e372e",
+          "channel": "S07",
+          "monotonic": 94153.835526833,
+          "epoch": 1788694752.1701329
+        },
+        {
+          "event": "dispatch",
+          "job_id": "94ce953b-9018-5e13-a49d-ee28b9e5eb2e",
+          "channel": "S06",
+          "monotonic": 94153.849388458,
+          "epoch": 1788694752.1839948
+        },
+        {
+          "event": "completed",
+          "job_id": "c9a218d3-f5d6-56d8-b33d-577cd72e372e",
+          "channel": "S07",
+          "monotonic": 94154.369721666,
+          "epoch": 1788694752.704331,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "13bc268e-a18f-58c9-8669-15b3649b2bad",
+          "channel": "S07",
+          "monotonic": 94154.438914458,
+          "epoch": 1788694752.773524
+        },
+        {
+          "event": "completed",
+          "job_id": "94ce953b-9018-5e13-a49d-ee28b9e5eb2e",
+          "channel": "S06",
+          "monotonic": 94154.441137416,
+          "epoch": 1788694752.775747,
+          "plc_done": true
+        },
+        {
+          "event": "dispatch",
+          "job_id": "ee9fbbfa-f3b5-5d02-9444-1120893228fa",
+          "channel": "S06",
+          "monotonic": 94154.485682333,
+          "epoch": 1788694752.820292
+        },
+        {
+          "event": "completed",
+          "job_id": "13bc268e-a18f-58c9-8669-15b3649b2bad",
+          "channel": "S07",
+          "monotonic": 94155.027176208,
+          "epoch": 1788694753.361789,
+          "plc_done": true
+        },
+        {
+          "event": "completed",
+          "job_id": "ee9fbbfa-f3b5-5d02-9444-1120893228fa",
+          "channel": "S06",
+          "monotonic": 94155.075683583,
+          "epoch": 1788694753.4102972,
+          "plc_done": true
+        }
+      ],
+      "active_claims": 0,
+      "active_leases": 0
+    }
+  ]
+}

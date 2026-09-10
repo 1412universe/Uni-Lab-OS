@@ -1,0 +1,1237 @@
+[
+  {
+    "event": "inventory_blocked",
+    "at": 100792.42490775
+  },
+  {
+    "event": "dispatch",
+    "at": 100792.440453208,
+    "job": "340b8a35-c6a4-5c50-b7b8-e4d96427e8f6",
+    "channel": "S07",
+    "action": "B:start"
+  },
+  {
+    "event": "dispatch",
+    "at": 100792.452438875,
+    "job": "0b2567ca-7161-519e-8ed9-21002639c4cd",
+    "channel": "S06",
+    "action": "A:start"
+  },
+  {
+    "event": "inventory_replenished",
+    "at": 100792.463286333
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.480299916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.533311583,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.587507916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.640950416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.685511458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.7245015,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.765417583,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.801736958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.843313916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.888705666,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.925335916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100792.966928458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100793.034898958,
+    "job": "0b2567ca-7161-519e-8ed9-21002639c4cd",
+    "channel": "S06",
+    "action": "A:start",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100793.066785875,
+    "job": "25015bb2-1f57-5f56-8812-72a4b25a0371",
+    "channel": "S06",
+    "action": "A:hold1"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100793.069028125,
+    "job": "0b2567ca-7161-519e-8ed9-21002639c4cd"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100793.160098,
+    "job": "340b8a35-c6a4-5c50-b7b8-e4d96427e8f6",
+    "channel": "S07",
+    "action": "B:start",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100793.172610916,
+    "job": "340b8a35-c6a4-5c50-b7b8-e4d96427e8f6"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100793.665872166,
+    "job": "25015bb2-1f57-5f56-8812-72a4b25a0371",
+    "channel": "S06",
+    "action": "A:hold1",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100793.693834708,
+    "job": "57ed7574-026d-511c-8eea-36b7885cf57e",
+    "channel": "S07",
+    "action": "A:hold2"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100793.698479333,
+    "job": "25015bb2-1f57-5f56-8812-72a4b25a0371"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100794.257226541,
+    "job": "57ed7574-026d-511c-8eea-36b7885cf57e",
+    "channel": "S07",
+    "action": "A:hold2",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100794.3041435,
+    "job": "0bb65b66-e8fa-594f-a800-1f3ecb73f164",
+    "channel": "S07",
+    "action": "B:hold1"
+  },
+  {
+    "event": "dispatch",
+    "at": 100794.321390916,
+    "job": "64d2bc83-1c06-518b-a4ab-aadd9e69e80e",
+    "channel": "S06",
+    "action": "A:left"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100794.32629425,
+    "job": "57ed7574-026d-511c-8eea-36b7885cf57e"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.367429541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.414809166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.45693,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.493304833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.5300655,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.566218666,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.606233708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.642432166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.679115,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.72352925,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.767764666,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100794.8153605,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100794.903755875,
+    "job": "0bb65b66-e8fa-594f-a800-1f3ecb73f164",
+    "channel": "S07",
+    "action": "B:hold1",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100794.929343,
+    "job": "15278578-0e7f-5ec2-bef1-be2d35874903",
+    "channel": "S07",
+    "action": "A:right"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100794.931466375,
+    "job": "0bb65b66-e8fa-594f-a800-1f3ecb73f164"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100794.987316375,
+    "job": "64d2bc83-1c06-518b-a4ab-aadd9e69e80e",
+    "channel": "S06",
+    "action": "A:left",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100795.017100583,
+    "job": "0d912821-109e-5cbf-9d02-f3244d5f4814",
+    "channel": "S06",
+    "action": "B:hold2"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100795.019204541,
+    "job": "64d2bc83-1c06-518b-a4ab-aadd9e69e80e"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.053131875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.089486791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.12532275,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.171014708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.220632416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.267782833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.3108595,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.349550083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.385103041,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.423613166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100795.483981375,
+    "job": "15278578-0e7f-5ec2-bef1-be2d35874903",
+    "channel": "S07",
+    "action": "A:right",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100795.507665083,
+    "job": "15278578-0e7f-5ec2-bef1-be2d35874903"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100795.606699375,
+    "job": "0d912821-109e-5cbf-9d02-f3244d5f4814",
+    "channel": "S06",
+    "action": "B:hold2",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100795.644203666,
+    "job": "48152704-c8a3-52ff-8b35-358c358365d0",
+    "channel": "S06",
+    "action": "A:join"
+  },
+  {
+    "event": "dispatch",
+    "at": 100795.661680833,
+    "job": "30199e32-7b70-59db-bf52-c3aca85136bc",
+    "channel": "S07",
+    "action": "B:left"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100795.66740875,
+    "job": "0d912821-109e-5cbf-9d02-f3244d5f4814"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.707381208,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.754473458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.79231375,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.83164975,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.872614791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.911011041,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.949272916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100795.988105166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100796.032084625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100796.078780875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100796.119946125,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100796.16571475,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100796.256081625,
+    "job": "48152704-c8a3-52ff-8b35-358c358365d0",
+    "channel": "S06",
+    "action": "A:join",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100796.292022583,
+    "job": "2bbd2e9e-773d-5525-8b81-752e1d41c4dd",
+    "channel": "S06",
+    "action": "B:right"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100796.296455208,
+    "job": "48152704-c8a3-52ff-8b35-358c358365d0"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100796.325130458,
+    "job": "30199e32-7b70-59db-bf52-c3aca85136bc",
+    "channel": "S07",
+    "action": "B:left",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100796.345735416,
+    "job": "30199e32-7b70-59db-bf52-c3aca85136bc"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100796.865263458,
+    "job": "2bbd2e9e-773d-5525-8b81-752e1d41c4dd",
+    "channel": "S06",
+    "action": "B:right",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100796.907323958,
+    "job": "79389b1b-77e6-5806-bc6a-7f17661bd64f",
+    "channel": "S07",
+    "action": "B:join"
+  },
+  {
+    "event": "dispatch",
+    "at": 100796.926720416,
+    "job": "1fe0e8f4-0501-5fd0-9ca7-bd0a9353701a",
+    "channel": "S06",
+    "action": "A:yes"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100796.929424,
+    "job": "2bbd2e9e-773d-5525-8b81-752e1d41c4dd"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100796.969531208,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.009587875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.050107833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.090478291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.128789666,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.169840625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.206838958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.247014416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.284516666,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.32733075,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.369632166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100797.408983166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100797.474450125,
+    "job": "79389b1b-77e6-5806-bc6a-7f17661bd64f",
+    "channel": "S07",
+    "action": "B:join",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100797.512845666,
+    "job": "3a041d84-d06c-595a-8cf0-9355bbea714b",
+    "channel": "S07",
+    "action": "B:measure"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100797.515066791,
+    "job": "79389b1b-77e6-5806-bc6a-7f17661bd64f"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100797.547980666,
+    "job": "1fe0e8f4-0501-5fd0-9ca7-bd0a9353701a",
+    "channel": "S06",
+    "action": "A:yes",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100797.576980666,
+    "job": "1fe0e8f4-0501-5fd0-9ca7-bd0a9353701a"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100798.102855375,
+    "job": "3a041d84-d06c-595a-8cf0-9355bbea714b",
+    "channel": "S07",
+    "action": "B:measure",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100798.149222583,
+    "job": "d74abb9f-5ade-5573-982e-39af68f0f280",
+    "channel": "S07",
+    "action": "B:measure"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100798.154334875,
+    "job": "3a041d84-d06c-595a-8cf0-9355bbea714b"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100798.723838583,
+    "job": "d74abb9f-5ade-5573-982e-39af68f0f280",
+    "channel": "S07",
+    "action": "B:measure",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100798.773436875,
+    "job": "7b9eff7f-8fd9-5944-9017-2cf8e0a3367a",
+    "channel": "S07",
+    "action": "B:measure"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100798.778796666,
+    "job": "d74abb9f-5ade-5573-982e-39af68f0f280"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100799.365285916,
+    "job": "7b9eff7f-8fd9-5944-9017-2cf8e0a3367a",
+    "channel": "S07",
+    "action": "B:measure",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100799.416742208,
+    "job": "5b359fd0-6dc4-55c7-80d6-d858c3dd6477",
+    "channel": "S06",
+    "action": "B:after_repeat"
+  },
+  {
+    "event": "dispatch",
+    "at": 100799.431646083,
+    "job": "4b41cf18-adcf-5056-ad7e-e6e47f48f208",
+    "channel": "S07",
+    "action": "A:after_condition"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100799.434001333,
+    "job": "7b9eff7f-8fd9-5944-9017-2cf8e0a3367a"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.470437708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.507003791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.544810041,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.584687416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.628736041,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.67498575,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.715908,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.794289291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.834171458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.872898166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100799.909232291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100799.9956135,
+    "job": "5b359fd0-6dc4-55c7-80d6-d858c3dd6477",
+    "channel": "S06",
+    "action": "B:after_repeat",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100800.0618,
+    "job": "1fbffdc0-f7f6-51d6-b82b-f70707a14f11",
+    "channel": "S06",
+    "action": "B:no"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100800.064920541,
+    "job": "5b359fd0-6dc4-55c7-80d6-d858c3dd6477"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100800.102708625,
+    "job": "4b41cf18-adcf-5056-ad7e-e6e47f48f208",
+    "channel": "S07",
+    "action": "A:after_condition",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100800.148438708,
+    "job": "4b41cf18-adcf-5056-ad7e-e6e47f48f208"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100800.679206458,
+    "job": "1fbffdc0-f7f6-51d6-b82b-f70707a14f11",
+    "channel": "S06",
+    "action": "B:no",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100800.729518916,
+    "job": "ce565f53-a88a-5dbc-8f16-653115f2cf55",
+    "channel": "S06",
+    "action": "B:after_condition"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100800.734229375,
+    "job": "1fbffdc0-f7f6-51d6-b82b-f70707a14f11"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100801.312287125,
+    "job": "ce565f53-a88a-5dbc-8f16-653115f2cf55",
+    "channel": "S06",
+    "action": "B:after_condition",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100801.374730333,
+    "job": "45a2d90e-294d-5cb9-9743-c7bcedc64a43",
+    "channel": "S06",
+    "action": "A:measure"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100801.377324333,
+    "job": "ce565f53-a88a-5dbc-8f16-653115f2cf55"
+  },
+  {
+    "event": "dispatch",
+    "at": 100801.424047625,
+    "job": "90dd7e97-c9bd-5321-814f-702f68b5e06e",
+    "channel": "S07",
+    "action": "B:manual"
+  },
+  {
+    "event": "manual_approved_twice",
+    "at": 100801.436030083,
+    "job": "90dd7e97-c9bd-5321-814f-702f68b5e06e"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.446069208,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.497208416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.539112708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.577007625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.61728,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.658298375,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.696462,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.738190625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.7886215,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.834837166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.879540166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100801.930644291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100801.993701041,
+    "job": "45a2d90e-294d-5cb9-9743-c7bcedc64a43",
+    "channel": "S06",
+    "action": "A:measure",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100802.049065666,
+    "job": "1408f2bb-19d4-5132-8035-99abcd098a26",
+    "channel": "S06",
+    "action": "A:measure"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100802.051378833,
+    "job": "45a2d90e-294d-5cb9-9743-c7bcedc64a43"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100802.08123125,
+    "job": "90dd7e97-c9bd-5321-814f-702f68b5e06e",
+    "channel": "S07",
+    "action": "B:manual",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100802.128526875,
+    "job": "90dd7e97-c9bd-5321-814f-702f68b5e06e"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100802.648959916,
+    "job": "1408f2bb-19d4-5132-8035-99abcd098a26",
+    "channel": "S06",
+    "action": "A:measure",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100802.707654166,
+    "job": "a2b981d6-28ad-5f4f-95c8-6cabc46c51fa",
+    "channel": "S06",
+    "action": "B:finish"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100802.713753791,
+    "job": "1408f2bb-19d4-5132-8035-99abcd098a26"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100803.282556916,
+    "job": "a2b981d6-28ad-5f4f-95c8-6cabc46c51fa",
+    "channel": "S06",
+    "action": "B:finish",
+    "letter": "B"
+  },
+  {
+    "event": "dispatch",
+    "at": 100803.344763791,
+    "job": "28f5c0f0-b55b-57b2-b267-d0a708e00477",
+    "channel": "S06",
+    "action": "A:measure"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100803.3473455,
+    "job": "a2b981d6-28ad-5f4f-95c8-6cabc46c51fa"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100803.946892458,
+    "job": "28f5c0f0-b55b-57b2-b267-d0a708e00477",
+    "channel": "S06",
+    "action": "A:measure",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100804.009767875,
+    "job": "d2586025-4785-5ef3-a850-69210fc1ad2a",
+    "channel": "S07",
+    "action": "A:after_repeat"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100804.012431875,
+    "job": "28f5c0f0-b55b-57b2-b267-d0a708e00477"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100804.595142458,
+    "job": "d2586025-4785-5ef3-a850-69210fc1ad2a",
+    "channel": "S07",
+    "action": "A:after_repeat",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100804.642305,
+    "job": "d2586025-4785-5ef3-a850-69210fc1ad2a"
+  },
+  {
+    "event": "dispatch",
+    "at": 100804.679752291,
+    "job": "4b7561b6-f016-50e4-a7b8-88fdc255a76d",
+    "channel": "S06",
+    "action": "A:manual"
+  },
+  {
+    "event": "manual_approved_twice",
+    "at": 100804.690109416,
+    "job": "4b7561b6-f016-50e4-a7b8-88fdc255a76d"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100805.2762955,
+    "job": "4b7561b6-f016-50e4-a7b8-88fdc255a76d",
+    "channel": "S06",
+    "action": "A:manual",
+    "letter": "A"
+  },
+  {
+    "event": "dispatch",
+    "at": 100805.354924791,
+    "job": "9ecb0194-8152-5c78-8b76-40fd27739b92",
+    "channel": "S07",
+    "action": "A:finish"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100805.357728166,
+    "job": "4b7561b6-f016-50e4-a7b8-88fdc255a76d"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100805.939624583,
+    "job": "9ecb0194-8152-5c78-8b76-40fd27739b92",
+    "channel": "S07",
+    "action": "A:finish",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100805.989443666,
+    "job": "9ecb0194-8152-5c78-8b76-40fd27739b92"
+  },
+  {
+    "event": "inventory_conservation_verified",
+    "at": 100805.996196666,
+    "lot": {
+      "quantity_total": 0.0,
+      "quantity_available": 0.0,
+      "quantity_reserved": 0.0
+    }
+  }
+]

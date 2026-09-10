@@ -919,6 +919,19 @@ class EdgeControlStore:
             )
             self._connection.commit()
 
+    def abort_restarted_job(self, job_uuid: str) -> None:
+        """退役工站权威已终结的旧进程镜像，不发布新的结果或对账请求。"""
+        with self._lock, self._immediate_transaction():
+            self._connection.execute(
+                "UPDATE edge_job_runtime SET status='outcome_retired',updated_at=? WHERE job_uuid=?",
+                (time.time(), job_uuid),
+            )
+            self._connection.execute(
+                "DELETE FROM edge_job_outcome_pending WHERE job_uuid=?",
+                (job_uuid,),
+            )
+            # 已发生的事件仍留在 outbox，由新会话照常 ACK；它们不能重开终态任务。
+
     def defer_not_started_job(self, job_uuid: str) -> None:
         """只撤回本次尚未开始的 dispatching，不覆盖并发取消或真实终态。"""
         with self._lock:

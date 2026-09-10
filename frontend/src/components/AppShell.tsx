@@ -3,7 +3,6 @@ import {
   Bell,
   BookOpen,
   Boxes,
-  ChevronDown,
   Code2,
   FileJson,
   FlaskConical,
@@ -105,15 +104,6 @@ export function AppShell({
           </div>
         </div>
 
-        <button className="workspace-switcher" type="button" onClick={() => onNotify('当前仅配置深圳实验室工作区')}>
-          <span className="workspace-icon">SZ</span>
-          <span>
-            <strong>深圳实验室</strong>
-            <small>Edge Workspace</small>
-          </span>
-          <ChevronDown size={15} />
-        </button>
-
         <nav aria-label="主导航">
           <span className="nav-label">运营工作台</span>
           {navigation.map(({ page: itemPage, label, icon: Icon }) => (
@@ -201,11 +191,6 @@ export function AppShell({
                     : '状态未知'}
             </span>
             <button className="icon-button" aria-label="通知" onClick={() => onNotify('通知中心尚未接入')}><Bell size={18} /></button>
-            <button className="profile-button" type="button" onClick={() => onNotify('用户与权限菜单尚未接入')}>
-              <span>XY</span>
-              <div><strong>Yanfei Xiong</strong><small>实验室管理员</small></div>
-              <ChevronDown size={14} />
-            </button>
           </div>
         </header>
         <main className="page-content">{children}</main>

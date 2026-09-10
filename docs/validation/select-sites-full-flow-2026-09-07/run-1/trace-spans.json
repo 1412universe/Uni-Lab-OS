@@ -1,0 +1,4272 @@
+[
+  {
+    "name": "edge.control.event.send",
+    "span_id": "b11c5277d874d2ce",
+    "parent_span_id": "59406bc55c92825e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:34.005468Z",
+    "duration_ns": 1128000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.material.retry",
+    "span_id": "2e9e78346081e9d8",
+    "parent_span_id": "7221dbfcdce85f0f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.885787Z",
+    "duration_ns": 3000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "7221dbfcdce85f0f",
+    "parent_span_id": "37fce17b499af661",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.88577Z",
+    "duration_ns": 34000,
+    "has_error": false
+  },
+  {
+    "name": "material.release",
+    "span_id": "5539232d8ef1fac0",
+    "parent_span_id": "0be8e99879f884d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.757538Z",
+    "duration_ns": 760000,
+    "has_error": false
+  },
+  {
+    "name": "material.release",
+    "span_id": "79033a6d24d02351",
+    "parent_span_id": "0be8e99879f884d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.756948Z",
+    "duration_ns": 541000,
+    "has_error": false
+  },
+  {
+    "name": "material.release",
+    "span_id": "ecccb171d25b4c6c",
+    "parent_span_id": "0be8e99879f884d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.756332Z",
+    "duration_ns": 543000,
+    "has_error": false
+  },
+  {
+    "name": "material.release",
+    "span_id": "4d48d46f4bdfd90c",
+    "parent_span_id": "0be8e99879f884d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.754807Z",
+    "duration_ns": 1453000,
+    "has_error": false
+  },
+  {
+    "name": "material.release",
+    "span_id": "f537f59fce81ad1a",
+    "parent_span_id": "0be8e99879f884d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.753305Z",
+    "duration_ns": 1328000,
+    "has_error": false
+  },
+  {
+    "name": "material.workflow.release",
+    "span_id": "0be8e99879f884d4",
+    "parent_span_id": "37fce17b499af661",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:33.75288Z",
+    "duration_ns": 5832000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "cd5765f52ec3f564",
+    "parent_span_id": "37fce17b499af661",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:32.634401Z",
+    "duration_ns": 28397000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "dc9210246a6d7b49",
+    "parent_span_id": "956dc334abf40318",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:32.560514Z",
+    "duration_ns": 1326060000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "956dc334abf40318",
+    "parent_span_id": "59406bc55c92825e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:32.552145Z",
+    "duration_ns": 1336040000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "59406bc55c92825e",
+    "parent_span_id": "a53a691f2748c48b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:32.55197Z",
+    "duration_ns": 1337151000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "614ad5d797849d67",
+    "parent_span_id": "2f461da1aec5c8fd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.154263Z",
+    "duration_ns": 1928000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "20039cd20700c39c",
+    "parent_span_id": "f845e70ed6be90de",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.151731Z",
+    "duration_ns": 2475000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "e52c29f30b6887c1",
+    "parent_span_id": "3dd6e480ca115905",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.148965Z",
+    "duration_ns": 2658000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "2f461da1aec5c8fd",
+    "parent_span_id": "a53a691f2748c48b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.089172Z",
+    "duration_ns": 1463000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "2b2e07f860dd4593",
+    "parent_span_id": "619d4a2768390908",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.061546Z",
+    "duration_ns": 2481466000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "f6cb15cb8db1d8cb",
+    "parent_span_id": "05dd5146cb87f939",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.055968Z",
+    "duration_ns": 729000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "05dd5146cb87f939",
+    "parent_span_id": "619d4a2768390908",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.011226Z",
+    "duration_ns": 46699000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "619d4a2768390908",
+    "parent_span_id": "a53a691f2748c48b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.011119Z",
+    "duration_ns": 47912000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "3dd6e480ca115905",
+    "parent_span_id": "a53a691f2748c48b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.010518Z",
+    "duration_ns": 277000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "a53a691f2748c48b",
+    "parent_span_id": "535722614b81f8db",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:30.008802Z",
+    "duration_ns": 2202000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "535722614b81f8db",
+    "parent_span_id": "37fce17b499af661",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:29.85763Z",
+    "duration_ns": 181370000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "37fce17b499af661",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:29.857582Z",
+    "duration_ns": 4028269000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "29604c4726ceaea4",
+    "parent_span_id": "8ce924fd2cb00182",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:29.851919Z",
+    "duration_ns": 187157000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "1c3b155122685410",
+    "parent_span_id": "8ce924fd2cb00182",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:28.690079Z",
+    "duration_ns": 1712000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "3fdfd14e3e84f654",
+    "parent_span_id": "a5760a22c133896c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:28.660343Z",
+    "duration_ns": 1380269000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "a5760a22c133896c",
+    "parent_span_id": "f845e70ed6be90de",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:28.652548Z",
+    "duration_ns": 1390060000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "f845e70ed6be90de",
+    "parent_span_id": "0db6b084b85dc825",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:28.652475Z",
+    "duration_ns": 1391897000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "f014d14de5c04fea",
+    "parent_span_id": "bcb09aece0ecbf9f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.275473Z",
+    "duration_ns": 234000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "10eede79be2571fe",
+    "parent_span_id": "b4d356dd3e5a844b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.274991Z",
+    "duration_ns": 425000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "bcb09aece0ecbf9f",
+    "parent_span_id": "0db6b084b85dc825",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.114454Z",
+    "duration_ns": 242000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "0a82495d3a35cd8e",
+    "parent_span_id": "e48fffb3568f967e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.09275Z",
+    "duration_ns": 2549407000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "e39d4440f7f2e2fa",
+    "parent_span_id": "bf41b3503264de5b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.078768Z",
+    "duration_ns": 1949000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "bf41b3503264de5b",
+    "parent_span_id": "e48fffb3568f967e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.076519Z",
+    "duration_ns": 13671000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "e48fffb3568f967e",
+    "parent_span_id": "0db6b084b85dc825",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.076364Z",
+    "duration_ns": 14626000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "b4d356dd3e5a844b",
+    "parent_span_id": "0db6b084b85dc825",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.075957Z",
+    "duration_ns": 91000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "0db6b084b85dc825",
+    "parent_span_id": "521955b60671d5ea",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.075442Z",
+    "duration_ns": 699000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "b4cff330c3557d46",
+    "parent_span_id": "baa3f98dd5c267e2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:26.070646Z",
+    "duration_ns": 2301000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "521955b60671d5ea",
+    "parent_span_id": "8ce924fd2cb00182",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:25.874789Z",
+    "duration_ns": 160182000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "8ce924fd2cb00182",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:25.874747Z",
+    "duration_ns": 4164373000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "b4365f751d8905cb",
+    "parent_span_id": "51298634b5b29a3e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:25.862947Z",
+    "duration_ns": 172151000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "1dc3854c5e3dd4b3",
+    "parent_span_id": "51298634b5b29a3e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:24.627362Z",
+    "duration_ns": 2379000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "da1591df3875e688",
+    "parent_span_id": "4ec0df6a4bd0bd3c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:24.595197Z",
+    "duration_ns": 1441749000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "4ec0df6a4bd0bd3c",
+    "parent_span_id": "baa3f98dd5c267e2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:24.583828Z",
+    "duration_ns": 1455471000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "baa3f98dd5c267e2",
+    "parent_span_id": "69637e796b573b61",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:24.583675Z",
+    "duration_ns": 1457324000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "6a1a8c2bc53151c1",
+    "parent_span_id": "b1cde838d8018261",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.42845Z",
+    "duration_ns": 462000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "8a87ca7db7b78f67",
+    "parent_span_id": "069d3d46ca24fff8",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.190616Z",
+    "duration_ns": 35472000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "b1cde838d8018261",
+    "parent_span_id": "69637e796b573b61",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.179513Z",
+    "duration_ns": 29162000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "a61741371c2a17de",
+    "parent_span_id": "ceb8f43c1294a626",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.176746Z",
+    "duration_ns": 13809000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "da8b1e30bd35e27f",
+    "parent_span_id": "5a246a00ff372afc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.040868Z",
+    "duration_ns": 2533095000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "85f71fed7374ff34",
+    "parent_span_id": "70e0a119b2cdb961",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.034974Z",
+    "duration_ns": 1581000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "70e0a119b2cdb961",
+    "parent_span_id": "5a246a00ff372afc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.028371Z",
+    "duration_ns": 9625000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "5a246a00ff372afc",
+    "parent_span_id": "69637e796b573b61",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.028286Z",
+    "duration_ns": 10546000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "069d3d46ca24fff8",
+    "parent_span_id": "69637e796b573b61",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.027803Z",
+    "duration_ns": 209000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "69637e796b573b61",
+    "parent_span_id": "ba0c693898b44ba0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:22.027065Z",
+    "duration_ns": 1136000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "ba0c693898b44ba0",
+    "parent_span_id": "51298634b5b29a3e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:21.731272Z",
+    "duration_ns": 255807000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "51298634b5b29a3e",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:21.731227Z",
+    "duration_ns": 4304144000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "23b4b1a182c7ca5b",
+    "parent_span_id": "eb6790ad393220b0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:21.724729Z",
+    "duration_ns": 262545000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "e3cf14c4c7e0f653",
+    "parent_span_id": "f2e60c37068ff4e2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:20.407858Z",
+    "duration_ns": 1580328000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "f2e60c37068ff4e2",
+    "parent_span_id": "ceb8f43c1294a626",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:20.389351Z",
+    "duration_ns": 1600098000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "ceb8f43c1294a626",
+    "parent_span_id": "4c3dd10cd4059f05",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:20.388993Z",
+    "duration_ns": 1601869000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "358d6c1d1ca0d646",
+    "parent_span_id": "fc86b2ea8b7622f0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.264006Z",
+    "duration_ns": 279000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "85e9648d45310c1e",
+    "parent_span_id": "b7caa677ad17a248",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.261756Z",
+    "duration_ns": 2169000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "840e43ba14994c1c",
+    "parent_span_id": "6d9c66e983e20d53",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.258953Z",
+    "duration_ns": 2486000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "fc86b2ea8b7622f0",
+    "parent_span_id": "4c3dd10cd4059f05",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.205911Z",
+    "duration_ns": 1862000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "024324ea26321501",
+    "parent_span_id": "0c6df28f907e5112",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.185295Z",
+    "duration_ns": 1199124000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "68293754e98644ae",
+    "parent_span_id": "38952540bba290ce",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.181289Z",
+    "duration_ns": 758000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "38952540bba290ce",
+    "parent_span_id": "0c6df28f907e5112",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.180338Z",
+    "duration_ns": 2333000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "0c6df28f907e5112",
+    "parent_span_id": "4c3dd10cd4059f05",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.180236Z",
+    "duration_ns": 3094000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "6d9c66e983e20d53",
+    "parent_span_id": "4c3dd10cd4059f05",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.179811Z",
+    "duration_ns": 181000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "4c3dd10cd4059f05",
+    "parent_span_id": "12f2cfeb13a21502",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.179114Z",
+    "duration_ns": 1049000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "12f2cfeb13a21502",
+    "parent_span_id": "eb6790ad393220b0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.073288Z",
+    "duration_ns": 103264000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "eb6790ad393220b0",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.073241Z",
+    "duration_ns": 2914123000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "d1ee6783dc78f229",
+    "parent_span_id": "42df60c61f635acd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:19.069296Z",
+    "duration_ns": 107362000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "9931be9743eb08a0",
+    "parent_span_id": "42df60c61f635acd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:17.997573Z",
+    "duration_ns": 1592000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "8fffa0c1cb4c89d7",
+    "parent_span_id": "2102e216f5daad51",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:17.970719Z",
+    "duration_ns": 1207205000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "2102e216f5daad51",
+    "parent_span_id": "b7caa677ad17a248",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:17.965389Z",
+    "duration_ns": 1214052000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "b7caa677ad17a248",
+    "parent_span_id": "d64abe0da16da826",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:17.965324Z",
+    "duration_ns": 1215673000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "bdc76dc5d56893b7",
+    "parent_span_id": "4af27a6e1e4b60b9",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.398716Z",
+    "duration_ns": 458000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "e71e03e0bd1fdbb2",
+    "parent_span_id": "38b32f50c3f65da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.398262Z",
+    "duration_ns": 411000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "7e03cfeea8df723a",
+    "parent_span_id": "2e391005d1937ecd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.395635Z",
+    "duration_ns": 2481000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "4af27a6e1e4b60b9",
+    "parent_span_id": "d64abe0da16da826",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.284958Z",
+    "duration_ns": 2550000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "ec1c9041d539576e",
+    "parent_span_id": "d8861cbbbe3a8832",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.260531Z",
+    "duration_ns": 3695930000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "f3f91b6a7605fdd0",
+    "parent_span_id": "af1591e426410398",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.25143Z",
+    "duration_ns": 1712000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "af1591e426410398",
+    "parent_span_id": "d8861cbbbe3a8832",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.249772Z",
+    "duration_ns": 6711000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "d8861cbbbe3a8832",
+    "parent_span_id": "d64abe0da16da826",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.249553Z",
+    "duration_ns": 8211000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "38b32f50c3f65da6",
+    "parent_span_id": "d64abe0da16da826",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.248771Z",
+    "duration_ns": 308000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "d64abe0da16da826",
+    "parent_span_id": "64fef0e957a4b9e7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.247906Z",
+    "duration_ns": 1488000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "64fef0e957a4b9e7",
+    "parent_span_id": "42df60c61f635acd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.119382Z",
+    "duration_ns": 112019000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "42df60c61f635acd",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.119341Z",
+    "duration_ns": 5057434000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "8706170b274a716f",
+    "parent_span_id": "bb3cc796308e2fdd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:14.114457Z",
+    "duration_ns": 117035000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "a8eb6ffef0255a89",
+    "parent_span_id": "1b7b91f5acebb5b6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:12.91137Z",
+    "duration_ns": 1321653000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "1b7b91f5acebb5b6",
+    "parent_span_id": "2e391005d1937ecd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:12.905894Z",
+    "duration_ns": 1330312000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "2e391005d1937ecd",
+    "parent_span_id": "df1ca2db5fd9fef2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:12.905795Z",
+    "duration_ns": 1331423000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "24510f9edcbe81db",
+    "parent_span_id": "2afc84d06d043019",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:12.351083Z",
+    "duration_ns": 1602000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "0a209c638fcd3d3f",
+    "parent_span_id": "7b6c0ab35fcdc737",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:12.248949Z",
+    "duration_ns": 50000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "d7da29979021d59f",
+    "parent_span_id": "6f64872754101d44",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.140834Z",
+    "duration_ns": 1418000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "48e94bf208526b15",
+    "parent_span_id": "3c1a324b5e6bd38b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.139633Z",
+    "duration_ns": 1142000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "a66367235739ef85",
+    "parent_span_id": "0ef0937c3273115f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.138581Z",
+    "duration_ns": 999000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "f2076c6b4e5e41a5",
+    "parent_span_id": "480a7500f993d0fc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.136575Z",
+    "duration_ns": 1929000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "d5c505df8c079a33",
+    "parent_span_id": "4c911c2e6dab0035",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.091359Z",
+    "duration_ns": 1171965000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "4c911c2e6dab0035",
+    "parent_span_id": "2afc84d06d043019",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.086427Z",
+    "duration_ns": 1180285000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "2afc84d06d043019",
+    "parent_span_id": "e254eb32d4e145b7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.086376Z",
+    "duration_ns": 1181957000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "6f64872754101d44",
+    "parent_span_id": "e254eb32d4e145b7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.039013Z",
+    "duration_ns": 547000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "652ebf1802d7281e",
+    "parent_span_id": "5ab4bae8ef8e33bf",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.010843Z",
+    "duration_ns": 68842000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "3c1a324b5e6bd38b",
+    "parent_span_id": "df1ca2db5fd9fef2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:11.00689Z",
+    "duration_ns": 7328000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "a17502290222fcdc",
+    "parent_span_id": "7cf5035f084ff190",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.975242Z",
+    "duration_ns": 1924615000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "a1f4fa2a03f41e58",
+    "parent_span_id": "9da591504dbea498",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.972739Z",
+    "duration_ns": 1285000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "99d18c44653cb042",
+    "parent_span_id": "094350258907d5ca",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.960438Z",
+    "duration_ns": 3311000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "9da591504dbea498",
+    "parent_span_id": "5ab4bae8ef8e33bf",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.955549Z",
+    "duration_ns": 22299000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "5ab4bae8ef8e33bf",
+    "parent_span_id": "e254eb32d4e145b7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.955456Z",
+    "duration_ns": 48836000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "480a7500f993d0fc",
+    "parent_span_id": "e254eb32d4e145b7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.95491Z",
+    "duration_ns": 89000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "e254eb32d4e145b7",
+    "parent_span_id": "5354e9764a7487d0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.953681Z",
+    "duration_ns": 1537000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "001377863c5ea0cc",
+    "parent_span_id": "c868c93ab618fb15",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.934784Z",
+    "duration_ns": 705000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "094350258907d5ca",
+    "parent_span_id": "7cf5035f084ff190",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.788846Z",
+    "duration_ns": 179038000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "7cf5035f084ff190",
+    "parent_span_id": "df1ca2db5fd9fef2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.788717Z",
+    "duration_ns": 183100000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "c868c93ab618fb15",
+    "parent_span_id": "df1ca2db5fd9fef2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.787461Z",
+    "duration_ns": 386000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "df1ca2db5fd9fef2",
+    "parent_span_id": "68e4a539d3b70509",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.78676Z",
+    "duration_ns": 1722000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "5354e9764a7487d0",
+    "parent_span_id": "7b6c0ab35fcdc737",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.784137Z",
+    "duration_ns": 164075000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "7b6c0ab35fcdc737",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.784092Z",
+    "duration_ns": 1465021000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "68e4a539d3b70509",
+    "parent_span_id": "bb3cc796308e2fdd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.538551Z",
+    "duration_ns": 236672000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "bb3cc796308e2fdd",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.538503Z",
+    "duration_ns": 3693128000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "e1e0fe834881ab67",
+    "parent_span_id": "053f68aec58aa0c0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:10.532831Z",
+    "duration_ns": 415468000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "5612e36cab3873ae",
+    "parent_span_id": "053f68aec58aa0c0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:09.587568Z",
+    "duration_ns": 1013000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "93d1543eef50c398",
+    "parent_span_id": "8150fa51ee520837",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:09.559346Z",
+    "duration_ns": 1393499000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "8150fa51ee520837",
+    "parent_span_id": "0ef0937c3273115f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:09.554364Z",
+    "duration_ns": 1402170000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "0ef0937c3273115f",
+    "parent_span_id": "fdd14ca1d6f7853f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:09.554182Z",
+    "duration_ns": 1404181000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "8cc0f563e217e32a",
+    "parent_span_id": "8a938570ef2e8e23",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.304732Z",
+    "duration_ns": 1949000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "5660bf119cd36fac",
+    "parent_span_id": "46d7095e9a39db3f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.303447Z",
+    "duration_ns": 1179000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "01e42177328366ac",
+    "parent_span_id": "9a26760563c9cdea",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.288219Z",
+    "duration_ns": 15069000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "8a938570ef2e8e23",
+    "parent_span_id": "fdd14ca1d6f7853f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.218402Z",
+    "duration_ns": 514000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "fc0dd12f2b340d56",
+    "parent_span_id": "a0902af87f5646c6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.193234Z",
+    "duration_ns": 2353331000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "0e9d0bca74aff5f5",
+    "parent_span_id": "d3a6364bdb4b7cab",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.183314Z",
+    "duration_ns": 3430000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "d3a6364bdb4b7cab",
+    "parent_span_id": "a0902af87f5646c6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.178577Z",
+    "duration_ns": 10674000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "a0902af87f5646c6",
+    "parent_span_id": "fdd14ca1d6f7853f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.178208Z",
+    "duration_ns": 12192000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "46d7095e9a39db3f",
+    "parent_span_id": "fdd14ca1d6f7853f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.177575Z",
+    "duration_ns": 254000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "fdd14ca1d6f7853f",
+    "parent_span_id": "190c97aa7e2b3d72",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:07.176608Z",
+    "duration_ns": 1443000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "190c97aa7e2b3d72",
+    "parent_span_id": "053f68aec58aa0c0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.938676Z",
+    "duration_ns": 175824000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "053f68aec58aa0c0",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.938636Z",
+    "duration_ns": 4009714000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "8d672a4e73b7cdac",
+    "parent_span_id": "c5675eda2c91a041",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.933645Z",
+    "duration_ns": 180947000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "142eaf286b890d12",
+    "parent_span_id": "c5675eda2c91a041",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.071953Z",
+    "duration_ns": 878000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "296120bfc3a68ce1",
+    "parent_span_id": "f501424728725988",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.041868Z",
+    "duration_ns": 1073241000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "f501424728725988",
+    "parent_span_id": "9a26760563c9cdea",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.037007Z",
+    "duration_ns": 1079610000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "9a26760563c9cdea",
+    "parent_span_id": "defacec6c3e84880",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:06.036922Z",
+    "duration_ns": 1080530000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "cf78d8fb96f265dd",
+    "parent_span_id": "7b5ec68bacf9a987",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.917626Z",
+    "duration_ns": 212000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "4053b2893b33c166",
+    "parent_span_id": "a9cab7e962076f12",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.917233Z",
+    "duration_ns": 347000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "7b5ec68bacf9a987",
+    "parent_span_id": "defacec6c3e84880",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.780999Z",
+    "duration_ns": 3998000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "6be2690c65a1babd",
+    "parent_span_id": "66bdb2c149f4f310",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.752963Z",
+    "duration_ns": 3276602000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "1dc2e25d4d55e036",
+    "parent_span_id": "6b696297e8693370",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.748408Z",
+    "duration_ns": 763000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "6b696297e8693370",
+    "parent_span_id": "66bdb2c149f4f310",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.716976Z",
+    "duration_ns": 32928000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "66bdb2c149f4f310",
+    "parent_span_id": "defacec6c3e84880",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.716817Z",
+    "duration_ns": 33975000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "5020b4ce17443e9c",
+    "parent_span_id": "3f570ce6b1dec9b9",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.716382Z",
+    "duration_ns": 279000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "3f570ce6b1dec9b9",
+    "parent_span_id": "defacec6c3e84880",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.716083Z",
+    "duration_ns": 99000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "defacec6c3e84880",
+    "parent_span_id": "9159dc2328ff60c2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.715699Z",
+    "duration_ns": 570000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "9159dc2328ff60c2",
+    "parent_span_id": "c5675eda2c91a041",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.625945Z",
+    "duration_ns": 116655000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "c5675eda2c91a041",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.625904Z",
+    "duration_ns": 4488734000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "c59e488d747ab15f",
+    "parent_span_id": "184081d4367edbd5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:02.620838Z",
+    "duration_ns": 121850000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "a128749f62042f4e",
+    "parent_span_id": "64bb9a90459d7df6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:01.86816Z",
+    "duration_ns": 876251000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "64bb9a90459d7df6",
+    "parent_span_id": "a9cab7e962076f12",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:01.864598Z",
+    "duration_ns": 881913000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "a9cab7e962076f12",
+    "parent_span_id": "50795653138d17d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:02:01.864549Z",
+    "duration_ns": 883349000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "7122c35c9b586741",
+    "parent_span_id": "30b7b248337220a5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.290694Z",
+    "duration_ns": 460000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "20aefded96b384d7",
+    "parent_span_id": "e2cdb1880d77f915",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.290309Z",
+    "duration_ns": 352000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "3102c1015863d157",
+    "parent_span_id": "d4c6186a06cc5a47",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.289632Z",
+    "duration_ns": 630000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "30b7b248337220a5",
+    "parent_span_id": "50795653138d17d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.221458Z",
+    "duration_ns": 11649000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "b231ffe1ec48a080",
+    "parent_span_id": "961630f95132d1e0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.186344Z",
+    "duration_ns": 2671337000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "f8bf5f9773308752",
+    "parent_span_id": "087213859a522e40",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.178369Z",
+    "duration_ns": 1544000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "087213859a522e40",
+    "parent_span_id": "961630f95132d1e0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.176364Z",
+    "duration_ns": 5292000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "961630f95132d1e0",
+    "parent_span_id": "50795653138d17d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.176164Z",
+    "duration_ns": 7017000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "e2cdb1880d77f915",
+    "parent_span_id": "50795653138d17d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.175521Z",
+    "duration_ns": 238000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "50795653138d17d4",
+    "parent_span_id": "b3de76521e4d58d4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.175062Z",
+    "duration_ns": 850000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "b3de76521e4d58d4",
+    "parent_span_id": "184081d4367edbd5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.006428Z",
+    "duration_ns": 148289000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "184081d4367edbd5",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.006386Z",
+    "duration_ns": 3736408000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "a7bb302923589b56",
+    "parent_span_id": "2649096c55c3f8fe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:59.002252Z",
+    "duration_ns": 152552000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "db0434a74d118181",
+    "parent_span_id": "2649096c55c3f8fe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:58.172213Z",
+    "duration_ns": 3374000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "8fed8078a4960353",
+    "parent_span_id": "ae2c5894176a1785",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:58.143458Z",
+    "duration_ns": 1013174000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "ae2c5894176a1785",
+    "parent_span_id": "d4c6186a06cc5a47",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:58.138637Z",
+    "duration_ns": 1019977000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "d4c6186a06cc5a47",
+    "parent_span_id": "162f9a68f4c362af",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:58.13857Z",
+    "duration_ns": 1020354000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "84c25cb298c79f8d",
+    "parent_span_id": "f238724111677e1e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.99548Z",
+    "duration_ns": 599000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "01bf99a493ba92b9",
+    "parent_span_id": "6f259264314046ef",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.995082Z",
+    "duration_ns": 278000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "83c7806215db99a7",
+    "parent_span_id": "ec29a048f2e6071f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.99444Z",
+    "duration_ns": 591000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "f238724111677e1e",
+    "parent_span_id": "162f9a68f4c362af",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.843228Z",
+    "duration_ns": 537000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "18a6e5932d1aaf45",
+    "parent_span_id": "dc0ff18b546af1ca",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.817047Z",
+    "duration_ns": 3315468000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "08b25023066abce2",
+    "parent_span_id": "f6888fcd5f8cbfbc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.807698Z",
+    "duration_ns": 2184000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "f6888fcd5f8cbfbc",
+    "parent_span_id": "dc0ff18b546af1ca",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.806496Z",
+    "duration_ns": 5284000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "dc0ff18b546af1ca",
+    "parent_span_id": "162f9a68f4c362af",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.806376Z",
+    "duration_ns": 7628000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "ec29a048f2e6071f",
+    "parent_span_id": "162f9a68f4c362af",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.806045Z",
+    "duration_ns": 126000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "162f9a68f4c362af",
+    "parent_span_id": "6526f2b29d06789c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.804768Z",
+    "duration_ns": 1507000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "6526f2b29d06789c",
+    "parent_span_id": "2649096c55c3f8fe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.706582Z",
+    "duration_ns": 95516000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "2649096c55c3f8fe",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.706541Z",
+    "duration_ns": 4448320000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "f9e0b0799571cc2c",
+    "parent_span_id": "823175f9bd9a4777",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:54.701103Z",
+    "duration_ns": 101092000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "6ac8b3f8941af38a",
+    "parent_span_id": "f4cd5e4971a35e28",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:53.90338Z",
+    "duration_ns": 900388000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "f4cd5e4971a35e28",
+    "parent_span_id": "6f259264314046ef",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:53.897651Z",
+    "duration_ns": 908229000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "6f259264314046ef",
+    "parent_span_id": "bea1fe13bf0f7dbe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:53.897561Z",
+    "duration_ns": 909780000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "b83b10f01e577e4a",
+    "parent_span_id": "1b5e7c3113103319",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.855701Z",
+    "duration_ns": 539000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "55d2e811fb224f81",
+    "parent_span_id": "5efc1ea2f1172276",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.65046Z",
+    "duration_ns": 4276000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "1b5e7c3113103319",
+    "parent_span_id": "bea1fe13bf0f7dbe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.64796Z",
+    "duration_ns": 594000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "e07d85bfc9712a89",
+    "parent_span_id": "6725d1639c8552dc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.645959Z",
+    "duration_ns": 4447000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "6b04183399b68852",
+    "parent_span_id": "60785f69a85b6ba5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.617326Z",
+    "duration_ns": 30268713000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "ace50172e1df93a8",
+    "parent_span_id": "ee9d861947a39d4b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.607199Z",
+    "duration_ns": 1927000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "ee9d861947a39d4b",
+    "parent_span_id": "60785f69a85b6ba5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.605952Z",
+    "duration_ns": 6965000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "60785f69a85b6ba5",
+    "parent_span_id": "bea1fe13bf0f7dbe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.605867Z",
+    "duration_ns": 8070000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "6725d1639c8552dc",
+    "parent_span_id": "bea1fe13bf0f7dbe",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.605342Z",
+    "duration_ns": 84000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "bea1fe13bf0f7dbe",
+    "parent_span_id": "11c4ffdfe15eda12",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.605077Z",
+    "duration_ns": 675000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "11c4ffdfe15eda12",
+    "parent_span_id": "823175f9bd9a4777",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.494667Z",
+    "duration_ns": 107976000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "823175f9bd9a4777",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.494626Z",
+    "duration_ns": 31307910000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "3be7ff56b1672f2d",
+    "parent_span_id": "64a5575732201b5b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:23.490087Z",
+    "duration_ns": 112643000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "6f9b51d0ac967c63",
+    "parent_span_id": "64a5575732201b5b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:22.777148Z",
+    "duration_ns": 1332000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "ac94bf8f539d1df4",
+    "parent_span_id": "af2445818cea14ac",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:22.751537Z",
+    "duration_ns": 852847000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "af2445818cea14ac",
+    "parent_span_id": "5efc1ea2f1172276",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:22.746771Z",
+    "duration_ns": 859359000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "5efc1ea2f1172276",
+    "parent_span_id": "3878868a7289bd49",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:22.746591Z",
+    "duration_ns": 860229000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "56b3154365049f4d",
+    "parent_span_id": "90fa4fa6aba20d22",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.398011Z",
+    "duration_ns": 1573000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "1cdd16251290e811",
+    "parent_span_id": "2e9fa9eb9899d761",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.397749Z",
+    "duration_ns": 228000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "b23b21129d4c6ee7",
+    "parent_span_id": "7601c8a5186cf3f5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.396497Z",
+    "duration_ns": 1195000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "90fa4fa6aba20d22",
+    "parent_span_id": "3878868a7289bd49",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.322323Z",
+    "duration_ns": 11773000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "11ecf8ece50fa3aa",
+    "parent_span_id": "cd856cc325f5df29",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.295154Z",
+    "duration_ns": 3446233000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "9af32074f543db8b",
+    "parent_span_id": "1b39c82b55084fb6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.28658Z",
+    "duration_ns": 1389000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "1b39c82b55084fb6",
+    "parent_span_id": "cd856cc325f5df29",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.280131Z",
+    "duration_ns": 10616000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "cd856cc325f5df29",
+    "parent_span_id": "3878868a7289bd49",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.279821Z",
+    "duration_ns": 12197000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "2e9fa9eb9899d761",
+    "parent_span_id": "3878868a7289bd49",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.279171Z",
+    "duration_ns": 190000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "3878868a7289bd49",
+    "parent_span_id": "625f6a2284686647",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.278339Z",
+    "duration_ns": 1143000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "625f6a2284686647",
+    "parent_span_id": "64a5575732201b5b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.078183Z",
+    "duration_ns": 191360000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "64a5575732201b5b",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.078141Z",
+    "duration_ns": 4524705000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "35aebcbcf15344e4",
+    "parent_span_id": "3ff2b077c19c0a2e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:19.074719Z",
+    "duration_ns": 194972000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "89467d2b450073d0",
+    "parent_span_id": "3ff2b077c19c0a2e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:18.439032Z",
+    "duration_ns": 971000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "940c594bb9fc88bd",
+    "parent_span_id": "bcf0cc8e6dae6b07",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:18.41132Z",
+    "duration_ns": 859166000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "bcf0cc8e6dae6b07",
+    "parent_span_id": "7601c8a5186cf3f5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:18.407887Z",
+    "duration_ns": 864129000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "7601c8a5186cf3f5",
+    "parent_span_id": "d2945d2c9a0db167",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:18.407784Z",
+    "duration_ns": 866007000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "f80da1c314eae275",
+    "parent_span_id": "6d6b487be7a6949a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:16.175973Z",
+    "duration_ns": 485000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "0e035e57decaee94",
+    "parent_span_id": "15e09bae4452e65a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.973322Z",
+    "duration_ns": 1187000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "7936a52b33ee98e4",
+    "parent_span_id": "b2dadc84fdc8f28e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.943513Z",
+    "duration_ns": 29731000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "6d6b487be7a6949a",
+    "parent_span_id": "d2945d2c9a0db167",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.934169Z",
+    "duration_ns": 32342000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "22993b3d48efa3a1",
+    "parent_span_id": "3b9f11163f14c832",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.90966Z",
+    "duration_ns": 2492403000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "db7af7aa40d5cfeb",
+    "parent_span_id": "45ba128293b5d639",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.905009Z",
+    "duration_ns": 643000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "45ba128293b5d639",
+    "parent_span_id": "3b9f11163f14c832",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.903868Z",
+    "duration_ns": 3230000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "3b9f11163f14c832",
+    "parent_span_id": "d2945d2c9a0db167",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.903756Z",
+    "duration_ns": 4080000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "15e09bae4452e65a",
+    "parent_span_id": "d2945d2c9a0db167",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.903527Z",
+    "duration_ns": 83000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "d2945d2c9a0db167",
+    "parent_span_id": "02845d82b9f959bc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.903194Z",
+    "duration_ns": 489000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "02845d82b9f959bc",
+    "parent_span_id": "3ff2b077c19c0a2e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.730051Z",
+    "duration_ns": 101939000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "3ff2b077c19c0a2e",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.729993Z",
+    "duration_ns": 3539823000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "1282a6b3b709803b",
+    "parent_span_id": "d0b97a5c6662c32e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:15.725325Z",
+    "duration_ns": 106791000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "79ba4a2d4380ae6a",
+    "parent_span_id": "1bdcfd656c5192c2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:14.979958Z",
+    "duration_ns": 852608000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "1bdcfd656c5192c2",
+    "parent_span_id": "b2dadc84fdc8f28e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:14.974671Z",
+    "duration_ns": 859289000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "b2dadc84fdc8f28e",
+    "parent_span_id": "fd0448196eeb72ff",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:14.974593Z",
+    "duration_ns": 859684000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "6c9bf46e482b50ce",
+    "parent_span_id": "c977633c47a83284",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.917993Z",
+    "duration_ns": 453000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "e433b5744981bbf7",
+    "parent_span_id": "fb3bef9ee77e78cd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.917163Z",
+    "duration_ns": 792000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "6f9f816b38e529f2",
+    "parent_span_id": "ab5116b481c5ae9d",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.916234Z",
+    "duration_ns": 873000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "c977633c47a83284",
+    "parent_span_id": "fd0448196eeb72ff",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.758115Z",
+    "duration_ns": 2131000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "9b638aa46c5a144c",
+    "parent_span_id": "4c08570d3c6084f2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.740961Z",
+    "duration_ns": 1229087000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "93f4eeb556d08553",
+    "parent_span_id": "cb47e5fa3db56d44",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.736678Z",
+    "duration_ns": 940000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "cb47e5fa3db56d44",
+    "parent_span_id": "4c08570d3c6084f2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.734516Z",
+    "duration_ns": 3786000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "4c08570d3c6084f2",
+    "parent_span_id": "fd0448196eeb72ff",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.73444Z",
+    "duration_ns": 4688000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "ab5116b481c5ae9d",
+    "parent_span_id": "fd0448196eeb72ff",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.734168Z",
+    "duration_ns": 86000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "fd0448196eeb72ff",
+    "parent_span_id": "dd7aca5b592e5545",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.733827Z",
+    "duration_ns": 515000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "dd7aca5b592e5545",
+    "parent_span_id": "d0b97a5c6662c32e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.638121Z",
+    "duration_ns": 94439000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "d0b97a5c6662c32e",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.638074Z",
+    "duration_ns": 2194120000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "55aecb4264eb8e4a",
+    "parent_span_id": "9b1017a2fc9a68d7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:13.632924Z",
+    "duration_ns": 99717000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "7a059a89da2745e1",
+    "parent_span_id": "9b1017a2fc9a68d7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:12.979052Z",
+    "duration_ns": 1175000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "39ce5ed7c1baf8b7",
+    "parent_span_id": "3a5f0ab9a947aad2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:12.950637Z",
+    "duration_ns": 783076000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "3a5f0ab9a947aad2",
+    "parent_span_id": "fb3bef9ee77e78cd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:12.946935Z",
+    "duration_ns": 788431000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "fb3bef9ee77e78cd",
+    "parent_span_id": "3629b915d6834f2b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:12.94687Z",
+    "duration_ns": 789135000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "4d8765588fbd2002",
+    "parent_span_id": "594daa33a0ea8597",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.85961Z",
+    "duration_ns": 255000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "c4e0d05a8e55a32e",
+    "parent_span_id": "a907c36648588397",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.858707Z",
+    "duration_ns": 854000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "1b725ab6f86057f4",
+    "parent_span_id": "5e5398c5cdb5c97a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.857906Z",
+    "duration_ns": 700000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "594daa33a0ea8597",
+    "parent_span_id": "3629b915d6834f2b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.682465Z",
+    "duration_ns": 761000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "178808b8a13b21cd",
+    "parent_span_id": "6282759f777bb112",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.666184Z",
+    "duration_ns": 3274858000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "517d84b57026b07a",
+    "parent_span_id": "180ad100a5223406",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.661683Z",
+    "duration_ns": 953000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "180ad100a5223406",
+    "parent_span_id": "6282759f777bb112",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.660682Z",
+    "duration_ns": 3117000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "6282759f777bb112",
+    "parent_span_id": "3629b915d6834f2b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.660478Z",
+    "duration_ns": 4044000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "5e5398c5cdb5c97a",
+    "parent_span_id": "3629b915d6834f2b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.660151Z",
+    "duration_ns": 139000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "3629b915d6834f2b",
+    "parent_span_id": "2c0bdc9875bc8d2c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.659672Z",
+    "duration_ns": 717000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "2c0bdc9875bc8d2c",
+    "parent_span_id": "9b1017a2fc9a68d7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.563643Z",
+    "duration_ns": 93980000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "9b1017a2fc9a68d7",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.563598Z",
+    "duration_ns": 4169086000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "8c4b7c2edd4daef0",
+    "parent_span_id": "3fc94fa32a568164",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:09.558612Z",
+    "duration_ns": 99099000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "69145ba085448613",
+    "parent_span_id": "e24b3e120e5f12a4",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:08.991022Z",
+    "duration_ns": 667607000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "e24b3e120e5f12a4",
+    "parent_span_id": "a907c36648588397",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:08.980743Z",
+    "duration_ns": 679305000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "a907c36648588397",
+    "parent_span_id": "678762f013d63955",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:08.979011Z",
+    "duration_ns": 682120000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "e7e9a33702818b03",
+    "parent_span_id": "d2740f0a54e94e72",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.823187Z",
+    "duration_ns": 162000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "95486182c578f83b",
+    "parent_span_id": "d54f9dc7dccaa662",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.822969Z",
+    "duration_ns": 186000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "0d67fdf2f0c31a0a",
+    "parent_span_id": "7b7aad717a3b5c2d",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.822519Z",
+    "duration_ns": 406000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d2740f0a54e94e72",
+    "parent_span_id": "678762f013d63955",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.771532Z",
+    "duration_ns": 7961000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "8016b7caade4d30d",
+    "parent_span_id": "61232d13dc995d84",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.744171Z",
+    "duration_ns": 3227853000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "62d456b94eadb86d",
+    "parent_span_id": "14348a260d098a6c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.734711Z",
+    "duration_ns": 2631000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "14348a260d098a6c",
+    "parent_span_id": "61232d13dc995d84",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.732661Z",
+    "duration_ns": 7039000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "61232d13dc995d84",
+    "parent_span_id": "678762f013d63955",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.732394Z",
+    "duration_ns": 8339000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d54f9dc7dccaa662",
+    "parent_span_id": "678762f013d63955",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.731879Z",
+    "duration_ns": 138000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "678762f013d63955",
+    "parent_span_id": "f7cb93e31306197d",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.73064Z",
+    "duration_ns": 1490000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "f7cb93e31306197d",
+    "parent_span_id": "3fc94fa32a568164",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.552775Z",
+    "duration_ns": 104658000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "3fc94fa32a568164",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.552728Z",
+    "duration_ns": 4105035000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "783e7a14dc4e46dd",
+    "parent_span_id": "4d1531134af4dd3f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.54801Z",
+    "duration_ns": 109504000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "3d77878de5357fb2",
+    "parent_span_id": "4d1531134af4dd3f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.077504Z",
+    "duration_ns": 910000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "2684fe16556b22bf",
+    "parent_span_id": "6699ccccb766a2a0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.04938Z",
+    "duration_ns": 608841000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "6699ccccb766a2a0",
+    "parent_span_id": "7b7aad717a3b5c2d",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.043705Z",
+    "duration_ns": 616584000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "7b7aad717a3b5c2d",
+    "parent_span_id": "db855012516492ba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:05.043555Z",
+    "duration_ns": 617130000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "a9e9d76a642d2619",
+    "parent_span_id": "e5f7fc666cc95f61",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.599817Z",
+    "duration_ns": 646000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "b2a6618539438f0c",
+    "parent_span_id": "267c77e517e4e965",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.598035Z",
+    "duration_ns": 1701000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "6cbe3bca5bdcb1f9",
+    "parent_span_id": "81526b072e5837dd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.596786Z",
+    "duration_ns": 1107000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "e5f7fc666cc95f61",
+    "parent_span_id": "db855012516492ba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.454842Z",
+    "duration_ns": 1762000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "38b520cafc106e0e",
+    "parent_span_id": "71c5911712a318d2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.439027Z",
+    "duration_ns": 2598619000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "c8fc29d1f2eee7cf",
+    "parent_span_id": "79f93dd49c529f95",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.433948Z",
+    "duration_ns": 858000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "79f93dd49c529f95",
+    "parent_span_id": "71c5911712a318d2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.432901Z",
+    "duration_ns": 3341000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "71c5911712a318d2",
+    "parent_span_id": "db855012516492ba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.432813Z",
+    "duration_ns": 4143000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "267c77e517e4e965",
+    "parent_span_id": "db855012516492ba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.432503Z",
+    "duration_ns": 80000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "db855012516492ba",
+    "parent_span_id": "89224d9d6b46a909",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.432146Z",
+    "duration_ns": 557000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "89224d9d6b46a909",
+    "parent_span_id": "4d1531134af4dd3f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.337179Z",
+    "duration_ns": 85706000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "4d1531134af4dd3f",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.337134Z",
+    "duration_ns": 3320446000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "1a256e59e5b5e726",
+    "parent_span_id": "8dd9b6a437a73980",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:02.333026Z",
+    "duration_ns": 89952000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "8b977ca8af6077a2",
+    "parent_span_id": "d6360531207e4942",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:01.932903Z",
+    "duration_ns": 490554000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "d6360531207e4942",
+    "parent_span_id": "81526b072e5837dd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:01.92872Z",
+    "duration_ns": 495881000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "81526b072e5837dd",
+    "parent_span_id": "b502058c0064e269",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:01.928661Z",
+    "duration_ns": 496197000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "f6a7feea7a78e640",
+    "parent_span_id": "f5b75bdf4ee21b85",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.673772Z",
+    "duration_ns": 285000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "d59a409b2707bdac",
+    "parent_span_id": "f2c54d61f9e2e25f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.672232Z",
+    "duration_ns": 1454000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "08a985914183fcde",
+    "parent_span_id": "8ba8bf4c870dca0c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.671333Z",
+    "duration_ns": 831000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "f5b75bdf4ee21b85",
+    "parent_span_id": "b502058c0064e269",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.585143Z",
+    "duration_ns": 442000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "bfdd59b6d6779b59",
+    "parent_span_id": "7c4415eb9d7c7762",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.567918Z",
+    "duration_ns": 1356531000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "5cdd0b84b6d30b9e",
+    "parent_span_id": "5a92e121c23a5d2a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.562967Z",
+    "duration_ns": 850000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "5a92e121c23a5d2a",
+    "parent_span_id": "7c4415eb9d7c7762",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.56147Z",
+    "duration_ns": 3285000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "7c4415eb9d7c7762",
+    "parent_span_id": "b502058c0064e269",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.561149Z",
+    "duration_ns": 4933000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "f2c54d61f9e2e25f",
+    "parent_span_id": "b502058c0064e269",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.560488Z",
+    "duration_ns": 134000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "b502058c0064e269",
+    "parent_span_id": "f0264d8e69149126",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.559013Z",
+    "duration_ns": 1953000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "f0264d8e69149126",
+    "parent_span_id": "8dd9b6a437a73980",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.460698Z",
+    "duration_ns": 91911000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "8dd9b6a437a73980",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.460647Z",
+    "duration_ns": 1962380000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "e4863900ebd6136e",
+    "parent_span_id": "d5d704f7ecb5a9df",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.457196Z",
+    "duration_ns": 95512000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "d2dcecc0efc74c62",
+    "parent_span_id": "d5d704f7ecb5a9df",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.119152Z",
+    "duration_ns": 1996000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "913bce7f867c5a09",
+    "parent_span_id": "0a43f8fd58813cdc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.09114Z",
+    "duration_ns": 461990000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "0a43f8fd58813cdc",
+    "parent_span_id": "8ba8bf4c870dca0c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.082336Z",
+    "duration_ns": 472694000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "8ba8bf4c870dca0c",
+    "parent_span_id": "660a286606143693",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:01:00.082259Z",
+    "duration_ns": 473464000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "7c478895679987ba",
+    "parent_span_id": "d15b12e61ee24b27",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:57.037123Z",
+    "duration_ns": 1113000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "24ca724defc457c1",
+    "parent_span_id": "e82b9a0895ab0cf6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.829255Z",
+    "duration_ns": 5498000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "c12813943e6d3080",
+    "parent_span_id": "ebc9a3c8aadd0825",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.81523Z",
+    "duration_ns": 13952000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d15b12e61ee24b27",
+    "parent_span_id": "660a286606143693",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.78705Z",
+    "duration_ns": 37529000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "02c04dd55bcf7b83",
+    "parent_span_id": "5ca984dfd52e5bec",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.763599Z",
+    "duration_ns": 3308415000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "c5f414105d518656",
+    "parent_span_id": "4c22a340c41092fc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.758849Z",
+    "duration_ns": 717000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "4c22a340c41092fc",
+    "parent_span_id": "5ca984dfd52e5bec",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.757899Z",
+    "duration_ns": 3002000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "5ca984dfd52e5bec",
+    "parent_span_id": "660a286606143693",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.757827Z",
+    "duration_ns": 3936000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "ebc9a3c8aadd0825",
+    "parent_span_id": "660a286606143693",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.7575Z",
+    "duration_ns": 70000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "660a286606143693",
+    "parent_span_id": "be1f9200bc4665bd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.75656Z",
+    "duration_ns": 1192000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "be1f9200bc4665bd",
+    "parent_span_id": "d5d704f7ecb5a9df",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.665997Z",
+    "duration_ns": 88841000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "d5d704f7ecb5a9df",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.665959Z",
+    "duration_ns": 3886793000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "0e50a20ae44f05ed",
+    "parent_span_id": "402af0e3fe244bae",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.661075Z",
+    "duration_ns": 93882000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "a514194c473c1c31",
+    "parent_span_id": "402af0e3fe244bae",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.35217Z",
+    "duration_ns": 807000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "0f4398731969fc34",
+    "parent_span_id": "3c714c3f5c2c909f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.326274Z",
+    "duration_ns": 430048000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "3c714c3f5c2c909f",
+    "parent_span_id": "e82b9a0895ab0cf6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.322733Z",
+    "duration_ns": 434617000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "e82b9a0895ab0cf6",
+    "parent_span_id": "bfb92a9837b91201",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:56.322672Z",
+    "duration_ns": 435922000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "5f3bfbdb50041f6e",
+    "parent_span_id": "4f9babef7f6faf2b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.151973Z",
+    "duration_ns": 195000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "304d7c87ad28dc25",
+    "parent_span_id": "2cdfe97bd48cf35d",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.151511Z",
+    "duration_ns": 414000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "22fd82b990990521",
+    "parent_span_id": "cf82fa22da3e4b04",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.151041Z",
+    "duration_ns": 413000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "4f9babef7f6faf2b",
+    "parent_span_id": "bfb92a9837b91201",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.084703Z",
+    "duration_ns": 8687000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "8f9e6443d842f284",
+    "parent_span_id": "55bcf5366746e485",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.053721Z",
+    "duration_ns": 2260909000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "5a2deff072bffb64",
+    "parent_span_id": "8a87f7edb6ee41dc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.049311Z",
+    "duration_ns": 667000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "8a87f7edb6ee41dc",
+    "parent_span_id": "55bcf5366746e485",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.048261Z",
+    "duration_ns": 2667000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "55bcf5366746e485",
+    "parent_span_id": "bfb92a9837b91201",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.048184Z",
+    "duration_ns": 3696000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "2cdfe97bd48cf35d",
+    "parent_span_id": "bfb92a9837b91201",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.04763Z",
+    "duration_ns": 70000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "bfb92a9837b91201",
+    "parent_span_id": "b37c6622e692309a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:54.046957Z",
+    "duration_ns": 1142000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "b37c6622e692309a",
+    "parent_span_id": "402af0e3fe244bae",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:53.889499Z",
+    "duration_ns": 145067000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "402af0e3fe244bae",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:53.889455Z",
+    "duration_ns": 2865749000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "85e87b726138d690",
+    "parent_span_id": "f5bef4e4d440d57b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:53.882114Z",
+    "duration_ns": 152554000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "8cf3815ecfc23d9e",
+    "parent_span_id": "445844ceeafec151",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:53.317338Z",
+    "duration_ns": 717791000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "445844ceeafec151",
+    "parent_span_id": "cf82fa22da3e4b04",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:53.311838Z",
+    "duration_ns": 724840000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "cf82fa22da3e4b04",
+    "parent_span_id": "829f59ef881ddbbf",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:53.311772Z",
+    "duration_ns": 725442000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "ab173827347d072b",
+    "parent_span_id": "d9cfd8f461ed74cc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.538497Z",
+    "duration_ns": 399000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "7c07f5be3217255b",
+    "parent_span_id": "2680799749d6d54f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.537899Z",
+    "duration_ns": 560000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "ac4160cb18ad070b",
+    "parent_span_id": "d1d92e83c3efb1c5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.534303Z",
+    "duration_ns": 3514000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d9cfd8f461ed74cc",
+    "parent_span_id": "829f59ef881ddbbf",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.447318Z",
+    "duration_ns": 758000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "fb04bd6ef316c474",
+    "parent_span_id": "3e1f474007f09abb",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.426303Z",
+    "duration_ns": 879051000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "031acd7add779cad",
+    "parent_span_id": "29b3361c48ac0ccd",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.42089Z",
+    "duration_ns": 1261000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "29b3361c48ac0ccd",
+    "parent_span_id": "3e1f474007f09abb",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.389902Z",
+    "duration_ns": 33285000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "3e1f474007f09abb",
+    "parent_span_id": "829f59ef881ddbbf",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.38982Z",
+    "duration_ns": 34390000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d1d92e83c3efb1c5",
+    "parent_span_id": "829f59ef881ddbbf",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.389267Z",
+    "duration_ns": 231000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "829f59ef881ddbbf",
+    "parent_span_id": "7e4481af3522ed0f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.388597Z",
+    "duration_ns": 1132000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "7e4481af3522ed0f",
+    "parent_span_id": "f5bef4e4d440d57b",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.330267Z",
+    "duration_ns": 84600000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "f5bef4e4d440d57b",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.33022Z",
+    "duration_ns": 1704529000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "c1e5519b5c63ffdb",
+    "parent_span_id": "cc04d415e08568fc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.326976Z",
+    "duration_ns": 87985000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "0b6859d39e3bb269",
+    "parent_span_id": "cc04d415e08568fc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.107151Z",
+    "duration_ns": 796000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "644d222af0ceab0f",
+    "parent_span_id": "a0d63c7c3326258d",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.082859Z",
+    "duration_ns": 332670000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "a0d63c7c3326258d",
+    "parent_span_id": "2680799749d6d54f",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.079132Z",
+    "duration_ns": 338063000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "2680799749d6d54f",
+    "parent_span_id": "e8a42bf88b59a254",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:52.078958Z",
+    "duration_ns": 342214000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "33a4a418940049f0",
+    "parent_span_id": "d8e84d73aa305f5a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.902316Z",
+    "duration_ns": 450000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "35c7a20554eebf37",
+    "parent_span_id": "d82b7e11e305ff8c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.901981Z",
+    "duration_ns": 296000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "5bf2ec3d64893dc6",
+    "parent_span_id": "51e1ec0f1a31597c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.901159Z",
+    "duration_ns": 751000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d8e84d73aa305f5a",
+    "parent_span_id": "e8a42bf88b59a254",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.818093Z",
+    "duration_ns": 318000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "9695721c9d86bbe0",
+    "parent_span_id": "0d169815417bde57",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.791328Z",
+    "duration_ns": 3282625000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "e4fb29f2413f8975",
+    "parent_span_id": "58a37ca06c1f25f2",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.78633Z",
+    "duration_ns": 712000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "58a37ca06c1f25f2",
+    "parent_span_id": "0d169815417bde57",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.784978Z",
+    "duration_ns": 3152000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "0d169815417bde57",
+    "parent_span_id": "e8a42bf88b59a254",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.784783Z",
+    "duration_ns": 4382000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "d82b7e11e305ff8c",
+    "parent_span_id": "e8a42bf88b59a254",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.783787Z",
+    "duration_ns": 227000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "e8a42bf88b59a254",
+    "parent_span_id": "baa04da3552f0812",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.782999Z",
+    "duration_ns": 1503000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "baa04da3552f0812",
+    "parent_span_id": "cc04d415e08568fc",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.589268Z",
+    "duration_ns": 147986000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "cc04d415e08568fc",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.589224Z",
+    "duration_ns": 3825806000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "f8caf91d1d0b389e",
+    "parent_span_id": "70eb3b608943b01e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.582236Z",
+    "duration_ns": 155114000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "59c7e394d24bd34b",
+    "parent_span_id": "ddaee1601426dc8c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.201871Z",
+    "duration_ns": 535956000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "ddaee1601426dc8c",
+    "parent_span_id": "51e1ec0f1a31597c",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.198657Z",
+    "duration_ns": 540419000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "51e1ec0f1a31597c",
+    "parent_span_id": "a3b278422e709eba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:48.198596Z",
+    "duration_ns": 541227000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "46e3c8cc981ff3cf",
+    "parent_span_id": "0cba88663b4ed41e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.493585Z",
+    "duration_ns": 1357000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "f959a6a0ab3a86c1",
+    "parent_span_id": "f32ee0675e876375",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.288574Z",
+    "duration_ns": 1872000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "0cba88663b4ed41e",
+    "parent_span_id": "a3b278422e709eba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.277732Z",
+    "duration_ns": 9243000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "bfff867c58955f44",
+    "parent_span_id": "809953ee91a522c0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.277034Z",
+    "duration_ns": 11483000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "0d85f76495db924e",
+    "parent_span_id": "70dba46b2f8a5719",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.264536Z",
+    "duration_ns": 930262000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "94ec7878e60b82cf",
+    "parent_span_id": "94f1816b204e235e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.260417Z",
+    "duration_ns": 750000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "94f1816b204e235e",
+    "parent_span_id": "70dba46b2f8a5719",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.259082Z",
+    "duration_ns": 2720000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "70dba46b2f8a5719",
+    "parent_span_id": "a3b278422e709eba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.258923Z",
+    "duration_ns": 3594000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "f32ee0675e876375",
+    "parent_span_id": "a3b278422e709eba",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.258239Z",
+    "duration_ns": 224000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "a3b278422e709eba",
+    "parent_span_id": "f13fe14750360ea7",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.257613Z",
+    "duration_ns": 1061000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "f13fe14750360ea7",
+    "parent_span_id": "70eb3b608943b01e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.097281Z",
+    "duration_ns": 83299000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "70eb3b608943b01e",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.097241Z",
+    "duration_ns": 1640165000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "c667fabe16d1b08c",
+    "parent_span_id": "a7fa6faefa52cee5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:47.093135Z",
+    "duration_ns": 87540000,
+    "has_error": false
+  },
+  {
+    "name": "inventory.material_transfer.settle",
+    "span_id": "30fc64b9005c6f86",
+    "parent_span_id": "a7fa6faefa52cee5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:46.917706Z",
+    "duration_ns": 2221000,
+    "has_error": false
+  },
+  {
+    "name": "PUT /api/v1/edge/jobs/{job_uuid}/outcome",
+    "span_id": "791c93dc14e28f15",
+    "parent_span_id": "ab0a0251ef90bbd0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:46.891137Z",
+    "duration_ns": 289981000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.outcome.commit",
+    "span_id": "ab0a0251ef90bbd0",
+    "parent_span_id": "809953ee91a522c0",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:46.886574Z",
+    "duration_ns": 295617000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.outcome.publish",
+    "span_id": "809953ee91a522c0",
+    "parent_span_id": "be0a5f89d05182ce",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:46.886358Z",
+    "duration_ns": 296390000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "8a2804059924817e",
+    "parent_span_id": "904811f3ed3b9e23",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.969747Z",
+    "duration_ns": 417000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.send",
+    "span_id": "58beca337ea1af67",
+    "parent_span_id": "cd50ce363deb2885",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.967604Z",
+    "duration_ns": 2085000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "904811f3ed3b9e23",
+    "parent_span_id": "be0a5f89d05182ce",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.82193Z",
+    "duration_ns": 370000,
+    "has_error": false
+  },
+  {
+    "name": "action.execute",
+    "span_id": "47131612c89ba354",
+    "parent_span_id": "93fe1ddcd788f8db",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.808254Z",
+    "duration_ns": 3072677000,
+    "has_error": false
+  },
+  {
+    "name": "GET /api/v1/edge/jobs/{job_uuid}",
+    "span_id": "1536d21b9a4bbebe",
+    "parent_span_id": "d4bd66f5922001c8",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.762139Z",
+    "duration_ns": 36818000,
+    "has_error": false
+  },
+  {
+    "name": "edge.http.job.fetch",
+    "span_id": "d4bd66f5922001c8",
+    "parent_span_id": "93fe1ddcd788f8db",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.759574Z",
+    "duration_ns": 43342000,
+    "has_error": false
+  },
+  {
+    "name": "edge.job.dispatch",
+    "span_id": "93fe1ddcd788f8db",
+    "parent_span_id": "be0a5f89d05182ce",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.759397Z",
+    "duration_ns": 46018000,
+    "has_error": false
+  },
+  {
+    "name": "edge.control.event.enqueue",
+    "span_id": "cd50ce363deb2885",
+    "parent_span_id": "be0a5f89d05182ce",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.758893Z",
+    "duration_ns": 232000,
+    "has_error": false
+  },
+  {
+    "name": "edge.command.receive",
+    "span_id": "be0a5f89d05182ce",
+    "parent_span_id": "e7670e7377195382",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.758001Z",
+    "duration_ns": 1288000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.job.dispatch",
+    "span_id": "e7670e7377195382",
+    "parent_span_id": "a7fa6faefa52cee5",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.523473Z",
+    "duration_ns": 276172000,
+    "has_error": false
+  },
+  {
+    "name": "action.run",
+    "span_id": "a7fa6faefa52cee5",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.523428Z",
+    "duration_ns": 3657315000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.reconcile",
+    "span_id": "1343c4ffa37281a6",
+    "parent_span_id": "45904b4e2231137a",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.508022Z",
+    "duration_ns": 291703000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.submit",
+    "span_id": "45904b4e2231137a",
+    "parent_span_id": "80d408777cb02da6",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.465495Z",
+    "duration_ns": 334464000,
+    "has_error": false
+  },
+  {
+    "name": "workflow.task.run",
+    "span_id": "80d408777cb02da6",
+    "parent_span_id": "4f08bb376894028e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:43.465463Z",
+    "duration_ns": 110380670000,
+    "has_error": false
+  },
+  {
+    "name": "material.material_source.admit",
+    "span_id": "22031304c1a6ecea",
+    "parent_span_id": "4f08bb376894028e",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:42.931221Z",
+    "duration_ns": 4171000,
+    "has_error": false
+  },
+  {
+    "name": "POST /api/v1/workflow-tasks",
+    "span_id": "4f08bb376894028e",
+    "parent_span_id": "",
+    "trace_id": "41991b6b461533704a54b53a0a7844fa",
+    "service": "unilabos-local-szlab",
+    "timestamp": "2026-09-06T16:00:42.372339Z",
+    "duration_ns": 1500092000,
+    "has_error": false
+  }
+]

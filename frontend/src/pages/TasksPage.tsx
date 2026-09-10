@@ -51,6 +51,7 @@ import type {
   WorkflowTaskExecutionLock,
 } from '../types'
 import { sourceSiteOptions } from '../lib/sourceSiteOptions'
+import { taskColor } from '../lib/resourceUsage'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
@@ -248,6 +249,7 @@ function TaskMatrix({
   writable,
   readyNodeUuids = new Set<string>(),
   selectedTaskControl,
+  onViewResources,
 }: {
   tasks: WorkflowTask[]
   selectedId: string
@@ -259,6 +261,7 @@ function TaskMatrix({
   writable: boolean
   readyNodeUuids?: ReadonlySet<string>
   selectedTaskControl?: ReactNode
+  onViewResources?: (taskUuid: string) => void
 }) {
   const maxNodeCount = Math.max(1, ...tasks.map((task) => task.nodes.length))
   const matrixWidth = TASK_IDENTITY_COLUMN_WIDTH
@@ -279,7 +282,7 @@ function TaskMatrix({
               style={{ gridTemplateColumns: columns }}
               onClick={() => onSelect(task.uuid)}
             >
-              <div className={`matrix-task-cell ${selectedId === task.uuid && selectedTaskControl ? 'matrix-task-cell-with-control' : ''}`}>
+              <div className={`matrix-task-cell ${selectedId === task.uuid && selectedTaskControl ? 'matrix-task-cell-with-control' : ''}`} style={{ borderLeft: `4px solid ${taskColor(task.uuid)}` }}>
                 <button
                   type="button"
                   className="matrix-task-select"
@@ -309,6 +312,7 @@ function TaskMatrix({
                     <em className="matrix-task-revision">{task.workflowRevision ? `r${task.workflowRevision}` : '—'}</em>
                   </span>
                 </button>
+                {onViewResources ? <button type="button" className="matrix-resource-link" onClick={(event) => { event.stopPropagation(); onViewResources(task.uuid) }}>占用资源</button> : null}
                 {task.trace ? (
                   <a
                     className="matrix-trace-link"
@@ -1069,6 +1073,10 @@ export function TasksPage({
   onNotify,
   onOpenWorkflow,
   startupMode = 'product',
+  errorTaskIds = [],
+  onHandleError,
+  targetTaskUuid,
+  onViewResources,
 }: {
   tasks: WorkflowTask[]
   workflows: WorkflowDefinition[]
@@ -1078,10 +1086,14 @@ export function TasksPage({
   onNotify: (message: string) => void
   onOpenWorkflow: (target: WorkflowTarget) => void
   startupMode?: 'develop' | 'product'
+  errorTaskIds?: string[]
+  onHandleError?: (taskUuid: string) => void
+  targetTaskUuid?: string
+  onViewResources?: (taskUuid: string) => void
 }) {
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState<TaskFilter>('all')
-  const [selectedId, setSelectedId] = useState(tasks[0]?.uuid || '')
+  const [selectedId, setSelectedId] = useState(targetTaskUuid || tasks[0]?.uuid || '')
   const [selectedNodeRef, setSelectedNodeRef] = useState<{ taskUuid: string; nodeUuid: string }>()
   const [selectedStepNodeUuid, setSelectedStepNodeUuid] = useState('')
   const interventionsQuery = useQuery({
@@ -1101,6 +1113,14 @@ export function TasksPage({
     setSelectedId(taskUuid)
     setSelectedNodeRef({ taskUuid, nodeUuid })
   }, [])
+
+  const targetTaskAvailable = tasks.some((task) => task.uuid === targetTaskUuid)
+  useEffect(() => {
+    if (!targetTaskUuid || !targetTaskAvailable) return
+    setFilter('all')
+    setSelectedId(targetTaskUuid)
+    setSelectedNodeRef(undefined)
+  }, [targetTaskUuid, targetTaskAvailable])
 
   useEffect(() => {
     if (!tasks.some((task) => task.uuid === selectedId)) setSelectedId(tasks[0]?.uuid || '')
@@ -1278,6 +1298,7 @@ export function TasksPage({
             writable={connected}
             readyNodeUuids={selected?.uuid ? readyNodeUuids : new Set<string>()}
             selectedTaskControl={selectedTaskControl}
+            onViewResources={onViewResources}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
       </Panel>
@@ -1292,6 +1313,7 @@ export function TasksPage({
           {selected ? (
             <>
               <div className="selected-task-identity"><span><FlaskConical size={18} /></span><div><strong>{selected.uuid}</strong><small>{selected.workflowName}</small></div><ChevronRight size={17} /></div>
+              {errorTaskIds.includes(selected.uuid) && onHandleError ? <Button tone="danger" icon={<AlertCircle size={16} />} onClick={() => onHandleError(selected.uuid)}>处理节点错误</Button> : null}
               <dl className="selected-task-properties">
                 <div><dt>样品</dt><dd>{selected.sample}</dd></div>
                 <div><dt>当前节点</dt><dd>{selected.current}</dd></div>

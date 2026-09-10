@@ -148,7 +148,11 @@ def _retained_resource_intervals(
     completed_jobs = [
         dict(row)
         for row in connection.execute(
-            "SELECT workflow_node_uuid, status, meta_data, uncertainty_reason FROM workflow_node_job WHERE workflow_task_uuid=? AND deleted_at IS NULL",
+            # 历史失败 attempt 不能使新 attempt 的后继被判为 fail-fast 已停止，
+            # 否则会提前释放重试成功后仍应传递给后继的区间租约。
+            "SELECT workflow_node_uuid, status, meta_data, uncertainty_reason "
+            "FROM workflow_node_job WHERE workflow_task_uuid=? "
+            "AND current_attempt=1 AND deleted_at IS NULL",
             (job_row["workflow_task_uuid"],),
         )
     ]
@@ -1043,6 +1047,10 @@ class TaskRuntimeProjection:
             for row in job_rows:
                 status = str(row["status"])
                 job_uuid = str(row["uuid"])
+                # 失败的历史尝试也可能保留物理不确定性，不能被终态分支跳过。
+                has_execution_attention = has_execution_attention or bool(
+                    str(row["uncertainty_reason"] or "").strip()
+                )
                 if status in _TERMINAL_JOB_STATES:
                     continue
                 if status == "pending":
@@ -2604,7 +2612,9 @@ class TaskRuntimeProjection:
 
         参数：``task_uuid`` 是稳定工作流任务（WorkflowTask）UUID。返回：非终态
         Task 失败后的任务/作业聚合；既有终态 Task 返回 ``None``。已完成
-        Job 保持不变，在途 Job 失败，未开始 Job 取消，旧执行占用释放。
+        Job 保留结果，在途 Job 失败，未开始 Job 取消，旧软件执行占用释放。
+        cleanup_status 保持 pending，待跨库软件资源清理完成后写 settled；
+        此过程不推断物理停止或实际库存变化，也不创建对账任务。
         """
 
         with self._store.transaction() as connection:

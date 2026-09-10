@@ -209,6 +209,8 @@ export interface WorkflowTask {
   workflowUuid: string
   workflowName: string
   status: TaskPresentationStatus
+  /** 原始任务终态，独立于界面的“需要干预”等提示状态。 */
+  executionStatus?: string
   priority: WorkflowTaskPresentationPriority
   sample: string
   description: string

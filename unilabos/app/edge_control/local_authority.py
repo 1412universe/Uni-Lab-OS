@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import math
+import logging
 import secrets
 import sqlite3
 import threading
@@ -35,6 +36,8 @@ from unilabos.app.edge_control.local_edge_session import (
 )
 from unilabos.app.scheduler.dispatch import CommittedJobOutcome, DispatchPayload
 from unilabos.utils.tracing import inject_trace_context, normalize_trace_context
+
+logger = logging.getLogger(__name__)
 
 _PROTOCOL_VERSION = 1
 _COMMAND_RETRY_SECONDS = 0.5
@@ -342,9 +345,19 @@ class LocalEdgeAuthorityStore:
             "SELECT value FROM local_edge_meta WHERE key='execution_process_uuid'"
         ).fetchone()
         previous_process_uuid = str(previous["value"]) if previous is not None else ""
-        process_restarted = bool(
+        changed_process = bool(
             previous_process_uuid and previous_process_uuid != process_uuid
         )
+        pending_restart = connection.execute(
+            "SELECT value FROM local_edge_meta WHERE key='execution_restart_pending'"
+        ).fetchone()
+        process_restarted = changed_process or pending_restart is not None
+        if changed_process:
+            connection.execute(
+                "INSERT INTO local_edge_meta(key,value) VALUES ('execution_restart_pending',?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (process_uuid,),
+            )
         connection.execute(
             "INSERT INTO local_edge_meta(key,value) VALUES "
             "('execution_process_uuid',?) ON CONFLICT(key) DO UPDATE "
@@ -413,6 +426,13 @@ class LocalEdgeAuthorityStore:
                 if changed != 1:
                     raise ValueError("running Edge job identity is unknown")
         return process_restarted, affected
+
+    def complete_execution_restart(self) -> None:
+        """调度侧全部终结成功后确认重启通知，失败或掉电时保留重试标记。"""
+        with self._lock, self._connection:
+            self._connection.execute(
+                "DELETE FROM local_edge_meta WHERE key='execution_restart_pending'"
+            )
 
     def mark_disconnected_jobs_unknown(self) -> list[str]:
         """显式锁定可能已跨越物理动作边界的所有在途作业。
@@ -622,7 +642,7 @@ class LocalEdgeAuthorityStore:
                 SELECT command_uuid, sequence, type, payload_json,
                        traceparent, tracestate
                 FROM local_edge_command
-                WHERE status != 'acked'
+                WHERE status NOT IN ('acked', 'retired')
                   AND (last_sent_at IS NULL OR last_sent_at <= ?)
                 ORDER BY sequence
                 """,
@@ -1261,6 +1281,11 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             try:
                 for job_uuid in normalized:
+                    self._connection.execute(
+                        "UPDATE local_edge_command SET status='retired' "
+                        "WHERE json_extract(payload_json,'$.job_uuid')=? AND status='pending'",
+                        (job_uuid,),
+                    )
                     row = self._connection.execute(
                         """
                         SELECT status, outcome_json FROM local_edge_job
@@ -1469,6 +1494,9 @@ class LocalEdgeControlAuthority:
         self._execution_process_restarted_listeners: list[
             Callable[[tuple[str, ...]], None]
         ] = []
+        self._execution_connection_lost_listeners: list[
+            Callable[[tuple[str, ...]], None]
+        ] = []
         self._error_decision_required_listeners: list[
             Callable[[dict[str, Any]], None]
         ] = []
@@ -1607,6 +1635,16 @@ class LocalEdgeControlAuthority:
             if current != listener
         ]
 
+    def add_execution_connection_lost_listener(
+        self, listener: Callable[[tuple[str, ...]], None]
+    ) -> None:
+        self._execution_connection_lost_listeners.append(listener)
+
+    def notify_execution_connection_lost(self, job_uuids: tuple[str, ...]) -> None:
+        """连接断开只报告断线；进程身份变化才报告重启。"""
+        for listener in tuple(self._execution_connection_lost_listeners):
+            listener(job_uuids)
+
     def notify_execution_process_restarted(
         self,
         job_uuids: list[str] | tuple[str, ...],
@@ -1622,6 +1660,8 @@ class LocalEdgeControlAuthority:
         affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
         for listener in tuple(self._execution_process_restarted_listeners):
             listener(affected)
+        if self._execution_process_restarted_listeners:
+            self.store.complete_execution_restart()
 
     def commit_feedback(
         self,
@@ -2161,7 +2201,7 @@ def create_local_edge_control_router(
                     try:
                         affected = authority.store.disconnect_session(session_uuid)
                         if affected and authority.execution_control is not None:
-                            authority.notify_execution_process_restarted(affected)
+                            authority.notify_execution_connection_lost(affected)
                     except ValueError:
                         pass
 
@@ -2183,7 +2223,16 @@ async def _handle_edge_event(
     elif event_type == "job.started":
         job_uuid = _required_text(payload, "job_uuid")
         # 新协议只有持久 begin 才能宣布开始；排队或 ROS 接受不是运行事实。
-        if authority.execution_control is None or authority.execution_control.execution_start_state(job_uuid) == "START_COMMITTED":
+        active = authority.store.job(job_uuid)["status"] not in {
+            "failed",
+            "canceled",
+            "succeeded",
+        }
+        if active and (
+            authority.execution_control is None
+            or authority.execution_control.execution_start_state(job_uuid)
+            == "START_COMMITTED"
+        ):
             authority.store.mark_job_started(job_uuid)
             if authority._execution_started is not None:
                 authority._execution_started(job_uuid)

@@ -15,21 +15,35 @@ import { loadReagents, updateMaterialCapacity } from '../lib/edgeClient'
 import { changeMaterialSite, instantiateMaterial, loadMaterialDetail, loadResourceTemplates, verifyMaterialBarcode } from '../lib/edgeClient'
 import { Button, EmptyState, Panel } from '../components/ui'
 import { MaterialHierarchyTree } from '../components/MaterialHierarchyTree'
+import { MaterialUsagePanel, SelectedSiteUsage, SiteUsageSummary } from '../components/MaterialUsagePanel'
+import type { MaterialUsageContext } from '../components/MaterialUsagePanel'
+import { materialUsage, taskColor, usageNeedsAttention } from '../lib/resourceUsage'
 
 export function MaterialsPage({
   materials,
   connected,
   onNotify,
   onRefresh,
+  usage,
+  targetMaterialUuid,
+  targetSiteUuid,
+  detailOnly = false,
 }: {
   materials: MaterialRecord[]
   total: number
   connected: boolean
   onNotify: (message: string) => void
   onRefresh?: () => void
+  usage?: MaterialUsageContext
+  targetMaterialUuid?: string
+  targetSiteUuid?: string
+  detailOnly?: boolean
 }) {
-  const [selectedId, setSelectedId] = useState(materials[0]?.uuid || '')
+  const [selectedId, setSelectedId] = useState(targetMaterialUuid || materials[0]?.uuid || '')
   const [selectedSiteId, setSelectedSiteId] = useState('')
+  const [requestedSite, setRequestedSite] = useState<{ owner: string; site: string }>()
+  useEffect(() => { if (targetMaterialUuid) setSelectedId(targetMaterialUuid) }, [targetMaterialUuid])
+  useEffect(() => { if (targetMaterialUuid && targetSiteUuid) setRequestedSite({ owner: targetMaterialUuid, site: targetSiteUuid }) }, [targetMaterialUuid, targetSiteUuid])
   const [dialog, setDialog] = useState<'barcode' | 'instantiate' | 'place' | 'remove' | 'capacity' | null>(null)
   const [capacityForm, setCapacityForm] = useState({ maximum: '', unit: 'mL' })
   const [capacityError, setCapacityError] = useState('')
@@ -47,10 +61,11 @@ export function MaterialsPage({
     }
   }, [materials, selectedId])
 
-  const selected = materials.find((material) => material.uuid === selectedId) || materials[0]
+  const selectableMaterials = usage?.visibleMaterialIds ? materials.filter((material) => usage.visibleMaterialIds!.has(material.uuid)) : materials
+  const selected = selectableMaterials.find((material) => material.uuid === selectedId) || selectableMaterials[0]
   useEffect(() => {
-    setSelectedSiteId(selected?.sites[0]?.uuid || '')
-  }, [selected?.uuid])
+    setSelectedSiteId(requestedSite && requestedSite.owner === selected?.uuid ? requestedSite.site : selected?.sites[0]?.uuid || '')
+  }, [selected?.uuid, requestedSite])
   const detailQuery = useQuery({
     queryKey: ['material-detail', selected?.uuid],
     queryFn: ({ signal }) => loadMaterialDetail(selected!.uuid, signal),
@@ -196,9 +211,10 @@ export function MaterialsPage({
   }
 
   return (
-    <div className="page materials-page">
+    <div className={`page materials-page ${detailOnly ? 'material-detail-only' : ''}`}>
       <div className="materials-layout scene-layout">
-        <MaterialHierarchyTree materials={materials} selectedId={selected?.uuid} onSelect={setSelectedId} />
+        {!detailOnly ? <MaterialHierarchyTree materials={materials} selectedId={selected?.uuid} onSelect={setSelectedId} onSelectSite={(owner, site) => { setSelectedId(owner); setRequestedSite({ owner, site }) }} visibleMaterialIds={usage?.visibleMaterialIds}
+          renderBadge={usage?.model ? (uuid) => { const siteFacts = usage.model!.sites.get(uuid); const facts = siteFacts || materialUsage(usage.model!, uuid); const taskIds = [...new Set([...facts.holdings.map((holding) => holding.taskUuid), ...facts.bindings.map((binding) => binding.workflow_task_uuid)])]; return <span className="resource-tree-colors" title={taskIds.length ? `Task ${taskIds.join('、')}` : '未绑定 Task'}>{taskIds.slice(0, 4).map((id) => <i key={id} style={{ backgroundColor: taskColor(id) }} />)}{facts.holdings.some(usageNeedsAttention) ? <small title="遗留占用或待确认">⚠</small> : null}</span> } : undefined} /> : null}
 
         <Panel className="material-table-panel">
           <div className="table-toolbar">
@@ -207,12 +223,17 @@ export function MaterialsPage({
           </div>
           {detail ? <div className="material-detail-workspace" aria-label="物料关系详情">
             <header className="material-detail-hero"><span><Boxes size={24} /></span><div><small>{detail.isStructural ? '结构资源' : '物料实例'}</small><h2>{detail.name}</h2><code>{detail.uuid}</code></div><em data-kind={detail.currentLocation.kind}>{detail.currentLocation.label}</em></header>
+            {usage ? <MaterialUsagePanel materialUuid={detail.uuid} context={usage} onSelectSite={(owner, site) => { setSelectedId(owner); setRequestedSite({ owner, site }) }} /> : null}
             <dl className="material-detail-facts"><div><dt>物料类型</dt><dd>{detail.category}</dd></div><div><dt>条码</dt><dd>{detail.barcode}</dd></div><div><dt>资源模板</dt><dd>{templatesQuery.data?.find((template) => template.uuid === detail.resourceTemplateUuid)?.displayName || detail.resourceTemplateUuid || '未绑定'}</dd></div><div><dt>修订</dt><dd>r{detail.revision}</dd></div><div><dt>父物料</dt><dd>{parentMaterial?.name || '无父物料'}</dd></div><div><dt>所在库位</dt><dd>{detail.currentLocation.kind === 'site' ? `${locationOwner?.name || detail.currentLocation.ownerMaterialUuid} / ${detail.currentLocation.label}` : detail.currentLocation.label}</dd></div></dl>
             {templatesQuery.data?.find((template) => template.uuid === detail.resourceTemplateUuid)?.tags?.includes('container') ? <section className="capacity-section"><strong>最大装料量：{maximumDisplay}</strong><small>容器额定容量：{capacityText(ratedCapacity)}</small><Button disabled={!capacityReady} onClick={openCapacity}>设置最大装料量</Button></section> : null}
             <section className="material-relation-section"><header><div><strong>物料关系</strong><small>parent 与库位占用关系</small></div></header><div className="material-relation-chain">{parentMaterial ? <button onClick={() => setSelectedId(parentMaterial.uuid)}><small>父物料</small><strong>{parentMaterial.name}</strong><code>{parentMaterial.uuid}</code></button> : <div className="relation-empty"><small>父物料</small><strong>无</strong></div>}<span>→</span><div className="relation-current"><small>当前物料</small><strong>{detail.name}</strong><code>{detail.uuid}</code></div><span>→</span><div><small>直接子物料</small><strong>{childMaterials.length} 个</strong></div></div>{childMaterials.length ? <div className="material-child-list">{childMaterials.map((child) => <button key={child.uuid} onClick={() => setSelectedId(child.uuid)}><Boxes size={14} /><span><strong>{child.name}</strong><small>{child.currentLocation.label}</small></span><code>{child.uuid}</code></button>)}</div> : null}</section>
-            <section className="material-site-section"><header><div><strong>自身库位</strong><small>该物料直接提供的库位及当前占用</small></div><span>{availableSites.length} 个库位</span></header>{availableSites.length ? <><div className="material-site-grid">{availableSites.map((site) => <button key={site.uuid} className={selectedSite?.uuid === site.uuid ? 'selected' : ''} onClick={() => setSelectedSiteId(site.uuid)}><MapPin size={14} /><span><strong>{site.name}</strong><small>{site.occupiedMaterialName || '空库位'}</small></span><em data-occupied={Boolean(site.occupiedMaterialUuid)}>{site.occupiedMaterialUuid ? '已占用' : '空闲'}</em></button>)}</div>{selectedSite ? <><div className="material-site-policy"><div><strong>库位允许放置的物料</strong><small>{allowedTemplateIds.length ? '仅允许以下物料模板的实例' : '未限制物料模板，可放置任意非结构物料'}</small></div><div className="material-site-policy-tags">{allowedTemplateNames.length ? allowedTemplateNames.map((template) => <span key={template.uuid} title={template.uuid}>{template.name}</span>) : <span>全部物料模板</span>}</div></div><footer><div><strong>{selectedSite.name}</strong><small>{selectedSite.occupiedMaterialName ? `当前物料：${selectedSite.occupiedMaterialName}` : '当前没有物料'}</small></div><Button disabled={!connected || Boolean(selectedSite.occupiedMaterialUuid)} onClick={openPlacementDialog}>上料</Button><Button disabled={!connected} onClick={openRemovalDialog}>下料</Button></footer></> : null}</> : <EmptyState title="该物料没有库位" description="它是可被放置的物料实例，不是库位容器或结构资源。" />}</section>
+            <section className="material-site-section"><header><div><strong>自身库位</strong><small>该物料直接提供的库位及当前占用</small></div><span>{availableSites.length} 个库位</span></header>{availableSites.length ? <><div className="material-site-grid">{availableSites.map((site) => {
+              const liveSite = usage?.model?.sites.get(site.uuid)
+              const taskId = liveSite?.holdings[0]?.taskUuid || liveSite?.bindings[0]?.workflow_task_uuid
+              return <button key={site.uuid} aria-label={`库位 ${site.name}`} className={`${selectedSite?.uuid === site.uuid ? 'selected' : ''} ${taskId ? 'has-resource-task' : ''} ${liveSite?.planned.length ? 'resource-reserved' : ''} ${liveSite?.holdings.some(usageNeedsAttention) ? 'resource-attention' : ''}`} style={taskId ? { borderLeftColor: taskColor(taskId) } : undefined} onClick={() => setSelectedSiteId(site.uuid)}><MapPin size={14} /><span><strong>{site.name}</strong><small>{site.occupiedMaterialName || '空库位'}</small>{usage ? <SiteUsageSummary site={liveSite} context={usage} /> : null}</span><em data-occupied={Boolean(site.occupiedMaterialUuid)}>{site.occupiedMaterialUuid ? '有物料' : '空库位'}</em></button>
+            })}</div>{selectedSite ? <>{usage ? <SelectedSiteUsage site={usage.model?.sites.get(selectedSite.uuid)} context={usage} /> : null}<div className="material-site-policy"><div><strong>库位允许放置的物料</strong><small>{allowedTemplateIds.length ? '仅允许以下物料模板的实例' : '未限制物料模板，可放置任意非结构物料'}</small></div><div className="material-site-policy-tags">{allowedTemplateNames.length ? allowedTemplateNames.map((template) => <span key={template.uuid} title={template.uuid}>{template.name}</span>) : <span>全部物料模板</span>}</div></div><footer><div><strong>{selectedSite.name}</strong><small>{selectedSite.occupiedMaterialName ? `当前物料：${selectedSite.occupiedMaterialName}` : '当前没有物料'}</small></div><Button disabled={!connected || Boolean(selectedSite.occupiedMaterialUuid)} onClick={openPlacementDialog}>上料</Button><Button disabled={!connected} onClick={openRemovalDialog}>下料</Button></footer></> : null}</> : <EmptyState title="该物料没有库位" description="它是可被放置的物料实例，不是库位容器或结构资源。" />}</section>
           </div> : null}
-          {!materials.length ? <EmptyState title="暂无物料" description="当前环境尚未加载物料资源。" /> : null}
+          {!materials.length ? <EmptyState title="暂无物料" description="当前环境尚未加载物料资源。" /> : !selected ? <EmptyState title="暂无匹配资源" description="当前任务或状态筛选没有匹配的设备、库位或物料。可清除筛选查看全部资源。" /> : null}
         </Panel>
       </div>
       {dialog ? <div className="dialog-backdrop" role="presentation"><div className="material-write-dialog" role="dialog" aria-modal="true">

@@ -1,0 +1,1190 @@
+{
+  "task_name": "composite-reverse-A",
+  "priority": "normal",
+  "resolved_input": {
+    "flag": false
+  },
+  "jobs": [
+    {
+      "uuid": "b2340515-ccad-541c-8b4d-b9d67c50029a",
+      "workflow_node_uuid": "e4176031-f8bc-5fee-b6df-7badfe04d42f",
+      "topological_index": 0,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "2b3c55c8-6121-5f6d-a671-25a4e1ba4d6b",
+      "workflow_node_uuid": "57dd449f-4270-590a-b44f-6056ffddaf5d",
+      "topological_index": 1,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "bc4a1c70-f4f5-50cd-849e-87c29cbad6eb",
+      "workflow_node_uuid": "f29a331a-14c5-5991-a0d0-ff2c87de0196",
+      "topological_index": 2,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "e5af0b11-8825-5a3a-9152-6fd8418d63d8",
+      "workflow_node_uuid": "f7cc6cde-efec-5564-8102-d2318ba43910",
+      "topological_index": 3,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "bddb70a9-fc27-5716-b954-707c31bf70e1",
+      "workflow_node_uuid": "83763516-a763-50d0-a6ae-0b9a621eed66",
+      "topological_index": 4,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "8ab52314-ce23-590b-bb2c-b9087cb2290a",
+      "workflow_node_uuid": "eb99dd62-259d-5cac-8702-c709555d943b",
+      "topological_index": 5,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "7a65e262-10e4-5bb0-9551-549457416c6f",
+      "workflow_node_uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+      "topological_index": 6,
+      "executor_kind": "condition",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {
+        "predecessor_node_uuids": [
+          "eb99dd62-259d-5cac-8702-c709555d943b"
+        ],
+        "successor_node_uuids": [
+          "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+        ],
+        "bindings": {
+          "flag": {
+            "kind": "workflow_input",
+            "parameter": "flag"
+          }
+        },
+        "branches": [
+          {
+            "label": "if",
+            "condition": {
+              "var": "flag"
+            },
+            "node_uuids": [
+              "a03ede7f-b148-52f5-b11e-d740832fd94d"
+            ],
+            "entry_node_uuids": [
+              "a03ede7f-b148-52f5-b11e-d740832fd94d"
+            ],
+            "exit_node_uuids": [
+              "a03ede7f-b148-52f5-b11e-d740832fd94d"
+            ]
+          },
+          {
+            "label": "else",
+            "condition": null,
+            "node_uuids": [
+              "821e4b12-377e-55dd-87cc-830e3147ba56"
+            ],
+            "entry_node_uuids": [
+              "821e4b12-377e-55dd-87cc-830e3147ba56"
+            ],
+            "exit_node_uuids": [
+              "821e4b12-377e-55dd-87cc-830e3147ba56"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "uuid": "7b3b479c-7106-5b0c-80ef-2970e1420a84",
+      "workflow_node_uuid": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+      "topological_index": 7,
+      "executor_kind": "repeat_until",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {
+        "predecessor_node_uuids": [
+          "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+        ],
+        "successor_node_uuids": [
+          "077c87be-3e67-5b6b-a820-e13ef475afbc"
+        ],
+        "loop_variable": "loop",
+        "max_iterations": 3,
+        "initial_carry": {},
+        "next_carry": {},
+        "until": {
+          "field": {
+            "var": "measurement"
+          },
+          "name": "qualified"
+        },
+        "bindings": {
+          "measurement": {
+            "kind": "node_result",
+            "node_uuid": "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          }
+        },
+        "node_uuids": [
+          "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+        ],
+        "entry_node_uuids": [
+          "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+        ],
+        "exit_node_uuids": [
+          "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+        ]
+      }
+    },
+    {
+      "uuid": "f5f9a0e4-d24f-500f-b788-1a184d3d7f1f",
+      "workflow_node_uuid": "a03ede7f-b148-52f5-b11e-d740832fd94d",
+      "topological_index": 8,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "c6cae94b-7a41-5480-b1c7-4faf5ef072ec",
+      "workflow_node_uuid": "821e4b12-377e-55dd-87cc-830e3147ba56",
+      "topological_index": 9,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "e3b8c714-ef5a-5653-8ad4-a08b098f9602",
+      "workflow_node_uuid": "2f1b18f3-0c64-5755-ac5b-a106ebff68cc",
+      "topological_index": 10,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "2bd7069c-1e68-5457-af0b-e0b1a638e275",
+      "workflow_node_uuid": "077c87be-3e67-5b6b-a820-e13ef475afbc",
+      "topological_index": 11,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "314e8c9d-4b11-523d-b1b9-e3aba6db2e44",
+      "workflow_node_uuid": "722b679a-deea-5820-9429-af967c163e2f",
+      "topological_index": 12,
+      "executor_kind": "manual_confirm",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    },
+    {
+      "uuid": "cbc6f16b-a71f-5714-9133-734d9cfc33b7",
+      "workflow_node_uuid": "217af964-5896-5785-9628-7b636ec08a2c",
+      "topological_index": 13,
+      "executor_kind": "device_action",
+      "execution_policy": {},
+      "execution_timeout_seconds": 0,
+      "param": {}
+    }
+  ],
+  "execution_plan": {
+    "version": 2,
+    "run_mode": "normal",
+    "capabilities": [
+      "condition_expression_v1",
+      "control_regions_v1",
+      "dynamic_iteration_jobs_v1"
+    ],
+    "nodes": [
+      {
+        "uuid": "e4176031-f8bc-5fee-b6df-7badfe04d42f",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:start",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "57dd449f-4270-590a-b44f-6056ffddaf5d",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:hold1",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "f29a331a-14c5-5991-a0d0-ff2c87de0196",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-b",
+        "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113",
+        "action_name": "A:hold2",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "f7cc6cde-efec-5564-8102-d2318ba43910",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:left",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "83763516-a763-50d0-a6ae-0b9a621eed66",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-b",
+        "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113",
+        "action_name": "A:right",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "eb99dd62-259d-5cac-8702-c709555d943b",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:join",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+        "parent_uuid": null,
+        "kind": "condition",
+        "param": {
+          "predecessor_node_uuids": [
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ],
+          "successor_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ],
+          "bindings": {
+            "flag": {
+              "kind": "workflow_input",
+              "parameter": "flag"
+            }
+          },
+          "branches": [
+            {
+              "label": "if",
+              "condition": {
+                "var": "flag"
+              },
+              "node_uuids": [
+                "a03ede7f-b148-52f5-b11e-d740832fd94d"
+              ],
+              "entry_node_uuids": [
+                "a03ede7f-b148-52f5-b11e-d740832fd94d"
+              ],
+              "exit_node_uuids": [
+                "a03ede7f-b148-52f5-b11e-d740832fd94d"
+              ]
+            },
+            {
+              "label": "else",
+              "condition": null,
+              "node_uuids": [
+                "821e4b12-377e-55dd-87cc-830e3147ba56"
+              ],
+              "entry_node_uuids": [
+                "821e4b12-377e-55dd-87cc-830e3147ba56"
+              ],
+              "exit_node_uuids": [
+                "821e4b12-377e-55dd-87cc-830e3147ba56"
+              ]
+            }
+          ]
+        },
+        "control_region": {
+          "predecessor_node_uuids": [
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ],
+          "successor_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ],
+          "bindings": {
+            "flag": {
+              "kind": "workflow_input",
+              "parameter": "flag"
+            }
+          },
+          "branches": [
+            {
+              "label": "if",
+              "condition": {
+                "var": "flag"
+              },
+              "node_uuids": [
+                "a03ede7f-b148-52f5-b11e-d740832fd94d"
+              ],
+              "entry_node_uuids": [
+                "a03ede7f-b148-52f5-b11e-d740832fd94d"
+              ],
+              "exit_node_uuids": [
+                "a03ede7f-b148-52f5-b11e-d740832fd94d"
+              ]
+            },
+            {
+              "label": "else",
+              "condition": null,
+              "node_uuids": [
+                "821e4b12-377e-55dd-87cc-830e3147ba56"
+              ],
+              "entry_node_uuids": [
+                "821e4b12-377e-55dd-87cc-830e3147ba56"
+              ],
+              "exit_node_uuids": [
+                "821e4b12-377e-55dd-87cc-830e3147ba56"
+              ]
+            }
+          ]
+        },
+        "execution_policy": {},
+        "action_resource_contract": {}
+      },
+      {
+        "uuid": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+        "parent_uuid": null,
+        "kind": "repeat_until",
+        "param": {
+          "predecessor_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ],
+          "successor_node_uuids": [
+            "077c87be-3e67-5b6b-a820-e13ef475afbc"
+          ],
+          "loop_variable": "loop",
+          "max_iterations": 3,
+          "initial_carry": {},
+          "next_carry": {},
+          "until": {
+            "field": {
+              "var": "measurement"
+            },
+            "name": "qualified"
+          },
+          "bindings": {
+            "measurement": {
+              "kind": "node_result",
+              "node_uuid": "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+            }
+          },
+          "node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ],
+          "entry_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ],
+          "exit_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ]
+        },
+        "control_region": {
+          "predecessor_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ],
+          "successor_node_uuids": [
+            "077c87be-3e67-5b6b-a820-e13ef475afbc"
+          ],
+          "loop_variable": "loop",
+          "max_iterations": 3,
+          "initial_carry": {},
+          "next_carry": {},
+          "until": {
+            "field": {
+              "var": "measurement"
+            },
+            "name": "qualified"
+          },
+          "bindings": {
+            "measurement": {
+              "kind": "node_result",
+              "node_uuid": "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+            }
+          },
+          "node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ],
+          "entry_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ],
+          "exit_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ]
+        },
+        "execution_policy": {},
+        "action_resource_contract": {}
+      },
+      {
+        "uuid": "a03ede7f-b148-52f5-b11e-d740832fd94d",
+        "parent_uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:yes",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "821e4b12-377e-55dd-87cc-830e3147ba56",
+        "parent_uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-b",
+        "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113",
+        "action_name": "A:no",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "2f1b18f3-0c64-5755-ac5b-a106ebff68cc",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-b",
+        "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113",
+        "action_name": "A:after_condition",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "7a145f54-eaf7-563d-8f6b-6c309cd12c8b",
+        "parent_uuid": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:measure",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "077c87be-3e67-5b6b-a820-e13ef475afbc",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-b",
+        "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113",
+        "action_name": "A:after_repeat",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      },
+      {
+        "uuid": "722b679a-deea-5820-9429-af967c163e2f",
+        "parent_uuid": null,
+        "kind": "manual_confirm",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-a",
+        "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+        "action_name": "A:manual",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {},
+        "manual_confirmation": {
+          "timeout_seconds": 3600
+        }
+      },
+      {
+        "uuid": "217af964-5896-5785-9628-7b636ec08a2c",
+        "parent_uuid": null,
+        "kind": "device_action",
+        "param": {},
+        "execution_policy": {},
+        "action_resource_contract": {},
+        "device_id": "reactor-b",
+        "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113",
+        "action_name": "A:finish",
+        "action_type": "UniLabJsonCommand",
+        "param_schema": {
+          "type": "object",
+          "properties": {
+            "goal": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": false
+        },
+        "material_requirements": [],
+        "carry_bindings": {}
+      }
+    ],
+    "edges": [
+      {
+        "uuid": "f28f6e64-3f1e-5b5e-8336-1b9db2c26cd0",
+        "source_node_uuid": "e4176031-f8bc-5fee-b6df-7badfe04d42f",
+        "target_node_uuid": "57dd449f-4270-590a-b44f-6056ffddaf5d",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "5eb6b4b3-d601-50e0-83e1-966481a200fd",
+        "source_node_uuid": "57dd449f-4270-590a-b44f-6056ffddaf5d",
+        "target_node_uuid": "f29a331a-14c5-5991-a0d0-ff2c87de0196",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "f6d1a119-240d-5bf9-801e-cd189d376d4c",
+        "source_node_uuid": "f29a331a-14c5-5991-a0d0-ff2c87de0196",
+        "target_node_uuid": "f7cc6cde-efec-5564-8102-d2318ba43910",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "4ff35f70-2c37-5611-8e63-9c5f6fa8df0a",
+        "source_node_uuid": "f29a331a-14c5-5991-a0d0-ff2c87de0196",
+        "target_node_uuid": "83763516-a763-50d0-a6ae-0b9a621eed66",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "3382dd5a-0904-5d39-8e57-beb864664871",
+        "source_node_uuid": "f7cc6cde-efec-5564-8102-d2318ba43910",
+        "target_node_uuid": "eb99dd62-259d-5cac-8702-c709555d943b",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "04f0e104-b8e4-5e47-9171-ba7f6f595c64",
+        "source_node_uuid": "83763516-a763-50d0-a6ae-0b9a621eed66",
+        "target_node_uuid": "eb99dd62-259d-5cac-8702-c709555d943b",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "22748b7f-4ec8-5b49-b5e7-e37dc03f56e4",
+        "source_node_uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+        "target_node_uuid": "a03ede7f-b148-52f5-b11e-d740832fd94d",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "8484f35d-b6ef-504a-84db-783e8e45a3f2",
+        "source_node_uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+        "target_node_uuid": "821e4b12-377e-55dd-87cc-830e3147ba56",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "d0778b9a-fc8d-53d9-93fb-a3289957a770",
+        "source_node_uuid": "a03ede7f-b148-52f5-b11e-d740832fd94d",
+        "target_node_uuid": "2f1b18f3-0c64-5755-ac5b-a106ebff68cc",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "bd013d16-b939-5f3d-b245-6c8614d2f0f3",
+        "source_node_uuid": "821e4b12-377e-55dd-87cc-830e3147ba56",
+        "target_node_uuid": "2f1b18f3-0c64-5755-ac5b-a106ebff68cc",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "d8666e7b-4d21-5f52-8842-2445b7cfae52",
+        "source_node_uuid": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+        "target_node_uuid": "7a145f54-eaf7-563d-8f6b-6c309cd12c8b",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "9baa27f5-0e8a-5a8b-bb00-31a5699abc62",
+        "source_node_uuid": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+        "target_node_uuid": "077c87be-3e67-5b6b-a820-e13ef475afbc",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "51e3f406-82a4-5f91-868a-f4a5a21c443f",
+        "source_node_uuid": "722b679a-deea-5820-9429-af967c163e2f",
+        "target_node_uuid": "217af964-5896-5785-9628-7b636ec08a2c",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "93405926-af56-55bd-8c65-772bbb4fcccf",
+        "source_node_uuid": "eb99dd62-259d-5cac-8702-c709555d943b",
+        "target_node_uuid": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "0b4a5492-706a-5c51-b77c-92ba06904f18",
+        "source_node_uuid": "2f1b18f3-0c64-5755-ac5b-a106ebff68cc",
+        "target_node_uuid": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      },
+      {
+        "uuid": "ef20b9cf-9d61-528c-abec-dafedbe4bdab",
+        "source_node_uuid": "077c87be-3e67-5b6b-a820-e13ef475afbc",
+        "target_node_uuid": "722b679a-deea-5820-9429-af967c163e2f",
+        "source_handle_uuid": "",
+        "target_handle_uuid": "",
+        "dependency_only": true
+      }
+    ],
+    "handles": [],
+    "resource_occupancy_plan": {
+      "version": 1,
+      "static_acyclic": true,
+      "intervals": [
+        {
+          "uuid": "c228ce08-7bde-5c37-be0d-b4fc3f982508",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/1e40411e-fdaf-4da8-a5ea-9f13bec1ef98",
+              "scope": "device",
+              "material_uuid": "1e40411e-fdaf-4da8-a5ea-9f13bec1ef98"
+            }
+          ],
+          "member_node_uuids": [
+            "57dd449f-4270-590a-b44f-6056ffddaf5d",
+            "f29a331a-14c5-5991-a0d0-ff2c87de0196"
+          ],
+          "entry_node_uuids": [
+            "57dd449f-4270-590a-b44f-6056ffddaf5d"
+          ],
+          "exit_node_uuids": [
+            "f29a331a-14c5-5991-a0d0-ff2c87de0196"
+          ]
+        },
+        {
+          "uuid": "a17aa1d2-ef78-578c-bbfc-0e4531f99f77",
+          "parent_uuid": "c228ce08-7bde-5c37-be0d-b4fc3f982508",
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "57dd449f-4270-590a-b44f-6056ffddaf5d"
+          ],
+          "entry_node_uuids": [
+            "57dd449f-4270-590a-b44f-6056ffddaf5d"
+          ],
+          "exit_node_uuids": [
+            "57dd449f-4270-590a-b44f-6056ffddaf5d"
+          ]
+        },
+        {
+          "uuid": "76533579-4ed6-5aeb-be4f-090742ebc6b7",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/2ff37284-fd80-4719-be69-af155c6f9df5",
+              "scope": "device",
+              "material_uuid": "2ff37284-fd80-4719-be69-af155c6f9df5"
+            }
+          ],
+          "member_node_uuids": [
+            "f7cc6cde-efec-5564-8102-d2318ba43910",
+            "83763516-a763-50d0-a6ae-0b9a621eed66",
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ],
+          "entry_node_uuids": [
+            "f7cc6cde-efec-5564-8102-d2318ba43910",
+            "83763516-a763-50d0-a6ae-0b9a621eed66"
+          ],
+          "exit_node_uuids": [
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ]
+        },
+        {
+          "uuid": "2d9a68f5-eefc-5267-bfa7-5c3042ae496f",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "e4176031-f8bc-5fee-b6df-7badfe04d42f"
+          ],
+          "entry_node_uuids": [
+            "e4176031-f8bc-5fee-b6df-7badfe04d42f"
+          ],
+          "exit_node_uuids": [
+            "e4176031-f8bc-5fee-b6df-7badfe04d42f"
+          ]
+        },
+        {
+          "uuid": "9071ed23-8ebf-5b1b-944f-01a8a94ed9af",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/b99cf2c9-85a8-413a-a435-7b9df002c113",
+              "scope": "device",
+              "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113"
+            }
+          ],
+          "member_node_uuids": [
+            "f29a331a-14c5-5991-a0d0-ff2c87de0196"
+          ],
+          "entry_node_uuids": [
+            "f29a331a-14c5-5991-a0d0-ff2c87de0196"
+          ],
+          "exit_node_uuids": [
+            "f29a331a-14c5-5991-a0d0-ff2c87de0196"
+          ]
+        },
+        {
+          "uuid": "36f92238-8d97-5de5-9379-df5f53456a3a",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "f7cc6cde-efec-5564-8102-d2318ba43910"
+          ],
+          "entry_node_uuids": [
+            "f7cc6cde-efec-5564-8102-d2318ba43910"
+          ],
+          "exit_node_uuids": [
+            "f7cc6cde-efec-5564-8102-d2318ba43910"
+          ]
+        },
+        {
+          "uuid": "37527e8c-eb2c-5414-8c87-da260cf1dc7e",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/b99cf2c9-85a8-413a-a435-7b9df002c113",
+              "scope": "device",
+              "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113"
+            }
+          ],
+          "member_node_uuids": [
+            "83763516-a763-50d0-a6ae-0b9a621eed66"
+          ],
+          "entry_node_uuids": [
+            "83763516-a763-50d0-a6ae-0b9a621eed66"
+          ],
+          "exit_node_uuids": [
+            "83763516-a763-50d0-a6ae-0b9a621eed66"
+          ]
+        },
+        {
+          "uuid": "d74ae898-91cd-53c7-b3b1-3f4aa45117ca",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ],
+          "entry_node_uuids": [
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ],
+          "exit_node_uuids": [
+            "eb99dd62-259d-5cac-8702-c709555d943b"
+          ]
+        },
+        {
+          "uuid": "4316e197-dd69-5fd5-a52b-65bb6ddf7f93",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "a03ede7f-b148-52f5-b11e-d740832fd94d"
+          ],
+          "entry_node_uuids": [
+            "a03ede7f-b148-52f5-b11e-d740832fd94d"
+          ],
+          "exit_node_uuids": [
+            "a03ede7f-b148-52f5-b11e-d740832fd94d"
+          ]
+        },
+        {
+          "uuid": "6bcd2fab-e2dc-5f5e-92db-afb8cc1deb38",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/b99cf2c9-85a8-413a-a435-7b9df002c113",
+              "scope": "device",
+              "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113"
+            }
+          ],
+          "member_node_uuids": [
+            "821e4b12-377e-55dd-87cc-830e3147ba56"
+          ],
+          "entry_node_uuids": [
+            "821e4b12-377e-55dd-87cc-830e3147ba56"
+          ],
+          "exit_node_uuids": [
+            "821e4b12-377e-55dd-87cc-830e3147ba56"
+          ]
+        },
+        {
+          "uuid": "0dd7befa-e092-5f06-8670-bbfaccebf15a",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/b99cf2c9-85a8-413a-a435-7b9df002c113",
+              "scope": "device",
+              "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113"
+            }
+          ],
+          "member_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ],
+          "entry_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ],
+          "exit_node_uuids": [
+            "2f1b18f3-0c64-5755-ac5b-a106ebff68cc"
+          ]
+        },
+        {
+          "uuid": "0e12dc50-38c9-58dc-9730-80ae666fc084",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ],
+          "entry_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ],
+          "exit_node_uuids": [
+            "7a145f54-eaf7-563d-8f6b-6c309cd12c8b"
+          ]
+        },
+        {
+          "uuid": "0db13878-7e40-58b4-8a7f-27587a52e699",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/b99cf2c9-85a8-413a-a435-7b9df002c113",
+              "scope": "device",
+              "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113"
+            }
+          ],
+          "member_node_uuids": [
+            "077c87be-3e67-5b6b-a820-e13ef475afbc"
+          ],
+          "entry_node_uuids": [
+            "077c87be-3e67-5b6b-a820-e13ef475afbc"
+          ],
+          "exit_node_uuids": [
+            "077c87be-3e67-5b6b-a820-e13ef475afbc"
+          ]
+        },
+        {
+          "uuid": "d6517f81-a66b-502e-8acb-2c566fb62c90",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/7f6c62c2-6380-4ca4-bd07-585c8cb4b92a",
+              "scope": "device",
+              "material_uuid": "7f6c62c2-6380-4ca4-bd07-585c8cb4b92a"
+            }
+          ],
+          "member_node_uuids": [
+            "722b679a-deea-5820-9429-af967c163e2f"
+          ],
+          "entry_node_uuids": [
+            "722b679a-deea-5820-9429-af967c163e2f"
+          ],
+          "exit_node_uuids": [
+            "722b679a-deea-5820-9429-af967c163e2f"
+          ]
+        },
+        {
+          "uuid": "77a70556-a239-574c-913f-4e80c06c8d30",
+          "parent_uuid": null,
+          "source": "explicit_scope",
+          "resource_locks": [
+            {
+              "lock_key": "/devices/b99cf2c9-85a8-413a-a435-7b9df002c113",
+              "scope": "device",
+              "material_uuid": "b99cf2c9-85a8-413a-a435-7b9df002c113"
+            }
+          ],
+          "member_node_uuids": [
+            "217af964-5896-5785-9628-7b636ec08a2c"
+          ],
+          "entry_node_uuids": [
+            "217af964-5896-5785-9628-7b636ec08a2c"
+          ],
+          "exit_node_uuids": [
+            "217af964-5896-5785-9628-7b636ec08a2c"
+          ]
+        }
+      ]
+    }
+  },
+  "_labels": {
+    "start": "e4176031-f8bc-5fee-b6df-7badfe04d42f",
+    "hold1": "57dd449f-4270-590a-b44f-6056ffddaf5d",
+    "hold2": "f29a331a-14c5-5991-a0d0-ff2c87de0196",
+    "left": "f7cc6cde-efec-5564-8102-d2318ba43910",
+    "right": "83763516-a763-50d0-a6ae-0b9a621eed66",
+    "join": "eb99dd62-259d-5cac-8702-c709555d943b",
+    "condition": "2e01b5ff-76ac-58eb-b8c0-f31d4f776b9e",
+    "yes": "a03ede7f-b148-52f5-b11e-d740832fd94d",
+    "no": "821e4b12-377e-55dd-87cc-830e3147ba56",
+    "after_condition": "2f1b18f3-0c64-5755-ac5b-a106ebff68cc",
+    "repeat": "cc7997b3-b05b-5261-a66a-b49695c781f6",
+    "measure": "7a145f54-eaf7-563d-8f6b-6c309cd12c8b",
+    "after_repeat": "077c87be-3e67-5b6b-a820-e13ef475afbc",
+    "manual": "722b679a-deea-5820-9429-af967c163e2f",
+    "finish": "217af964-5896-5785-9628-7b636ec08a2c"
+  }
+}

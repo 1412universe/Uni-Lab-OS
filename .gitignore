@@ -269,3 +269,7 @@ unilabos/.ua/
 # Python/ROS 的通用 ``lib/`` 忽略规则不能吞掉前端 API 客户端源码。
 !/frontend/src/lib/
 !/frontend/src/lib/**
+
+# 本地验证数据库快照保留在工作区，报告和文本证据继续纳入版本控制。
+/docs/validation/**/*.db
+/docs/validation/**/*.db-*

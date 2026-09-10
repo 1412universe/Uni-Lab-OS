@@ -1,0 +1,194 @@
+{
+  "status": "passed",
+  "profile_count": 11,
+  "task_count": 22,
+  "physical_simulator_commands": 269,
+  "expected_terminal_tasks": {
+    "succeeded": 19,
+    "failed": 1,
+    "timeout": 1,
+    "canceled": 1
+  },
+  "active_claims": 0,
+  "active_leases": 0,
+  "regression": "118 passed, 2 warnings",
+  "profiles": [
+    {
+      "profile": "normal",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 2,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "reverse",
+      "status": "passed",
+      "tasks": {
+        "B": "succeeded",
+        "A": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 2,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "capacity",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 1,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "controls",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 2,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "step",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 2,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "uncertain",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 2,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "failed",
+      "status": "passed",
+      "tasks": {
+        "A": "failed",
+        "B": "succeeded"
+      },
+      "dispatches": 15,
+      "peak": 2,
+      "measurements": {
+        "A": 0,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "timeout",
+      "status": "passed",
+      "tasks": {
+        "A": "timeout",
+        "B": "succeeded"
+      },
+      "dispatches": 15,
+      "peak": 2,
+      "measurements": {
+        "A": 0,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "cancel",
+      "status": "passed",
+      "tasks": {
+        "A": "canceled",
+        "B": "succeeded"
+      },
+      "dispatches": 15,
+      "peak": 2,
+      "measurements": {
+        "A": 0,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "inventory",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 2,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    },
+    {
+      "profile": "priority",
+      "status": "passed",
+      "tasks": {
+        "A": "succeeded",
+        "B": "succeeded"
+      },
+      "dispatches": 28,
+      "peak": 1,
+      "measurements": {
+        "A": 3,
+        "B": 3
+      },
+      "active_claims": 0,
+      "active_leases": 0
+    }
+  ],
+  "limits": "软件调度核心及持久库存到PLC Sim；故障回执由运行器注入；不是产品HTTP/实际驱动全链路或所有组合穷尽"
+}

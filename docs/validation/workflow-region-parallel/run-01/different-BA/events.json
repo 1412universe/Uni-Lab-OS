@@ -1,0 +1,62 @@
+[
+  {
+    "event": "dispatch",
+    "job_id": "c9a218d3-f5d6-56d8-b33d-577cd72e372e",
+    "channel": "S07",
+    "monotonic": 94153.835526833,
+    "epoch": 1788694752.1701329
+  },
+  {
+    "event": "dispatch",
+    "job_id": "94ce953b-9018-5e13-a49d-ee28b9e5eb2e",
+    "channel": "S06",
+    "monotonic": 94153.849388458,
+    "epoch": 1788694752.1839948
+  },
+  {
+    "event": "completed",
+    "job_id": "c9a218d3-f5d6-56d8-b33d-577cd72e372e",
+    "channel": "S07",
+    "monotonic": 94154.369721666,
+    "epoch": 1788694752.704331,
+    "plc_done": true
+  },
+  {
+    "event": "dispatch",
+    "job_id": "13bc268e-a18f-58c9-8669-15b3649b2bad",
+    "channel": "S07",
+    "monotonic": 94154.438914458,
+    "epoch": 1788694752.773524
+  },
+  {
+    "event": "completed",
+    "job_id": "94ce953b-9018-5e13-a49d-ee28b9e5eb2e",
+    "channel": "S06",
+    "monotonic": 94154.441137416,
+    "epoch": 1788694752.775747,
+    "plc_done": true
+  },
+  {
+    "event": "dispatch",
+    "job_id": "ee9fbbfa-f3b5-5d02-9444-1120893228fa",
+    "channel": "S06",
+    "monotonic": 94154.485682333,
+    "epoch": 1788694752.820292
+  },
+  {
+    "event": "completed",
+    "job_id": "13bc268e-a18f-58c9-8669-15b3649b2bad",
+    "channel": "S07",
+    "monotonic": 94155.027176208,
+    "epoch": 1788694753.361789,
+    "plc_done": true
+  },
+  {
+    "event": "completed",
+    "job_id": "ee9fbbfa-f3b5-5d02-9444-1120893228fa",
+    "channel": "S06",
+    "monotonic": 94155.075683583,
+    "epoch": 1788694753.4102972,
+    "plc_done": true
+  }
+]

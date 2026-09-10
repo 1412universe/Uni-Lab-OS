@@ -10,6 +10,7 @@ export function pageFromSearch(search: string): PageId {
 export function searchWithPage(search: string, page: PageId): string {
   const params = new URLSearchParams(search)
   params.set('page', page)
+  if (page !== 'materials') params.delete('usageTask')
   if (page !== 'workflows') {
     params.delete('workflow')
     params.delete('revision')

@@ -1,0 +1,20 @@
+Traceback (most recent call last):
+  File "/Users/xiongyanfei/Desktop/code/dp/sz/Uni-Lab-OS/unilabos/workflow/task_input.py", line 702, in _freeze_site_selections
+    resolution = resolver(request)
+                 ^^^^^^^^^^^^^^^^^
+  File "/Users/xiongyanfei/Desktop/code/dp/sz/Uni-Lab-OS/unilabos/app/scheduler/inventory/site_selection.py", line 79, in resolve_site_selection
+    selected = _exact_site_rows(
+               ^^^^^^^^^^^^^^^^^
+  File "/Users/xiongyanfei/Desktop/code/dp/sz/Uni-Lab-OS/unilabos/app/scheduler/inventory/site_selection.py", line 178, in _exact_site_rows
+    raise InventorySiteSelectionError("精确库位引用不存在或不唯一")
+unilabos.app.scheduler.inventory.site_selection.InventorySiteSelectionError: 精确库位引用不存在或不唯一
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<stdin>", line 9, in <module>
+  File "/Users/xiongyanfei/Desktop/code/dp/sz/Uni-Lab-OS/unilabos/workflow/task_input.py", line 100, in prepare_task_input
+    _freeze_site_selections(
+  File "/Users/xiongyanfei/Desktop/code/dp/sz/Uni-Lab-OS/unilabos/workflow/task_input.py", line 704, in _freeze_site_selections
+    raise TaskInputError("工作流任务库位选择解析失败") from exc
+unilabos.workflow.task_input.TaskInputError: 工作流任务库位选择解析失败

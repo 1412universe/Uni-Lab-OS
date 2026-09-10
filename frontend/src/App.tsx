@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
 import { StartupModeDialog } from './components/StartupModeDialog'
+import { StationErrorHandling } from './components/StationErrorHandling'
 import { useEdgeData } from './hooks/useEdgeData'
+import { useStationErrorHandling } from './hooks/useStationErrorHandling'
 import { EdgeApiError, startupModeSwitchBlockers, switchStartupMode } from './lib/edgeClient'
 import { pageFromSearch, searchForWorkflow, searchWithPage, workflowTargetFromSearch } from './lib/routes'
-import { MaterialsPage } from './pages/MaterialsPage'
+import { LiveMaterialsPage } from './pages/LiveMaterialsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { TasksPage } from './pages/TasksPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
@@ -19,6 +21,8 @@ export default function App() {
   const workflowTarget = workflowTargetFromSearch(`?${searchParams.toString()}`)
   const { snapshot, connection, error, refetch, lastSuccessfulAt } = useEdgeData()
   const [toast, setToast] = useState('')
+  const errorHandling = useStationErrorHandling(connection === 'connected', setToast)
+  const [handlingTarget, setHandlingTarget] = useState<{ taskUuid: string; sequence: number }>()
   const [modeDialogOpen, setModeDialogOpen] = useState(false)
   const [modeSwitchPending, setModeSwitchPending] = useState(false)
   const [modeSwitchError, setModeSwitchError] = useState('')
@@ -39,6 +43,22 @@ export default function App() {
       `?${current.toString()}`,
       target,
     )))
+  }, [setSearchParams])
+
+  const openTask = useCallback((taskUuid: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(searchWithPage(`?${current.toString()}`, 'tasks'))
+      next.set('task', taskUuid)
+      return next
+    })
+  }, [setSearchParams])
+
+  const openResources = useCallback((taskUuid: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(searchWithPage(`?${current.toString()}`, 'materials'))
+      next.set('usageTask', taskUuid)
+      return next
+    })
   }, [setSearchParams])
 
   const refresh = useCallback(() => {
@@ -124,10 +144,11 @@ export default function App() {
           <div><strong>当前为显式演示模式</strong><span>以下内容不是 Edge 生产数据。</span></div>
         </div>
       ) : null}
+      {connection !== 'demo' ? <StationErrorHandling controller={errorHandling} materials={snapshot.materials} tasks={snapshot.tasks} openRequest={handlingTarget} /> : null}
       {page === 'overview' ? (
         <OverviewPage tasks={snapshot.tasks} materialTotal={snapshot.materialTotal} workflowLoaded={snapshot.workflowLoaded} connection={connection} onNavigate={navigate} onNotify={setToast} />
       ) : page === 'materials' ? (
-        <MaterialsPage materials={snapshot.materials} total={snapshot.materialTotal} connected={connection === 'connected'} onNotify={setToast} onRefresh={refresh} />
+        <LiveMaterialsPage key={searchParams.get('usageTask') || 'all'} materials={snapshot.materials} tasks={snapshot.tasks} connected={connection === 'connected'} onNotify={setToast} onRefresh={refresh} onOpenTask={openTask} targetTaskUuid={searchParams.get('usageTask') || undefined} />
       ) : page === 'operations' ? (
         <OperationsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
       ) : page === 'reagents' ? (
@@ -153,6 +174,10 @@ export default function App() {
           onNotify={setToast}
           onOpenWorkflow={openWorkflow}
           startupMode={snapshot.startupMode}
+          errorTaskIds={errorHandling.snapshot?.errors.map((item) => item.source_task_uuid)}
+          onHandleError={(taskUuid) => setHandlingTarget({ taskUuid, sequence: Date.now() })}
+          targetTaskUuid={searchParams.get('task') || undefined}
+          onViewResources={openResources}
         />
       )}
       <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>

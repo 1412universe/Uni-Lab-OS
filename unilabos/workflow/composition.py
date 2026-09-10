@@ -370,9 +370,11 @@ def compose_workflow_runtime(
             # 合同恢复到进程内目录。运行事实 SQLite 不持有工作流定义或发布权威。
             new_service.restore_published_workflow_contracts()
             if task_scheduler_bridge is not None:
-                # 只恢复没有结果不明作业的运行中任务；已成功动作
-                # 仅重建 DAG 状态，不越过物理派发边界重放。
-                task_scheduler_bridge.recover_active_tasks()
+                # 本地执行器随 Runtime 退出，旧任务统一失败；分离执行进程由
+                # HELLO 进程身份变化通知终结，仅调度器重建才恢复原结果路由。
+                task_scheduler_bridge.recover_active_tasks(
+                    execution_process_restarted=scheduler.execution_process_is_local
+                )
             if start_source_monitor:
                 new_monitor = WorkflowSourceMonitor(new_service)
             if before_publish is not None:

@@ -175,7 +175,12 @@ class StationExecutionControl:
             row = conn.execute(
                 "SELECT * FROM workflow_node_job WHERE uuid=?", (job_uuid,)
             ).fetchone()
-            if row is None or self.recovering:
+            if (
+                row is None
+                or self.recovering
+                or row["status"]
+                not in {"pending", "dispatched", "running", "cancel_requested"}
+            ):
                 return False
             if row["execution_source"] == "error_manual":
                 # 撤销后的旧投递仍可被接收并按持久 no-send 事实结算。
@@ -339,6 +344,8 @@ class StationExecutionControl:
             ).fetchone()
             if job is None or job["edge_command_uuid"] != command_uuid:
                 raise StoreConflict("execution_identity_conflict")
+            if job["status"] in {"failed", "canceled", "succeeded", "timeout"}:
+                return "CANCELED"
             if self.recovering:
                 return "WAIT"
             if job["start_state"] != "NOT_STARTED":
@@ -535,6 +542,13 @@ class StationExecutionControl:
                 ).fetchone(),
             )
 
+    def resource_usage(self) -> dict[str, Any]:
+        """读取实时资源监控投影；初始库存不会因此绑定任何任务。"""
+        from unilabos.workflow.resource_usage import read_resource_usage
+
+        with self.lock, self.store.read() as conn:
+            return read_resource_usage(conn)
+
     def occupancies(self) -> list[dict[str, Any]]:
         from unilabos.workflow.execution_lock_lease import list_execution_locks
 
@@ -724,6 +738,8 @@ class StationExecutionControl:
                     "SELECT uuid,control_data FROM workflow_node_job WHERE workflow_task_uuid=? AND deleted_at IS NULL",
                     (item["workflow_task_uuid"],),
                 ):
+                    if command["result"].get("action") == "retry_current_node" and job["uuid"] != item["workflow_node_job_uuid"]:
+                        continue
                     data = json.loads(job["control_data"])
                     same_fence = any(
                         fence.get("lock_key") == item["lock_key"]
@@ -821,6 +837,15 @@ class StationExecutionControl:
         if row is None:
             raise StoreNotFound("错误决定不存在")
         return row
+
+    @staticmethod
+    def _next_decision_revision(conn: sqlite3.Connection, job_uuid: str) -> int:
+        """版本唯一键属于 Job；同一 Job 的全部错误事实共用递增序列。"""
+        return conn.execute(
+            "SELECT COALESCE(MAX(revision),0)+1 FROM workflow_intervention "
+            "WHERE workflow_node_job_uuid=?",
+            (job_uuid,),
+        ).fetchone()[0]
 
     def _read_session(self, conn: sqlite3.Connection, identity: str) -> sqlite3.Row:
         row = conn.execute(
@@ -995,8 +1020,16 @@ class StationExecutionControl:
                 )
                 conn.execute(
                     """UPDATE workflow_intervention SET stage='MANUAL_HANDLING',initial_action=?,
-                    session_id=?,revision=revision+1,update_time=? WHERE decision_id=?""",
-                    (action, session_id, now, decision_id),
+                    session_id=?,revision=?,update_time=? WHERE decision_id=?""",
+                    (
+                        action,
+                        session_id,
+                        self._next_decision_revision(
+                            conn, decision["workflow_node_job_uuid"]
+                        ),
+                        now,
+                        decision_id,
+                    ),
                 )
                 conn.execute(
                     "UPDATE workflow_station_control SET mode='PAUSED',active_session_id=? WHERE station_id=?",
@@ -1019,6 +1052,18 @@ class StationExecutionControl:
                 result["resume_requested"] = request.get("resume_requested") is True
                 if action == "retry_current_node":
                     result["retry_job_uuid"] = self._create_retry(conn, decision)
+                    old = conn.execute("SELECT status,uncertainty_reason FROM workflow_node_job WHERE uuid=?",
+                                       (decision["workflow_node_job_uuid"],)).fetchone()
+                    if old["status"] in {"failed", "timeout", "canceled"} and old["uncertainty_reason"]:
+                        # 用户重试已结束的失败尝试：冻结它的占用，不能把其他任务一起解锁。
+                        from unilabos.workflow.execution_lock_lease import list_execution_locks
+                        result["retry_previous_uncertainty"] = old["uncertainty_reason"]
+                        result["retry_occupancies"] = [
+                            {**row, "occupancy_kind": "execution_lock"}
+                            for row in list_execution_locks(conn, job_uuid=decision["workflow_node_job_uuid"])
+                            if row["state"] != "released"
+                        ]
+                        result["reason"] = request.get("reason") or "用户选择重试当前节点，按当前库存登记重新执行"
                 else:
                     # 取消意图先冻结本任务，物理停止请求由调度桥在事务外应用。
                     conn.execute(
@@ -1027,9 +1072,19 @@ class StationExecutionControl:
                     )
                 conn.execute(
                     """UPDATE workflow_intervention SET stage='APPLYING',status='selected',
-                    initial_action=COALESCE(initial_action,?),final_action=?,revision=revision+1,update_time=?,
+                    initial_action=COALESCE(initial_action,?),final_action=?,revision=?,update_time=?,
                     decided_at=?,decision_idempotency_key=? WHERE decision_id=?""",
-                    (action, action, now, now, idempotency_key, decision_id),
+                    (
+                        action,
+                        action,
+                        self._next_decision_revision(
+                            conn, decision["workflow_node_job_uuid"]
+                        ),
+                        now,
+                        now,
+                        idempotency_key,
+                        decision_id,
+                    ),
                 )
             return self._save_command(
                 conn,
@@ -1058,6 +1113,33 @@ class StationExecutionControl:
                 raise StoreConflict("重试来源链身份不一致")
             ancestors.add(identity)
         return ancestors
+
+    def record_operator_retry(self, command: dict[str, Any]) -> None:
+        """归档旧尝试的不确定性，不伪造成功或物理位置对账结论。"""
+        result = command["result"]
+        if not result.get("retry_previous_uncertainty"):
+            return
+        with self.lock, self.store.transaction() as conn:
+            old = conn.execute("SELECT * FROM workflow_node_job WHERE uuid=?",
+                               (result["source_job_uuid"],)).fetchone()
+            control = json.loads(old["control_data"])
+            audit = {
+                "command_uuid": command["command_uuid"],
+                "retry_job_uuid": result["retry_job_uuid"],
+                "previous_uncertainty_reason": result["retry_previous_uncertainty"],
+                "reason": result["reason"],
+            }
+            if control.get("operator_retry") == audit:
+                return
+            if old["status"] not in {"failed", "timeout", "canceled"} or old["uncertainty_reason"] != result["retry_previous_uncertainty"]:
+                raise StoreConflict("重试来源尝试状态发生变化")
+            control["operator_retry"] = audit
+            now = utc_now()
+            conn.execute("UPDATE workflow_node_job SET control_data=?,uncertainty_reason=NULL,update_time=? WHERE uuid=?",
+                         (_json(control), now, old["uuid"]))
+            from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
+            TaskRuntimeProjection._resume_task_after_reconciliation(conn, task_uuid=old["workflow_task_uuid"], now=now)
+            self._emit(conn, old["workflow_task_uuid"])
 
     def _create_retry(self, conn: sqlite3.Connection, decision: sqlite3.Row) -> str:
         old = conn.execute(
@@ -1186,8 +1268,15 @@ class StationExecutionControl:
                 ),
             )
             conn.execute(
-                "UPDATE workflow_intervention SET stage=?,revision=revision+1,update_time=? WHERE decision_id=?",
-                (target, now, session["decision_id"]),
+                "UPDATE workflow_intervention SET stage=?,revision=?,update_time=? WHERE decision_id=?",
+                (
+                    target,
+                    self._next_decision_revision(
+                        conn, decision["workflow_node_job_uuid"]
+                    ),
+                    now,
+                    session["decision_id"],
+                ),
             )
             result = {
                 "session_id": session_id,
@@ -1270,8 +1359,14 @@ class StationExecutionControl:
                 )
             decision = self._read_decision(conn, result["decision_id"])
             conn.execute(
-                "UPDATE workflow_intervention SET stage='RESOLVED',update_time=?,revision=revision+1 WHERE decision_id=?",
-                (now, decision["decision_id"]),
+                "UPDATE workflow_intervention SET stage='RESOLVED',update_time=?,revision=? WHERE decision_id=?",
+                (
+                    now,
+                    self._next_decision_revision(
+                        conn, decision["workflow_node_job_uuid"]
+                    ),
+                    decision["decision_id"],
+                ),
             )
             if decision["session_id"]:
                 conn.execute(
@@ -1283,11 +1378,22 @@ class StationExecutionControl:
                     (self.station_id, decision["session_id"]),
                 )
             if result.get("action") == "cancel_task":
-                conn.execute(
-                    """UPDATE workflow_intervention SET stage='RESOLVED',final_action='cancel_task',revision=revision+1,update_time=?
+                remaining = conn.execute(
+                    """SELECT decision_id,workflow_node_job_uuid FROM workflow_intervention
                     WHERE workflow_task_uuid=? AND decision_kind='edge_node_error' AND stage!='RESOLVED'""",
-                    (now, decision["workflow_task_uuid"]),
-                )
+                    (decision["workflow_task_uuid"],),
+                ).fetchall()
+                for other in remaining:
+                    conn.execute(
+                        "UPDATE workflow_intervention SET stage='RESOLVED',final_action='cancel_task',revision=?,update_time=? WHERE decision_id=?",
+                        (
+                            self._next_decision_revision(
+                                conn, other["workflow_node_job_uuid"]
+                            ),
+                            now,
+                            other["decision_id"],
+                        ),
+                    )
             unresolved = conn.execute(
                 """SELECT 1 FROM workflow_intervention WHERE workflow_task_uuid=?
                 AND decision_kind='edge_node_error' AND stage!='RESOLVED' LIMIT 1""",
@@ -1363,6 +1469,71 @@ class StationExecutionControl:
             session["manual_actions"] = self._manual_summaries(conn, session_id)
             return session
 
+    def close_restarted_task(self, task_uuid: str) -> None:
+        """任务因 Runtime 退出终结后关闭旧决定和会话，保留审计记录。"""
+        with self.lock, self.store.transaction() as conn:
+            now = utc_now()
+            decisions = conn.execute(
+                "SELECT decision_id,session_id,workflow_node_job_uuid FROM workflow_intervention "
+                "WHERE workflow_task_uuid=? AND decision_kind='edge_node_error' AND stage!='RESOLVED'",
+                (task_uuid,),
+            ).fetchall()
+            for decision in decisions:
+                # 同一 Job 可有多个错误事实；版本必须跨这些记录保持唯一。
+                revision = self._next_decision_revision(
+                    conn, decision["workflow_node_job_uuid"]
+                )
+                conn.execute(
+                    "UPDATE workflow_intervention SET stage='RESOLVED',status='superseded', "
+                    "description='runtime_restarted',revision=?,update_time=? WHERE decision_id=?",
+                    (revision, now, decision["decision_id"]),
+                )
+                if decision["session_id"]:
+                    conn.execute(
+                        "UPDATE workflow_error_session SET stage='RESOLVED',resolved_at=?, "
+                        "version=version+1 WHERE session_id=? AND stage!='RESOLVED'",
+                        (now, decision["session_id"]),
+                    )
+                    conn.execute(
+                        "UPDATE workflow_station_control SET active_session_id=NULL "
+                        "WHERE station_id=? AND active_session_id=?",
+                        (self.station_id, decision["session_id"]),
+                    )
+            if decisions:
+                conn.execute(
+                    "UPDATE workflow_station_control SET version=version+1,updated_at=? WHERE station_id=?",
+                    (now, self.station_id),
+                )
+                self._emit(conn, task_uuid)
+
+    def finish_runtime_restart(self) -> None:
+        """旧任务清理完成后作废旧控制意图，开放新任务调度，不恢复旧任务。"""
+        with self.lock:
+            with self.store.read() as conn:
+                task_ids = [
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT DISTINCT workflow_task_uuid FROM workflow_intervention "
+                        "WHERE station_id=? AND decision_kind='edge_node_error' AND stage!='RESOLVED'",
+                        (self.station_id,),
+                    )
+                ]
+            for task_uuid in task_ids:
+                self.close_restarted_task(task_uuid)
+            for command in self.pending_commands():
+                self.reject_command(
+                    command["command_uuid"], "runtime 已重启，旧控制命令已失效"
+                )
+            with self.store.transaction() as conn:
+                changed = conn.execute(
+                    "UPDATE workflow_station_control SET mode='RUNNING',active_session_id=NULL, "
+                    "version=version+1,updated_at=? WHERE station_id=? "
+                    "AND (mode!='RUNNING' OR active_session_id IS NOT NULL)",
+                    (utc_now(), self.station_id),
+                ).rowcount
+                if changed:
+                    self._emit(conn)
+
     def pending_commands(self) -> list[dict[str, Any]]:
         with self.lock, self.store.read() as conn:
             return [
@@ -1420,10 +1591,7 @@ class StationExecutionControl:
                 "SELECT error_epoch FROM workflow_station_control WHERE station_id=?",
                 (self.station_id,),
             ).fetchone()[0]
-            revision = conn.execute(
-                "SELECT COALESCE(MAX(revision),0)+1 FROM workflow_intervention WHERE workflow_node_job_uuid=?",
-                (job_uuid,),
-            ).fetchone()[0]
+            revision = self._next_decision_revision(conn, job_uuid)
             resume_status = task["control_status"]
             if resume_status == "error_waiting":
                 previous = conn.execute(

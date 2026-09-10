@@ -282,6 +282,18 @@ class WorkflowRun:
         else:
             self.state = WorkflowState.FAILED
 
+    def abort_execution_process(self) -> None:
+        """执行进程退出后终结内存图，保留已完成节点，不触发设备取消。"""
+        for node_id, state in self._node_states.items():
+            if state == NodeState.DISPATCHED:
+                self._node_states[node_id] = NodeState.FAILED
+            elif state in {NodeState.PENDING, NodeState.READY}:
+                self._node_states[node_id] = NodeState.CANCELED
+        for runtime in self._repeat_runtime.values():
+            if runtime.round_run is not None:
+                runtime.round_run.abort_execution_process()
+        self.state = WorkflowState.FAILED
+
     def hold_error(self, node_id: str) -> None:
         """消费失败的本次执行但保留依赖，任务不提前进入终态。"""
         owner = self._round_owner(node_id)

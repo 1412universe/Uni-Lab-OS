@@ -1,0 +1,243 @@
+{
+  "tasks": [
+    {
+      "task_uuid": "bd19a379-c84d-49a3-bb7d-91feac8ecced",
+      "jobs_succeeded": 35,
+      "returned_materials": {
+        "coarse_powder_cartridge": [
+          [
+            "424df858-57e3-529c-b754-4f64466a2bec",
+            "P01"
+          ]
+        ],
+        "fine_powder_cartridge": [
+          [
+            "424df858-57e3-529c-b754-4f64466a2bec",
+            "P02"
+          ]
+        ],
+        "product_vial": [
+          [
+            "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+            "L1A1"
+          ]
+        ],
+        "reagent_bottle": [
+          [
+            "63bda02f-6191-5d89-acbb-2e560ff95e90",
+            "R1C1"
+          ]
+        ],
+        "used_beaker": [
+          [
+            "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+            "L1B1"
+          ]
+        ]
+      },
+      "trace_id": "83c83f7c921e9ba9eaa76b7e8ef70c05"
+    },
+    {
+      "task_uuid": "75d4a357-e7e7-45bb-a2b2-e472e2b68ef3",
+      "jobs_succeeded": 35,
+      "returned_materials": {
+        "coarse_powder_cartridge": [
+          [
+            "424df858-57e3-529c-b754-4f64466a2bec",
+            "P03"
+          ]
+        ],
+        "fine_powder_cartridge": [
+          [
+            "424df858-57e3-529c-b754-4f64466a2bec",
+            "P04"
+          ]
+        ],
+        "product_vial": [
+          [
+            "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+            "L1A2"
+          ]
+        ],
+        "reagent_bottle": [
+          [
+            "63bda02f-6191-5d89-acbb-2e560ff95e90",
+            "R1C2"
+          ]
+        ],
+        "used_beaker": [
+          [
+            "4a0b516d-d145-5cdf-9b15-02093b1286d4",
+            "L1B2"
+          ]
+        ]
+      },
+      "trace_id": "ace49c46de1fb1e8c4641f7f6b98e232"
+    }
+  ],
+  "cross_task_overlaps": [
+    {
+      "a_job": "b977d7b9-95de-4d34-968b-c253a8c6e2c3",
+      "b_job": "d1e45679-5c37-4453-9a47-b2acc4efa060",
+      "a_device": "szlab_mixer_pump",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 0.9737939834594727
+    },
+    {
+      "a_job": "baec595e-0745-420c-bdb6-7b1317caaa23",
+      "b_job": "2b67f01e-7cb3-4150-ae39-d4521aeff7ad",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_s07_solid_addition",
+      "seconds": 1.2677030563354492
+    },
+    {
+      "a_job": "321698e3-fd7e-47f5-8da5-a27135797789",
+      "b_job": "fa91e1a9-ea4a-4eae-8a56-4612ed587744",
+      "a_device": "szlab_s08_cap_station",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 1.3265719413757324
+    },
+    {
+      "a_job": "253d846c-53cd-4259-b86b-a7abf9affe08",
+      "b_job": "c276556d-d330-41dc-81a0-bf66f32f83b3",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_pump",
+      "seconds": 0.954409122467041
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "f488c4b0-0ad8-4473-b976-4dd21f0b311e",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 3.4364659786224365
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "0913888b-556d-4004-a510-e602ec655560",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 2.4676010608673096
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "f49fb0bb-faef-4f38-b1ea-1f2a61a09392",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_s08_cap_station",
+      "seconds": 1.340512990951538
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "b86091b2-eff2-48b0-8b29-8753b41de6f6",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 2.309486150741577
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "e39fcf7b-d01d-474e-8647-c7aade36ed36",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_mixer_pipetting_station",
+      "seconds": 3.2229321002960205
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "d7a73abc-52cd-415a-b9b7-bd508844bd61",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 3.37191104888916
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "4fe76966-f23e-4ffe-b03a-cb145b6554ba",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_s08_cap_station",
+      "seconds": 1.0807769298553467
+    },
+    {
+      "a_job": "60be76de-b493-4a50-b0fb-d1fcfc77cfbf",
+      "b_job": "57bf3942-7611-4844-a1eb-80175d1b2a68",
+      "a_device": "szlab_mixer_stirrer",
+      "b_device": "szlab_mixer_robot",
+      "seconds": 3.484488010406494
+    },
+    {
+      "a_job": "f4ebb1c1-739c-4f4d-9c7e-6d97455d7f40",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_pipetting_station",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 2.465735912322998
+    },
+    {
+      "a_job": "59519f56-52ce-49a9-a120-279c1fa579fb",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 3.3880159854888916
+    },
+    {
+      "a_job": "15ca73e6-d886-48e0-aa20-9bdf99952c2b",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 3.588109016418457
+    },
+    {
+      "a_job": "834fc9c0-8e45-4354-938c-508fa2b77de1",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_s08_cap_station",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 1.5970258712768555
+    },
+    {
+      "a_job": "cdcf052a-7f6d-4d4e-8d7d-f4951e839cb8",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_photoshotting",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 0.2389519214630127
+    },
+    {
+      "a_job": "3f2f1195-c51f-4bab-aad9-298aff942e4c",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 3.6439549922943115
+    },
+    {
+      "a_job": "d514ec12-549f-4fe0-8046-0f0093f053dc",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_s08_cap_station",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 1.2575511932373047
+    },
+    {
+      "a_job": "0bc99c37-2758-418c-a472-ea48ff233e3e",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 2.458669900894165
+    },
+    {
+      "a_job": "3063d7f0-f971-4a20-96b9-c43395bd601f",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 2.724799156188965
+    },
+    {
+      "a_job": "d84dbaff-2534-45e7-b603-e11295039046",
+      "b_job": "bad4a788-e57b-4622-9221-f79afa276da8",
+      "a_device": "szlab_mixer_robot",
+      "b_device": "szlab_mixer_stirrer",
+      "seconds": 0.6695780754089355
+    }
+  ],
+  "released_claims": 50,
+  "released_leases": 306,
+  "resource_lease_overlap_count": 0,
+  "plc_sequence_delta": 270,
+  "plc_phases": {
+    "accepted": 90,
+    "completed": 90,
+    "reset": 90
+  }
+}

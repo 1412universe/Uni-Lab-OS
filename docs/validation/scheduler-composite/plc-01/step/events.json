@@ -1,0 +1,2216 @@
+[
+  {
+    "event": "dispatch",
+    "at": 100686.988155333,
+    "job": "57834de3-f774-560a-9daa-7ef6014a01df",
+    "channel": "S06",
+    "action": "A:start"
+  },
+  {
+    "event": "step",
+    "at": 100686.990309125,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "8c5a21d4-1672-5c1a-8c7f-17801673daf5"
+  },
+  {
+    "event": "dispatch",
+    "at": 100687.009061833,
+    "job": "b722b849-a178-5d14-a009-5be85bd7df04",
+    "channel": "S07",
+    "action": "B:start"
+  },
+  {
+    "event": "step",
+    "at": 100687.01453975,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "7e8fa3ca-d3bf-5d48-8e39-84662a18874d"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.032793083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.071687708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.1151985,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.1582895,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.196566583,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.241650083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.281651291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.321558541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.35800175,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.393880625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.435973291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100687.47450425,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100687.575129666,
+    "job": "57834de3-f774-560a-9daa-7ef6014a01df",
+    "channel": "S06",
+    "action": "A:start",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100687.588072541,
+    "job": "57834de3-f774-560a-9daa-7ef6014a01df"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100687.629060875,
+    "job": "b722b849-a178-5d14-a009-5be85bd7df04",
+    "channel": "S07",
+    "action": "B:start",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100687.63938075,
+    "job": "b722b849-a178-5d14-a009-5be85bd7df04"
+  },
+  {
+    "event": "dispatch",
+    "at": 100687.675297333,
+    "job": "5c78384c-8429-5b3f-867b-3fd78202cdd8",
+    "channel": "S06",
+    "action": "A:hold1"
+  },
+  {
+    "event": "step",
+    "at": 100687.677582625,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "4ec04597-dc01-59b9-9418-7b96422c3416"
+  },
+  {
+    "event": "step",
+    "at": 100687.680293833,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.718582291,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.752962666,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.787945125,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.828053208,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.862464916,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.894552416,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.930448875,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100687.966812208,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.005503208,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.039528833,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.073153125,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.111404708,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.145423166,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.178320833,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.214985583,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100688.252317333,
+    "job": "5c78384c-8429-5b3f-867b-3fd78202cdd8",
+    "channel": "S06",
+    "action": "A:hold1",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100688.264891416,
+    "job": "5c78384c-8429-5b3f-867b-3fd78202cdd8"
+  },
+  {
+    "event": "dispatch",
+    "at": 100688.298945541,
+    "job": "98aad418-763f-54cd-9623-57d0c222f040",
+    "channel": "S07",
+    "action": "A:hold2"
+  },
+  {
+    "event": "step",
+    "at": 100688.301060916,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "d0bd4313-6607-5011-b588-48238fc7f2f3"
+  },
+  {
+    "event": "step",
+    "at": 100688.30336875,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.336520958,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.370102875,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.404907875,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.439995083,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.477762041,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.511537,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.544570916,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.580321166,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.612267541,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.644386666,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.677918625,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.710487333,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.745402708,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.778987083,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.811976958,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "step",
+    "at": 100688.84555075,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100688.881369083,
+    "job": "98aad418-763f-54cd-9623-57d0c222f040",
+    "channel": "S07",
+    "action": "A:hold2",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100688.897890291,
+    "job": "98aad418-763f-54cd-9623-57d0c222f040"
+  },
+  {
+    "event": "dispatch",
+    "at": 100688.93243225,
+    "job": "bc458865-08b9-5f02-a4e7-ccd7d6219549",
+    "channel": "S06",
+    "action": "A:left"
+  },
+  {
+    "event": "step",
+    "at": 100688.934782291,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "c38fa2f9-9ab8-564e-85b9-ad94feea9364"
+  },
+  {
+    "event": "dispatch",
+    "at": 100688.9476505,
+    "job": "8093ecb4-811d-52db-b8ad-f5e20f45a593",
+    "channel": "S07",
+    "action": "B:hold1"
+  },
+  {
+    "event": "step",
+    "at": 100688.950655166,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "5a91779f-4d4c-5d89-92cc-7e0965ad4629"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100688.964638833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.007821333,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.046215166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.085932583,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.123880208,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.165691083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.20414125,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.246829958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.287880541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.326696708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.364753916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.401716166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.441768875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100689.529306875,
+    "job": "bc458865-08b9-5f02-a4e7-ccd7d6219549",
+    "channel": "S06",
+    "action": "A:left",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100689.547569416,
+    "job": "bc458865-08b9-5f02-a4e7-ccd7d6219549"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100689.603224,
+    "job": "8093ecb4-811d-52db-b8ad-f5e20f45a593",
+    "channel": "S07",
+    "action": "B:hold1",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100689.616154458,
+    "job": "8093ecb4-811d-52db-b8ad-f5e20f45a593"
+  },
+  {
+    "event": "dispatch",
+    "at": 100689.65260075,
+    "job": "65c63dd3-c4cb-54d6-b8a7-7dc3063348ef",
+    "channel": "S07",
+    "action": "A:right"
+  },
+  {
+    "event": "step",
+    "at": 100689.654639708,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "fb36a09e-d156-57c7-8a3d-34275e6af207"
+  },
+  {
+    "event": "dispatch",
+    "at": 100689.666452583,
+    "job": "08c99940-db4c-516a-9439-482fea9e0dc6",
+    "channel": "S06",
+    "action": "B:hold2"
+  },
+  {
+    "event": "step",
+    "at": 100689.668605583,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "c01ba2d5-7a1f-5554-b879-2969e74822b9"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.681398958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.722576,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.763920375,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.802597416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.845165458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.882056291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.921158916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100689.9612035,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.004504541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.045051333,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.088045625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.126229958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.167054,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100690.25950475,
+    "job": "65c63dd3-c4cb-54d6-b8a7-7dc3063348ef",
+    "channel": "S07",
+    "action": "A:right",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100690.281918333,
+    "job": "65c63dd3-c4cb-54d6-b8a7-7dc3063348ef"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100690.315977875,
+    "job": "08c99940-db4c-516a-9439-482fea9e0dc6",
+    "channel": "S06",
+    "action": "B:hold2",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100690.331602875,
+    "job": "08c99940-db4c-516a-9439-482fea9e0dc6"
+  },
+  {
+    "event": "dispatch",
+    "at": 100690.369041333,
+    "job": "45b31544-064d-5ec7-97f5-d575d1ddc550",
+    "channel": "S06",
+    "action": "A:join"
+  },
+  {
+    "event": "step",
+    "at": 100690.371184666,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "b2ee4f31-9a67-594d-96bb-bdd44e436b4c"
+  },
+  {
+    "event": "dispatch",
+    "at": 100690.381791583,
+    "job": "600f8b2b-371d-5717-a368-6c00bc6eafc6",
+    "channel": "S07",
+    "action": "B:left"
+  },
+  {
+    "event": "step",
+    "at": 100690.383846458,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "268040a0-760a-5614-a851-d9ca5a6871a5"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.395639083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.43306775,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.472754958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.51245075,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.554285916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.594611166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.630868083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.670649125,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.713349625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.758450958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.799092125,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.842620791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100690.881269625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100690.945783833,
+    "job": "45b31544-064d-5ec7-97f5-d575d1ddc550",
+    "channel": "S06",
+    "action": "A:join",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100690.969829791,
+    "job": "45b31544-064d-5ec7-97f5-d575d1ddc550"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100691.00176525,
+    "job": "600f8b2b-371d-5717-a368-6c00bc6eafc6",
+    "channel": "S07",
+    "action": "B:left",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100691.020435375,
+    "job": "600f8b2b-371d-5717-a368-6c00bc6eafc6"
+  },
+  {
+    "event": "step",
+    "at": 100691.047314083,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "7eef44c6-5de5-595a-a1ee-2281fea9cc52"
+  },
+  {
+    "event": "dispatch",
+    "at": 100691.059805583,
+    "job": "cf8197a7-e849-50c4-a7c9-bbac338a0d80",
+    "channel": "S06",
+    "action": "B:right"
+  },
+  {
+    "event": "step",
+    "at": 100691.061924916,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "74948593-f7a5-5944-a94a-f0b3c88a9dfa"
+  },
+  {
+    "event": "step",
+    "at": 100691.096587916,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.133755208,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.167982708,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.20251375,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.23712575,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.272471583,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.309826125,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.344503083,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.379302875,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.413397125,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.445791708,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.482620083,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.516002583,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.552700291,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.586893791,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "step",
+    "at": 100691.623666208,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100691.662134625,
+    "job": "cf8197a7-e849-50c4-a7c9-bbac338a0d80",
+    "channel": "S06",
+    "action": "B:right",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100691.683052083,
+    "job": "cf8197a7-e849-50c4-a7c9-bbac338a0d80"
+  },
+  {
+    "event": "dispatch",
+    "at": 100691.724179458,
+    "job": "d037930b-57af-51a9-bd6a-37a5d7f4ce49",
+    "channel": "S06",
+    "action": "A:yes"
+  },
+  {
+    "event": "step",
+    "at": 100691.726681083,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "1e86b18c-bbf1-55a6-8117-33c9d767b4e0"
+  },
+  {
+    "event": "dispatch",
+    "at": 100691.755111875,
+    "job": "2dde157f-aba4-511d-a488-30abe12fecef",
+    "channel": "S07",
+    "action": "B:join"
+  },
+  {
+    "event": "step",
+    "at": 100691.759820625,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "e814f7ea-35b1-5211-bd6d-80686fb47734"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100691.78497925,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100691.848770458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100691.890385166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100691.935343916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100691.9766245,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100692.016418458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100692.058804833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100692.100618916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100692.149537166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100692.192395875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100692.234480083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100692.318645,
+    "job": "d037930b-57af-51a9-bd6a-37a5d7f4ce49",
+    "channel": "S06",
+    "action": "A:yes",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100692.34590475,
+    "job": "d037930b-57af-51a9-bd6a-37a5d7f4ce49"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100692.377343291,
+    "job": "2dde157f-aba4-511d-a488-30abe12fecef",
+    "channel": "S07",
+    "action": "B:join",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100692.402780458,
+    "job": "2dde157f-aba4-511d-a488-30abe12fecef"
+  },
+  {
+    "event": "dispatch",
+    "at": 100692.440273666,
+    "job": "d0cb7073-85bb-5157-9d22-aa10388d4adc",
+    "channel": "S07",
+    "action": "A:after_condition"
+  },
+  {
+    "event": "step",
+    "at": 100692.44265825,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "5f7d6902-a12d-5a77-a906-4f6e15db0fc1"
+  },
+  {
+    "event": "step",
+    "at": 100692.446406,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "c37bf298-7b05-5aed-94af-35e5f6b51971"
+  },
+  {
+    "event": "step",
+    "at": 100692.480589291,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.514055958,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.549672291,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.582717458,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.61890925,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.653759583,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.686744166,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.720674541,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.755573,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.79055125,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.82871925,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.864026083,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.900771125,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.936811,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "step",
+    "at": 100692.970972875,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100693.007046083,
+    "job": "d0cb7073-85bb-5157-9d22-aa10388d4adc",
+    "channel": "S07",
+    "action": "A:after_condition",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100693.038081833,
+    "job": "d0cb7073-85bb-5157-9d22-aa10388d4adc"
+  },
+  {
+    "event": "step",
+    "at": 100693.065993625,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "eda1881c-e179-5938-99a3-f3d960c8e838"
+  },
+  {
+    "event": "dispatch",
+    "at": 100693.078400166,
+    "job": "9392bf49-5e32-5cd8-b358-4a09bc94c25c",
+    "channel": "S07",
+    "action": "B:measure"
+  },
+  {
+    "event": "step",
+    "at": 100693.0805795,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "bff5da77-e897-5f97-a1a7-2be11798712f"
+  },
+  {
+    "event": "dispatch",
+    "at": 100693.121597416,
+    "job": "49f2cca6-07c0-56c2-aa08-12c851d28d50",
+    "channel": "S06",
+    "action": "A:measure"
+  },
+  {
+    "event": "step",
+    "at": 100693.123790958,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "187f6901-48d9-50d2-bda0-7382b1fe200f"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.13558175,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.175112833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.21352625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.25742675,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.303320166,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.344474916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.382527291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.427019583,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.465215416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.512148958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.553727333,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.593408,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100693.688385958,
+    "job": "9392bf49-5e32-5cd8-b358-4a09bc94c25c",
+    "channel": "S07",
+    "action": "B:measure",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100693.738567541,
+    "job": "9392bf49-5e32-5cd8-b358-4a09bc94c25c"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100693.786451041,
+    "job": "49f2cca6-07c0-56c2-aa08-12c851d28d50",
+    "channel": "S06",
+    "action": "A:measure",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100693.830877208,
+    "job": "49f2cca6-07c0-56c2-aa08-12c851d28d50"
+  },
+  {
+    "event": "dispatch",
+    "at": 100693.870816083,
+    "job": "96ce6ae3-861f-53f9-bd35-48e9d3cc4f4b",
+    "channel": "S06",
+    "action": "A:measure"
+  },
+  {
+    "event": "step",
+    "at": 100693.873062083,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "4e39c6a7-9166-5df8-b38e-adb67186ef4b"
+  },
+  {
+    "event": "dispatch",
+    "at": 100693.8870115,
+    "job": "0dda438f-2ad7-5e7d-ad04-e6991a613a19",
+    "channel": "S07",
+    "action": "B:measure"
+  },
+  {
+    "event": "step",
+    "at": 100693.889299833,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "a9ced119-c903-5bde-8e67-ff1ec55e9630"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.90649425,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.947871875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100693.988201833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.029159791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.067095958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.108494,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.146412,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.188885375,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.226249958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.264166791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.304195416,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.340890375,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.379130583,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100694.452499791,
+    "job": "96ce6ae3-861f-53f9-bd35-48e9d3cc4f4b",
+    "channel": "S06",
+    "action": "A:measure",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100694.495197666,
+    "job": "96ce6ae3-861f-53f9-bd35-48e9d3cc4f4b"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100694.531076875,
+    "job": "0dda438f-2ad7-5e7d-ad04-e6991a613a19",
+    "channel": "S07",
+    "action": "B:measure",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100694.597143208,
+    "job": "0dda438f-2ad7-5e7d-ad04-e6991a613a19"
+  },
+  {
+    "event": "dispatch",
+    "at": 100694.636602208,
+    "job": "a0294e3e-0797-55e8-90c6-fc526e72d54b",
+    "channel": "S06",
+    "action": "A:measure"
+  },
+  {
+    "event": "step",
+    "at": 100694.638930791,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "f6cb7982-64d9-5433-abf6-f075aa589991"
+  },
+  {
+    "event": "dispatch",
+    "at": 100694.650500208,
+    "job": "d93de78e-f2a8-551f-a1bc-50956c4e2cb5",
+    "channel": "S07",
+    "action": "B:measure"
+  },
+  {
+    "event": "step",
+    "at": 100694.6550355,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "6e451d84-5c0d-55e7-ad4a-6374c1de3113"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.668927791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.704922125,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.74859225,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.7934885,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.8372225,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.883566791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.922013916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100694.961986833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.002872541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.044789458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.08729725,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.126399541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100695.21789725,
+    "job": "a0294e3e-0797-55e8-90c6-fc526e72d54b",
+    "channel": "S06",
+    "action": "A:measure",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100695.266865125,
+    "job": "a0294e3e-0797-55e8-90c6-fc526e72d54b"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100695.307843666,
+    "job": "d93de78e-f2a8-551f-a1bc-50956c4e2cb5",
+    "channel": "S07",
+    "action": "B:measure",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100695.350505625,
+    "job": "d93de78e-f2a8-551f-a1bc-50956c4e2cb5"
+  },
+  {
+    "event": "dispatch",
+    "at": 100695.39150175,
+    "job": "683cf77a-12f4-5d71-936d-3163fecaf9f9",
+    "channel": "S07",
+    "action": "A:after_repeat"
+  },
+  {
+    "event": "step",
+    "at": 100695.394465083,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "c71e0bda-8f07-5af4-ba83-443ca855131b"
+  },
+  {
+    "event": "dispatch",
+    "at": 100695.406583541,
+    "job": "ac493c0a-a0b1-59fd-af77-809c010f2c7c",
+    "channel": "S06",
+    "action": "B:after_repeat"
+  },
+  {
+    "event": "step",
+    "at": 100695.408981541,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "d8e92bea-0565-574d-b7da-18b626910978"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.428126291,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.469560541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.507240708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.546106125,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.586489041,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.626658875,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.667869041,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.712891791,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.755559083,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.794600625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.836988833,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.876345916,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100695.918512458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100695.983718375,
+    "job": "683cf77a-12f4-5d71-936d-3163fecaf9f9",
+    "channel": "S07",
+    "action": "A:after_repeat",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100696.024623833,
+    "job": "683cf77a-12f4-5d71-936d-3163fecaf9f9"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100696.053699083,
+    "job": "ac493c0a-a0b1-59fd-af77-809c010f2c7c",
+    "channel": "S06",
+    "action": "B:after_repeat",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100696.089508541,
+    "job": "ac493c0a-a0b1-59fd-af77-809c010f2c7c"
+  },
+  {
+    "event": "step",
+    "at": 100696.121791916,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "c837b7cc-a243-5d8c-a5c5-971673ba6d76"
+  },
+  {
+    "event": "step",
+    "at": 100696.1243045,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "6695b007-0c2a-5e5e-8303-a5f3a41f76a5"
+  },
+  {
+    "event": "dispatch",
+    "at": 100696.145249458,
+    "job": "d01f1b31-b582-5177-831c-0c16d547497b",
+    "channel": "S06",
+    "action": "A:manual"
+  },
+  {
+    "event": "manual_approved_twice",
+    "at": 100696.155531041,
+    "job": "d01f1b31-b582-5177-831c-0c16d547497b"
+  },
+  {
+    "event": "step",
+    "at": 100696.190784416,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.229348208,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.265708791,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.302991458,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.336596958,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.373592,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.410924208,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.44489475,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.478207625,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.515462291,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.5530485,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.590893541,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.62865475,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "step",
+    "at": 100696.674958708,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100696.74174175,
+    "job": "d01f1b31-b582-5177-831c-0c16d547497b",
+    "channel": "S06",
+    "action": "A:manual",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100696.795088791,
+    "job": "d01f1b31-b582-5177-831c-0c16d547497b"
+  },
+  {
+    "event": "dispatch",
+    "at": 100696.833170416,
+    "job": "00c463ae-4e7b-5f0b-9e9e-0b38d69b22a2",
+    "channel": "S07",
+    "action": "A:finish"
+  },
+  {
+    "event": "step",
+    "at": 100696.837077208,
+    "task": "384d0105-b10a-5abe-b581-e7c502ecdd35",
+    "node": "125e1852-f19d-501e-b3b8-59324857b3a6"
+  },
+  {
+    "event": "dispatch",
+    "at": 100696.853134875,
+    "job": "3349816c-078f-5340-a277-6ec86ed5a8fd",
+    "channel": "S06",
+    "action": "B:no"
+  },
+  {
+    "event": "step",
+    "at": 100696.856147375,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "dab17e58-7955-58b0-a4bd-7e3ac6e7eaab"
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100696.881090375,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100696.935502,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100696.981653625,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.0304665,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.078142708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.1267,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.187203541,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.23140725,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.274063458,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.330042958,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "plc_overlap",
+    "at": 100697.378000708,
+    "channels": [
+      "S06",
+      "S07"
+    ]
+  },
+  {
+    "event": "physical_completed",
+    "at": 100697.445100833,
+    "job": "00c463ae-4e7b-5f0b-9e9e-0b38d69b22a2",
+    "channel": "S07",
+    "action": "A:finish",
+    "letter": "A"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100697.49637675,
+    "job": "00c463ae-4e7b-5f0b-9e9e-0b38d69b22a2"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100697.532929166,
+    "job": "3349816c-078f-5340-a277-6ec86ed5a8fd",
+    "channel": "S06",
+    "action": "B:no",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100697.570926083,
+    "job": "3349816c-078f-5340-a277-6ec86ed5a8fd"
+  },
+  {
+    "event": "dispatch",
+    "at": 100697.606529541,
+    "job": "77c41b19-edc8-581b-8f86-83edea54f420",
+    "channel": "S06",
+    "action": "B:after_condition"
+  },
+  {
+    "event": "step",
+    "at": 100697.608954791,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "54ff3fe9-adce-5b78-8595-111508a11010"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100698.185999458,
+    "job": "77c41b19-edc8-581b-8f86-83edea54f420",
+    "channel": "S06",
+    "action": "B:after_condition",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100698.227652583,
+    "job": "77c41b19-edc8-581b-8f86-83edea54f420"
+  },
+  {
+    "event": "step",
+    "at": 100698.257628041,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "a5a2ccde-3776-5192-b4c5-3657bc937cf8"
+  },
+  {
+    "event": "dispatch",
+    "at": 100698.283438958,
+    "job": "4e7f189b-d3c6-509c-a6ab-8034d3296b6a",
+    "channel": "S07",
+    "action": "B:manual"
+  },
+  {
+    "event": "manual_approved_twice",
+    "at": 100698.2957125,
+    "job": "4e7f189b-d3c6-509c-a6ab-8034d3296b6a"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100698.9078705,
+    "job": "4e7f189b-d3c6-509c-a6ab-8034d3296b6a",
+    "channel": "S07",
+    "action": "B:manual",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100698.952314708,
+    "job": "4e7f189b-d3c6-509c-a6ab-8034d3296b6a"
+  },
+  {
+    "event": "dispatch",
+    "at": 100698.989624833,
+    "job": "aa05cc74-6164-580c-8619-324b42353afb",
+    "channel": "S06",
+    "action": "B:finish"
+  },
+  {
+    "event": "step",
+    "at": 100698.992204166,
+    "task": "29eb37c8-ed7a-5220-8dcb-52c97043c0b4",
+    "node": "11043362-e532-55a9-8b80-1212df6c6377"
+  },
+  {
+    "event": "physical_completed",
+    "at": 100699.566289791,
+    "job": "aa05cc74-6164-580c-8619-324b42353afb",
+    "channel": "S06",
+    "action": "B:finish",
+    "letter": "B"
+  },
+  {
+    "event": "duplicate_receipt",
+    "at": 100699.631569125,
+    "job": "aa05cc74-6164-580c-8619-324b42353afb"
+  }
+]

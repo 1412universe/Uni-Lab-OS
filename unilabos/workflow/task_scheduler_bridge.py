@@ -44,7 +44,6 @@ from unilabos.workflow.execution_lock_lease import (
 from unilabos.workflow.execution_restart_recovery import (
     EXECUTION_PROCESS_RESTARTED,
     TASK_ABORTED_BY_RUNTIME_RESTART,
-    restart_retained_uncertain_job_uuids,
 )
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
 from unilabos.workflow.error_control import StationExecutionControl
@@ -59,7 +58,7 @@ from unilabos.workflow.physical_settlement_policy import (
 )
 from unilabos.workflow.quantity_inventory import WorkflowQuantityInventory
 from unilabos.workflow.resource_lock_key import device_lock_key
-from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore
+from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
 from unilabos.workflow.task_runtime_projection import (
     CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL,
     TaskRuntimeProjection,
@@ -243,6 +242,9 @@ class TaskSchedulerBridge:
         scheduler.add_local_control_listener(self._on_local_control_evaluated)
         scheduler.add_execution_process_restarted_listener(
             self._on_execution_process_restarted
+        )
+        scheduler.add_execution_connection_lost_listener(
+            self._on_execution_connection_lost
         )
         scheduler.set_drain_blocker_provider(self.active_or_uncertain_job_ids)
 
@@ -532,7 +534,22 @@ class TaskSchedulerBridge:
         result = accepted["result"]
         task_uuid = result["source_task_uuid"]
         with self.error_control.lock:
+            current = self.error_control.get_command(accepted["command_uuid"])
+            if current["status"] != "PENDING":
+                return current
             if result["action"] == "retry_current_node":
+                occupancies = result.get("retry_occupancies", [])
+                if result.get("retry_previous_uncertainty"):
+                    inventory = self._scheduler.station_resource_inventory
+                    if inventory is not None:
+                        # 重试只释放来源 Claim；共享 Fence 下仍运行的其他 Job 保持占用。
+                        for claim_uuid in sorted({item["claim_uuid"] for item in occupancies}):
+                            inventory.transition_dispatch_permit(claim_uuid, target_state="released")
+                    self.error_control.apply_resource_facts({
+                        **accepted, "result": {**result, "occupancies": occupancies},
+                    })
+                    self.error_control.record_operator_retry(accepted)
+                    self._scheduler.release_error_occupancies(occupancies, include_shared=False)
                 job = self._store.get_job(result["retry_job_uuid"])
                 self._task_by_job[job["uuid"]] = task_uuid
                 node_id = job["control_data"].get("runtime_node_id") or job["workflow_node_uuid"]
@@ -1052,10 +1069,15 @@ class TaskSchedulerBridge:
         ) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
-    def recover_active_tasks(self) -> list[dict[str, Any]]:
-        """先还原 DAG 与路由，再重放真实结果，最后按持久工站状态开放派发。"""
+    def recover_active_tasks(
+        self, *, execution_process_restarted: bool = False
+    ) -> list[dict[str, Any]]:
+        """同进程调度重建可恢复路由；执行进程重启只终结旧任务，不恢复动作。"""
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        if execution_process_restarted:
+            self._scheduler.on_execution_process_restarted(())
+            return []
         recovered: list[dict[str, Any]] = []
         with self._scheduler.execution_control_lock:
             self.error_control.recovering = True
@@ -1280,11 +1302,42 @@ class TaskSchedulerBridge:
             "normal" if success else outcome.outcome,
         )
 
-    def _on_execution_process_restarted(
+    def _on_execution_process_restarted(self, job_uuids: tuple[str, ...]) -> None:
+        """确认执行进程更换后终结全部活动任务，清理失败可幂等重入。"""
+        self.error_control.recovering = True
+        # 事件中的 Job 列表仅是执行端观测，不得遗漏暂停、排队或节点间隙的任务。
+        candidates = {
+            task["uuid"] for task in self._store.list_execution_restart_candidates()
+        }
+        candidates.update(self._runtime_restart_cleanup_pending_tasks)
+        with self._store.read() as conn:
+            candidates.update(
+                row[0]
+                for row in conn.execute(
+                    "SELECT uuid FROM workflow_task WHERE status='failed' "
+                    "AND cleanup_status='pending' AND deleted_at IS NULL AND ("
+                    "EXISTS (SELECT 1 FROM json_each(workflow_task.error_info) "
+                    "WHERE json_extract(value,'$.code')='execution_process_restarted') OR "
+                    "EXISTS (SELECT 1 FROM workflow_node_job j WHERE j.workflow_task_uuid=workflow_task.uuid "
+                    "AND json_extract(j.control_data,'$.runtime_interruption.reason')='execution_process_restarted'))"
+                )
+            )
+        for task_uuid in sorted(candidates):
+            self._runtime_restart_cleanup_pending_tasks.add(task_uuid)
+            aggregate = self._projection.project_execution_process_restarted(task_uuid)
+            self.error_control.close_restarted_task(task_uuid)
+            self._release_runtime_restart_resources(
+                aggregate or self._aggregate(task_uuid)
+            )
+            self._runtime_restart_cleanup_pending_tasks.discard(task_uuid)
+        self.error_control.finish_runtime_restart()
+        self.error_control.recovering = False
+
+    def _on_execution_connection_lost(
         self,
         job_uuids: tuple[str, ...],
     ) -> None:
-        """连接中断或进程重启时保留执行事实，未开始意图可按原身份恢复。"""
+        """连接中断不能证明进程退出；暂停新动作并等待重连。"""
 
         for job_uuid in job_uuids or tuple(self.active_or_uncertain_job_ids()):
             try:
@@ -1295,145 +1348,50 @@ class TaskSchedulerBridge:
                 continue
             if job["status"] in {"dispatched", "running", "cancel_requested"}:
                 self.error_control.report_error(
-                    job_uuid, phase="execution_unknown", message="执行连接中断或进程重启，动作结果待核对"
+                    job_uuid,
+                    phase="execution_unknown",
+                    message="执行连接中断，动作结果待核对",
                 )
                 if job.get("uncertainty_reason") != "execution_connection_lost":
                     self._transition_inventory_claim(job_uuid, target_state="uncertain")
                     self._projection.project_execution_attention(job_uuid, reason="execution_connection_lost")
         self._scheduler.restore_not_started_dispatches()
 
-    def _release_runtime_restart_resources(
-        self,
-        aggregate: Mapping[str, Any],
-    ) -> None:
-        """runtime 重启终止任务后，释放本次中断的资源。
-
-        重启前已终态且仍需物理对账/交接的 Job，以及本次中断后实际物料位置
-        未知的转运/分装 Job，其 Inventory/Workflow Claim 必须继续阻断其他 Task。
-        """
-
-        task = aggregate.get("task")
-        jobs = aggregate.get("jobs")
-        if (
-            not isinstance(task, Mapping)
-            or not isinstance(jobs, list)
-            or any(not isinstance(job, Mapping) for job in jobs)
-        ):
-            raise StoreConflict("重启失败聚合结构非法")
-        task_uuid = self._required_text(task.get("uuid"), field="task.uuid")
+    def _release_runtime_restart_resources(self, aggregate: Mapping[str, Any]) -> None:
+        """释放中断任务的软件执行占用；不请求或推断实际库存对账。"""
+        task_uuid = str(aggregate["task"]["uuid"])
+        jobs = aggregate["jobs"]
         inventory = self._scheduler.station_resource_inventory
-        from unilabos.workflow.resource_lock_plan import (
-            failed_explicit_resource_interval_ids,
-        )
-
-        failure_latched_interval_ids = set(
-            failed_explicit_resource_interval_ids(
-                task.get("execution_plan", {}),
-                jobs,
-            )
-        )
-        retained_uncertain_job_uuids = restart_retained_uncertain_job_uuids(jobs)
-        if (
-            retained_uncertain_job_uuids
-            and inventory is None
-            and self._scheduler.physical_dispatch_enabled
-        ):
-            raise StoreConflict("物理部署缺少库存 DispatchPermit 权威")
-        retained_task_resources = bool(
-            str(task.get("attention_reason") or "").strip()
-            or task.get("cleanup_status") == "requires_attention"
-            or retained_uncertain_job_uuids
-        )
-        restarted_job_uuids: list[str] = []
         for job in jobs:
-            if not isinstance(job, Mapping):
-                continue
-            job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
+            job_uuid = str(job["uuid"])
             claim = self._projection.get_execution_claim(job_uuid)
-            if (
-                job_uuid in retained_uncertain_job_uuids
-                and claim is None
-                and self._scheduler.physical_dispatch_enabled
-            ):
-                raise StoreConflict(f"等待物理结算的作业缺少库存 Claim：{job_uuid}")
-            aborted_by_restart = self._was_aborted_by_runtime_restart(job)
-            if (
-                aborted_by_restart
-                and job.get("status") == "failed"
-                and job_uuid not in restarted_job_uuids
-            ):
-                restarted_job_uuids.append(job_uuid)
             if claim is not None and inventory is not None:
-                control_data = job.get("control_data")
-                interval_map = (
-                    control_data.get("resource_interval_ids_by_lock", {})
-                    if isinstance(control_data, Mapping)
-                    else {}
+                inventory.transition_dispatch_permit(
+                    str(claim["claim_uuid"]), target_state="released"
                 )
-                keep_lock_keys = tuple(
-                    str(lock_key)
-                    for lock_key, raw_ids in interval_map.items()
-                    if isinstance(raw_ids, (list, tuple, set, frozenset))
-                    and {str(value) for value in raw_ids}
-                    & failure_latched_interval_ids
-                )
-                if keep_lock_keys:
-                    inventory.retain_dispatch_permit_resources(
-                        str(claim["claim_uuid"]),
-                        keep_lock_keys=keep_lock_keys,
-                    )
-                    retained_task_resources = True
-                else:
-                    inventory.transition_dispatch_permit(
-                        str(claim["claim_uuid"]),
-                        target_state=(
-                            "uncertain"
-                            if job_uuid in retained_uncertain_job_uuids
-                            else "released"
-                        ),
-                    )
-            if job_uuid in retained_uncertain_job_uuids:
-                retained_task_resources = True
-            elif (
-                not aborted_by_restart
-                and isinstance(claim, Mapping)
-                and claim.get("state") in {"reserved", "running", "uncertain"}
-            ):
-                retained_task_resources = True
             self._task_by_job.pop(job_uuid, None)
             self._cancel_cancel_timer(job_uuid)
             self._cancel_manual_confirmation_timer(job_uuid)
+        release_permits = getattr(inventory, "release_task_dispatch_permits", None)
+        if callable(release_permits):
+            # 覆盖库存 Permit 已创建、工作流 Claim 尚未提交的崩溃窗口。
+            release_permits(task_uuid=task_uuid)
+        if self._quantity_inventory is not None:
+            self._quantity_inventory.release_task(task_uuid, reason="runtime_restarted")
+        if any(job.get("executor_kind") == "material_source" for job in jobs):
+            self._material_sources.release_terminal_reservations(
+                task_uuid, reason="runtime_restarted"
+            )
+        # 包括未投递和未 ACK 的旧命令，避免新执行进程重新领取它们。
+        self._scheduler.fail_restarted_jobs([str(job["uuid"]) for job in jobs])
+        with self._store.transaction() as conn:
+            conn.execute(
+                "UPDATE workflow_task SET cleanup_status='settled', attention_reason=NULL, "
+                "update_time=? WHERE uuid=? AND cleanup_status!='settled'",
+                (utc_now(), task_uuid),
+            )
         self._submitted_tasks.discard(task_uuid)
         self._admission_pending_tasks.discard(task_uuid)
-        if self._quantity_inventory is not None and not retained_task_resources:
-            self._quantity_inventory.release_task(
-                task_uuid,
-                reason="runtime_restarted",
-            )
-        if not retained_task_resources and any(
-            isinstance(job, Mapping)
-            and job.get("executor_kind") == "material_source"
-            for job in jobs
-        ):
-            self._material_sources.release_terminal_reservations(
-                task_uuid,
-                reason="runtime_restarted",
-            )
-        if restarted_job_uuids:
-            self._scheduler.fail_restarted_jobs(restarted_job_uuids)
-        if (
-            not retained_task_resources
-            and task.get("status") in {"failed", "canceled", "timeout"}
-            and task.get("cleanup_status")
-            in CLEANUP_STATUSES_SETTLEABLE_AFTER_TERMINAL
-            and all(
-                job.get("status") in {"succeeded", "failed", "canceled", "timeout"}
-                for job in jobs
-            )
-        ):
-            # 实际库存对账可能已经提交，而 Permit 释放在跨库窗口中失败。
-            # 幂等补偿全部完成后再提交 settled，释放任务独占物料 Claim。
-            self._projection.project_cleanup_settled(task_uuid)
 
     def _recover_running_task(self, task: Mapping[str, Any]) -> dict[str, Any] | None:
         """以有效 attempt 还原节点，历史在途执行只恢复结果路由，不重新发送。"""
@@ -1565,6 +1523,9 @@ class TaskSchedulerBridge:
         self._scheduler.remove_local_control_listener(self._on_local_control_evaluated)
         self._scheduler.remove_execution_process_restarted_listener(
             self._on_execution_process_restarted
+        )
+        self._scheduler.remove_execution_connection_lost_listener(
+            self._on_execution_connection_lost
         )
         self._scheduler.set_drain_blocker_provider(None)
         self._task_by_job.clear()
@@ -2943,6 +2904,14 @@ class TaskSchedulerBridge:
     def _was_aborted_by_runtime_restart(job: Mapping[str, Any]) -> bool:
         """判断 Job 终态是否由 runtime 重启策略冻结。"""
 
+        control_data = job.get("control_data")
+        if isinstance(control_data, Mapping):
+            interruption = control_data.get("runtime_interruption")
+            if (
+                isinstance(interruption, Mapping)
+                and interruption.get("reason") == EXECUTION_PROCESS_RESTARTED
+            ):
+                return True
         error_info = job.get("error_info")
         if not isinstance(error_info, list):
             return False

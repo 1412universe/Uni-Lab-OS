@@ -242,7 +242,8 @@ function adaptIntervention(value: RawRecord): WorkflowIntervention {
 
 export async function loadWorkflowInterventions(signal?: AbortSignal): Promise<WorkflowIntervention[]> {
   const values = await requestData<RawRecord[]>('/workflow-interventions?status=open&limit=100', signal)
-  return Array.isArray(values) ? values.map(adaptIntervention) : []
+  // Edge 节点错误由工站处置接口处理，不能送入旧干预决定接口。
+  return Array.isArray(values) ? values.filter((value) => value.decision_kind !== 'edge_node_error').map(adaptIntervention) : []
 }
 
 export async function decideWorkflowIntervention(intervention: WorkflowIntervention, optionId: string): Promise<void> {
@@ -935,6 +936,7 @@ export function adaptTask(
     workflowUuid: String(raw.workflow_uuid || raw.workflow?.uuid || ''),
     workflowName: String(raw.workflow_snapshot?.workflow?.name || workflowName),
     status,
+    executionStatus: normalisedStatus,
     priority: taskPriority(raw.priority),
     sample: String(raw.input?.sample_id || raw.input?.sample || raw.meta_data?.sample_id || '未命名样品'),
     description: String(raw.description || workflowName),

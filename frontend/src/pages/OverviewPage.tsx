@@ -58,6 +58,7 @@ export function OverviewPage({
                 : 'Edge 任务与物料状态已汇总，当前没有需要操作员处理的异常。'}
         actions={
           <>
+            <Button icon={<Cpu size={16} />} onClick={() => onNavigate('materials')}>设备与库位</Button>
             <Button icon={<Clock3 size={16} />} onClick={() => onNotify('运行报告导出将在文件服务接入后开放')}>运行报告</Button>
             <Button tone="primary" icon={<Plus size={17} />} onClick={() => onNavigate('tasks')}>
               创建实验任务

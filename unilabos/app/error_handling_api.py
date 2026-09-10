@@ -329,6 +329,10 @@ def create_error_handling_router(
             operator_id=actor(request),
         )
 
+    @router.get("/resource-usage", summary="读取设备、库位与任务物料使用关系")
+    def resource_usage(service: ErrorHandlingService = service_dependency) -> dict[str, Any]:
+        return invoke(service.control.resource_usage)
+
     @router.get("/resource-dispositions", summary="读取当前逻辑资源占用")
     def occupancies(
         service: ErrorHandlingService = service_dependency,
