@@ -1,4 +1,4 @@
-"""把工站任务与作业状态变化投影到事务发件箱。"""
+"""保留旧 Backend 状态投影接口；发件箱统一入口已停写。"""
 
 from __future__ import annotations
 
@@ -16,13 +16,13 @@ def append_task_state_event(
     task_uuid: str,
     status: str,
     details: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """在任务状态事务内追加一个可重放的 Backend 投影事件。
+) -> None:
+    """校验任务状态事件参数并调用已停写的 Backend 兼容接口。
 
     参数：``connection`` 是当前工作流写事务；``task_uuid`` 是稳定任务身份；
     ``status`` 是已提交的主状态；``details`` 是清理状态、时间或失败码等补充事实。
-    返回：持久事件。异常：身份或状态为空、补充字段试图覆盖核心身份时抛
-    ``StoreConflict``；SQLite 写入错误原样传播并由外层回滚。
+    返回无，不再追加发件箱记录。异常：身份或状态为空、补充字段试图覆盖核心
+    身份时抛 ``StoreConflict``。
     """
 
     normalized_task_uuid = str(task_uuid or "").strip()
@@ -31,7 +31,7 @@ def append_task_state_event(
         raise StoreConflict("工站任务状态事件缺少任务身份或状态")
     payload = {"task_uuid": normalized_task_uuid, "status": normalized_status}
     _merge_details(payload, details)
-    return append_station_event(
+    append_station_event(
         connection,
         event_type=f"task.{normalized_status}",
         aggregate_type="workflow_task",
@@ -50,13 +50,13 @@ def append_job_state_event(
     status: str,
     event_name: str | None = None,
     details: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """追加包含 Task/Job/Node/attempt 身份的作业状态事件。
+) -> None:
+    """校验作业状态事件参数并调用已停写的 Backend 兼容接口。
 
     参数：当前工作流写事务、持久作业行、已提交的主状态、可选事件名称和补充
     事实。``event_name`` 用于 ``execution_attention`` 这类主状态仍为 running 的
-    独立事件。返回：持久事件。异常：必填身份为空、尝试序号非法或补充字段覆盖
-    核心身份时抛 ``StoreConflict``；数据库异常由调用方事务处理。
+    独立事件。返回无，不再追加发件箱记录。异常：必填身份为空、尝试序号非法或
+    补充字段覆盖核心身份时抛 ``StoreConflict``。
     """
 
     task_uuid = str(job_row["workflow_task_uuid"] or "").strip()
@@ -82,7 +82,7 @@ def append_job_state_event(
         "status": normalized_status,
     }
     _merge_details(payload, details)
-    return append_station_event(
+    append_station_event(
         connection,
         event_type=f"job.{normalized_name}",
         aggregate_type="workflow_node_job",

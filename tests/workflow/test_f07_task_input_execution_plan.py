@@ -427,7 +427,7 @@ def test_station_invocation_is_idempotent_and_allows_same_workflow_twice(
         event_count = store._conn.execute(
             "SELECT COUNT(*) FROM workflow_station_event_outbox"
         ).fetchone()[0]
-        assert event_count == 6
+        assert event_count == 0
     finally:
         store.close()
 

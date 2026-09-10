@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from threading import Event
 
 from fastapi.testclient import TestClient
@@ -9,10 +11,7 @@ import pytest
 
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
-from unilabos.workflow.station_event_outbox import (
-    StationEventOutboxStore,
-    append_station_event,
-)
+from unilabos.workflow.station_event_outbox import StationEventOutboxStore
 from unilabos.workflow.station_event_publisher import StationEventPublisher
 from unilabos.workflow.store import StoreConflict, WorkflowStore
 from unilabos.workflow.task_runtime_projection import TaskRuntimeProjection
@@ -22,6 +21,39 @@ TASK_UUID = "20000000-0000-4000-8000-000000000101"
 NODE_UUID = "30000000-0000-4000-8000-000000000101"
 JOB_UUID = "40000000-0000-4000-8000-000000000101"
 CREATED_AT = "2026-08-26T00:00:00Z"
+
+
+def _seed_legacy_station_event(
+    connection: sqlite3.Connection,
+    *,
+    index: int,
+    source_kind: str = "test",
+    source_uuid: str | None = None,
+) -> None:
+    """直接装入旧版本事件，验证停写后历史记录的兼容读取与 ACK。"""
+
+    connection.execute(
+        """
+        INSERT INTO workflow_station_event_outbox(
+            event_uuid, create_time, update_time, event_type, aggregate_type,
+            aggregate_uuid, source_kind, source_uuid, idempotency_key, payload
+        ) VALUES (?, ?, ?, ?, 'workflow_node_job', ?, ?, ?, ?, '{}')
+        """,
+        (
+            f"70000000-0000-4000-8000-{index:012d}",
+            CREATED_AT,
+            CREATED_AT,
+            (
+                "job.outcome_committed"
+                if source_kind == "job_result"
+                else "job.feedback_committed"
+            ),
+            JOB_UUID,
+            source_kind,
+            source_uuid or f"legacy-source-{index}",
+            f"legacy-event-{index}",
+        ),
+    )
 
 
 def _seed_job(store: WorkflowStore) -> None:
@@ -182,16 +214,34 @@ def test_terminal_result_is_immutable_and_feedback_closes(tmp_path) -> None:
         store.close()
 
 
-def test_actual_params_feedback_and_result_share_durable_station_outbox(tmp_path) -> None:
-    """实参、反馈与结果先在工站库提交，Backend ACK 前可反复重放。
+@pytest.mark.parametrize("with_legacy_events", [False, True])
+def test_local_job_lifecycle_does_not_append_station_events(
+    tmp_path: Path,
+    with_legacy_events: bool,
+) -> None:
+    """持续反馈、结果重放和重开数据库保留本地事实，且不新增或改写旧发件箱。"""
 
-    参数：``tmp_path`` 提供隔离 SQLite 路径。返回无；断言事件序列、幂等身份和
-    ACK 结算。异常：本地事实与发件箱不是同一事务或 ACK 错标会使测试失败。
-    """
-
-    store = WorkflowStore(tmp_path / "station-outbox.db")
+    database = tmp_path / "station-outbox.db"
+    store = WorkflowStore(database)
     try:
         _seed_job(store)
+        if with_legacy_events:
+            with store.transaction() as connection:
+                for index in (1, 2):
+                    _seed_legacy_station_event(connection, index=index)
+            outbox = StationEventOutboxStore(store)
+            first = outbox.list_pending()[0]
+            outbox.acknowledge(
+                event_uuid=first["event_uuid"],
+                station_sequence=first["station_sequence"],
+            )
+        with store.read() as connection:
+            original_events = [
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT * FROM workflow_station_event_outbox ORDER BY station_sequence"
+                )
+            ]
         projection = TaskRuntimeProjection(store)
         actual_param = {
             "device_uuid": "50000000-0000-4000-8000-000000000101",
@@ -205,22 +255,23 @@ def test_actual_params_feedback_and_result_share_durable_station_outbox(tmp_path
                 {"lock_key": "/devices/reactor-a", "scope": "device"},
             ],
         )
-        projection.project_feedback(
+        for sequence in range(1, 101):
+            assert projection.project_feedback(
+                job_uuid=JOB_UUID,
+                sequence=sequence,
+                feedback_type="progress",
+                data={"percent": sequence},
+                observed_at="2026-08-26T00:00:01Z",
+                idempotency_key=f"feedback-{sequence}",
+            ) == {"through_sequence": sequence, "created": 1}
+        assert projection.project_feedback(
             job_uuid=JOB_UUID,
-            sequence=1,
+            sequence=100,
             feedback_type="progress",
-            data={"percent": 60},
+            data={"percent": 100},
             observed_at="2026-08-26T00:00:01Z",
-            idempotency_key="feedback-1",
-        )
-        projection.project_feedback(
-            job_uuid=JOB_UUID,
-            sequence=1,
-            feedback_type="progress",
-            data={"percent": 60},
-            observed_at="2026-08-26T00:00:01Z",
-            idempotency_key="feedback-1",
-        )
+            idempotency_key="feedback-100",
+        ) == {"through_sequence": 100, "created": 0}
         projection.project_job_finished(
             job_uuid=JOB_UUID,
             scheduler_state="success",
@@ -231,44 +282,116 @@ def test_actual_params_feedback_and_result_share_durable_station_outbox(tmp_path
             scheduler_state="success",
             return_info={"mass_g": 12.5},
         )
+
+        store.close()
+        store = WorkflowStore(database)
+        job = store.get_job(JOB_UUID)
+        assert job["status"] == "succeeded"
+        assert job["param"] == actual_param
+        assert job["feedback_sequence"] == 100
+        assert job["feedback_data"] == {"percent": 100}
+        assert job["return_info"] == {"mass_g": 12.5}
+        assert store.get_task(TASK_UUID)["status"] == "succeeded"
+        with store.read() as connection:
+            events = [
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT * FROM workflow_station_event_outbox ORDER BY station_sequence"
+                )
+            ]
+            assert events == original_events
+            feedback = connection.execute(
+                "SELECT sequence, data, published_at FROM workflow_node_job_feedback_history "
+                "WHERE workflow_node_job_uuid = ? ORDER BY sequence",
+                (JOB_UUID,),
+            ).fetchall()
+            assert [row["sequence"] for row in feedback] == list(range(1, 101))
+            assert feedback[-1]["data"] == '{"percent":100}'
+            assert all(row["published_at"] is None for row in feedback)
+            results = connection.execute(
+                "SELECT outcome, return_info, consumed_at FROM workflow_node_job_result "
+                "WHERE workflow_node_job_uuid = ?",
+                (JOB_UUID,),
+            ).fetchall()
+            assert [tuple(row) for row in results] == [
+                ("succeeded", '{"mass_g":12.5}', None),
+            ]
+            assert connection.execute(
+                "SELECT COUNT(*) FROM workflow_runtime_journal "
+                "WHERE workflow_node_job_uuid = ? AND kind = 'feedback_committed'",
+                (JOB_UUID,),
+            ).fetchone()[0] == 100
+    finally:
+        store.close()
+
+
+def test_legacy_station_event_acknowledges_original_evidence(tmp_path: Path) -> None:
+    """停写后仍能读取旧反馈与结果事件，并在精确 ACK 后标记对应本地证据。"""
+
+    store = WorkflowStore(tmp_path / "legacy-station-outbox.db")
+    try:
+        _seed_job(store)
+        projection = TaskRuntimeProjection(store)
+        projection.project_pre_dispatch(task_uuid=TASK_UUID, job_uuid=JOB_UUID)
+        projection.project_feedback(
+            job_uuid=JOB_UUID,
+            sequence=1,
+            feedback_type="progress",
+            data={"percent": 100},
+            observed_at="2026-08-26T00:00:01Z",
+            idempotency_key="feedback-1",
+        )
+        projection.project_job_finished(
+            job_uuid=JOB_UUID,
+            scheduler_state="success",
+            return_info={"mass_g": 12.5},
+        )
+        with store.transaction() as connection:
+            feedback_uuid = connection.execute(
+                "SELECT uuid FROM workflow_node_job_feedback_history "
+                "WHERE workflow_node_job_uuid = ? AND sequence = 1",
+                (JOB_UUID,),
+            ).fetchone()[0]
+            result_uuid = connection.execute(
+                "SELECT uuid FROM workflow_node_job_result WHERE workflow_node_job_uuid = ?",
+                (JOB_UUID,),
+            ).fetchone()[0]
+            _seed_legacy_station_event(
+                connection,
+                index=1,
+                source_kind="job_feedback",
+                source_uuid=feedback_uuid,
+            )
+            _seed_legacy_station_event(
+                connection,
+                index=2,
+                source_kind="job_result",
+                source_uuid=result_uuid,
+            )
 
         outbox = StationEventOutboxStore(store)
         events = outbox.list_pending()
-        assert [event["station_sequence"] for event in events] == [1, 2, 3, 4, 5]
-        assert [event["event_type"] for event in events] == [
-            "task.running",
-            "job.dispatched",
-            "job.feedback_committed",
-            "job.outcome_committed",
-            "task.succeeded",
-        ]
-        assert events[1]["payload"]["actual_param"] == actual_param
-        assert events[3]["payload"]["actual_param"] == actual_param
-        assert events[3]["payload"]["return_info"] == {"mass_g": 12.5}
+        assert [event["station_sequence"] for event in events] == [1, 2]
 
         attempted = outbox.mark_delivery_attempt(
-            event_uuid=events[2]["event_uuid"],
-            station_sequence=events[2]["station_sequence"],
+            event_uuid=events[0]["event_uuid"],
+            station_sequence=events[0]["station_sequence"],
         )
         assert attempted["delivery_attempts"] == 1
         assert attempted["acked_at"] is None
-        assert len(outbox.list_pending()) == 5
+        assert len(outbox.list_pending()) == 2
 
-        outbox.acknowledge(
-            event_uuid=events[2]["event_uuid"],
-            station_sequence=events[2]["station_sequence"],
-        )
-        outbox.acknowledge(
-            event_uuid=events[3]["event_uuid"],
-            station_sequence=events[3]["station_sequence"],
-        )
-        remaining = outbox.list_pending()
-        assert [event["event_type"] for event in remaining] == [
-            "task.running",
-            "job.dispatched",
-            "task.succeeded",
-        ]
-        with store.transaction() as connection:
+        for event in events:
+            acked = outbox.acknowledge(
+                event_uuid=event["event_uuid"],
+                station_sequence=event["station_sequence"],
+            )
+            assert outbox.acknowledge(
+                event_uuid=event["event_uuid"],
+                station_sequence=event["station_sequence"],
+            ) == acked
+        assert outbox.list_pending() == []
+        with store.read() as connection:
             feedback_published_at = connection.execute(
                 """
                 SELECT published_at FROM workflow_node_job_feedback_history
@@ -283,6 +406,9 @@ def test_actual_params_feedback_and_result_share_durable_station_outbox(tmp_path
                 """,
                 (JOB_UUID,),
             ).fetchone()[0]
+            assert connection.execute(
+                "SELECT COUNT(*) FROM workflow_station_event_outbox"
+            ).fetchone()[0] == 2
         assert feedback_published_at is not None
         assert result_consumed_at is not None
     finally:
@@ -301,16 +427,7 @@ def test_station_event_publisher_retries_and_accepts_only_exact_prefix(tmp_path)
         outbox = StationEventOutboxStore(store)
         with store.transaction() as connection:
             for index in (1, 2):
-                append_station_event(
-                    connection,
-                    event_type="job.feedback_committed",
-                    aggregate_type="workflow_node_job",
-                    aggregate_uuid=JOB_UUID,
-                    source_kind="test",
-                    source_uuid=f"source-{index}",
-                    idempotency_key=f"publisher-test-{index}",
-                    payload={"index": index},
-                )
+                _seed_legacy_station_event(connection, index=index)
 
         calls = 0
 
@@ -360,16 +477,7 @@ def test_station_event_publisher_stop_never_returns_while_sender_uses_store(
     sender_may_finish = Event()
     try:
         with store.transaction() as connection:
-            append_station_event(
-                connection,
-                event_type="job.feedback_committed",
-                aggregate_type="workflow_node_job",
-                aggregate_uuid=JOB_UUID,
-                source_kind="test",
-                source_uuid="blocking-sender",
-                idempotency_key="publisher-stop-race",
-                payload={"sequence": 1},
-            )
+            _seed_legacy_station_event(connection, index=1)
 
         def blocking_sender(events):
             """模拟仍处于有限 HTTP 请求中的 Backend 适配器。
