@@ -199,6 +199,9 @@ def cleanup_for_restart() -> bool:
     异常：各可选组件的普通清理异常转换为警告并继续后续步骤；导入或 ROS 清理
     故障按既有策略返回 ``False``。本函数不直接退出进程。
     """
+    from unilabos.app.runtime_thread_lifecycle import begin_runtime_shutdown
+
+    begin_runtime_shutdown()
     print_status("[重启] 开始执行重启前清理", "info")
     cleanup_succeeded = True
     storage_owners_closed = True

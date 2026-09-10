@@ -1,5 +1,9 @@
 import threading
 
+from unilabos.app.runtime_thread_lifecycle import (
+    start_runtime_generation,
+    start_runtime_thread,
+)
 from unilabos.resources.resource_tracker import ResourceTreeSet
 from unilabos.utils import logger
 
@@ -31,7 +35,8 @@ def start_backend(
     else:
         raise ValueError(f"Unsupported backend: {backend}")
 
-    backend_thread = threading.Thread(
+    start_runtime_generation()
+    backend_thread = start_runtime_thread(
         target=main if not is_slave else slave,
         args=(
             devices_config,
@@ -44,8 +49,6 @@ def start_backend(
             resources_mesh_config,
         ),
         name="backend_thread",
-        daemon=True,
     )
-    backend_thread.start()
     logger.info(f"Backend {backend} started.")
     return backend_thread

@@ -14,7 +14,11 @@ import rclpy
 from unilabos_msgs.srv._serial_command import SerialCommand_Response
 
 from unilabos.app.register import register_devices_and_resources
-from unilabos.app.runtime_topology import publish_edge_runtime_ready_signal
+from unilabos.app.runtime_thread_lifecycle import (
+    begin_runtime_shutdown,
+    publish_edge_runtime_ready_signal,
+    start_runtime_thread,
+)
 from unilabos.ros.nodes.presets.resource_mesh_manager import ResourceMeshManager
 from unilabos.resources.resource_tracker import (
     DeviceNodeResourceTracker,
@@ -25,6 +29,7 @@ from unilabos.devices.ros_dev.liquid_handler_joint_publisher import (
 )
 from unilabos_msgs.srv import SerialCommand  # type: ignore
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from rclpy.timer import Timer
 
 from unilabos.registry.registry import lab_registry
@@ -44,6 +49,7 @@ from unilabos.utils.type_check import TypeEncoder
 
 def exit() -> None:
     """关闭ROS节点和资源"""
+    begin_runtime_shutdown()
     host_instance = HostNode.get_instance()
     if host_instance is not None:
         # 停止发现定时器
@@ -84,7 +90,8 @@ def main(
     )
     # Support restart - check if rclpy is already initialized
     if not rclpy.ok():
-        rclpy.init(args=rclpy_init_args)
+        # 应用先标记正常关闭再停止 ROS，禁止原生信号线程抢先关闭 context。
+        rclpy.init(args=rclpy_init_args, signal_handler_options=SignalHandlerOptions.NO)
     else:
         logger.info("[ROS] rclpy already initialized, reusing context")
     executor = rclpy.__executor = RuntimeExecutor(
@@ -135,10 +142,9 @@ def main(
         executor.add_node(joint_republisher)
         # executor.add_node(lh_joint_pub)
 
-    thread = threading.Thread(
-        target=executor.spin, daemon=True, name="host_executor_thread"
+    thread = start_runtime_thread(
+        target=executor.spin, name="host_executor_thread"
     )
-    thread.start()
 
     if BasicConfig.process_role == "edge_runtime":
         deadline = time.monotonic() + 30.0
@@ -195,10 +201,14 @@ def slave(
     # 1. 初始化 ROS2（domain_id=None 时 rclpy 回退环境变量/默认域）
     if not rclpy.ok():
         try:
-            rclpy.init(args=rclpy_init_args, domain_id=hostlink_domain_id)
+            rclpy.init(
+                args=rclpy_init_args,
+                domain_id=hostlink_domain_id,
+                signal_handler_options=SignalHandlerOptions.NO,
+            )
         except TypeError:
             # 旧版 rclpy 无 domain_id 形参：环境变量路径已在上面套用
-            rclpy.init(args=rclpy_init_args)
+            rclpy.init(args=rclpy_init_args, signal_handler_options=SignalHandlerOptions.NO)
     executor = rclpy.__executor
     if not executor:
         executor = rclpy.__executor = RuntimeExecutor(
@@ -206,10 +216,9 @@ def slave(
         )
 
     # 1.5 启动 executor 线程
-    thread = threading.Thread(
-        target=executor.spin, daemon=True, name="slave_executor_thread"
+    thread = start_runtime_thread(
+        target=executor.spin, name="slave_executor_thread"
     )
-    thread.start()
 
     # 2. 创建 Slave Machine Node
     n = Node(f"slaveMachine_{BasicConfig.machine_name}", parameter_overrides=[])

@@ -1577,6 +1577,8 @@ def main():
         from unilabos.app.scheduler.host_network import setup_slave_network_client
 
         setup_slave_network_client(device_ids=slave_device_ids)
+        # 从机也由应用统一接收正常信号；默认关闭回调会释放 HostLink 网络所有权。
+        install_host_shutdown_handlers(())
 
     args_dict["resources_mesh_config"] = {}
     args_dict["resources_edge_config"] = resource_edge_info
@@ -1587,9 +1589,14 @@ def main():
         )
         edge_backend_thread = start_backend(**args_dict)
         edge_backend_thread.join()
-        raise RuntimeError(
-            "Edge Runtime backend thread terminated unexpectedly"
+        from unilabos.app.runtime_thread_lifecycle import (
+            fail_runtime_thread,
+            runtime_shutdown_requested,
         )
+
+        if runtime_shutdown_requested():
+            return
+        fail_runtime_thread(edge_backend_thread.name)
 
     if runtime_process_plan.role.value == "workspace_backend":
         print_status(

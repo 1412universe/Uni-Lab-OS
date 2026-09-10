@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import signal
+import sys
 from collections.abc import Callable, Iterable
 from types import FrameType
 from typing import Any
@@ -10,6 +11,23 @@ from typing import Any
 from unilabos.utils import logger
 
 ShutdownHandler = Callable[[int, FrameType | None], None]
+
+
+def _shutdown_ros_runtime() -> None:
+    """只关闭本进程已启动的 ROS，不为纯 Web 进程导入或初始化 ROS。
+
+    执行器最多等待两秒；即使回调未结束，也要关闭 context 唤醒 ROS 等待。
+    业务服务的关闭回调可能为空，因此 ROS 关闭由应用信号所有者明确承担。
+    """
+    ros = sys.modules.get("rclpy")
+    if ros is None or not ros.ok():
+        return
+    executor = getattr(ros, "__executor", None)
+    try:
+        if executor is not None and not executor.shutdown(timeout_sec=2.0):
+            raise RuntimeError("正常关闭时 ROS 执行器仍有未结束回调")
+    finally:
+        ros.try_shutdown()
 
 
 def install_host_shutdown_handlers(
@@ -39,6 +57,9 @@ def install_host_shutdown_handlers(
         # 清理期间忽略第二个正常退出信号，避免发现服务刚收到 TERM 又被重入关闭。
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        from unilabos.app.runtime_thread_lifecycle import begin_runtime_shutdown
+
+        begin_runtime_shutdown()
         failures: list[BaseException] = []
         for communication_client in clients:
             try:
@@ -56,6 +77,10 @@ def install_host_shutdown_handlers(
 
             shutdown_workflow_runtime()
         except BaseException as error:  # noqa: BLE001 - 必须继续关闭 Edge 存储
+            failures.append(error)
+        try:
+            _shutdown_ros_runtime()
+        except BaseException as error:  # noqa: BLE001 - ROS 失败不能阻止其余所有者关闭
             failures.append(error)
         try:
             if runtime_shutdown is None:
