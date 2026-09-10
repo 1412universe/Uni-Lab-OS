@@ -308,7 +308,7 @@ class CoreRuntime:
     workflow_store: WorkflowStore
     inventory_store: InventoryStore
     inventory: InventoryService
-    dispatcher: FakeDispatcher
+    dispatcher: Any
     scheduler: EdgeScheduler
     bridge: TaskSchedulerBridge
     device_materials: dict[str, str]
@@ -478,6 +478,7 @@ def build_core_runtime(
     max_active_tasks: int = 500,
     max_tasks_per_workflow: int = 100,
     device_available: Callable[[str], bool] | None = None,
+    execution_backend: Any = None,
 ) -> CoreRuntime:
     """装配可配置容量的双 SQLite 调度核心组合根。"""
 
@@ -517,7 +518,7 @@ def build_core_runtime(
         )
 
     inventory = InventoryService(inventory_store, time_fn=clock.time)
-    dispatcher = FakeDispatcher()
+    dispatcher = execution_backend if execution_backend is not None else FakeDispatcher()
 
     def resolve_device(
         selector: Mapping[str, Any],

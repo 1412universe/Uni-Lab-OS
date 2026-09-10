@@ -32,9 +32,14 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from unilabos.app.edge_control.execution_start import (
+    ExecutionStartCanceled,
+    ExecutionStartDeferred,
+    ExecutionStartUnknown,
+)
 from unilabos.app.scheduler.dispatch import CancelDispatchState, DispatchPayload
 from unilabos.app.scheduler.execution_outcome import normalize_executor_outcome
-from unilabos.app.ws_client import (
+from unilabos.app.job_queue import (
     DeviceActionManager,
     JobInfo,
     JobStatus,
@@ -86,6 +91,10 @@ class JobExecutionBackend:
         self._running = False
         self._pending = 0
         self._pending_lock = threading.Lock()
+        self.execution_control: Any = None
+        self._execution_started: Callable[[str], None] | None = None
+        self.deferred_start = False
+        self._deferred_jobs: dict[str, JobInfo] = {}
 
         # 等待人工决策的 action 异常（decision_id -> report）。
         # 本地模式（无云端 WS）下由调度器 REST / 前端做审批入口。
@@ -96,6 +105,31 @@ class JobExecutionBackend:
         ] = []
 
     # ── 生命周期 ─────────────────────────────────────────────
+
+    def bind_execution_control(self, control: Any, on_started: Callable[[str], None]) -> None:
+        """复用工站权威，入执行队列不再被当作设备已经开始。"""
+        self.execution_control = control
+        self._execution_started = on_started
+        self.deferred_start = True
+
+    def restore_dispatch(self, payload: DispatchPayload) -> None:
+        """仅恢复丢失的未开始队列项，已投递给 Host 的原命令不能重复发送。"""
+        if self.execution_control is None:
+            raise ValueError("恢复命令缺少工站执行控制")
+        with self.execution_control.lock:
+            job_id = str(payload["job_id"])
+            if self.execution_control.execution_start_state(job_id) != "NOT_STARTED":
+                return
+            if self.device_manager.get_job_info(job_id) is None:
+                self.dispatch(payload)
+
+    def _begin_execution(self, job: JobInfo) -> str:
+        """由设备在实际调用前确认；许可与开始投影共享工站短临界区。"""
+        with self.execution_control.lock:
+            result = self.execution_control.begin_execution(job.job_id, job.command_uuid)
+            if result == "START" and self._execution_started is not None:
+                self._execution_started(job.job_id)
+            return result
 
     def start(self) -> None:
         if self._running:
@@ -131,6 +165,13 @@ class JobExecutionBackend:
 
     def dispatch(self, payload: DispatchPayload) -> None:
         """接收调度器下发的 job_start 载荷：入队/直发（同 _handle_job_start 语义）。"""
+        execution_source = payload.get("execution_source", "workflow")
+        manual = execution_source == "error_manual"
+        if manual and (
+            self.execution_control is None
+            or not self.execution_control.is_manual(str(payload["job_id"]))
+        ):
+            raise ValueError("手动执行来源未被工站控制器授权")
         job_info = JobInfo(
             job_id=payload["job_id"],
             task_id=payload.get("task_id", ""),
@@ -142,10 +183,12 @@ class JobExecutionBackend:
             start_time=time.time(),
             action_type=payload.get("action_type", ""),
             action_args=payload.get("action_args", {}) or {},
-            always_free=bool(payload.get("always_free", False)),
+            always_free=manual or bool(payload.get("always_free", False)),
             sample_material=payload.get("sample_material", {}) or {},
             server_info=payload.get("server_info"),
             trace_context=None,
+            execution_source=execution_source,
+            command_uuid=str(payload.get("command_uuid") or ""),
         )
         with span(
             "action.queue",
@@ -191,6 +234,14 @@ class JobExecutionBackend:
         job = self.device_manager.get_job_info(job_id)
         if job is None:
             return CancelDispatchState.UNAVAILABLE
+        if self.execution_control is not None:
+            with self.execution_control.lock:
+                if self.execution_control.execution_start_state(job_id) == "NOT_STARTED":
+                    canceled, next_job, _ = self.device_manager.cancel_job(job_id)
+                    self._deferred_jobs.pop(job_id, None)
+                    if next_job is not None:
+                        self._put_event(("start", next_job), context=next_job.trace_context)
+                    return CancelDispatchState.NOT_SENT if canceled else CancelDispatchState.UNAVAILABLE
         if job.status == JobStatus.QUEUE:
             canceled, next_job, _lock_became_free = self.device_manager.cancel_job(
                 job_id
@@ -439,7 +490,14 @@ class JobExecutionBackend:
 
     def _run(self) -> None:
         while self._running:
-            event_context, event = self._events.get()
+            try:
+                event_context, event = self._events.get(timeout=0.1)
+            except queue.Empty:
+                # 只重试被实际开始屏障明确拒绝的未开始动作，已受理 Goal 不重发。
+                for job in list(self._deferred_jobs.values()):
+                    with use_context(job.trace_context):
+                        self._start_goal(job)
+                continue
             if event[0] == "__stop__":
                 break
             try:
@@ -461,6 +519,20 @@ class JobExecutionBackend:
                     self._pending -= 1
 
     def _start_goal(self, job: JobInfo) -> None:
+        if self.device_manager.get_job_info(job.job_id) is None:
+            self._deferred_jobs.pop(job.job_id, None)
+            return
+        if self.execution_control is not None:
+            with self.execution_control.lock:
+                self._deferred_jobs.pop(job.job_id, None)
+                if self.execution_control.execution_start_state(job.job_id) != "NOT_STARTED":
+                    return
+                if self.execution_control.recovering or (
+                    job.execution_source != "error_manual"
+                    and not self.execution_control.allows_task(job.task_id)
+                ):
+                    self._deferred_jobs[job.job_id] = job
+                    return
         job_log = format_job_log(job.job_id, job.task_id, job.device_id, job.action_name)
         queue_item = QueueItem(
             task_type="job_call_back_status",
@@ -471,6 +543,8 @@ class JobExecutionBackend:
             notebook_id=job.notebook_id,
             device_action_key=job.device_action_key,
             trace_context={},
+            execution_source=job.execution_source,
+            start_guard=(lambda: self._begin_execution(job)) if self.execution_control is not None else None,
         )
         inject_trace_context(queue_item.trace_context)
         host_node = self._host_node_getter()
@@ -492,6 +566,17 @@ class JobExecutionBackend:
                 server_info=job.server_info,
             )
             logger.info("[JobExecutionBackend] goal sent for job %s", job_log)
+        except ExecutionStartDeferred:
+            with self.execution_control.lock:
+                self._deferred_jobs[job.job_id] = job
+        except ExecutionStartCanceled:
+            # 工站权威已保存开始前撤销；清理队列，不伪造设备执行失败。
+            _, next_job, _ = self.device_manager.cancel_job(job.job_id)
+            if next_job is not None:
+                self._put_event(("start", next_job), context=next_job.trace_context)
+        except ExecutionStartUnknown as error:
+            # 保留在途身份与占用，只报告未知事实，禁止自动重发。
+            self.execution_control.report_error(job.job_id, phase="dispatch_unknown", message=str(error))
         except Exception:
             logger.exception("[JobExecutionBackend] send_goal failed for job %s", job_log)
             self._put_event(

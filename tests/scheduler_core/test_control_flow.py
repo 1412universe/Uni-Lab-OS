@@ -732,9 +732,9 @@ def test_step_advances_only_the_selected_local_condition(
     assert {item["node_id"] for item in candidates} == {condition_b, action_a}
 
 
-def test_repeat_until_persists_each_iteration_before_dispatch(
+def submit_repeat_task(
     core_runtime: CoreRuntime,
-) -> None:
+) -> dict:
     """RepeatUntil 每轮使用新 Job 身份，满足严格布尔条件后才派发后继。"""
 
     repeat_uuid = stable_uuid("repeat:control")
@@ -845,6 +845,13 @@ def test_repeat_until_persists_each_iteration_before_dispatch(
         ],
     )
 
+    return aggregate
+
+
+def test_repeat_until_persists_each_iteration_before_dispatch(core_runtime):
+    """RepeatUntil 每轮使用新 Job 身份，满足严格布尔条件后才派发后继。"""
+    aggregate = submit_repeat_task(core_runtime)
+    final_job = stable_uuid("job:repeat:final")
     first_measure = core_runtime.dispatcher.dispatched[-1]
     assert first_measure["action"] == "measure"
     core_runtime.scheduler.on_job_finished(

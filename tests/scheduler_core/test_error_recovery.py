@@ -261,3 +261,52 @@ def test_approved_manual_confirmation_survives_station_pause_and_restart(core_ru
         failed,
         manual_job,
     ]
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_repeat_retry_keeps_committed_rounds_and_other_tasks_schedulable(core_runtime, restart):
+    """控制节点重试保留已完成轮次；重启后仍能报告当前错误并调度其他任务。"""
+    from tests.scheduler_core.test_control_flow import submit_repeat_task
+
+    runtime = core_runtime
+    aggregate = submit_repeat_task(runtime)
+    for iteration in range(3):
+        runtime.scheduler.on_job_finished(runtime.dispatcher.dispatched[-1]["job_id"], True, {"qualified": False})
+        runtime.scheduler.on_job_finished(runtime.dispatcher.dispatched[-1]["job_id"], True, {"next_dose": iteration + 2})
+    control = runtime.bridge.error_control
+    snapshot = control.snapshot()
+    decision = snapshot["errors"][0]
+    result = runtime.bridge.decide_error(decision["decision_id"], {
+        "action": "retry_current_node",
+        "expected_station_version": snapshot["station_version"],
+        "expected_decision_version": decision["decision_version"],
+        "observed_error_epoch": snapshot["error_epoch"],
+        "resume_requested": False,
+    }, idempotency_key="retry-loop", operator_id="tester")
+    retry_job = result["result"]["retry_job_uuid"]
+    if restart:
+        runtime.restart_scheduler()
+    control = runtime.bridge.error_control
+    snapshot = control.snapshot()
+    control.resume({
+        "expected_station_version": snapshot["station_version"],
+        "observed_error_epoch": snapshot["error_epoch"],
+        "operator_confirmed": True,
+        "confirm_snapshot_id": snapshot["snapshot_id"],
+    }, idempotency_key="resume-loop", operator_id="tester")
+    runtime.bridge.reschedule()
+    # 冻结的循环上限仍不满足，重试应重新显示该错误，而不是重放已成功的设备动作。
+    snapshot = control.snapshot()
+    assert snapshot["mode"] == "PAUSED"
+    assert snapshot["errors"][0]["source_job_uuid"] == retry_job
+    assert "最大迭代次数" in snapshot["errors"][0]["meta_data"]["message"]
+    assert len(runtime.dispatcher.dispatched) == 6
+    assert len([j for j in runtime.workflow_store.list_jobs(aggregate["task"]["uuid"]) if j["status"] == "succeeded"]) == 6
+    control.resume({
+        "expected_station_version": snapshot["station_version"],
+        "observed_error_epoch": snapshot["error_epoch"],
+        "operator_confirmed": True,
+        "confirm_snapshot_id": snapshot["snapshot_id"],
+    }, idempotency_key="resume-other-tasks", operator_id="tester")
+    other = runtime.submit(task_name="unrelated-after-loop", devices=["robot-a"])
+    assert runtime.dispatcher.dispatched[-1]["task_id"] == other["task"]["uuid"]

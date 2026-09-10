@@ -983,11 +983,13 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         tags=["workflow"],
         route_class=_BackendJSONRoute,
     )
-    error_handling = getattr(service, "error_handling", None)
-    if error_handling is not None:
-        from unilabos.app.error_handling_api import create_error_handling_router
+    from unilabos.app.error_handling_api import create_error_handling_router
 
-        router.include_router(create_error_handling_router(error_handling))
+    router.include_router(
+        create_error_handling_router(
+            service_provider=lambda: getattr(service, "error_handling", None),
+        )
+    )
 
     def _with_workflow_status(payload: Any) -> Any:
         """给包含工作流图的公共响应补充当前源码/已发布状态。

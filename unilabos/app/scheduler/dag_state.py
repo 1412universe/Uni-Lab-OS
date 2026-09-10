@@ -312,6 +312,7 @@ class WorkflowRun:
 
     def restore_execution_facts(self, jobs: Sequence[Mapping[str, Any]]) -> None:
         """仅重建已落盘的有效执行事实；循环物化不提交任何设备动作。"""
+        jobs_by_id = {str(job["uuid"]): job for job in jobs}
         facts = {
             str((job.get("control_data") or {}).get("runtime_node_id") or job["workflow_node_uuid"]): job
             for job in jobs if job.get("current_attempt", True)
@@ -351,7 +352,18 @@ class WorkflowRun:
                 if evaluation["phase"] == "materialize":
                     can_replay = all(item["runtime_node_id"] in facts for item in evaluation["iteration_jobs"])
                 elif control is not None:
+                    # 重试更换控制 Job，但已经成功的轮次及其决定仍是恢复事实。
+                    # 沿显式 retry 链读取，不能把旧 attempt 的终态赋给新 attempt。
                     data = control.get("control_data") or {}
+                    previous = control
+                    visited = {str(control["uuid"])}
+                    while "condition_result" not in data:
+                        retry_of = str(previous.get("retry_of_job_uuid") or "")
+                        if retry_of in visited or retry_of not in jobs_by_id:
+                            break
+                        visited.add(retry_of)
+                        previous = jobs_by_id[retry_of]
+                        data = previous.get("control_data") or {}
                     can_replay = "condition_result" in data and int(data.get("iteration_index", -1)) >= evaluation["iteration_index"]
                 if can_replay:
                     self.commit_local_control(evaluation)

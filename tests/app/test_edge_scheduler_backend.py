@@ -13,7 +13,7 @@ from unilabos.app.scheduler.backend import JobExecutionBackend, create_edge_stac
 from unilabos.app.scheduler.device_target import ResolvedDeviceTarget
 from unilabos.app.scheduler.dispatch import build_job_start_payload
 from unilabos.app.scheduler.models import WorkflowEdge, WorkflowNode, WorkflowSpec
-from unilabos.app.ws_client import QueueItem
+from unilabos.app.job_queue import QueueItem
 from unilabos.utils.type_check import serialize_result_info
 
 

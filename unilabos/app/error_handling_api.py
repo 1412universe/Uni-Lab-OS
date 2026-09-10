@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -111,8 +112,24 @@ class ResourceDispositionRequest(StationVersion):
     reason: str = Field(min_length=1, max_length=20000)
 
 
-def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
-    def station_scope(station_id: str) -> None:
+def create_error_handling_router(
+    service: ErrorHandlingService | None = None,
+    *,
+    service_provider: Callable[[], ErrorHandlingService | None] | None = None,
+) -> APIRouter:
+    def resolve_service() -> ErrorHandlingService:
+        # 冷启动先挂载路由，运行时在请求阶段解析；Depends 在同一请求内复用结果。
+        current = service_provider() if service_provider is not None else service
+        if current is None:
+            raise HTTPException(503, "工站错误处置服务尚未就绪")
+        return current
+
+    service_dependency = Depends(resolve_service)
+
+    def station_scope(
+        station_id: str,
+        service: ErrorHandlingService = service_dependency,
+    ) -> None:
         if station_id != service.control.station_id:
             raise HTTPException(404, "工站不存在")
 
@@ -147,7 +164,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
             raise HTTPException(422, str(error)) from error
 
     @router.get("/error-handling", summary="读取工站错误与处置状态")
-    def snapshot() -> dict[str, Any]:
+    def snapshot(service: ErrorHandlingService = service_dependency) -> dict[str, Any]:
         return invoke(service.control.snapshot)
 
     @router.post(
@@ -160,6 +177,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: DecisionRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.bridge.decide_error,
@@ -170,7 +188,9 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         )
 
     @router.get("/sessions/{session_id}", summary="读取人工处置会话")
-    def session(session_id: str) -> dict[str, Any]:
+    def session(
+        session_id: str, service: ErrorHandlingService = service_dependency
+    ) -> dict[str, Any]:
         return invoke(service.control.get_session, session_id)
 
     @router.post(
@@ -181,6 +201,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: CompleteRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.complete,
@@ -196,6 +217,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: SessionVersion,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.control.return_to_manual,
@@ -209,7 +231,11 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         "/sessions/{session_id}/devices/{device_id}/actions",
         summary="读取设备全部可用动作",
     )
-    def actions(session_id: str, device_id: str) -> dict[str, Any]:
+    def actions(
+        session_id: str,
+        device_id: str,
+        service: ErrorHandlingService = service_dependency,
+    ) -> dict[str, Any]:
         return invoke(service.manual_actions, session_id, device_id)
 
     @router.post(
@@ -222,6 +248,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: ManualActionRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.execute_manual,
@@ -232,7 +259,9 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         )
 
     @router.get("/manual-actions/{command_id}", summary="读取手动动作执行记录")
-    def action(command_id: str) -> dict[str, Any]:
+    def action(
+        command_id: str, service: ErrorHandlingService = service_dependency
+    ) -> dict[str, Any]:
         return invoke(service.control.manual_action, command_id)
 
     @router.post(
@@ -245,6 +274,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: StopRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.stop_manual,
@@ -255,7 +285,9 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         )
 
     @router.get("/control-commands/{command_uuid}", summary="读取已受理控制命令")
-    def command(command_uuid: str) -> dict[str, Any]:
+    def command(
+        command_uuid: str, service: ErrorHandlingService = service_dependency
+    ) -> dict[str, Any]:
         return invoke(service.control.get_command, command_uuid)
 
     @router.post(
@@ -263,13 +295,17 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         status_code=202,
         summary="继续应用已受理控制命令",
     )
-    def apply_command(command_uuid: str) -> dict[str, Any]:
+    def apply_command(
+        command_uuid: str, service: ErrorHandlingService = service_dependency
+    ) -> dict[str, Any]:
         return invoke(service.apply_command, command_uuid)
 
     @router.get(
         "/sessions/{session_id}/inventory", summary="读取手动处理所需的库存事实"
     )
-    def inventory(session_id: str) -> dict[str, Any]:
+    def inventory(
+        session_id: str, service: ErrorHandlingService = service_dependency
+    ) -> dict[str, Any]:
         invoke(service.control.get_session, session_id)
         return invoke(service.bridge.error_inventory)
 
@@ -283,6 +319,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: InventoryCorrectionRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.bridge.apply_auxiliary,
@@ -293,7 +330,9 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         )
 
     @router.get("/resource-dispositions", summary="读取当前逻辑资源占用")
-    def occupancies() -> dict[str, Any]:
+    def occupancies(
+        service: ErrorHandlingService = service_dependency,
+    ) -> dict[str, Any]:
         return invoke(service.control.occupancies)
 
     @router.post(
@@ -303,6 +342,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: ResourceDispositionRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.bridge.apply_auxiliary,
@@ -313,7 +353,9 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         )
 
     @router.get("/events", summary="读取工站控制操作记录")
-    def events(after: int = 0) -> dict[str, Any]:
+    def events(
+        after: int = 0, service: ErrorHandlingService = service_dependency
+    ) -> dict[str, Any]:
         return invoke(service.control.events, after)
 
     @router.post("/resume", summary="按用户确认恢复工站普通调度")
@@ -321,6 +363,7 @@ def create_error_handling_router(service: ErrorHandlingService) -> APIRouter:
         body: ResumeRequest,
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
     ) -> dict[str, Any]:
         return invoke(
             service.resume,
