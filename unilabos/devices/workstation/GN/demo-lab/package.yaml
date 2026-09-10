@@ -1,0 +1,6 @@
+package:
+  name: demo_lab
+
+workflows:
+  - workflow_uuid: 7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5
+    source: demo_lab/workflows/weigh_aliquot.py

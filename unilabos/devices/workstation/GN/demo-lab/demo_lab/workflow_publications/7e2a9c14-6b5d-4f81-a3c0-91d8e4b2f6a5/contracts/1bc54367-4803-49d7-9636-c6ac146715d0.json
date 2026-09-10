@@ -1,0 +1,3291 @@
+{
+  "contract": {
+    "boundary_mapping": {
+      "source_mappings": {
+        "2a7fcdc5-99bd-5f5e-b754-1f9216973dbb": {
+          "kind": "node_output",
+          "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b"
+        },
+        "65db2faa-15d9-597e-9017-6d5b8b0dfdd6": {
+          "kind": "node_output",
+          "source_handle_uuid": "089c1f6f-a245-51fa-825d-5d00d15d895d",
+          "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a205"
+        },
+        "753249d7-6df4-581e-9c9f-fffc0463202d": {
+          "kind": "node_output",
+          "source_handle_uuid": "92ffadc5-8c96-5f23-9ce1-4b92b32ea61a",
+          "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a"
+        },
+        "e1377dae-c0f2-56da-b6a2-3afdb4488ce4": {
+          "kind": "node_output",
+          "source_handle_uuid": "f78fdcc6-26d1-5ad5-ba65-898f3b61b4c2",
+          "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208"
+        },
+        "e25fa457-f78f-55c3-9534-f96c34fe5ac6": {
+          "kind": "node_output",
+          "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c"
+        }
+      },
+      "structural_mappings": {
+        "completion_sources": [],
+        "entry_targets": []
+      },
+      "target_mappings": {
+        "002c96da-dd5f-550c-a8d7-c60628db85c4": [
+          {
+            "target_handle_uuid": "4bcd9a89-a1e9-52f7-8c70-88a6e0032cf7",
+            "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208"
+          }
+        ],
+        "6103a0dc-b1cd-5359-a7e4-169625380059": [
+          {
+            "target_handle_uuid": "e018bb56-20a9-5d29-976c-56e5e1f26fee",
+            "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a207"
+          }
+        ],
+        "9feb3848-04bb-5626-82e4-01a0e6da8a18": [
+          {
+            "target_handle_uuid": "e018bb56-20a9-5d29-976c-56e5e1f26fee",
+            "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a204"
+          }
+        ],
+        "a05725aa-358e-5228-87c9-5a35e8fc21a3": [
+          {
+            "target_handle_uuid": "dc655ec6-a9b7-517b-959c-e935ee855239",
+            "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b"
+          }
+        ],
+        "afc34694-9130-54cc-8935-20d5eb924038": [
+          {
+            "target_handle_uuid": "dc655ec6-a9b7-517b-959c-e935ee855239",
+            "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c"
+          }
+        ],
+        "b9e53d71-7196-5ff3-8a4d-72c72b7d39ac": [],
+        "f4865212-5181-5f60-84af-e1633d8133ae": [
+          {
+            "target_handle_uuid": "b27e2401-7081-587e-8858-7df6cc1bc46d",
+            "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a"
+          }
+        ]
+      }
+    },
+    "contract_digest": "sha256:36b0ccf43d543a1d7d2844aab2e2a85ab726c13024415099f35c9f0a73903a83",
+    "create_time": "2026-09-08T07:36:00.203804Z",
+    "description": "取标准样品母液称量后，按目标体积分装到空瓶，封盖后回库，母液放到已用区。",
+    "edge_count": 13,
+    "executor_binding_mapping": {
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a204": "executor_1",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a205": "executor_2",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a206": "executor_1",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a207": "executor_1",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208": "executor_3",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a209": "executor_1",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a": "executor_4",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b": "executor_1",
+      "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c": "executor_1"
+    },
+    "executor_requirements": [
+      {
+        "display_name": "执行设备 1",
+        "key": "executor_1",
+        "required": true,
+        "resource_template_uuid": "650e00e1-d39f-5cac-ae1b-9260aa25a132"
+      },
+      {
+        "display_name": "执行设备 2",
+        "key": "executor_2",
+        "required": true,
+        "resource_template_uuid": "6c7d8a75-b98f-53d9-9019-42d9b63ef26c"
+      },
+      {
+        "display_name": "执行设备 3",
+        "key": "executor_3",
+        "required": true,
+        "resource_template_uuid": "3a5d9b89-9a19-5cd4-8a8a-eb68a7045625"
+      },
+      {
+        "display_name": "执行设备 4",
+        "key": "executor_4",
+        "required": true,
+        "resource_template_uuid": "418fc83b-bf4f-59c5-a1ae-a54128795c86"
+      }
+    ],
+    "graph_snapshot": {
+      "edges": [
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "48cbd472-30a1-5886-9219-9e8638fc4449",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a205",
+          "target_handle_uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a206",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "1a433aeb-6eb0-5a7b-9bac-eb5f32eaa4e2"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "8a3093c9-3f34-5b0f-9cfd-aed63a50ae04",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b",
+          "target_handle_uuid": "88d7e76e-ac5e-5124-8c96-30db0d6f0771",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "201abc8d-8798-5ff9-9d76-8160de23d072"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a207",
+          "target_handle_uuid": "6df34ea0-1c19-58cc-bd27-315ede556acd",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2792c2a2-b87f-5209-aec0-d324a3a22306"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a204",
+          "target_handle_uuid": "b28f57af-678e-508c-805b-c6287c714daa",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a205",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "50b3cba1-20a6-5ad6-82c8-7c7bacee7aac"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a209",
+          "target_handle_uuid": "91d3a962-eaad-57dc-99ca-ab491dad2058",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "51891f0a-bd43-5b64-890f-09aec85978f3"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "822f6eb8-89ef-5fd9-83f3-5dd97188c67c",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a",
+          "target_handle_uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "69e76326-3911-5784-9134-f4f583f00435"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a206",
+          "target_handle_uuid": "555de7ee-5250-5aa0-941c-f475e3cf38ff",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "7c03c569-5450-513b-9a17-037e9c284ad2"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "8a3093c9-3f34-5b0f-9cfd-aed63a50ae04",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a206",
+          "target_handle_uuid": "88d7e76e-ac5e-5124-8c96-30db0d6f0771",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a207",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "922b5c1f-7fa2-58a0-ac66-858935b7f969"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "51ba7502-78ec-58ed-b6a8-c22795dfc1bd",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208",
+          "target_handle_uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a209",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "95342ccf-c203-5500-862a-2ceb636d5d2a"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "2386e169-d7ce-5376-bf0b-15caa16729aa",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a201",
+          "target_handle_uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a204",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "be920de5-721d-5401-a94c-229e26beb8da"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "2386e169-d7ce-5376-bf0b-15caa16729aa",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a203",
+          "target_handle_uuid": "d010e7af-c02f-55a7-aed3-f774ff07bc36",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "dc670085-63d7-580d-9e52-b3331f2c3e77"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "2386e169-d7ce-5376-bf0b-15caa16729aa",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a202",
+          "target_handle_uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a207",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "dcecba0e-8f6f-594e-9257-be0f80f22dba"
+        },
+        {
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "meta_data": {},
+          "source_handle_uuid": "d471fd26-d319-545a-ac81-ea21ea47fe42",
+          "source_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208",
+          "target_handle_uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "target_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "e26c1576-a9e6-5001-a249-3a99d8beaaa7"
+        }
+      ],
+      "handle_templates": [
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "source",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "038e9a52-bdc7-5d3b-ae72-15cc5fed007d",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "measured_mass_g",
+          "data_source": "executor",
+          "display_name": "measured_mass_g",
+          "handle_key": "measured_mass_g",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 4,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "number"
+              }
+            }
+          },
+          "required": false,
+          "type": "number",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "089c1f6f-a245-51fa-825d-5d00d15d895d",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "material",
+          "data_source": "executor",
+          "description": "向下游节点传递具体物料实例的物料占位符。",
+          "display_name": "Material",
+          "handle_key": "material",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "value_schema": {
+                "$slot": "ResourceSlot"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "2386e169-d7ce-5376-bf0b-15caa16729aa",
+          "workflow_node_template_uuid": "9a48a520-b592-5454-8ece-cdc28a552866"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "check_source_presence",
+          "data_source": "goal",
+          "display_name": "check_source_presence",
+          "handle_key": "check_source_presence",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 6,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "default": true,
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "29ea5c95-12c1-58b8-ae54-98fea9d5de7a",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "success",
+          "data_source": "executor",
+          "display_name": "success",
+          "handle_key": "success",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 4,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "30bd30dd-56a2-5f16-a498-9a108753c140",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "source_warehouse",
+          "data_source": "executor",
+          "display_name": "source_warehouse",
+          "handle_key": "source_warehouse",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 15,
+              "editor_control": "material_port",
+              "implicit_passthrough": true,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "32ac69e9-c4c7-5af2-ab82-ad72e929d544",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "message",
+          "data_source": "executor",
+          "display_name": "message",
+          "handle_key": "message",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 10,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "4024fad3-7cac-5ec3-bb98-abe5a20a02ad",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "target_warehouse",
+          "data_source": "executor",
+          "display_name": "target_warehouse",
+          "handle_key": "target_warehouse",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 16,
+              "editor_control": "material_port",
+              "implicit_passthrough": true,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "4128b807-bf3f-5f01-9c3c-8696a68ec5d4",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "stock_vial",
+          "data_source": "executor",
+          "display_name": "stock_vial",
+          "handle_key": "stock_vial",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 3,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "48cbd472-30a1-5886-9219-9e8638fc4449",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "target_aliquot_volume_ul",
+          "data_source": "goal",
+          "display_name": "target_aliquot_volume_ul",
+          "handle_key": "target_aliquot_volume_ul",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 3,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "integer"
+              }
+            }
+          },
+          "required": true,
+          "type": "integer",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "4bcd9a89-a1e9-52f7-8c70-88a6e0032cf7",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "success",
+          "data_source": "executor",
+          "display_name": "success",
+          "handle_key": "success",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 9,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "504f5472-f628-5c92-bafc-639cd888373c",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "message",
+          "data_source": "executor",
+          "display_name": "message",
+          "handle_key": "message",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 2,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "506789d7-983d-58f7-aca1-3a14dd3b0541",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "aliquot_vial",
+          "data_source": "executor",
+          "display_name": "aliquot_vial",
+          "handle_key": "aliquot_vial",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 7,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "51ba7502-78ec-58ed-b6a8-c22795dfc1bd",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "stock_vial",
+          "data_source": "goal",
+          "display_name": "stock_vial",
+          "handle_key": "stock_vial",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+              ],
+              "contract_order": 0,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "555de7ee-5250-5aa0-941c-f475e3cf38ff",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "source",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "5be6bdb2-96ae-5b03-8019-1576cd13aab7",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "aliquot_vial",
+          "data_source": "goal",
+          "display_name": "aliquot_vial",
+          "handle_key": "aliquot_vial",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "19d9f68e-0c65-4b64-bd58-075bb756e184"
+              ],
+              "contract_order": 1,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "6df34ea0-1c19-58cc-bd27-315ede556acd",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "tip_box",
+          "data_source": "executor",
+          "display_name": "tip_box",
+          "handle_key": "tip_box",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "15fc2d56-9a79-428f-b7bc-73fd5594b662"
+              ],
+              "contract_order": 9,
+              "editor_control": "material_port",
+              "implicit_passthrough": true,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "6f9d1baf-3412-5af0-b4af-d999d67652bf",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "source_warehouse",
+          "data_source": "goal",
+          "display_name": "source_warehouse",
+          "handle_key": "source_warehouse",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 1,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "target",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "76737ce6-f230-59af-9c94-de149e09b9cb",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "aliquot_vial",
+          "data_source": "executor",
+          "display_name": "aliquot_vial",
+          "handle_key": "aliquot_vial",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 4,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "822f6eb8-89ef-5fd9-83f3-5dd97188c67c",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "target",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "88d7e76e-ac5e-5124-8c96-30db0d6f0771",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "message",
+          "data_source": "executor",
+          "display_name": "message",
+          "handle_key": "message",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 5,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "88e7cbeb-4c3f-57c4-89ab-4d76de45a35f",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "source",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "8a3093c9-3f34-5b0f-9cfd-aed63a50ae04",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "check_gripper_payload",
+          "data_source": "goal",
+          "display_name": "check_gripper_payload",
+          "handle_key": "check_gripper_payload",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 8,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "default": true,
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "8b33050e-f308-517f-b2d8-4f99cbebded5",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "resource",
+          "data_source": "executor",
+          "display_name": "resource",
+          "handle_key": "resource",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 11,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "aliquot_vial",
+          "data_source": "goal",
+          "display_name": "aliquot_vial",
+          "handle_key": "aliquot_vial",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "19d9f68e-0c65-4b64-bd58-075bb756e184"
+              ],
+              "contract_order": 0,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "91d3a962-eaad-57dc-99ca-ab491dad2058",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "message",
+          "data_source": "executor",
+          "display_name": "message",
+          "handle_key": "message",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 3,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "92ffadc5-8c96-5f23-9ce1-4b92b32ea61a",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "check_target_presence",
+          "data_source": "goal",
+          "display_name": "check_target_presence",
+          "handle_key": "check_target_presence",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 7,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "default": true,
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "a2779c9f-79f0-5b55-9609-abb230f1f220",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "target_device",
+          "data_source": "goal",
+          "display_name": "target_device",
+          "handle_key": "target_device",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 3,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "aa808dba-d742-5df8-b200-fdef0fb4e5a6",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "target",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "aa932b52-5096-500a-95e7-4aa4f593a41b",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "success",
+          "data_source": "executor",
+          "display_name": "success",
+          "handle_key": "success",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 1,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "abe52dae-2916-5dbb-b233-f069c0f7d410",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "sample_id",
+          "data_source": "goal",
+          "display_name": "sample_id",
+          "handle_key": "sample_id",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 1,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "default": "",
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "b27e2401-7081-587e-8858-7df6cc1bc46d",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "stock_vial",
+          "data_source": "goal",
+          "display_name": "stock_vial",
+          "handle_key": "stock_vial",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+              ],
+              "contract_order": 0,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "b28f57af-678e-508c-805b-c6287c714daa",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "result",
+          "data_source": "executor",
+          "display_name": "result",
+          "handle_key": "result",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 14,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "enum": [
+                  "success",
+                  "failed",
+                  "unknown"
+                ],
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "bc094c7f-1c6e-5483-a332-8727bd393ea6",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "success",
+          "data_source": "executor",
+          "display_name": "success",
+          "handle_key": "success",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 2,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "boolean"
+              }
+            }
+          },
+          "required": false,
+          "type": "boolean",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "c6cae59e-49a2-5202-8871-57174efb881a",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "site",
+          "data_source": "executor",
+          "display_name": "site",
+          "handle_key": "site",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 13,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": false,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "cea6dd42-8847-5d91-a6ca-9433db45b81d",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "tip_box",
+          "data_source": "goal",
+          "display_name": "tip_box",
+          "handle_key": "tip_box",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "15fc2d56-9a79-428f-b7bc-73fd5594b662"
+              ],
+              "contract_order": 2,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "d010e7af-c02f-55a7-aed3-f774ff07bc36",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "resource",
+          "data_source": "goal",
+          "display_name": "resource",
+          "handle_key": "resource",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": [
+                "e73b4e12-cbb8-4da1-927d-8e36782c4de2",
+                "19d9f68e-0c65-4b64-bd58-075bb756e184"
+              ],
+              "contract_order": 0,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "stock_vial",
+          "data_source": "executor",
+          "display_name": "stock_vial",
+          "handle_key": "stock_vial",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 6,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "d471fd26-d319-545a-ac81-ea21ea47fe42",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "mount_resource",
+          "data_source": "executor",
+          "display_name": "mount_resource",
+          "handle_key": "mount_resource",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 12,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": false,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "d7e2b607-536f-5f6f-b04f-5fd1dd8b0f0b",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "target_warehouse",
+          "data_source": "goal",
+          "display_name": "target_warehouse",
+          "handle_key": "target_warehouse",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 2,
+              "editor_control": "material_port",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "uuid": {
+                    "format": "uuid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid"
+                ],
+                "type": "object",
+                "x-unilabos-material-lock": true
+              }
+            }
+          },
+          "required": true,
+          "type": "ResourceSlot",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "target_site",
+          "data_source": "goal",
+          "display_name": "target_site",
+          "handle_key": "target_site",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 5,
+              "editor_control": "site_selector",
+              "implicit_passthrough": false,
+              "site_selector": {
+                "allow_occupied": false,
+                "occupant": "resource",
+                "owner": "target_warehouse",
+                "show_occupied": true,
+                "version": 1
+              },
+              "structural_role": null,
+              "value_schema": {
+                "format": "uuid",
+                "type": "string",
+                "x-unilabos-editor-control": "site_selector",
+                "x-unilabos-site-selector": {
+                  "allow_occupied": false,
+                  "occupant": "resource",
+                  "owner": "target_warehouse",
+                  "show_occupied": true,
+                  "version": 1
+                }
+              }
+            }
+          },
+          "required": true,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "dc655ec6-a9b7-517b-959c-e935ee855239",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "source_site",
+          "data_source": "goal",
+          "display_name": "source_site",
+          "handle_key": "source_site",
+          "io_type": "target",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 4,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true,
+          "type": "string",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "e018bb56-20a9-5d29-976c-56e5e1f26fee",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "target",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "f234c6cd-1b28-53bd-96f7-c9d51370c154",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "data_key": "commanded_volume_ul",
+          "data_source": "executor",
+          "display_name": "commanded_volume_ul",
+          "handle_key": "commanded_volume_ul",
+          "io_type": "source",
+          "meta_data": {
+            "unilab": {
+              "allowed_resource_template_uuids": null,
+              "contract_order": 8,
+              "editor_control": "variable_selector",
+              "implicit_passthrough": false,
+              "site_selector": null,
+              "structural_role": null,
+              "value_schema": {
+                "type": "integer"
+              }
+            }
+          },
+          "required": false,
+          "type": "integer",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "f78fdcc6-26d1-5ad5-ba65-898f3b61b4c2",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "create_time": "1970-01-01T00:00:00Z",
+          "display_name": "ready",
+          "handle_key": "ready",
+          "io_type": "source",
+          "meta_data": {},
+          "required": false,
+          "type": "default",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "f9c3a910-ed61-5d7f-8646-4260258ba2fa",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        }
+      ],
+      "node_templates": [
+        {
+          "class": "demo_lab.devices.stations:PipetteStation",
+          "create_time": "1970-01-01T00:00:00Z",
+          "description": "按微升目标体积从母液瓶移入分装瓶。",
+          "display_name": "分装移液",
+          "feedback": {},
+          "goal": {
+            "aliquot_vial": "aliquot_vial",
+            "stock_vial": "stock_vial",
+            "target_aliquot_volume_ul": "target_aliquot_volume_ul",
+            "tip_box": "tip_box"
+          },
+          "goal_default": {},
+          "meta_data": {
+            "unilab": {
+              "action_contract_schema": {
+                "description": "按微升目标体积从母液瓶移入分装瓶。",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "_unilabos_placeholder_info": {},
+                    "additionalProperties": false,
+                    "properties": {
+                      "aliquot_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      },
+                      "stock_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      },
+                      "target_aliquot_volume_ul": {
+                        "type": "integer"
+                      },
+                      "tip_box": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      }
+                    },
+                    "required": [
+                      "stock_vial",
+                      "aliquot_vial",
+                      "tip_box",
+                      "target_aliquot_volume_ul"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "aliquot_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object"
+                      },
+                      "commanded_volume_ul": {
+                        "type": "integer"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "stock_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "success",
+                      "message",
+                      "stock_vial",
+                      "aliquot_vial",
+                      "commanded_volume_ul"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "aliquot参数",
+                "type": "object",
+                "x-unilabos-action-contract": {
+                  "input_order": [
+                    "stock_vial",
+                    "aliquot_vial",
+                    "tip_box",
+                    "target_aliquot_volume_ul"
+                  ],
+                  "output_order": [
+                    "success",
+                    "message",
+                    "stock_vial",
+                    "aliquot_vial",
+                    "commanded_volume_ul"
+                  ],
+                  "resource_template_symbols": {
+                    "goal": {
+                      "aliquot_vial": [
+                        "demo_lab.resources.materials:aliquot_vial"
+                      ],
+                      "stock_vial": [
+                        "demo_lab.resources.materials:stock_vial"
+                      ],
+                      "tip_box": [
+                        "demo_lab.resources.materials:tip_box"
+                      ]
+                    },
+                    "result": {}
+                  },
+                  "version": 2
+                }
+              },
+              "contract_kind": "typed",
+              "resource_template": {
+                "display_name": "模拟移液工站",
+                "name": "community.demo_lab.pipette_station_sim",
+                "uuid": "3a5d9b89-9a19-5cd4-8a8a-eb68a7045625"
+              }
+            }
+          },
+          "name": "aliquot",
+          "node_type": "ILab",
+          "resource_template_uuid": "3a5d9b89-9a19-5cd4-8a8a-eb68a7045625",
+          "result": {},
+          "schema": "{\"_unilabos_placeholder_info\":{},\"additionalProperties\":false,\"properties\":{\"aliquot_vial\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true},\"stock_vial\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true},\"target_aliquot_volume_ul\":{\"type\":\"integer\"},\"tip_box\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true}},\"required\":[\"stock_vial\",\"aliquot_vial\",\"tip_box\",\"target_aliquot_volume_ul\"],\"type\":\"object\"}",
+          "type": "UniLabJsonCommand",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "46a2ba1b-8981-56d1-9617-416b442dec12"
+        },
+        {
+          "class": "unilabos.workflow.authoring:material_source",
+          "create_time": "1970-01-01T00:00:00Z",
+          "description": "声明工作流进入边界的物料来源。",
+          "display_name": "Material Source",
+          "feedback": {},
+          "goal": {},
+          "goal_default": {},
+          "meta_data": {
+            "unilab": {
+              "framework_owner_only": true,
+              "resource_template": {
+                "display_name": "host_node",
+                "name": "host_node",
+                "uuid": "06259194-f142-5e2b-84dc-133f38f47eb3"
+              }
+            }
+          },
+          "name": "material_source",
+          "node_type": "material_source",
+          "resource_template_uuid": "06259194-f142-5e2b-84dc-133f38f47eb3",
+          "result": {},
+          "schema": "{\"additionalProperties\":false,\"properties\":{\"custody_policy\":{\"enum\":[\"task_exclusive\",\"shared_source\"],\"type\":\"string\"},\"flow_role\":{\"enum\":[\"primary_sample\",\"aliquot_sample\",\"reagent\",\"consumable\"],\"type\":\"string\"},\"material_uuid\":{\"format\":\"uuid\",\"type\":[\"string\",\"null\"]},\"mode\":{\"enum\":[\"existing\",\"create_new\"],\"type\":\"string\"},\"mount\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\"},\"resource_template_uuid\":{\"format\":\"uuid\",\"type\":\"string\"},\"site\":{\"format\":\"uuid\",\"type\":[\"string\",\"null\"],\"x-unilabos-editor-control\":\"site_selector\",\"x-unilabos-site-selector\":{\"allow_occupied\":false,\"occupant\":\"resource_template_uuid\",\"owner\":\"mount\",\"show_occupied\":true,\"version\":1}},\"slot_range\":{\"items\":{\"format\":\"uuid\",\"type\":\"string\"},\"minItems\":1,\"type\":[\"array\",\"null\"],\"uniqueItems\":true}},\"required\":[\"mode\",\"resource_template_uuid\",\"mount\",\"material_uuid\",\"site\",\"slot_range\",\"flow_role\",\"custody_policy\"],\"type\":\"object\"}",
+          "type": "material_source",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "9a48a520-b592-5454-8ece-cdc28a552866"
+        },
+        {
+          "class": "demo_lab.devices.transport_robot:TransportRobot",
+          "create_time": "1970-01-01T00:00:00Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "display_name": "演示物料搬运",
+          "feedback": {},
+          "goal": {
+            "check_gripper_payload": "check_gripper_payload",
+            "check_source_presence": "check_source_presence",
+            "check_target_presence": "check_target_presence",
+            "resource": "resource",
+            "source_site": "source_site",
+            "source_warehouse": "source_warehouse",
+            "target_device": "target_device",
+            "target_site": "target_site",
+            "target_warehouse": "target_warehouse"
+          },
+          "goal_default": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true
+          },
+          "meta_data": {
+            "unilab": {
+              "action_contract_schema": {
+                "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "_unilabos_placeholder_info": {},
+                    "additionalProperties": false,
+                    "properties": {
+                      "check_gripper_payload": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "check_source_presence": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "check_target_presence": {
+                        "default": true,
+                        "type": "boolean"
+                      },
+                      "resource": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      },
+                      "source_site": {
+                        "type": "string"
+                      },
+                      "source_warehouse": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      },
+                      "target_device": {
+                        "type": "string"
+                      },
+                      "target_site": {
+                        "format": "uuid",
+                        "type": "string",
+                        "x-unilabos-editor-control": "site_selector",
+                        "x-unilabos-site-selector": {
+                          "allow_occupied": false,
+                          "occupant": "resource",
+                          "owner": "target_warehouse",
+                          "show_occupied": true,
+                          "version": 1
+                        }
+                      },
+                      "target_warehouse": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      }
+                    },
+                    "required": [
+                      "resource",
+                      "source_warehouse",
+                      "target_warehouse",
+                      "target_device",
+                      "source_site",
+                      "target_site"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "message": {
+                        "type": "string"
+                      },
+                      "mount_resource": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object"
+                      },
+                      "resource": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object"
+                      },
+                      "result": {
+                        "enum": [
+                          "success",
+                          "failed",
+                          "unknown"
+                        ],
+                        "type": "string"
+                      },
+                      "site": {
+                        "type": "string"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "success",
+                      "message",
+                      "resource",
+                      "mount_resource",
+                      "site",
+                      "result"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "transfer_material_atomic参数",
+                "type": "object",
+                "x-unilabos-action-contract": {
+                  "input_order": [
+                    "resource",
+                    "source_warehouse",
+                    "target_warehouse",
+                    "target_device",
+                    "source_site",
+                    "target_site",
+                    "check_source_presence",
+                    "check_target_presence",
+                    "check_gripper_payload"
+                  ],
+                  "output_order": [
+                    "success",
+                    "message",
+                    "resource",
+                    "mount_resource",
+                    "site",
+                    "result"
+                  ],
+                  "resource_contract": {
+                    "transfer": {
+                      "gripper_site_role": "robot.gripper",
+                      "material_param": "resource",
+                      "source_owner_param": "source_warehouse",
+                      "source_site_name_param": "source_site",
+                      "source_site_uuid_param": "",
+                      "target_owner_param": "target_warehouse",
+                      "target_site_name_param": "target_site",
+                      "target_site_uuid_param": ""
+                    },
+                    "version": 1
+                  },
+                  "resource_template_symbols": {
+                    "goal": {
+                      "resource": [
+                        "demo_lab.resources.materials:stock_vial",
+                        "demo_lab.resources.materials:aliquot_vial"
+                      ]
+                    },
+                    "result": {}
+                  },
+                  "version": 2
+                }
+              },
+              "contract_kind": "typed",
+              "executor_kind": "material_transfer",
+              "resource_template": {
+                "display_name": "模拟搬运机器人",
+                "name": "community.demo_lab.transport_robot_sim",
+                "uuid": "650e00e1-d39f-5cac-ae1b-9260aa25a132"
+              }
+            }
+          },
+          "name": "transfer_material_atomic",
+          "node_type": "ILab",
+          "resource_template_uuid": "650e00e1-d39f-5cac-ae1b-9260aa25a132",
+          "result": {},
+          "schema": "{\"_unilabos_placeholder_info\":{},\"additionalProperties\":false,\"properties\":{\"check_gripper_payload\":{\"default\":true,\"type\":\"boolean\"},\"check_source_presence\":{\"default\":true,\"type\":\"boolean\"},\"check_target_presence\":{\"default\":true,\"type\":\"boolean\"},\"resource\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true},\"source_site\":{\"type\":\"string\"},\"source_warehouse\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true},\"target_device\":{\"type\":\"string\"},\"target_site\":{\"format\":\"uuid\",\"type\":\"string\",\"x-unilabos-editor-control\":\"site_selector\",\"x-unilabos-site-selector\":{\"allow_occupied\":false,\"occupant\":\"resource\",\"owner\":\"target_warehouse\",\"show_occupied\":true,\"version\":1}},\"target_warehouse\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true}},\"required\":[\"resource\",\"source_warehouse\",\"target_warehouse\",\"target_device\",\"source_site\",\"target_site\"],\"type\":\"object\"}",
+          "type": "UniLabJsonCommand",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21"
+        },
+        {
+          "class": "demo_lab.devices.stations:CapStation",
+          "create_time": "1970-01-01T00:00:00Z",
+          "description": "封闭分装瓶。",
+          "display_name": "封盖分装瓶",
+          "feedback": {},
+          "goal": {
+            "aliquot_vial": "aliquot_vial",
+            "sample_id": "sample_id"
+          },
+          "goal_default": {
+            "sample_id": ""
+          },
+          "meta_data": {
+            "unilab": {
+              "action_contract_schema": {
+                "description": "封闭分装瓶。",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "_unilabos_placeholder_info": {},
+                    "additionalProperties": false,
+                    "properties": {
+                      "aliquot_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      },
+                      "sample_id": {
+                        "default": "",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "aliquot_vial"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "aliquot_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "success",
+                      "message",
+                      "aliquot_vial"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "close_cap参数",
+                "type": "object",
+                "x-unilabos-action-contract": {
+                  "input_order": [
+                    "aliquot_vial",
+                    "sample_id"
+                  ],
+                  "output_order": [
+                    "success",
+                    "message",
+                    "aliquot_vial"
+                  ],
+                  "resource_template_symbols": {
+                    "goal": {
+                      "aliquot_vial": [
+                        "demo_lab.resources.materials:aliquot_vial"
+                      ]
+                    },
+                    "result": {}
+                  },
+                  "version": 2
+                }
+              },
+              "contract_kind": "typed",
+              "resource_template": {
+                "display_name": "模拟封盖工站",
+                "name": "community.demo_lab.cap_station_sim",
+                "uuid": "418fc83b-bf4f-59c5-a1ae-a54128795c86"
+              }
+            }
+          },
+          "name": "close_cap",
+          "node_type": "ILab",
+          "resource_template_uuid": "418fc83b-bf4f-59c5-a1ae-a54128795c86",
+          "result": {},
+          "schema": "{\"_unilabos_placeholder_info\":{},\"additionalProperties\":false,\"properties\":{\"aliquot_vial\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true},\"sample_id\":{\"default\":\"\",\"type\":\"string\"}},\"required\":[\"aliquot_vial\"],\"type\":\"object\"}",
+          "type": "UniLabJsonCommand",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79"
+        },
+        {
+          "class": "demo_lab.devices.stations:BalanceStation",
+          "create_time": "1970-01-01T00:00:00Z",
+          "description": "返回模拟称量质量。",
+          "display_name": "称量母液瓶",
+          "feedback": {},
+          "goal": {
+            "stock_vial": "stock_vial"
+          },
+          "goal_default": {},
+          "meta_data": {
+            "unilab": {
+              "action_contract_schema": {
+                "description": "返回模拟称量质量。",
+                "properties": {
+                  "feedback": {},
+                  "goal": {
+                    "_unilabos_placeholder_info": {},
+                    "additionalProperties": false,
+                    "properties": {
+                      "stock_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object",
+                        "x-unilabos-material-lock": true
+                      }
+                    },
+                    "required": [
+                      "stock_vial"
+                    ],
+                    "type": "object"
+                  },
+                  "result": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "measured_mass_g": {
+                        "type": "number"
+                      },
+                      "message": {
+                        "type": "string"
+                      },
+                      "stock_vial": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "uuid": {
+                            "format": "uuid",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "uuid"
+                        ],
+                        "type": "object"
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "success",
+                      "message",
+                      "stock_vial",
+                      "measured_mass_g"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "goal"
+                ],
+                "title": "weigh参数",
+                "type": "object",
+                "x-unilabos-action-contract": {
+                  "input_order": [
+                    "stock_vial"
+                  ],
+                  "output_order": [
+                    "success",
+                    "message",
+                    "stock_vial",
+                    "measured_mass_g"
+                  ],
+                  "resource_template_symbols": {
+                    "goal": {
+                      "stock_vial": [
+                        "demo_lab.resources.materials:stock_vial"
+                      ]
+                    },
+                    "result": {}
+                  },
+                  "version": 2
+                }
+              },
+              "contract_kind": "typed",
+              "resource_template": {
+                "display_name": "模拟天平工站",
+                "name": "community.demo_lab.balance_station_sim",
+                "uuid": "6c7d8a75-b98f-53d9-9019-42d9b63ef26c"
+              }
+            }
+          },
+          "name": "weigh",
+          "node_type": "ILab",
+          "resource_template_uuid": "6c7d8a75-b98f-53d9-9019-42d9b63ef26c",
+          "result": {},
+          "schema": "{\"_unilabos_placeholder_info\":{},\"additionalProperties\":false,\"properties\":{\"stock_vial\":{\"additionalProperties\":false,\"properties\":{\"uuid\":{\"format\":\"uuid\",\"type\":\"string\"}},\"required\":[\"uuid\"],\"type\":\"object\",\"x-unilabos-material-lock\":true}},\"required\":[\"stock_vial\"],\"type\":\"object\"}",
+          "type": "UniLabJsonCommand",
+          "update_time": "1970-01-01T00:00:00Z",
+          "uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb"
+        }
+      ],
+      "nodes": [
+        {
+          "action_name": "material_source",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "声明工作流进入边界的物料来源。",
+          "disabled": false,
+          "execution_policy": {},
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "source_stock",
+              "authoring_source_order": 0,
+              "input_bindings": {},
+              "material_source_site_binding": {
+                "parameter": "source_stock_site"
+              },
+              "resource_refs": {
+                "mount": {
+                  "resource_id": "source_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "Material Source",
+          "param": {
+            "custody_policy": "task_exclusive",
+            "flow_role": "primary_sample",
+            "material_uuid": null,
+            "mode": "existing",
+            "mount": {
+              "uuid": "3aca0503-ee43-555a-8f6d-17e6e2390b63"
+            },
+            "resource_template_uuid": "e73b4e12-cbb8-4da1-927d-8e36782c4de2",
+            "site": null,
+            "slot_range": null
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "material_source",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a201",
+          "workflow_node_template_uuid": "9a48a520-b592-5454-8ece-cdc28a552866",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "material_source",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "声明工作流进入边界的物料来源。",
+          "disabled": false,
+          "execution_policy": {},
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "source_empty",
+              "authoring_source_order": 1,
+              "input_bindings": {},
+              "material_source_site_binding": {
+                "parameter": "source_empty_site"
+              },
+              "resource_refs": {
+                "mount": {
+                  "resource_id": "source_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "Material Source",
+          "param": {
+            "custody_policy": "task_exclusive",
+            "flow_role": "consumable",
+            "material_uuid": null,
+            "mode": "existing",
+            "mount": {
+              "uuid": "3aca0503-ee43-555a-8f6d-17e6e2390b63"
+            },
+            "resource_template_uuid": "19d9f68e-0c65-4b64-bd58-075bb756e184",
+            "site": null,
+            "slot_range": null
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "material_source",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a202",
+          "workflow_node_template_uuid": "9a48a520-b592-5454-8ece-cdc28a552866",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "material_source",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "声明工作流进入边界的物料来源。",
+          "disabled": false,
+          "execution_policy": {},
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "source_tip_box",
+              "authoring_source_order": 2,
+              "input_bindings": {},
+              "material_source_site_binding": {
+                "parameter": "tip_box_site"
+              },
+              "resource_refs": {
+                "mount": {
+                  "resource_id": "tip_warehouse"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "Material Source",
+          "param": {
+            "custody_policy": "shared_source",
+            "flow_role": "consumable",
+            "material_uuid": null,
+            "mode": "existing",
+            "mount": {
+              "uuid": "ebb1f6f5-2c9e-5b50-b33c-15d1e2c2fc9d"
+            },
+            "resource_template_uuid": "15fc2d56-9a79-428f-b7bc-73fd5594b662",
+            "site": null,
+            "slot_range": null
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "material_source",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a203",
+          "workflow_node_template_uuid": "9a48a520-b592-5454-8ece-cdc28a552866",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "transfer_material_atomic",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "stock_at_balance",
+              "authoring_source_order": 3,
+              "executor_binding": {
+                "device_id": "transport_robot_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {
+                "e018bb56-20a9-5d29-976c-56e5e1f26fee": {
+                  "parameter": "source_stock_site"
+                }
+              },
+              "material_passthrough_handles": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+                "8d354932-ccf3-5552-b14d-496a4d41708b": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6"
+              },
+              "output_schema_overrides": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "6bad92fb-872b-4264-9bf3-2fddd3719477"
+                  ]
+                },
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "f61d439c-31e0-4737-9a49-e70bb10a33b8"
+                  ]
+                },
+                "8d354932-ccf3-5552-b14d-496a4d41708b": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+                  ]
+                }
+              },
+              "resource_refs": {
+                "7007c4b7-5152-5cc9-befd-964bf884a5c5": {
+                  "resource_id": "source_rack"
+                },
+                "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31": {
+                  "resource_id": "balance_process_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "演示物料搬运",
+          "param": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true,
+            "source_warehouse": {
+              "uuid": "3aca0503-ee43-555a-8f6d-17e6e2390b63"
+            },
+            "target_device": "balance_station_01",
+            "target_site": "BAL1",
+            "target_warehouse": {
+              "uuid": "1492b694-fad8-5d00-9f4c-3f8a4670c7ca"
+            }
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a204",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "weigh",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "返回模拟称量质量。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "weighed",
+              "authoring_source_order": 4,
+              "executor_binding": {
+                "device_id": "balance_station_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {},
+              "material_passthrough_handles": {
+                "48cbd472-30a1-5886-9219-9e8638fc4449": "b28f57af-678e-508c-805b-c6287c714daa"
+              },
+              "output_schema_overrides": {
+                "48cbd472-30a1-5886-9219-9e8638fc4449": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+                  ]
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "称量母液瓶",
+          "param": {},
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a205",
+          "workflow_node_template_uuid": "e5af5451-cd56-51ee-a334-4c858cd7d9eb",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "transfer_material_atomic",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "stock_at_pipette",
+              "authoring_source_order": 5,
+              "executor_binding": {
+                "device_id": "transport_robot_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {},
+              "material_passthrough_handles": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+                "8d354932-ccf3-5552-b14d-496a4d41708b": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6"
+              },
+              "output_schema_overrides": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "f61d439c-31e0-4737-9a49-e70bb10a33b8"
+                  ]
+                },
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "51e39f0b-4988-44af-a2ff-240bcf9f0eeb"
+                  ]
+                },
+                "8d354932-ccf3-5552-b14d-496a4d41708b": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+                  ]
+                }
+              },
+              "resource_refs": {
+                "7007c4b7-5152-5cc9-befd-964bf884a5c5": {
+                  "resource_id": "balance_process_rack"
+                },
+                "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31": {
+                  "resource_id": "pipette_process_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "演示物料搬运",
+          "param": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true,
+            "source_site": "BAL1",
+            "source_warehouse": {
+              "uuid": "1492b694-fad8-5d00-9f4c-3f8a4670c7ca"
+            },
+            "target_device": "pipette_station_01",
+            "target_site": "PIP_S",
+            "target_warehouse": {
+              "uuid": "f39b24c9-cc0e-5750-bfc1-1d444ca617c9"
+            }
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a206",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "transfer_material_atomic",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "empty_at_pipette",
+              "authoring_source_order": 6,
+              "executor_binding": {
+                "device_id": "transport_robot_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {
+                "e018bb56-20a9-5d29-976c-56e5e1f26fee": {
+                  "parameter": "source_empty_site"
+                }
+              },
+              "material_passthrough_handles": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+                "8d354932-ccf3-5552-b14d-496a4d41708b": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6"
+              },
+              "output_schema_overrides": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "6bad92fb-872b-4264-9bf3-2fddd3719477"
+                  ]
+                },
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "51e39f0b-4988-44af-a2ff-240bcf9f0eeb"
+                  ]
+                },
+                "8d354932-ccf3-5552-b14d-496a4d41708b": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "19d9f68e-0c65-4b64-bd58-075bb756e184"
+                  ]
+                }
+              },
+              "resource_refs": {
+                "7007c4b7-5152-5cc9-befd-964bf884a5c5": {
+                  "resource_id": "source_rack"
+                },
+                "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31": {
+                  "resource_id": "pipette_process_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "演示物料搬运",
+          "param": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true,
+            "source_warehouse": {
+              "uuid": "3aca0503-ee43-555a-8f6d-17e6e2390b63"
+            },
+            "target_device": "pipette_station_01",
+            "target_site": "PIP_T",
+            "target_warehouse": {
+              "uuid": "f39b24c9-cc0e-5750-bfc1-1d444ca617c9"
+            }
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a207",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "aliquot",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "按微升目标体积从母液瓶移入分装瓶。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "aliquoted",
+              "authoring_source_order": 7,
+              "executor_binding": {
+                "device_id": "pipette_station_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {
+                "4bcd9a89-a1e9-52f7-8c70-88a6e0032cf7": {
+                  "parameter": "target_aliquot_volume_ul"
+                }
+              },
+              "material_passthrough_handles": {
+                "51ba7502-78ec-58ed-b6a8-c22795dfc1bd": "6df34ea0-1c19-58cc-bd27-315ede556acd",
+                "6f9d1baf-3412-5af0-b4af-d999d67652bf": "d010e7af-c02f-55a7-aed3-f774ff07bc36",
+                "d471fd26-d319-545a-ac81-ea21ea47fe42": "555de7ee-5250-5aa0-941c-f475e3cf38ff"
+              },
+              "output_schema_overrides": {
+                "51ba7502-78ec-58ed-b6a8-c22795dfc1bd": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "19d9f68e-0c65-4b64-bd58-075bb756e184"
+                  ]
+                },
+                "6f9d1baf-3412-5af0-b4af-d999d67652bf": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "15fc2d56-9a79-428f-b7bc-73fd5594b662"
+                  ]
+                },
+                "d471fd26-d319-545a-ac81-ea21ea47fe42": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+                  ]
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "分装移液",
+          "param": {},
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208",
+          "workflow_node_template_uuid": "46a2ba1b-8981-56d1-9617-416b442dec12",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "transfer_material_atomic",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "filled_at_cap",
+              "authoring_source_order": 8,
+              "executor_binding": {
+                "device_id": "transport_robot_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {},
+              "material_passthrough_handles": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+                "8d354932-ccf3-5552-b14d-496a4d41708b": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6"
+              },
+              "output_schema_overrides": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "51e39f0b-4988-44af-a2ff-240bcf9f0eeb"
+                  ]
+                },
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "c7d8b1f8-2893-41b4-be09-3fcdb384149e"
+                  ]
+                },
+                "8d354932-ccf3-5552-b14d-496a4d41708b": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "19d9f68e-0c65-4b64-bd58-075bb756e184"
+                  ]
+                }
+              },
+              "resource_refs": {
+                "7007c4b7-5152-5cc9-befd-964bf884a5c5": {
+                  "resource_id": "pipette_process_rack"
+                },
+                "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31": {
+                  "resource_id": "cap_process_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "演示物料搬运",
+          "param": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true,
+            "source_site": "PIP_T",
+            "source_warehouse": {
+              "uuid": "f39b24c9-cc0e-5750-bfc1-1d444ca617c9"
+            },
+            "target_device": "cap_station_01",
+            "target_site": "CAP1",
+            "target_warehouse": {
+              "uuid": "853f092d-6ba8-597a-aded-f6535f584453"
+            }
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a209",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "close_cap",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "封闭分装瓶。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "closed",
+              "authoring_source_order": 9,
+              "executor_binding": {
+                "device_id": "cap_station_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {
+                "b27e2401-7081-587e-8858-7df6cc1bc46d": {
+                  "parameter": "sample_id"
+                }
+              },
+              "material_passthrough_handles": {
+                "822f6eb8-89ef-5fd9-83f3-5dd97188c67c": "91d3a962-eaad-57dc-99ca-ab491dad2058"
+              },
+              "output_schema_overrides": {
+                "822f6eb8-89ef-5fd9-83f3-5dd97188c67c": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "19d9f68e-0c65-4b64-bd58-075bb756e184"
+                  ]
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "封盖分装瓶",
+          "param": {},
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a",
+          "workflow_node_template_uuid": "b29bbf28-89a3-5315-9fc0-93e48b1e6d79",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "transfer_material_atomic",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "product_vial",
+              "authoring_source_order": 10,
+              "executor_binding": {
+                "device_id": "transport_robot_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {
+                "dc655ec6-a9b7-517b-959c-e935ee855239": {
+                  "parameter": "product_vial_target_site"
+                }
+              },
+              "material_passthrough_handles": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+                "8d354932-ccf3-5552-b14d-496a4d41708b": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6"
+              },
+              "output_schema_overrides": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "c7d8b1f8-2893-41b4-be09-3fcdb384149e"
+                  ]
+                },
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "42730905-c66b-4177-86ff-586c2f2612a5"
+                  ]
+                },
+                "8d354932-ccf3-5552-b14d-496a4d41708b": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "19d9f68e-0c65-4b64-bd58-075bb756e184"
+                  ]
+                }
+              },
+              "resource_refs": {
+                "7007c4b7-5152-5cc9-befd-964bf884a5c5": {
+                  "resource_id": "cap_process_rack"
+                },
+                "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31": {
+                  "resource_id": "finished_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "演示物料搬运",
+          "param": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true,
+            "source_site": "CAP1",
+            "source_warehouse": {
+              "uuid": "853f092d-6ba8-597a-aded-f6535f584453"
+            },
+            "target_device": "host_node",
+            "target_warehouse": {
+              "uuid": "ce6a7d07-c215-5ed1-9ec3-3f6ce097308b"
+            }
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        },
+        {
+          "action_name": "transfer_material_atomic",
+          "action_type": "UniLabJsonCommand",
+          "create_time": "2026-09-08T07:35:56.051474Z",
+          "description": "把母液瓶或分装瓶从当前库位搬到目标库位。",
+          "disabled": false,
+          "execution_policy": {},
+          "material_uuid": null,
+          "meta_data": {
+            "unilab": {
+              "authoring_result_name": "used_stock",
+              "authoring_source_order": 11,
+              "executor_binding": {
+                "device_id": "transport_robot_01",
+                "mode": "fixed"
+              },
+              "input_bindings": {
+                "dc655ec6-a9b7-517b-959c-e935ee855239": {
+                  "parameter": "used_stock_target_site"
+                }
+              },
+              "material_passthrough_handles": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": "7007c4b7-5152-5cc9-befd-964bf884a5c5",
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31",
+                "8d354932-ccf3-5552-b14d-496a4d41708b": "d40425ff-6c3a-5b49-b67f-eccb7011e7b6"
+              },
+              "output_schema_overrides": {
+                "32ac69e9-c4c7-5af2-ab82-ad72e929d544": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "51e39f0b-4988-44af-a2ff-240bcf9f0eeb"
+                  ]
+                },
+                "4128b807-bf3f-5f01-9c3c-8696a68ec5d4": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "68ed92ca-1850-4dcd-aba3-f4692e627f2d"
+                  ]
+                },
+                "8d354932-ccf3-5552-b14d-496a4d41708b": {
+                  "$slot": "ResourceSlot",
+                  "allowed_resource_template_uuids": [
+                    "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+                  ]
+                }
+              },
+              "resource_refs": {
+                "7007c4b7-5152-5cc9-befd-964bf884a5c5": {
+                  "resource_id": "pipette_process_rack"
+                },
+                "da87d1e8-8cf5-501f-a1a7-9bf11abdaf31": {
+                  "resource_id": "used_rack"
+                }
+              }
+            }
+          },
+          "minimized": false,
+          "name": "演示物料搬运",
+          "param": {
+            "check_gripper_payload": true,
+            "check_source_presence": true,
+            "check_target_presence": true,
+            "source_site": "PIP_S",
+            "source_warehouse": {
+              "uuid": "f39b24c9-cc0e-5750-bfc1-1d444ca617c9"
+            },
+            "target_device": "host_node",
+            "target_warehouse": {
+              "uuid": "e7359aab-c1e8-590b-9bb5-2921b36507b6"
+            }
+          },
+          "pose": {},
+          "status": "idle",
+          "type": "ILab",
+          "update_time": "2026-09-08T07:35:56.051474Z",
+          "uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c",
+          "workflow_node_template_uuid": "ae3fb00c-7708-50ae-a387-63555fff5e21",
+          "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+        }
+      ],
+      "workflow": {
+        "create_time": "2026-09-08T07:35:55.848699Z",
+        "description": "取标准样品母液称量后，按目标体积分装到空瓶，封盖后回库，母液放到已用区。",
+        "meta_data": {
+          "unilab": {
+            "authoring_function_name": "weigh_aliquot",
+            "authoring_result_record_name": "WeighAliquotResult",
+            "input_contract": {
+              "parameters": [
+                {
+                  "default": "ASSAY-2026-001",
+                  "name": "sample_id",
+                  "required": false,
+                  "schema": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "default": 200,
+                  "description": "单位 μL",
+                  "name": "target_aliquot_volume_ul",
+                  "required": false,
+                  "schema": {
+                    "maximum": 5000,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "title": "分装体积"
+                },
+                {
+                  "default": "S01",
+                  "name": "source_stock_site",
+                  "required": false,
+                  "schema": {
+                    "enum": [
+                      "S01"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "default": "E01",
+                  "name": "source_empty_site",
+                  "required": false,
+                  "schema": {
+                    "enum": [
+                      "E01"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "default": "T01",
+                  "name": "tip_box_site",
+                  "required": false,
+                  "schema": {
+                    "enum": [
+                      "T01"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "default": "U01",
+                  "name": "used_stock_target_site",
+                  "required": false,
+                  "schema": {
+                    "enum": [
+                      "U01"
+                    ],
+                    "type": "string"
+                  }
+                },
+                {
+                  "default": "F01",
+                  "name": "product_vial_target_site",
+                  "required": false,
+                  "schema": {
+                    "enum": [
+                      "F01"
+                    ],
+                    "type": "string"
+                  }
+                }
+              ],
+              "version": 1
+            },
+            "output_bindings": {
+              "commanded_volume_ul": {
+                "kind": "node_output",
+                "source_handle_uuid": "f78fdcc6-26d1-5ad5-ba65-898f3b61b4c2",
+                "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a208"
+              },
+              "measured_mass_g": {
+                "kind": "node_output",
+                "source_handle_uuid": "089c1f6f-a245-51fa-825d-5d00d15d895d",
+                "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a205"
+              },
+              "message": {
+                "kind": "node_output",
+                "source_handle_uuid": "92ffadc5-8c96-5f23-9ce1-4b92b32ea61a",
+                "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20a"
+              },
+              "product_vial": {
+                "kind": "node_output",
+                "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+                "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20b"
+              },
+              "used_stock_vial": {
+                "kind": "node_output",
+                "source_handle_uuid": "8d354932-ccf3-5552-b14d-496a4d41708b",
+                "workflow_node_uuid": "2a6f1c80-0d4b-4e91-9c3a-7b18e5d4a20c"
+              }
+            },
+            "output_contract": {
+              "outputs": [
+                {
+                  "implicit": false,
+                  "name": "product_vial",
+                  "schema": {
+                    "$slot": "ResourceSlot",
+                    "allowed_resource_template_uuids": [
+                      "19d9f68e-0c65-4b64-bd58-075bb756e184"
+                    ]
+                  }
+                },
+                {
+                  "implicit": false,
+                  "name": "used_stock_vial",
+                  "schema": {
+                    "$slot": "ResourceSlot",
+                    "allowed_resource_template_uuids": [
+                      "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+                    ]
+                  }
+                },
+                {
+                  "implicit": false,
+                  "name": "measured_mass_g",
+                  "schema": {
+                    "type": "number"
+                  }
+                },
+                {
+                  "implicit": false,
+                  "name": "commanded_volume_ul",
+                  "schema": {
+                    "type": "integer"
+                  }
+                },
+                {
+                  "implicit": false,
+                  "name": "message",
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              ],
+              "version": 1
+            },
+            "source_bootstrap": {
+              "kind": "editable_package_manifest",
+              "package_id": "demo_lab",
+              "relative_path": "workflows/weigh_aliquot.py",
+              "source_uri": "package://demo_lab/workflows/weigh_aliquot.py"
+            }
+          }
+        },
+        "name": "标准样品称量分装",
+        "revision": 3,
+        "tags": [],
+        "update_time": "2026-09-08T07:35:55.996113Z",
+        "uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5",
+        "workflow_type": "normal"
+      }
+    },
+    "input_contract": {
+      "parameters": [
+        {
+          "default": "ASSAY-2026-001",
+          "name": "sample_id",
+          "required": false,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "default": 200,
+          "description": "单位 μL",
+          "name": "target_aliquot_volume_ul",
+          "required": false,
+          "schema": {
+            "maximum": 5000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "title": "分装体积"
+        },
+        {
+          "default": "S01",
+          "name": "source_stock_site",
+          "required": false,
+          "schema": {
+            "enum": [
+              "S01"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "default": "E01",
+          "name": "source_empty_site",
+          "required": false,
+          "schema": {
+            "enum": [
+              "E01"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "default": "T01",
+          "name": "tip_box_site",
+          "required": false,
+          "schema": {
+            "enum": [
+              "T01"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "default": "U01",
+          "name": "used_stock_target_site",
+          "required": false,
+          "schema": {
+            "enum": [
+              "U01"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "default": "F01",
+          "name": "product_vial_target_site",
+          "required": false,
+          "schema": {
+            "enum": [
+              "F01"
+            ],
+            "type": "string"
+          }
+        }
+      ],
+      "version": 1
+    },
+    "meta_data": {},
+    "name": "标准样品称量分装",
+    "node_count": 12,
+    "node_template_uuid": "9d9fb8d3-5088-49d3-ab8c-2b5df8f8c9f2",
+    "output_contract": {
+      "outputs": [
+        {
+          "implicit": false,
+          "name": "product_vial",
+          "schema": {
+            "$slot": "ResourceSlot",
+            "allowed_resource_template_uuids": [
+              "19d9f68e-0c65-4b64-bd58-075bb756e184"
+            ]
+          }
+        },
+        {
+          "implicit": false,
+          "name": "used_stock_vial",
+          "schema": {
+            "$slot": "ResourceSlot",
+            "allowed_resource_template_uuids": [
+              "e73b4e12-cbb8-4da1-927d-8e36782c4de2"
+            ]
+          }
+        },
+        {
+          "implicit": false,
+          "name": "measured_mass_g",
+          "schema": {
+            "type": "number"
+          }
+        },
+        {
+          "implicit": false,
+          "name": "commanded_volume_ul",
+          "schema": {
+            "type": "integer"
+          }
+        },
+        {
+          "implicit": false,
+          "name": "message",
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "version": 1
+    },
+    "source_hash": "sha256:cfccb1ca87517115ecac461a170891f03cfcab45adf460eba429956c4fed03a0",
+    "tags": [],
+    "update_time": "2026-09-08T07:36:00.203804Z",
+    "uuid": "1bc54367-4803-49d7-9636-c6ac146715d0",
+    "version": 2,
+    "workflow_revision": 3,
+    "workflow_uuid": "7e2a9c14-6b5d-4f81-a3c0-91d8e4b2f6a5"
+  },
+  "source_draft_hash": "sha256:80d18cce69e259c0d8abc353379cebbcb76d31c8be04bb7d2f11132e9ba2893d"
+}
