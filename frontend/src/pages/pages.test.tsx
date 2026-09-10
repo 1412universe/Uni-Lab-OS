@@ -665,6 +665,124 @@ describe('WorkflowsPage', () => {
 })
 
 describe('TasksPage', () => {
+  it.each(['normal', 'step'] as const)('cancels the selected %s task in product mode without exposing step controls', async (executionMode) => {
+    const task = {
+      ...demoTasks[1],
+      uuid: '81500c0b-9b3d-4849-8962-7c61a950cb0b',
+      executionMode,
+    }
+    const onNotify = vi.fn()
+    let completeCancel!: (result: Response) => void
+    const cancelResponse = new Promise<Response>((resolve) => { completeCancel = resolve })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith(`/workflow-tasks/${task.uuid}/commands`) && init?.method === 'POST') {
+        return cancelResponse
+      }
+      if (url.includes('/workflow-interventions?')) return response({ code: 0, data: [] })
+      if (url.endsWith('/execution-locks')) return response({ code: 0, data: { locks: [] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithQuery(
+      <TasksPage
+        tasks={[demoTasks[0], task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="product"
+        onRefresh={vi.fn()}
+        onNotify={onNotify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const taskRow = screen.getByText(task.uuid).closest('.matrix-row') as HTMLElement
+    fireEvent.click(taskRow)
+    const controls = within(taskRow).getByLabelText('Task 行内任务控制')
+    const cancel = within(controls).getByRole('button', { name: '取消任务' })
+    expect(within(controls).getAllByRole('button')).toEqual([cancel])
+    expect(within(controls).queryByRole('combobox')).not.toBeInTheDocument()
+    expect(within(controls).queryByText('调度模式')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Task 行内单步调度控制')).not.toBeInTheDocument()
+    expect(cancel).toBeEnabled()
+    fireEvent.click(cancel)
+
+    await waitFor(() => expect(cancel).toBeDisabled())
+    const commands = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(commands).toHaveLength(1)
+    expect(commands[0][0]).toBe('/api/v1/workflow-tasks/81500c0b-9b3d-4849-8962-7c61a950cb0b/commands')
+    expect(JSON.parse(String(commands[0][1]?.body))).toMatchObject({
+      type: 'cancel',
+      target_node_uuid: null,
+    })
+
+    completeCancel(response({ code: 0, data: { status: 'succeeded', result: {} } }))
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith('取消命令已提交'))
+    expect(cancel).toBeEnabled()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/step-state'))).toBe(false)
+  })
+
+  it.each(['succeeded', 'failed', 'canceled', 'timeout'] as const)('hides cancellation for a %s task in product mode', (status) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: { locks: [] } })))
+    renderWithQuery(
+      <TasksPage
+        tasks={[{ ...demoTasks[0], status }]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="product"
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Task 行内任务控制')).not.toBeInTheDocument()
+  })
+
+  it.each(['succeeded', 'failed', 'canceled', 'timeout'] as const)('hides cancellation when a %s task still requires attention', (executionStatus) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: { locks: [] } })))
+    renderWithQuery(
+      <TasksPage
+        tasks={[{ ...demoTasks[0], status: 'intervention_required', executionStatus }]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="product"
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: '取消任务' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Task 行内任务控制')).not.toBeInTheDocument()
+  })
+
+  it('disables product task cancellation while Edge is disconnected', () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithQuery(
+      <TasksPage
+        tasks={[demoTasks[0]]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected={false}
+        startupMode="product"
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const cancel = within(screen.getByLabelText('Task 行内任务控制')).getByRole('button', { name: '取消任务' })
+    expect(cancel).toBeDisabled()
+    fireEvent.click(cancel)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('shows authoritative Step candidates and submits the selected node', async () => {
     const onNotify = vi.fn()
     const task = {

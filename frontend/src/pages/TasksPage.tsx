@@ -1152,11 +1152,12 @@ export function TasksPage({
     : undefined
   const selectedNode = selectedNodeTask?.nodes.find((node) => node.uuid === selectedNodeRef?.nodeUuid)
   const runningTasks = tasks.filter((task) => task.nodes.some((node) => node.status === 'running' || node.status === 'canceling'))
-  const selectedIsTerminal = Boolean(selected && ['succeeded', 'failed', 'canceled', 'timeout'].includes(selected.status))
+  const showStepControls = startupMode === 'develop'
+  const selectedIsTerminal = Boolean(selected && ['succeeded', 'failed', 'canceled', 'timeout'].includes(selected.executionStatus || selected.status))
   const stepStateQuery = useQuery({
     queryKey: ['workflow-task-step-state', selected?.uuid],
     queryFn: ({ signal }) => loadWorkflowTaskStepState(selected!.uuid, signal),
-    enabled: startupMode === 'develop' && connected && Boolean(selected) && !selectedIsTerminal,
+    enabled: showStepControls && connected && Boolean(selected) && !selectedIsTerminal,
     refetchInterval: 2_000,
   })
   const stepState = stepStateQuery.data
@@ -1201,16 +1202,18 @@ export function TasksPage({
     { label: '今日完成', value: counts.succeeded, tone: 'green', icon: Check },
     { label: '需要处理', value: counts.failed, tone: 'red', icon: AlertCircle },
   ]
-  const selectedTaskControl = startupMode === 'develop' && selected && !selectedIsTerminal ? (
-    <div className="task-step-inline" aria-label="Task 行内单步调度控制">
-      <header>
-        <span>
-          <strong>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在切换' : '单步调试'}</strong>
-          <small>{effectiveExecutionMode === 'switching_to_step' ? '等待在途 Job 结束' : '调度模式'}</small>
-        </span>
-        <code>{effectiveExecutionMode}</code>
-      </header>
-      {effectiveExecutionMode === 'step' && stepState?.candidates.length ? (
+  const selectedTaskControl = selected && !selectedIsTerminal ? (
+    <div className="task-step-inline" aria-label={showStepControls ? 'Task 行内单步调度控制' : 'Task 行内任务控制'}>
+      {showStepControls ? (
+        <header>
+          <span>
+            <strong>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在切换' : '单步调试'}</strong>
+            <small>{effectiveExecutionMode === 'switching_to_step' ? '等待在途 Job 结束' : '调度模式'}</small>
+          </span>
+          <code>{effectiveExecutionMode}</code>
+        </header>
+      ) : null}
+      {showStepControls && effectiveExecutionMode === 'step' && stepState?.candidates.length ? (
         <label className="task-step-inline-candidate">
           <span>下一步节点</span>
           <select
@@ -1228,15 +1231,15 @@ export function TasksPage({
           </select>
         </label>
       ) : null}
-      {effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? (
+      {showStepControls && effectiveExecutionMode === 'step' && !stepStateQuery.isFetching && !stepState?.candidates.length ? (
         <small className="task-step-inline-note">当前没有可执行节点</small>
       ) : null}
       <div className="task-step-inline-actions">
-        {effectiveExecutionMode === 'normal' ? (
+        {showStepControls && effectiveExecutionMode === 'normal' ? (
           <Button icon={<Pause size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button>
         ) : null}
-        {effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={12} />} disabled>等待切换</Button> : null}
-        {effectiveExecutionMode === 'step' ? (
+        {showStepControls && effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={12} />} disabled>等待切换</Button> : null}
+        {showStepControls && effectiveExecutionMode === 'step' ? (
           <>
             <Button tone="primary" icon={<StepForward size={12} />} disabled={!connected || controlMutation.isPending || !stepState?.canStep || (stepState.requiresSelection && !selectedStepNodeUuid)} onClick={() => controlMutation.mutate({ type: 'step', targetNodeUuid: selectedStepNodeUuid || stepState?.candidates[0]?.nodeUuid })}>
               {stepState?.inFlightJobCount ? '当前节点运行中' : '执行下一步'}
