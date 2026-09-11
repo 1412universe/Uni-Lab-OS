@@ -270,6 +270,5 @@ unilabos/.ua/
 !/frontend/src/lib/
 !/frontend/src/lib/**
 
-# 本地验证数据库快照保留在工作区，报告和文本证据继续纳入版本控制。
-/docs/validation/**/*.db
-/docs/validation/**/*.db-*
+# 本地验证报告、运行快照、日志和截图不纳入版本控制。
+/docs/validation/

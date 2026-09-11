@@ -18,9 +18,6 @@ from tests.scheduler_core.test_failure_safety import outcome
 from unilabos.app.scheduler.dispatch import CallbackDispatcher
 from unilabos.workflow.service import WorkflowService
 
-BASE = Path(__file__).resolve().parents[2] / 'docs/validation/scheduler-composite'
-
-
 def make_workflow(runtime: Any, letter: str, profile: str) -> dict[str, Any]:
     """A 先条件后循环，B 先循环后条件；两者均包含范围与并行分支。"""
     name = f'composite-{profile}-{letter}'

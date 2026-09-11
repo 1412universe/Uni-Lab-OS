@@ -15,9 +15,6 @@ from unilabos.workflow.resource_lock_plan import (
     bind_station_resource_plan, compile_template_resource_plan, serialize_resource_plan,
 )
 
-BASE = Path(__file__).resolve().parents[2] / "docs/validation/workflow-region-parallel"
-
-
 def frozen_workflow(runtime: Any, source: dict[str, Any], region: str, name: str) -> dict[str, Any]:
     """编译作者图并绑定本次独立库存的范围身份。"""
     graph = source["graph"]
@@ -51,7 +48,9 @@ def frozen_workflow(runtime: Any, source: dict[str, Any], region: str, name: str
     }}
 
 
-def run_case(client: Client, output: Path, same_region: bool, reverse: bool) -> dict[str, Any]:
+def run_case(
+    client: Client, output: Path, sources: list[dict[str, Any]], same_region: bool, reverse: bool,
+) -> dict[str, Any]:
     """同时提交两个任务，独立记录 PLC 完成后才向调度器结算。"""
     name = f"{'same' if same_region else 'different'}-{'BA' if reverse else 'AB'}"
     directory = output / name
@@ -86,7 +85,6 @@ def run_case(client: Client, output: Path, same_region: bool, reverse: bool) -> 
 
     runtime.scheduler._dispatcher = CallbackDispatcher(dispatch)
     try:
-        sources = [json.loads((BASE / f"workflow-{letter}.json").read_text()) for letter in ("a", "b")]
         specs = [frozen_workflow(runtime, s, "region-a" if same_region or i == 0 else "region-b", f"{name}-{i}")
                  for i, s in enumerate(sources)]
         (directory / "frozen-workflows.json").write_text(json.dumps(specs, ensure_ascii=False, indent=2))
@@ -140,8 +138,27 @@ def main() -> None:
     """执行四种绑定/顺序组合；失败保留已采集证据，不强行清锁。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--endpoint", required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--workflows", type=Path, required=True,
+                        help="外部输入目录，包含 workflow-a.json 和 workflow-b.json")
+    parser.add_argument("--output", type=Path, required=True,
+                        help="新建的验证结果目录，须与输入目录分离")
     args = parser.parse_args()
+    args.workflows = args.workflows.expanduser().resolve()
+    args.output = args.output.expanduser().resolve()
+    if not args.workflows.is_dir():
+        parser.error(f"工作流输入目录不存在或不是目录：{args.workflows}")
+    if args.output.is_relative_to(args.workflows) or args.workflows.is_relative_to(args.output):
+        parser.error("输入与输出目录不能相同或相互包含")
+    sources: list[dict[str, Any]] = []
+    for letter in ("a", "b"):
+        path = args.workflows / f"workflow-{letter}.json"
+        try:
+            source = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            parser.error(f"无法读取工作流输入 {path}：{error}")
+        if not isinstance(source, dict):
+            parser.error(f"工作流输入必须是 JSON 对象：{path}")
+        sources.append(source)
     args.output.mkdir(parents=True, exist_ok=False)
     results: dict[str, Any] = {"status": "running", "endpoint": args.endpoint, "cases": []}
     client = Client(args.endpoint, timeout=5)
@@ -149,7 +166,7 @@ def main() -> None:
         client.connect()
         for same in (True, False):
             for reverse in (False, True):
-                case = run_case(client, args.output, same, reverse)
+                case = run_case(client, args.output, sources, same, reverse)
                 results["cases"].append(case)
                 print(f"{case['case']}: passed, peak={case['peak_in_flight']}", flush=True)
         results["status"] = "passed"

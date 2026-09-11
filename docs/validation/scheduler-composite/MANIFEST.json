@@ -1,6 +1,0 @@
-{
-  "git_commit": "213e5190f6e94d1a750ab90e0343ff369f540c48",
-  "tracked_worktree_diff_sha256": "6d1ca12a14dcdd3c24d7072d2f72131d29abda4393eae4fe4c7cfd370274cbb8",
-  "runner_sha256": "bc744630e2a6c93dab532fb328fb2b926565e0ecdacbb92fc1080c0679bd099e",
-  "note": "最终运行器新增inventory/priority配置；首批9配置在新增两配置前执行，其冻结定义与实际事件保存在plc-01。"
-}
