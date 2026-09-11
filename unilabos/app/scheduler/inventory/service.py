@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 import time
@@ -54,6 +55,8 @@ from unilabos.app.scheduler.inventory.store import (
 )
 from unilabos.app.scheduler.inventory.workflow_quantity import (
     WorkflowQuantityInventoryAuthority,
+    WorkflowQuantityReservationError,
+    subtract_quantity,
 )
 from unilabos.utils.tracing import add_event, inject_trace_context, span
 from unilabos.workflow.resource_lock_key import site_lock_key
@@ -1966,7 +1969,9 @@ class InventoryService:
                 "分装 PhysicalSettlement 回执与冻结目标闭集不一致",
             )
         if any(
-            receipt.actual_quantity < 0 or not receipt.quantity_unit.strip()
+            not math.isfinite(receipt.actual_quantity)
+            or receipt.actual_quantity < 0
+            or not receipt.quantity_unit.strip()
             for receipt in receipts
         ):
             raise StationResourceError(
@@ -2044,11 +2049,13 @@ class InventoryService:
                 raise StationResourceError(
                     "aliquot_unit_mismatch", "分装目标回执单位与来源内容物不一致"
                 )
-            total = sum(float(receipt.actual_quantity) for receipt in receipts)
-            if float(source["quantity"]) + 1e-9 < total:
+            total = math.fsum(float(receipt.actual_quantity) for receipt in receipts)
+            try:
+                source_after = subtract_quantity(float(source["quantity"]), total)
+            except WorkflowQuantityReservationError as error:
                 raise StationResourceError(
                     "aliquot_source_insufficient", "分装来源内容物余量不足"
-                )
+                ) from error
             placeholders = ",".join("?" for _ in targets)
             existing_materials = conn.execute(
                 f"SELECT uuid FROM material WHERE uuid IN ({placeholders}) "
@@ -2069,7 +2076,6 @@ class InventoryService:
                 raise StationResourceError(
                     "aliquot_target_not_empty", "一个或多个分装目标容器已有内容物"
                 )
-            source_after = float(source["quantity"]) - total
             source_revision = int(source["revision"]) + 1
             changed = conn.execute(
                 "UPDATE current_substance SET quantity=?,revision=?,update_time=?,observed_at=? "

@@ -7,6 +7,7 @@ import hmac
 import json
 import re
 from typing import Annotated, Any, Dict, List, Literal, Optional
+from uuid import UUID
 
 from fastapi import (
     APIRouter,
@@ -831,6 +832,22 @@ class UncertainJobResolutionRequest(_StrictModel):
     resolution: str
     reason: str
     device_command_id: Optional[str] = None
+
+
+class QuantityConsumptionCorrection(_StrictModel):
+    """操作员核对后的单个库存实例实际用量。"""
+
+    inventory_type: Literal["reagent", "current_substance"]
+    inventory_uuid: UUID
+    actual_quantity: float = Field(ge=0, allow_inf_nan=False)
+    quantity_unit: str = Field(min_length=1)
+
+
+class QuantityReconciliationRequest(_StrictModel):
+    """更正请求不授权重新派发设备，只允许结算已有成功结果。"""
+
+    consumptions: List[QuantityConsumptionCorrection] = Field(min_length=1, max_length=500)
+    reason: str = Field(min_length=1)
 
 
 class FailedMaterialTransferSettlementRequest(_StrictModel):
@@ -1982,6 +1999,19 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             result,
             status=202 if result["pending_edge_confirmation"] else 200,
         )
+
+    @router.post("/workflow-node-jobs/{job_uuid}/reconcile-quantity")
+    def reconcile_job_quantity(
+        job_uuid: str,
+        body: QuantityReconciliationRequest,
+    ) -> JSONResponse:
+        """核对实际用量，完成待结算库存并重放已提交的设备结果。"""
+
+        return _success(service.reconcile_job_quantity(
+            job_uuid,
+            consumptions=[item.model_dump(mode="json") for item in body.consumptions],
+            reason=body.reason,
+        ))
 
     @router.post("/workflow-node-jobs/{job_uuid}/settle-material-transfer")
     def settle_failed_material_transfer(

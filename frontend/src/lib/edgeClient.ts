@@ -1347,6 +1347,14 @@ export interface ReagentDispenseResult {
   replayed: boolean
 }
 
+/** 只有服务端明确拒绝的命令可以修改后作为新命令提交；网络错误不证明未执行。 */
+export class InventoryCommandRejectedError extends EdgeApiError {
+  constructor(message: string, code?: string) {
+    super(message, { code })
+    this.name = 'InventoryCommandRejectedError'
+  }
+}
+
 /**
  * 把一瓶源试剂原子分装到若干空容器。
  * 走库存命令入口，`commandId` 由调用方生成并在重试时复用，服务端按它幂等重放。
@@ -1384,12 +1392,23 @@ export async function dispenseReagent(payload: {
       reason: payload.reason || '分装',
     },
   })
-  if (response?.status !== 'completed') {
-    throw new Error(String(response?.error || response?.error_code || '分装被拒绝'))
+  if (response.command_id !== payload.commandId) throw new Error('分装响应与原请求不匹配，请核对原请求结果')
+  if (response.status === 'rejected') {
+    throw new InventoryCommandRejectedError(String(response.error || response.error_code || '分装被拒绝'), String(response.error_code || ''))
   }
+  if (response.status !== 'completed') throw new Error('分装结果尚未确认，请核对原请求结果')
   const result = (response.result || {}) as RawRecord
   const source = (result.source || {}) as RawRecord
   const targets = Array.isArray(result.targets) ? (result.targets as RawRecord[]) : []
+  if (source.reagent_uuid !== payload.sourceReagentUuid || !source.material_uuid
+    || !Number.isFinite(source.quantity) || source.quantity < 0 || !Number.isInteger(source.revision)
+    || source.quantity_unit !== payload.quantityUnit || targets.length !== payload.targets.length
+    || new Set(targets.map((target) => target.material_uuid)).size !== targets.length
+    || payload.targets.some((requested) => !targets.some((target) => target.material_uuid === requested.materialUuid
+      && target.reagent_uuid && target.quantity === requested.quantity && target.quantity_unit === payload.quantityUnit
+      && Number.isInteger(target.revision)))) {
+    throw new Error('分装响应缺少原请求的完整结果，请核对原请求结果')
+  }
   return {
     source: { reagentUuid: String(source.reagent_uuid || ''), materialUuid: String(source.material_uuid || ''), quantity: Number(source.quantity || 0), quantityUnit: String(source.quantity_unit || ''), revision: Number(source.revision || 0) },
     targets: targets.map((item) => ({ materialUuid: String(item.material_uuid || ''), reagentUuid: String(item.reagent_uuid || ''), quantity: Number(item.quantity || 0), quantityUnit: String(item.quantity_unit || ''), revision: Number(item.revision || 0) })),

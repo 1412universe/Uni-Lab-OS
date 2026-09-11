@@ -11,8 +11,10 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from collections.abc import Mapping, Sequence
-from typing import Any
+from collections.abc import Callable, Mapping, Sequence
+from functools import wraps
+from threading import RLock
+from typing import Any, TypeVar
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from unilabos.app.scheduler.inventory.store import InventoryStore
@@ -89,6 +91,20 @@ def _quantity_equal(left: float, right: float) -> bool:
     return abs(left - right) <= tolerance
 
 
+_Result = TypeVar("_Result")
+
+
+def _serialized_protocol(method: Callable[..., _Result]) -> Callable[..., _Result]:
+    """串行执行同一协调器的跨库协议，禁止更正与旧结果争用同一消费事件。"""
+
+    @wraps(method)
+    def serialized(self: "WorkflowQuantityInventory", *args: Any, **kwargs: Any) -> _Result:
+        with self._settlement_lock:
+            return method(self, *args, **kwargs)
+
+    return serialized
+
+
 class WorkflowQuantityInventory:
     """隐藏工作流库与库存库之间的数量型库存协议。
 
@@ -108,6 +124,7 @@ class WorkflowQuantityInventory:
         if not isinstance(inventory_store, InventoryStore):
             raise TypeError("数量型工作流库存必须复用调度器的 InventoryStore")
         self._workflow_store = workflow_store
+        self._settlement_lock = RLock()
         self._authority = WorkflowQuantityInventoryAuthority(
             inventory_store,
             edge_id=str(getattr(inventory_service, "edge_id", "edge-default")),
@@ -376,7 +393,7 @@ class WorkflowQuantityInventory:
                 raise StoreConflict(f"库存需求 {requirement_key} 没有运行时绑定")
             if not bool(requirement.get("allow_split")) and len(selected) != 1:
                 raise StoreConflict(f"库存需求 {requirement_key} 不允许拆分绑定")
-            total = sum(float(binding["reserved_quantity"]) for binding in selected)
+            total = math.fsum(float(binding["reserved_quantity"]) for binding in selected)
             required = float(requirement["required_quantity"])
             if not _quantity_equal(total, required):
                 raise StoreConflict(
@@ -423,6 +440,7 @@ class WorkflowQuantityInventory:
                 )
         return allocations
 
+    @_serialized_protocol
     def consume_successful_job(
         self,
         *,
@@ -441,6 +459,7 @@ class WorkflowQuantityInventory:
         normalized_task = _uuid(task_uuid, field="workflow_task_uuid")
         normalized_job = _uuid(job_uuid, field="workflow_node_job_uuid")
         operation_key = f"consume:{normalized_job}"
+        rejected_error: StoreConflict | None = None
         with self._workflow_store.transaction() as connection:
             rows = connection.execute(
                 """
@@ -455,46 +474,80 @@ class WorkflowQuantityInventory:
                 return self._authority.list_job_consumptions(normalized_job)
             if any(row["status"] != "reserved" for row in allocations):
                 raise StoreConflict("工作流库存分配已被释放或部分结算")
-            audit_context = self._job_audit_context(
-                connection,
-                task_uuid=normalized_task,
-                job_uuid=normalized_job,
-            )
-            records = self._build_consumption_records(
-                allocations,
-                consumptions,
-                audit_context=audit_context,
-            )
-            if not allocations and consumptions:
-                raise StoreConflict("作业上报了未在执行计划中预留的库存消耗")
-            if not records:
-                return []
-            now = utc_now()
-            connection.execute(
-                """
-                INSERT INTO workflow_inventory_saga(
-                    workflow_task_uuid,status,operation_key,payload,last_error,
-                    attempt,update_time
-                ) VALUES (?, 'consume_pending', ?, ?, NULL, 1, ?)
-                ON CONFLICT(workflow_task_uuid) DO UPDATE SET
-                    status='consume_pending', operation_key=excluded.operation_key,
-                    payload=excluded.payload, last_error=NULL,
-                    attempt=workflow_inventory_saga.attempt + 1,
-                    update_time=excluded.update_time
-                """,
-                (normalized_task, operation_key, _json({"records": records}), now),
-            )
+            pending = connection.execute(
+                "SELECT operation_key,payload,last_error FROM workflow_inventory_saga "
+                "WHERE workflow_task_uuid=? AND status='consume_pending'",
+                (normalized_task,),
+            ).fetchone()
+            if pending is not None:
+                if str(pending["operation_key"]) != operation_key:
+                    raise StoreConflict("任务存在待对账的库存消费，不能结算其他作业")
+                # Edge 结果不可变；普通重放始终使用首次持久化或人工对账后的记录。
+                records = self._pending_records(
+                    pending["payload"], task_uuid=normalized_task, job_uuid=normalized_job
+                )
+                if _load(pending["payload"], {}).get("needs_correction"):
+                    rejected_error = StoreConflict(
+                        str(pending["last_error"] or "库存消费上报无效，需人工更正")
+                    )
+            else:
+                audit_context = self._job_audit_context(
+                    connection,
+                    task_uuid=normalized_task,
+                    job_uuid=normalized_job,
+                )
+                try:
+                    records = self._build_consumption_records(
+                        allocations, consumptions, audit_context=audit_context,
+                    )
+                except StoreConflict as error:
+                    if not allocations:
+                        raise
+                    # 无效回执仍可能对应真实耗用，冻结预留与原始证据，不能自动按计划扣量。
+                    records = self._build_consumption_records(
+                        allocations, [], audit_context=audit_context,
+                    )
+                    rejected_error = error
+                if not allocations and consumptions:
+                    raise StoreConflict("作业上报了未在执行计划中预留的库存消耗")
+                if not records:
+                    return []
+                now = utc_now()
+                payload: dict[str, Any] = {"records": records}
+                if rejected_error is not None:
+                    payload.update({
+                        "needs_correction": True,
+                        "rejected_consumptions": list(consumptions),
+                    })
+                connection.execute(
+                    """
+                    INSERT INTO workflow_inventory_saga(
+                        workflow_task_uuid,status,operation_key,payload,last_error,
+                        attempt,update_time
+                    ) VALUES (?, 'consume_pending', ?, ?, ?, 1, ?)
+                    ON CONFLICT(workflow_task_uuid) DO UPDATE SET
+                        status='consume_pending', operation_key=excluded.operation_key,
+                        payload=excluded.payload, last_error=excluded.last_error,
+                        attempt=workflow_inventory_saga.attempt + 1,
+                        update_time=excluded.update_time
+                    """,
+                    (normalized_task, operation_key, _json(payload),
+                     str(rejected_error) if rejected_error is not None else None, now),
+                )
+        if rejected_error is not None:
+            raise rejected_error
         return self._apply_pending_consumption(
             task_uuid=normalized_task,
             operation_key=operation_key,
             records=records,
         )
 
-    def recover_pending(self) -> None:
+    @_serialized_protocol
+    def recover_pending(self) -> dict[str, str]:
         """重放未收敛消费/释放并清理任务创建崩溃残留。
 
-        参数与返回均为空。稳定事件重放不会重复扣减；库存已预留但 Task 未落库时
-        执行补偿释放，库存已提交但工作流投影未提交时只补齐工作流状态。
+        返回本轮需要对账的任务及原因。单任务的确定性业务错误保留预留和消费意图，
+        不阻止其他任务恢复；连接、磁盘等基础设施错误仍向上传播。
         """
 
         def task_exists(task_uuid: str) -> bool:
@@ -510,33 +563,221 @@ class WorkflowQuantityInventory:
         with self._workflow_store.transaction() as connection:
             rows = connection.execute(
                 """
-                SELECT workflow_task_uuid,operation_key,payload
+                SELECT workflow_task_uuid,operation_key,payload,last_error
                 FROM workflow_inventory_saga
                 WHERE status IN ('consume_pending','release_pending')
                 ORDER BY update_time, workflow_task_uuid
                 """
             ).fetchall()
+        failures: dict[str, str] = {}
         for row in rows:
+            task_uuid = str(row["workflow_task_uuid"])
             operation_key = str(row["operation_key"])
             payload = _load(row["payload"], {})
-            if operation_key.startswith("release:"):
-                reason = (
-                    str(payload.get("reason") or "workflow_terminal")
-                    if isinstance(payload, Mapping)
-                    else "workflow_terminal"
+            try:
+                if operation_key.startswith("release:"):
+                    reason = (
+                        str(payload.get("reason") or "workflow_terminal")
+                        if isinstance(payload, Mapping)
+                        else "workflow_terminal"
+                    )
+                    self.release_task(task_uuid, reason=reason)
+                    continue
+                if not operation_key.startswith("consume:"):
+                    raise StoreConflict("库存消费 Saga 操作身份损坏")
+                if isinstance(payload, Mapping) and payload.get("needs_correction"):
+                    raise StoreConflict(str(row["last_error"] or "库存消费上报无效，需人工更正"))
+                self._apply_pending_consumption(
+                    task_uuid=task_uuid,
+                    operation_key=operation_key,
+                    records=self._pending_records(
+                        payload, task_uuid=task_uuid,
+                        job_uuid=operation_key.removeprefix("consume:"),
+                    ),
                 )
-                self.release_task(str(row["workflow_task_uuid"]), reason=reason)
-                continue
-            records = payload.get("records") if isinstance(payload, Mapping) else None
-            if not isinstance(records, list):
-                raise StoreConflict("库存消费 Saga 载荷损坏")
-            self._apply_pending_consumption(
-                task_uuid=str(row["workflow_task_uuid"]),
-                operation_key=operation_key,
-                records=[
-                    dict(record) for record in records if isinstance(record, Mapping)
-                ],
+            except (WorkflowQuantityReservationError, StoreConflict, sqlite3.IntegrityError) as error:
+                failures[task_uuid] = str(error)
+                with self._workflow_store.transaction() as connection:
+                    connection.execute(
+                        "UPDATE workflow_inventory_saga SET last_error=?,update_time=? "
+                        "WHERE workflow_task_uuid=? AND operation_key=?",
+                        (str(error), utc_now(), task_uuid, operation_key),
+                    )
+        return failures
+
+    @staticmethod
+    def _pending_records(
+        payload: Any, *, task_uuid: str, job_uuid: str
+    ) -> list[dict[str, Any]]:
+        """严格读取消费意图，损坏项不能被过滤成空消费并误释放预留。"""
+
+        loaded = _load(payload, {})
+        records = loaded.get("records") if isinstance(loaded, Mapping) else None
+        if not isinstance(records, list) or not records or any(
+            not isinstance(record, Mapping) for record in records
+        ):
+            raise StoreConflict("库存消费 Saga 载荷损坏")
+        required = {
+            "uuid", "event_uuid", "workflow_task_uuid", "workflow_node_job_uuid", "inventory_type",
+            "inventory_uuid", "material_uuid", "quantity_unit", "reserved_quantity",
+            "planned_quantity", "actual_quantity", "reported_quantity_unit",
+            "workflow_node_uuid", "workflow_name", "node_name",
+        }
+        seen: set[tuple[str, str]] = set()
+        for record in records:
+            if (
+                not required.issubset(record)
+                or record["workflow_task_uuid"] != task_uuid
+                or record["workflow_node_job_uuid"] != job_uuid
+                or not isinstance(record["inventory_type"], str)
+                or record["inventory_type"] not in {"reagent", "current_substance"}
+            ):
+                raise StoreConflict("库存消费 Saga 载荷身份损坏")
+            inventory_uuid = _uuid(record["inventory_uuid"], field="inventory_uuid")
+            _uuid(record["uuid"], field="allocation_uuid")
+            _uuid(record["event_uuid"], field="event_uuid")
+            _positive(record["reserved_quantity"], field="reserved_quantity")
+            _positive(record["planned_quantity"], field="planned_quantity")
+            _non_negative(record["actual_quantity"], field="actual_quantity")
+            if not str(record["quantity_unit"] or "").strip() or not str(
+                record["reported_quantity_unit"] or ""
+            ).strip():
+                raise StoreConflict("库存消费 Saga 缺少数量单位")
+            identity = (record["inventory_type"], inventory_uuid)
+            if identity in seen:
+                raise StoreConflict("库存消费 Saga 包含重复实例")
+            seen.add(identity)
+        return [dict(record) for record in records]
+
+    @_serialized_protocol
+    def pending_consumption_reconciliations(self) -> list[dict[str, str]]:
+        """列出仍持有数量预留的待结算作业，供运行时冻结和人工对账。"""
+
+        with self._workflow_store.transaction() as connection:
+            rows = connection.execute(
+                "SELECT workflow_task_uuid,operation_key,last_error "
+                "FROM workflow_inventory_saga WHERE status='consume_pending' "
+                "ORDER BY update_time,workflow_task_uuid"
+            ).fetchall()
+        return [
+            {
+                "task_uuid": str(row["workflow_task_uuid"]),
+                "job_uuid": str(row["operation_key"]).removeprefix("consume:"),
+                "reason": str(row["last_error"] or "工作流库存消费尚未结算"),
+            }
+            for row in rows
+        ]
+
+    @_serialized_protocol
+    def reconcile_consumption(
+        self,
+        *,
+        task_uuid: str,
+        job_uuid: str,
+        consumptions: Sequence[Mapping[str, Any]],
+        reason: str,
+    ) -> list[dict[str, Any]]:
+        """按人工原因更正尚未落账的消费；普通 Edge 重放不能更改冻结数量。
+
+        调用方负责验证操作权限和设备停止证据。本方法只更正同 Job 的待消费意图，
+        保留未更正实例的原值；同一更正重试幂等，已落账后不能改成其他数量。
+        """
+
+        normalized_task = _uuid(task_uuid, field="workflow_task_uuid")
+        normalized_job = _uuid(job_uuid, field="workflow_node_job_uuid")
+        if not isinstance(reason, str) or not reason.strip():
+            raise StoreConflict("库存消费对账必须填写原因")
+        reason = reason.strip()
+        operation_key = f"consume:{normalized_job}"
+        with self._workflow_store.transaction() as connection:
+            pending = connection.execute(
+                "SELECT status,payload FROM workflow_inventory_saga WHERE workflow_task_uuid=? "
+                "AND operation_key=?",
+                (normalized_task, operation_key),
+            ).fetchone()
+            if pending is None:
+                raise StoreConflict("作业没有待对账的库存消费")
+            payload = _load(pending["payload"], {})
+            previous = self._pending_records(
+                payload, task_uuid=normalized_task, job_uuid=normalized_job
             )
+            corrections = {
+                (str(item.get("inventory_type") or "").strip().lower(),
+                 _uuid(item.get("inventory_uuid"), field="inventory_uuid"))
+                for item in consumptions if isinstance(item, Mapping)
+            }
+            if payload.get("needs_correction") and corrections != {
+                (record["inventory_type"], record["inventory_uuid"]) for record in previous
+            }:
+                raise StoreConflict("无效消费回执的对账必须明确全部已预留实例的实际用量")
+            merged = [
+                {
+                    "inventory_type": record["inventory_type"],
+                    "inventory_uuid": record["inventory_uuid"],
+                    "actual_quantity": record["actual_quantity"],
+                    "quantity_unit": record["reported_quantity_unit"],
+                }
+                for record in previous
+                if (record["inventory_type"], record["inventory_uuid"]) not in corrections
+            ]
+            records = self._build_consumption_records(
+                previous, [*merged, *consumptions], audit_context={}
+            )
+            request = {"consumptions": [dict(item) for item in consumptions], "reason": reason}
+            for record, old in zip(records, previous):
+                if (record["inventory_type"], record["inventory_uuid"]) not in corrections:
+                    record["actual_quantity_reported"] = old.get("actual_quantity_reported", True)
+            history = payload.get("reconciliations", [])
+            if not isinstance(history, list):
+                raise StoreConflict("库存消费对账历史损坏")
+            replaying = bool(
+                history and isinstance(history[-1], Mapping)
+                and history[-1].get("reason") == reason
+                and all(
+                    (old.get("reconciliation") or {}).get("request") == request
+                    for old in previous
+                )
+                and all(
+                    all(record[key] == old.get(key, True) for key in (
+                        "actual_quantity", "reported_quantity_unit", "actual_quantity_reported"
+                    ))
+                    for record, old in zip(records, previous)
+                )
+            )
+            committed = self._authority.list_job_consumptions(normalized_job)
+            if committed and (not replaying or any(
+                ((item.get("meta_data") or {}).get("reconciliation") or {}).get("request") != request
+                for item in committed
+            )):
+                raise StoreConflict("作业消费已落账，请重放结算，不能更改已提交数量")
+            if pending["status"] != "consume_pending":
+                if committed and replaying:
+                    return committed
+                raise StoreConflict("作业没有待对账的库存消费")
+            if replaying:
+                records = previous
+            else:
+                now = utc_now()
+                for record, old in zip(records, previous):
+                    record["reconciliation"] = {
+                        "request": request,
+                        "reason": reason,
+                        "at": now,
+                        "previous_actual_quantity": old["actual_quantity"],
+                        "previous_reported_quantity_unit": old["reported_quantity_unit"],
+                    }
+                connection.execute(
+                    "UPDATE workflow_inventory_saga SET payload=?,last_error=NULL,"
+                    "attempt=attempt+1,update_time=? WHERE workflow_task_uuid=? AND operation_key=?",
+                    (_json({**payload, "needs_correction": False,
+                            "records": records, "reconciliations": [*history, {
+                        "reason": reason, "at": now, "previous_records": previous,
+                        "corrected_records": records,
+                    }]}), now, normalized_task, operation_key),
+                )
+        return self._apply_pending_consumption(
+            task_uuid=normalized_task, operation_key=operation_key, records=records
+        )
 
     def discard_uncommitted_task(self, task_uuid: str) -> None:
         """补偿任务创建事务未提交前已经写入库存权威的数量预留。
@@ -552,6 +793,7 @@ class WorkflowQuantityInventory:
             reason="workflow_task_creation_rolled_back",
         )
 
+    @_serialized_protocol
     def release_task(self, task_uuid: str, *, reason: str) -> None:
         """先释放库存权威预留，再把工作流分配投影收敛为 released。
 
@@ -562,6 +804,11 @@ class WorkflowQuantityInventory:
 
         normalized_task = _uuid(task_uuid, field="workflow_task_uuid")
         with self._workflow_store.transaction() as connection:
+            if connection.execute(
+                "SELECT 1 FROM workflow_inventory_saga WHERE workflow_task_uuid=? "
+                "AND status='consume_pending'", (normalized_task,)
+            ).fetchone() is not None:
+                raise StoreConflict("库存消费尚未结算，必须完成对账后才能释放预留")
             pending = connection.execute(
                 "SELECT COUNT(*) FROM workflow_inventory_allocation "
                 "WHERE workflow_task_uuid=? AND status='reserved'",
@@ -702,6 +949,7 @@ class WorkflowQuantityInventory:
                     "event_uuid": event_uuid,
                     "planned_quantity": float(allocation["reserved_quantity"]),
                     "actual_quantity": actual_quantity,
+                    "actual_quantity_reported": actual is not None,
                     "reported_quantity_unit": (
                         str(actual["reported_quantity_unit"])
                         if actual is not None

@@ -18,10 +18,28 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from unilabos.app.scheduler.inventory.store import InventoryStore
+from unilabos.app.scheduler.inventory.settled_quantity import aliquot_consumption_fact
 
 
 class WorkflowQuantityReservationError(ValueError):
     """表示工作流数量预留、释放或消费违反库存权威约束。"""
+
+
+def subtract_quantity(available: float, consumed: float) -> float:
+    """扣减有限非负数量，仅把浮点舍入造成的微小负余量归零。
+
+    容差随两个操作数的浮点精度变化，避免固定绝对容差在 kg 与 µL 间
+    放大真实超量。调用方仍须在同一库存事务内验证并写入返回余量。
+    """
+
+    available, consumed = float(available), float(consumed)
+    if any(not math.isfinite(value) or value < 0 for value in (available, consumed)):
+        raise WorkflowQuantityReservationError("库存数量必须是有限非负数")
+    difference = available - consumed
+    tolerance = 8 * max(math.ulp(available), math.ulp(consumed))
+    if difference < -tolerance:
+        raise WorkflowQuantityReservationError("库存当前余量不足，不能提交扣减")
+    return max(0.0, difference)
 
 
 def _json(value: Any) -> str:
@@ -130,6 +148,36 @@ def _workflow_quantity_allocations(raw: Any) -> list[dict[str, Any]]:
     return [dict(item) for item in allocations]
 
 
+def active_workflow_reserved_quantities(
+    connection: sqlite3.Connection,
+    *,
+    excluding_task_uuid: str = "",
+) -> dict[tuple[str, str], float]:
+    """扫描一次活动预留，按实例类型和身份批量汇总数量。
+
+    每个键的数量使用实例单位；损坏的本协议载荷关闭式失败，不把它当作零预留。
+    """
+
+    rows = connection.execute(
+        "SELECT workflow_id,amounts_json FROM inventory_reservation "
+        "WHERE status='active'"
+    ).fetchall()
+    quantities: dict[tuple[str, str], list[float]] = {}
+    for row in rows:
+        if excluding_task_uuid and str(row["workflow_id"]) == excluding_task_uuid:
+            continue
+        for allocation in _workflow_quantity_allocations(row["amounts_json"]):
+            try:
+                quantity = float(allocation["reserved_quantity"])
+                identity = (str(allocation["inventory_type"]), str(allocation["inventory_uuid"]))
+            except (KeyError, TypeError, ValueError) as error:
+                raise WorkflowQuantityReservationError("库存数量预留载荷损坏") from error
+            if not math.isfinite(quantity) or quantity <= 0:
+                raise WorkflowQuantityReservationError("库存数量预留载荷损坏")
+            quantities.setdefault(identity, []).append(quantity)
+    return {identity: math.fsum(values) for identity, values in quantities.items()}
+
+
 def active_workflow_reserved_quantity(
     connection: sqlite3.Connection,
     *,
@@ -137,27 +185,11 @@ def active_workflow_reserved_quantity(
     inventory_uuid: str,
     excluding_task_uuid: str = "",
 ) -> float:
-    """在库存事务内汇总一个实例的活动工作流预留。
+    """返回单个实例的活动预留；批量展示应复用一次批量汇总结果。"""
 
-    参数：库存连接、实例类型/身份及可选排除的任务身份。返回：与库存实例同单位的
-    活动预留总量。异常：预留载荷损坏时关闭式失败，禁止继续修改库存。
-    """
-
-    rows = connection.execute(
-        "SELECT workflow_id,amounts_json FROM inventory_reservation "
-        "WHERE status='active'"
-    ).fetchall()
-    total = 0.0
-    for row in rows:
-        if excluding_task_uuid and str(row["workflow_id"]) == excluding_task_uuid:
-            continue
-        for allocation in _workflow_quantity_allocations(row["amounts_json"]):
-            if (
-                str(allocation.get("inventory_type")) == inventory_type
-                and str(allocation.get("inventory_uuid")) == inventory_uuid
-            ):
-                total += float(allocation["reserved_quantity"])
-    return total
+    return active_workflow_reserved_quantities(
+        connection, excluding_task_uuid=excluding_task_uuid
+    ).get((inventory_type, inventory_uuid), 0.0)
 
 
 def assert_workflow_quantity_mutation_allowed(
@@ -424,7 +456,7 @@ class WorkflowQuantityInventoryAuthority:
     ) -> None:
         """在同一库存快照内按实例聚合并验证整组可用数量。"""
 
-        requested: dict[tuple[str, str], float] = {}
+        requested: dict[tuple[str, str], list[float]] = {}
         for allocation in allocations:
             inventory_type = str(allocation["inventory_type"])
             inventory_uuid = str(allocation["inventory_uuid"])
@@ -441,22 +473,18 @@ class WorkflowQuantityInventoryAuthority:
                     "库存实例单位与工作流绑定单位不一致"
                 )
             identity = (inventory_type, inventory_uuid)
-            requested[identity] = requested.get(identity, 0.0) + float(
-                allocation["reserved_quantity"]
-            )
-        for (inventory_type, inventory_uuid), quantity in requested.items():
+            requested.setdefault(identity, []).append(float(allocation["reserved_quantity"]))
+        reserved_by_identity = active_workflow_reserved_quantities(
+            connection, excluding_task_uuid=excluding_task_uuid
+        )
+        for (inventory_type, inventory_uuid), quantities in requested.items():
             current = self._tx_content(
                 connection,
                 inventory_type=inventory_type,
                 inventory_uuid=inventory_uuid,
             )
-            reserved = active_workflow_reserved_quantity(
-                connection,
-                inventory_type=inventory_type,
-                inventory_uuid=inventory_uuid,
-                excluding_task_uuid=excluding_task_uuid,
-            )
-            if float(current["quantity"]) - reserved + 1e-9 < quantity:
+            reserved = reserved_by_identity.get((inventory_type, inventory_uuid), 0.0)
+            if float(current["quantity"]) - reserved + 1e-9 < math.fsum(quantities):
                 raise WorkflowQuantityReservationError(
                     "库存实例可用数量不足，无法完成整任务预留"
                 )
@@ -703,25 +731,64 @@ class WorkflowQuantityInventoryAuthority:
             concentration_value=current["concentration_value"],
             density_g_per_ml=current["density_g_per_ml"],
         )
+        try:
+            physical_fact = aliquot_consumption_fact(connection, record)
+        except ValueError as error:
+            raise WorkflowQuantityReservationError(str(error)) from error
+        if physical_fact is not None:
+            physical_conversion = convert_quantity(
+                float(physical_fact["actual_quantity"]),
+                str(physical_fact["quantity_unit"]),
+                live_unit,
+                inventory_type=inventory_type,
+                physical_state=current["physical_state"],
+                concentration_value=current["concentration_value"],
+                density_g_per_ml=current["density_g_per_ml"],
+            )
+            if physical_conversion is None:
+                raise WorkflowQuantityReservationError("分装消费事实单位无法安全换算，需人工对账")
+            if record.get("actual_quantity_reported", True):
+                if actual_conversion is None or not math.isclose(
+                    actual_conversion[0], physical_conversion[0], rel_tol=1e-9, abs_tol=1e-9
+                ):
+                    raise WorkflowQuantityReservationError("实际上报消耗与已提交分装事实不一致，需人工对账")
+            else:
+                reported_unit = str(physical_fact["quantity_unit"])
+            actual_conversion = physical_conversion
+        if planned_conversion is None or actual_conversion is None:
+            raise WorkflowQuantityReservationError(
+                "库存消费单位无法安全换算，需人工对账："
+                f"计划 {planned_unit}、实际上报 {reported_unit}、库存 {live_unit}"
+            )
+        planned_quantity = planned_conversion[0]
+        actual_quantity = actual_conversion[0]
+        overrun_quantity = 0.0
+        try:
+            subtract_quantity(planned_quantity, actual_quantity)
+        except WorkflowQuantityReservationError as error:
+            if physical_fact is None and not record.get("reconciliation"):
+                raise WorkflowQuantityReservationError("实际消耗量不能超过本作业的预留量") from error
+            # 已提交物理事实和明确人工核对的用量必须如实记账，不能要求伪造为计划值。
+            overrun_quantity = actual_quantity - planned_quantity
         balance_before = float(current["quantity"])
-        planned_quantity = float(record["planned_quantity"])
-        actual_quantity = float(record["actual_quantity"])
-        balance_after = balance_before
-        status = "unit_mismatch"
         revision = int(current["revision"])
-        if planned_conversion is not None and actual_conversion is not None:
-            planned_quantity = planned_conversion[0]
-            actual_quantity = actual_conversion[0]
-            if actual_quantity > planned_quantity + 1e-9:
-                raise WorkflowQuantityReservationError(
-                    "实际消耗量不能超过本作业的预留量"
+        if physical_fact is not None:
+            # 分装已原子扣减源瓶并增加目标瓶，本事件只确认数量预留的消费归属。
+            balance_before = float(physical_fact["balance_before"])
+            balance_after = float(physical_fact["balance_after"])
+        else:
+            balance_after = subtract_quantity(balance_before, actual_quantity)
+            if overrun_quantity:
+                reserved = active_workflow_reserved_quantity(
+                    connection, inventory_type=inventory_type, inventory_uuid=inventory_uuid
                 )
-            if balance_before + 1e-9 < actual_quantity:
-                raise WorkflowQuantityReservationError(
-                    "库存当前余量不足，不能提交作业成功结果"
-                )
-            balance_after = balance_before - actual_quantity
-            status = "consumed"
+                remaining_reserved = subtract_quantity(reserved, planned_quantity)
+                try:
+                    subtract_quantity(balance_after, remaining_reserved)
+                except WorkflowQuantityReservationError as error:
+                    raise WorkflowQuantityReservationError(
+                        "实际超耗会侵占其他作业的活动预留，需先完成库存对账"
+                    ) from error
             revision += 1
             table = "reagent" if inventory_type == "reagent" else "current_substance"
             changed = connection.execute(
@@ -750,18 +817,26 @@ class WorkflowQuantityInventoryAuthority:
             "quantity_unit": live_unit,
             "balance_before": balance_before,
             "balance_after": balance_after,
-            "status": status,
+            "status": "consumed",
             "display_name": str(current["display_name"] or ""),
             "container_barcode": str(current["container_barcode"] or ""),
             "workflow_name": str(record["workflow_name"] or ""),
             "node_name": str(record["node_name"] or ""),
         }
+        if physical_fact is not None:
+            consumption["physical_settlement_entry_uuid"] = physical_fact["entry_uuid"]
+        if overrun_quantity:
+            consumption["overrun_quantity"] = overrun_quantity
+            consumption["overrun_authority"] = (
+                "physical_settlement" if physical_fact is not None else "manual_reconciliation"
+            )
+        if record.get("reconciliation") is not None:
+            consumption["reconciliation"] = record["reconciliation"]
         if (
             actual_conversion is not None
             and reported_unit.casefold() != live_unit.casefold()
         ):
             consumption["quantity_conversion"] = actual_conversion[1]
-        event_action = "consume" if status == "consumed" else "adjust"
         InventoryStore.tx_append_inventory_event(
             connection,
             entry_uuid=str(record["event_uuid"]),
@@ -771,11 +846,11 @@ class WorkflowQuantityInventoryAuthority:
             aggregate_type=inventory_type,
             aggregate_id=inventory_uuid,
             aggregate_version=revision,
-            event_type=f"{inventory_type}.{event_action}",
+            event_type=f"{inventory_type}.consume",
             payload={
                 "changes": {
                     "result": {
-                        "quantity": balance_after,
+                        "quantity": float(current["quantity"]) if physical_fact is not None else balance_after,
                         "quantity_unit": live_unit,
                         "revision": revision,
                         "consumption": consumption,
@@ -789,7 +864,7 @@ class WorkflowQuantityInventoryAuthority:
             causation_id=operation_key,
             material_uuid=str(record["material_uuid"]),
             subject_type=inventory_type,
-            quantity_delta=balance_after - balance_before,
+            quantity_delta=0.0 if physical_fact is not None else balance_after - balance_before,
             quantity_unit=live_unit,
             revision=revision,
             workflow_task_uuid=task_uuid,
@@ -858,6 +933,14 @@ class WorkflowQuantityInventoryAuthority:
                     if payload.get("quantity_conversion") is not None
                     else {}
                 ),
+                **{
+                    key: payload[key]
+                    for key in (
+                        "physical_settlement_entry_uuid", "reconciliation",
+                        "overrun_quantity", "overrun_authority",
+                    )
+                    if key in payload
+                },
             },
             "display_name": str(payload.get("display_name") or ""),
             "container_barcode": str(payload.get("container_barcode") or ""),
@@ -869,7 +952,9 @@ class WorkflowQuantityInventoryAuthority:
 __all__ = [
     "WorkflowQuantityInventoryAuthority",
     "WorkflowQuantityReservationError",
+    "active_workflow_reserved_quantities",
     "active_workflow_reserved_quantity",
     "assert_workflow_quantity_mutation_allowed",
     "convert_quantity",
+    "subtract_quantity",
 ]
