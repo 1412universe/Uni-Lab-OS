@@ -263,7 +263,7 @@ Source: /installation.md
 
 | 路径 | 适合谁 | 得到什么 |
 | --- | --- | --- |
-| **一键安装包** | 首次体验、演示和不修改 OS 源码的用户 | 已打包的 Uni-Lab OS 运行环境和命令行；本页先提供 macOS Apple 芯片版安装步骤 |
+| **一键安装包** | 首次体验、演示和不修改 OS 源码的用户 | 已打包的 Uni-Lab OS 运行环境和命令行；本页提供 macOS Apple 芯片版和 Windows x64 版安装步骤 |
 | **Conda/Mamba + `unilabos-env` + 源码** | 需要创建设备包、开发驱动或修改 OS 的用户 | ROS/Python 依赖和可编辑的 OS 源码 |
 
 `unilabos-full` 等仿真和可视化环境不是默认安装路径。确实需要 Gazebo、RViz 或 MoveIt 时，再按[环境与运行配置](environment.md)选择。
@@ -272,7 +272,7 @@ Source: /installation.md
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | 本页一键安装包适用于 macOS 11.0 及以上、Apple 芯片（M 系列）；其他平台请按对应安装方式准备环境 |
+| 操作系统 | macOS 安装包适用于 macOS 11.0 及以上、Apple 芯片（M 系列）；Windows 安装包适用于 Windows x64（Intel/AMD 64 位）。请按操作系统和 CPU 架构选择对应安装包 |
 | Python | 安装路径会准备兼容的 Python 3.11 环境 |
 | 磁盘空间 | 至少 10 GB 可用空间 |
 | 网络 | 源码安装时能访问 Conda 软件源和 Git 仓库 |
