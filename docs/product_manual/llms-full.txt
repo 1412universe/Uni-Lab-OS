@@ -6694,10 +6694,12 @@ API 是 Uni-Lab OS 网页、Workbench 和自动化工具共用的产品能力入
 
 ## 入口
 
+当前演示环境可直接打开以下入口；部署到其他环境时，将示例地址替换为实际的 `<BACKEND_URL>`：
+
 | 入口 | 地址 |
 | --- | --- |
-| Swagger | `<BACKEND_URL>/api/docs` |
-| OpenAPI JSON | `<BACKEND_URL>/api/openapi.json` |
+| Swagger | [打开当前演示环境 Swagger UI](http://115.190.137.109:30183/api/docs) · `<BACKEND_URL>/api/docs` |
+| OpenAPI JSON | [查看当前演示环境 OpenAPI JSON](http://115.190.137.109:30183/api/openapi.json) · `<BACKEND_URL>/api/openapi.json` |
 | Uni-Lab OS 页面 | `<BACKEND_URL>/console/` |
 
 :::{warning}
