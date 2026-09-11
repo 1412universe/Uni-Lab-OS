@@ -41,7 +41,6 @@
 :maxdepth: 1
 
 overview
-console
 示例设备包 <demo-lab>
 ```
 

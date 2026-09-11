@@ -15,7 +15,6 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "index",
             "overview",
-            "console",
         ),
     ),
     (

@@ -8,7 +8,6 @@
 
 - [Uni-Lab OS 产品使用说明书](/index.md): 说明书入口、学习路线、能力状态标签和已部署产品链接。
 - [认识 Uni-Lab OS](/overview.md): 产品模型、适用角色、核心对象和当前部署边界。
-- [Uni-Lab OS 快速上手](/console.md): 浏览 Uni-Lab OS 页面，并了解各入口的当前功能和限制。
 
 ## 系统安装与配置
 
