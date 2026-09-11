@@ -274,6 +274,11 @@ class CompositeAuthoring:
             revision=revision,
             applied_source_hash=applied_source.get("source_hash"),
         )
+        published_uuid = _published_contract_uuid(
+            template_action.template,
+            workflow_uuid=source.workflow_uuid,
+            revision=revision,
+        )
         graph = {
             "workflow": _plain(workflow),
             "nodes": _sequence(snapshot.get("nodes"), "/child/nodes"),
@@ -323,6 +328,14 @@ class CompositeAuthoring:
             nested_invocations=nested_resource_scopes,
         )
         executor_requirements, executor_mapping = _snapshot_executor_requirements(graph)
+        if device_bindings is None and published_uuid is not None:
+            # 首次从 Python 构建调用时，绑定来自已发布子图中的固定设备。
+            # 即使没有固定设备也显式保存空映射，使后续发布可做兼容性核对。
+            device_bindings = {
+                executor_mapping[str(node["uuid"])]: str(node["material_uuid"])
+                for node in graph["nodes"]
+                if str(node["uuid"]) in executor_mapping
+            }
         if device_bindings is not None:
             if set(device_bindings) != set(executor_mapping.values()):
                 raise _CompositeFailure(
@@ -386,6 +399,10 @@ class CompositeAuthoring:
                 extension["composition_allow_transparent"]
             ),
         }
+        # 冷启动和纯 Python 导入没有可沿用的调用根。发布身份应来自已核对
+        # 来源、修订和源码摘要的目录模板，而不是依赖旧图恰好保留该字段。
+        if published_uuid is not None:
+            contract_pin["contract_uuid"] = published_uuid
         try:
             contract_compatibility = published_workflow_compatibility_projection(
                 template_action.template,
@@ -664,6 +681,32 @@ def _published_template(
     ):
         raise _CompositeFailure("composite_catalog_mismatch", "/catalog/contract")
     return action, _plain(extension)
+
+
+def _published_contract_uuid(
+    template: Mapping[str, Any],
+    *,
+    workflow_uuid: str,
+    revision: int,
+) -> str | None:
+    """读取同一发布版本的可信身份；保留没有显式发布目录的旧包兼容行为。"""
+    metadata = template.get("meta_data")
+    unilab = metadata.get("unilab") if isinstance(metadata, Mapping) else None
+    published = (
+        unilab.get("workflow_contract") if isinstance(unilab, Mapping) else None
+    )
+    if not isinstance(published, Mapping) or "contract_uuid" not in published:
+        return None
+    if (
+        published.get("workflow_uuid") != workflow_uuid
+        or published.get("workflow_revision") != revision
+    ):
+        raise _CompositeFailure("composite_catalog_mismatch", "/catalog/publication")
+    return _canonical_uuid(
+        published["contract_uuid"],
+        "composite_catalog_mismatch",
+        "/catalog/publication",
+    )
 
 
 def _normalize_arguments(
@@ -1270,6 +1313,10 @@ def _invocation_node(
                     "child_applied_source_hash",
                     "executor_requirements",
                 )
+            )
+            and (
+                "contract_uuid" not in composite
+                or base_composite.get("contract_uuid") == composite["contract_uuid"]
             )
         ):
             composite = _plain(base_composite)

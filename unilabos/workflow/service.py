@@ -1741,6 +1741,7 @@ class WorkflowService:
         已经创建的工作流任务使用各自冻结快照，不在此处读取或修改。
         """
 
+        contract = self._contract_for_composite_expansion(contract)
         updated: list[str] = []
         pending: list[dict[str, str]] = []
         source_dependents = set(
@@ -1965,6 +1966,32 @@ class WorkflowService:
                 return False
         return True
 
+    def _contract_for_composite_expansion(
+        self,
+        contract: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """为本次展开补充同修订的源码摘要，不修改不可变发布合同。
+
+        发布合同的 ``source_hash`` 是图摘要；Python 往返编译核对的是已应用
+        源码摘要。新增引用和发布后刷新必须使用相同补充规则，且不能把当前
+        新修订的源码摘要写到旧合同上。
+        """
+        result = deepcopy(dict(contract))
+        try:
+            snapshot = self._definition_store.get_published_workflow_snapshot(
+                str(contract["workflow_uuid"])
+            )
+        except (StoreNotFound, KeyError, TypeError, ValueError):
+            return result
+        applied = snapshot.get("applied_source")
+        if (
+            isinstance(applied, Mapping)
+            and applied.get("workflow_revision") == contract.get("workflow_revision")
+            and isinstance(applied.get("source_hash"), str)
+        ):
+            result["applied_source_hash"] = applied["source_hash"]
+        return result
+
     def insert_composite_workflow(
         self,
         workflow_uuid: str,
@@ -2023,24 +2050,7 @@ class WorkflowService:
                 raise WorkflowError("invalid_composite_child_type")
             if child.get("status") != "published":
                 raise WorkflowError("invalid_composite_child_status")
-            # 发布合同的 ``source_hash`` 是冻结图摘要，而组合节点合同 pin 需要
-            # 子工作流当前已应用源码摘要。两者不能混用；从同一 SQLite 视图读取
-            # 应用记录并把摘要仅注入本次展开，避免改写不可变发布合同表。
-            try:
-                child_snapshot = self._definition_store.get_published_workflow_snapshot(
-                    child_uuid
-                )
-            except (StoreNotFound, KeyError, TypeError, ValueError):
-                child_snapshot = None
-            applied_source = (
-                child_snapshot.get("applied_source")
-                if isinstance(child_snapshot, Mapping)
-                else None
-            )
-            if isinstance(applied_source, Mapping) and isinstance(
-                applied_source.get("source_hash"), str
-            ):
-                contract["applied_source_hash"] = applied_source["source_hash"]
+            contract = self._contract_for_composite_expansion(contract)
             requirements = contract["executor_requirements"]
             required_keys = {str(item["key"]) for item in requirements}
             if set(normalized_bindings) != required_keys:

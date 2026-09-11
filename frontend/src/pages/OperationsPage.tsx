@@ -642,7 +642,27 @@ export function OperationsPage({ materials: inputMaterials, connected, onNotify 
 
   async function publish(operation: WorkflowDefinition) {
     if (!connected) return
-    try { await publishWorkflow(operation.uuid, operation.revision); onNotify(`实验操作“${operation.name}”已发布`); await queryClient.invalidateQueries({ queryKey: ['experiment-operations'] }) }
+    try {
+      const result = await publishWorkflow(operation.uuid, operation.revision)
+      const refresh = result.dependent_refresh
+      const pending = Array.isArray(refresh?.pending) ? refresh.pending : []
+      const updated = Array.isArray(refresh?.updated_workflow_uuids) ? refresh.updated_workflow_uuids : []
+      let message = `实验操作“${operation.name}”已发布`
+      if (updated.length) message += `；${updated.length} 个父工作流已更新`
+      if (pending.length) {
+        message += `；${pending.length} 个父工作流未更新，请处理后再运行：`
+        message += pending.map((item: { workflow_uuid?: string; message?: string }) =>
+          `${item.workflow_uuid || '未知工作流'}（${item.message || '请查看工作流诊断'}）`,
+        ).join('；')
+      }
+      onNotify(message)
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['experiment-operations'] }),
+        queryClient.invalidateQueries({ queryKey: ['published-child-workflows'] }),
+        queryClient.invalidateQueries({ queryKey: ['workflow-graph'] }),
+        queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] }),
+      ])
+    }
     catch (error) { onNotify(`发布失败：${error instanceof Error ? error.message : '未知错误'}`) }
   }
 

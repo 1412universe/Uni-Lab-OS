@@ -43,6 +43,7 @@ vi.mock('../lib/edgeClient', async () => {
     createExperimentOperation: vi.fn(async () => ({ workflowUuid: 'parent-workflow', revision: 1 })),
     insertCompositeWorkflow: vi.fn(async () => ({ workflow: { revision: 2 } })),
     ensureWorkflowSequenceEdges: vi.fn(async () => undefined),
+    publishWorkflow: vi.fn(async () => ({})),
   }
 })
 
@@ -51,14 +52,42 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function renderPage() {
+function renderPage(onNotify = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
-      <OperationsPage materials={[]} connected onNotify={vi.fn()} />
+      <OperationsPage materials={[]} connected onNotify={onNotify} />
     </QueryClientProvider>,
   )
 }
+
+describe('实验操作发布结果', () => {
+  it.each([false, true])('分别提示子流程发布与父流程更新结果：pending=%s', async (pending) => {
+    const client = await import('../lib/edgeClient')
+    vi.mocked(client.loadExperimentOperations).mockResolvedValueOnce([{
+      uuid: 'child-publication', name: '连续发布测试', revision: 2, status: 'source',
+      description: '', nodeCount: 3, tags: [], inputContract: [], outputContract: [],
+      workflowType: 'experiment_operation',
+    }])
+    vi.mocked(client.publishWorkflow).mockResolvedValueOnce({ dependent_refresh: {
+      updated_workflow_uuids: pending ? [] : ['parent-publication'],
+      pending: pending ? [{ workflow_uuid: 'parent-publication', message: '新增了必填参数' }] : [],
+    } })
+    const notify = vi.fn()
+    renderPage(notify)
+    fireEvent.click(await screen.findByRole('button', { name: '发布 连续发布测试 child-publication' }))
+    await waitFor(() => expect(notify).toHaveBeenCalled())
+    const message = String(notify.mock.calls[0][0])
+    expect(message).toContain('已发布')
+    if (pending) {
+      expect(message).toContain('1 个父工作流未更新')
+      expect(message).toContain('parent-publication')
+      expect(message).toContain('新增了必填参数')
+    } else {
+      expect(message).toContain('1 个父工作流已更新')
+    }
+  })
+})
 
 describe('OperationsPage upstream output binding', () => {
   /** 验证用户只能从目标节点之前的兼容输出中选择，并记录真实来源句柄。 */
