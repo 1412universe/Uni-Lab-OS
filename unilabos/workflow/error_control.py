@@ -13,6 +13,7 @@ from uuid import uuid4
 from unilabos.workflow.event_writer import append_frontend_event
 from unilabos.workflow.intervention import ensure_intervention_schema
 from unilabos.workflow.store import StoreConflict, StoreNotFound, WorkflowStore, utc_now
+from unilabos.workflow.manual_action_review import MANUAL_TERMINAL_STATUSES
 
 OPTIONS = [
     {"id": "cancel_task", "label": "取消当前任务"},
@@ -287,7 +288,7 @@ class StationExecutionControl:
             self._read_session(conn, metadata["session_id"])
             return {
                 "manual_command_id": command_uuid,
-                "execution_job": WorkflowStore._job_row(row),
+                "execution_job": self._manual_summary(row),
                 "execution_task": WorkflowStore._task_row(
                     conn.execute(
                         "SELECT * FROM workflow_task WHERE uuid=?",
@@ -489,19 +490,156 @@ class StationExecutionControl:
         ).fetchone()[0]
         return station
 
+    def _manual_rows(
+        self, conn: sqlite3.Connection, session_id: str | None = None
+    ) -> list[sqlite3.Row]:
+        """只读取本工站会话中的有效手动动作；门禁不能受展示数量限制。"""
+        return conn.execute(
+            """SELECT j.* FROM workflow_node_job j
+            JOIN workflow_error_session s ON s.session_id=json_extract(j.meta_data,'$.session_id')
+            WHERE s.station_id=? AND (j.execution_source='error_manual'
+                OR json_extract(j.meta_data,'$.execution_source')='error_manual') AND j.deleted_at IS NULL
+            AND (? IS NULL OR s.session_id=?) ORDER BY j.create_time DESC""",
+            (self.station_id, session_id, session_id),
+        ).fetchall()
+
+    @staticmethod
+    def _manual_summary(row: sqlite3.Row) -> dict[str, Any]:
+        """与公共 Job 读取共用核对投影，不能对紧凑字段重新计算证据版本。"""
+        return WorkflowStore._job_row(row)
+
     def _manual_summaries(
         self, conn: sqlite3.Connection, session_id: str | None = None
     ) -> list[dict[str, Any]]:
-        return [
-            WorkflowStore._job_row(row)
-            for row in conn.execute(
-                """SELECT j.* FROM workflow_node_job j
-            JOIN workflow_error_session s ON s.session_id=json_extract(j.meta_data,'$.session_id')
-            WHERE s.station_id=? AND json_extract(j.meta_data,'$.execution_source')='error_manual' AND (? IS NULL OR s.session_id=?)
-            ORDER BY j.create_time DESC LIMIT 200""",
-                (self.station_id, session_id, session_id),
+        return [self._manual_summary(row) for row in self._manual_rows(conn, session_id)]
+
+    def _check_manual_actions_finished(
+        self, conn: sqlite3.Connection, session_id: str | None = None,
+        *, require_review: bool = True, exclude_job_uuid: str | None = None,
+    ) -> None:
+        jobs = [job for job in self._manual_rows(conn, session_id)
+                if job["uuid"] != exclude_job_uuid]
+        if any(job["status"] not in MANUAL_TERMINAL_STATUSES for job in jobs):
+            raise StoreConflict("manual_actions_running")
+        if require_review and any(
+            job["uncertainty_reason"] and not self._manual_summary(job).get("result_reviewed", False)
+            for job in jobs
+        ):
+            raise StoreConflict("manual_actions_unresolved")
+
+    def review_manual(
+        self, command_uuid: str, request: dict[str, Any], *,
+        idempotency_key: str, operator_id: str,
+    ) -> dict[str, Any]:
+        """记录终态动作的现场核对，不改执行结论、不清除不确定事实和资源占用。"""
+        operation = f"review:{command_uuid}"
+        with self.lock, self.store.transaction() as conn:
+            existing = self._existing(conn, operation, idempotency_key, request, operator_id)
+            if existing is not None:
+                return existing
+            station = self._check_station(conn, request)
+            session = self._read_session(conn, str(request.get("session_id") or ""))
+            decision = self._read_decision(conn, session["decision_id"])
+            review_stage = session["stage"] == "MANUAL_HANDLING" or (
+                session["stage"] == "DECISION_REQUIRED" and decision["stage"] == "APPLYING"
             )
-        ]
+            if (
+                station["mode"] != "PAUSED"
+                or station["active_session_id"] != session["session_id"]
+                or not review_stage
+                or session["version"] != request.get("expected_session_version")
+            ):
+                raise StoreConflict("session_version_conflict")
+            job = next((row for row in self._manual_rows(conn, session["session_id"])
+                        if row["edge_command_uuid"] == command_uuid), None)
+            if job is None:
+                raise StoreNotFound("当前会话的手动动作不存在")
+            self._require_manual_review_job(conn, job["uuid"])
+            return self._write_manual_review(
+                conn, job, request, operation=operation, session_id=session["session_id"],
+                idempotency_key=idempotency_key, operator_id=operator_id,
+            )
+
+    def _require_manual_review_job(self, conn: sqlite3.Connection, job_uuid: str) -> sqlite3.Row:
+        """核对资格以持久执行来源和本站会话为准，不接受普通重试的来源元数据。"""
+        job = conn.execute(
+            """SELECT j.* FROM workflow_node_job j
+            JOIN workflow_task t ON t.uuid=j.workflow_task_uuid
+            JOIN workflow_error_session s ON s.session_id=json_extract(j.meta_data,'$.session_id')
+            WHERE j.uuid=? AND j.execution_source='error_manual' AND j.deleted_at IS NULL
+                AND t.deleted_at IS NULL AND s.station_id=?""",
+            (job_uuid, self.station_id),
+        ).fetchone()
+        if job is None:
+            raise StoreNotFound("本工站的手动动作不存在")
+        if job["status"] not in MANUAL_TERMINAL_STATUSES:
+            raise StoreConflict("manual_action_not_finished")
+        return job
+
+    def _manual_review_context(self, conn: sqlite3.Connection, job: sqlite3.Row) -> dict[str, Any]:
+        summary = self._manual_summary(job)
+        session_id = json.loads(job["meta_data"])["session_id"]
+        session = self._read_session(conn, session_id)
+        return {
+            "station_id": self.station_id, "session_id": session_id,
+            "session_stage": session["stage"], "job": summary,
+            "review_version": summary["review_version"],
+            "result_reviewed": summary["result_reviewed"],
+            "manual_review": summary["manual_review"],
+        }
+
+    def manual_job_review_context(self, job_uuid: str) -> dict[str, Any]:
+        """读取历史或当前手动动作的核对上下文，不依赖工站仍处于原会话。"""
+        with self.lock, self.store.read() as conn:
+            return self._manual_review_context(conn, self._require_manual_review_job(conn, job_uuid))
+
+    def review_manual_job(
+        self, job_uuid: str, request: dict[str, Any], *, idempotency_key: str, operator_id: str,
+    ) -> dict[str, Any]:
+        """按实际结果版本核对历史动作，只写审计，不恢复调度或修改执行事实。"""
+        operation = f"review-job:{job_uuid}"
+        with self.lock, self.store.transaction() as conn:
+            job = self._require_manual_review_job(conn, job_uuid)
+            existing = self._existing(conn, operation, idempotency_key, request, operator_id)
+            if existing is not None:
+                return {**existing, "review_context": self._manual_review_context(conn, job)}
+            result = self._write_manual_review(
+                conn, job, request, operation=operation,
+                session_id=json.loads(job["meta_data"])["session_id"],
+                idempotency_key=idempotency_key, operator_id=operator_id,
+            )
+            updated = self._require_manual_review_job(conn, job_uuid)
+            return {**result, "review_context": self._manual_review_context(conn, updated)}
+
+    def _write_manual_review(
+        self, conn: sqlite3.Connection, job: sqlite3.Row, request: dict[str, Any], *,
+        operation: str, session_id: str, idempotency_key: str, operator_id: str,
+    ) -> dict[str, Any]:
+        """活跃会话与历史入口共享结果校验和审计写入。"""
+        if job["status"] not in MANUAL_TERMINAL_STATUSES:
+            raise StoreConflict("manual_action_not_finished")
+        if request.get("operator_confirmed") is not True:
+            raise StoreConflict("operator_confirmation_required")
+        reason = str(request.get("reason") or "").strip()
+        if not reason:
+            raise ValueError("请填写现场核对说明")
+        summary = self._manual_summary(job)
+        if summary["review_version"] != request.get("expected_review_version"):
+            raise StoreConflict("manual_review_version_conflict")
+        review = {
+            "review_version": summary["review_version"], "operator_id": operator_id,
+            "reviewed_at": utc_now(), "reason": reason,
+        }
+        data = summary["control_data"]
+        data["manual_review"] = review
+        conn.execute("UPDATE workflow_node_job SET control_data=? WHERE uuid=?", (_json(data), job["uuid"]))
+        return self._save_command(
+            conn, operation=operation, key=idempotency_key, request=request,
+            operator=operator_id, applied=True,
+            result={"job_uuid": job["uuid"], "session_id": session_id,
+                    "source_task_uuid": job["workflow_task_uuid"],
+                    "manual_command_id": job["edge_command_uuid"], **review},
+        )
 
     def get_command(self, command_uuid: str) -> dict[str, Any]:
         with self.lock, self.store.read() as conn:
@@ -1007,6 +1145,7 @@ class StationExecutionControl:
                 "source_task_uuid": decision["workflow_task_uuid"],
                 "source_job_uuid": decision["workflow_node_job_uuid"],
                 "action": action,
+                "application_started": False,
             }
             now = utc_now()
             if action == "enter_manual_handling":
@@ -1045,10 +1184,12 @@ class StationExecutionControl:
                         or session["stage"] != "DECISION_REQUIRED"
                     ):
                         raise StoreConflict("session_version_conflict")
+                    self._check_manual_actions_finished(conn, session["session_id"])
                 elif station["active_session_id"]:
                     raise StoreConflict("active_session_conflict")
                 if request.get("resume_requested", False):
                     self._confirm_resume(station, request)
+                    self._check_manual_actions_finished(conn, require_review=False)
                 result["resume_requested"] = request.get("resume_requested") is True
                 if action == "retry_current_node":
                     result["retry_job_uuid"] = self._create_retry(conn, decision)
@@ -1065,6 +1206,10 @@ class StationExecutionControl:
                         ]
                         result["reason"] = request.get("reason") or "用户选择重试当前节点，按当前库存登记重新执行"
                 else:
+                    # 保存受理前状态，门禁变化时可撤回尚未应用的取消意图。
+                    task = conn.execute("SELECT status FROM workflow_task WHERE uuid=?",
+                                        (decision["workflow_task_uuid"],)).fetchone()
+                    result["previous_task_status"] = task["status"]
                     # 取消意图先冻结本任务，物理停止请求由调度桥在事务外应用。
                     conn.execute(
                         "UPDATE workflow_task SET status='canceling',update_time=? WHERE uuid=? AND status IN ('pending','running')",
@@ -1254,6 +1399,8 @@ class StationExecutionControl:
             decision = self._read_decision(conn, session["decision_id"])
             if decision["stage"] == "APPLYING":
                 raise StoreConflict("decision_conflict")
+            if not returning:
+                self._check_manual_actions_finished(conn, session_id)
             target = "MANUAL_HANDLING" if returning else "DECISION_REQUIRED"
             now = utc_now()
             conn.execute(
@@ -1282,41 +1429,6 @@ class StationExecutionControl:
                 "session_id": session_id,
                 "source_task_uuid": decision["workflow_task_uuid"],
             }
-            if not returning:
-                canceled = []
-                for job in conn.execute(
-                    """SELECT * FROM workflow_node_job WHERE execution_source='error_manual'
-                    AND json_extract(meta_data,'$.session_id')=? AND start_state='NOT_STARTED'
-                    AND status IN ('pending','dispatched','running')""",
-                    (session_id,),
-                ).fetchall():
-                    from unilabos.workflow.job_evidence import record_job_result
-
-                    record_job_result(
-                        conn,
-                        job_row=job,
-                        outcome="canceled",
-                        return_info={"cancel_reason": "local_no_send_proof"},
-                        error_info=[],
-                    )
-                    conn.execute(
-                        """UPDATE workflow_node_job SET status='canceled' ,finished_at=?,update_time=?,
-                        return_info=?,control_data=? WHERE uuid=?""",
-                        (
-                            now,
-                            now,
-                            _json({"cancel_reason": "local_no_send_proof"}),
-                            _json({"canceled_before_start": True}),
-                            job["uuid"],
-                        ),
-                    )
-                    conn.execute(
-                        "UPDATE workflow_task SET status='canceled',finished_at=?,update_time=? WHERE uuid=?",
-                        (now, now, job["workflow_task_uuid"]),
-                    )
-                    canceled.append(job["edge_command_uuid"])
-                    self._emit(conn, job["workflow_task_uuid"])
-                result["canceled_before_start"] = canceled
             return self._save_command(
                 conn,
                 operation=operation,
@@ -1326,6 +1438,103 @@ class StationExecutionControl:
                 result=result,
                 applied=True,
             )
+
+    def _check_pending_decision_actions(
+        self, conn: sqlite3.Connection, command: sqlite3.Row,
+    ) -> None:
+        if command["status"] != "PENDING" or not command["operation"].startswith("decision:"):
+            return
+        result = json.loads(command["snapshot_json"])
+        decision = self._read_decision(conn, result["decision_id"])
+        retry_uuid = result.get("retry_job_uuid")
+        if decision["session_id"]:
+            self._check_manual_actions_finished(conn, decision["session_id"], exclude_job_uuid=retry_uuid)
+        if result.get("resume_requested"):
+            # 本次明确重试的新尝试不是遗留手动动作，不能被自己的恢复门禁挡住。
+            self._check_manual_actions_finished(conn, require_review=False, exclude_job_uuid=retry_uuid)
+
+    def validate_pending_decision(self, command_uuid: str) -> None:
+        """应用前门禁变化时撤回未派发意图，返回原会话继续核对。"""
+        blocked: StoreConflict | None = None
+        with self.lock, self.store.transaction() as conn:
+            command = conn.execute(
+                "SELECT * FROM workflow_station_control_command WHERE command_uuid=? AND station_id=?",
+                (command_uuid, self.station_id),
+            ).fetchone()
+            if command is None:
+                raise StoreNotFound("控制命令不存在")
+            try:
+                self._check_pending_decision_actions(conn, command)
+                if command["status"] == "PENDING" and command["operation"].startswith("decision:"):
+                    result = json.loads(command["snapshot_json"])
+                    if not result.get("application_started"):
+                        result["application_started"] = utc_now()
+                        conn.execute("UPDATE workflow_station_control_command SET snapshot_json=? WHERE command_uuid=?",
+                                     (_json(result), command_uuid))
+            except StoreConflict as error:
+                blocked = error
+                self._reopen_unapplied_decision(conn, command, str(error))
+        if blocked is not None:
+            raise blocked
+
+    def _reopen_unapplied_decision(
+        self, conn: sqlite3.Connection, command: sqlite3.Row, reason: str,
+    ) -> None:
+        """只撤回本命令的准备状态；已派发尝试仍保留原意图等待处理。"""
+        result = json.loads(command["snapshot_json"])
+        decision = self._read_decision(conn, result["decision_id"])
+        # 老版本没有应用边界记录，按可能已执行处理，不能回退物理意图。
+        if not decision["session_id"] or result.get("application_started") is not False:
+            return
+        now = utc_now()
+        retry_uuid = result.get("retry_job_uuid")
+        if retry_uuid:
+            retry = conn.execute("SELECT * FROM workflow_node_job WHERE uuid=?", (retry_uuid,)).fetchone()
+            if (retry is None or retry["status"] != "pending" or retry["start_state"] != "NOT_STARTED"
+                    or retry["started_at"] or json.loads(retry["control_data"]).get("dispatch_payload")):
+                return
+            # 尚未进入调度器的准备尝试保留审计行，恢复原尝试的当前身份。
+            conn.execute("UPDATE workflow_node_job SET current_attempt=0,deleted_at=?,update_time=? WHERE uuid=?",
+                         (now, now, retry_uuid))
+            conn.execute("UPDATE workflow_node_job SET current_attempt=1 WHERE uuid=?",
+                         (decision["workflow_node_job_uuid"],))
+        elif result.get("action") == "cancel_task":
+            previous = result.get("previous_task_status")
+            if previous not in {"pending", "running"}:
+                return
+            task = conn.execute("SELECT status FROM workflow_task WHERE uuid=?",
+                                (decision["workflow_task_uuid"],)).fetchone()
+            if task["status"] != "canceling":
+                return
+            conn.execute("UPDATE workflow_task SET status=?,update_time=? WHERE uuid=?",
+                         (previous, now, decision["workflow_task_uuid"]))
+        conn.execute("UPDATE workflow_station_control_command SET status='FAILED',snapshot_json=?,applied_at=? WHERE command_uuid=?",
+                     (_json({**result, "error": reason}), now, command["command_uuid"]))
+        conn.execute("UPDATE workflow_task_command SET status='rejected',result=?,consumed_at=?,update_time=? WHERE uuid=?",
+                     (_json({**result, "error": reason}), now, now, command["command_uuid"]))
+        conn.execute("UPDATE workflow_error_session SET stage='MANUAL_HANDLING',version=version+1,completed_at=NULL,completed_by=NULL WHERE session_id=?",
+                     (decision["session_id"],))
+        conn.execute("UPDATE workflow_intervention SET stage='MANUAL_HANDLING',status='open',final_action=NULL,revision=?,update_time=? WHERE decision_id=?",
+                     (self._next_decision_revision(conn, decision["workflow_node_job_uuid"]), now, decision["decision_id"]))
+        conn.execute("UPDATE workflow_station_control SET mode='PAUSED',active_session_id=?,version=version+1,updated_at=? WHERE station_id=?",
+                     (decision["session_id"], now, self.station_id))
+        self._emit(conn, decision["workflow_task_uuid"])
+
+    def mark_decision_effects_applied(self, command_uuid: str) -> None:
+        """保存动作意图已应用边界，迟到结果重新核对后只继续同命令的收尾。"""
+        with self.lock, self.store.transaction() as conn:
+            command = conn.execute(
+                "SELECT * FROM workflow_station_control_command WHERE command_uuid=? AND station_id=?",
+                (command_uuid, self.station_id),
+            ).fetchone()
+            if command is None:
+                raise StoreNotFound("控制命令不存在")
+            if command["status"] != "PENDING" or not command["operation"].startswith("decision:"):
+                return
+            result = json.loads(command["snapshot_json"])
+            result["application_effects_applied"] = utc_now()
+            conn.execute("UPDATE workflow_station_control_command SET snapshot_json=? WHERE command_uuid=?",
+                         (_json(result), command_uuid))
 
     def mark_applied(self, command_uuid: str) -> dict[str, Any]:
         """由调度桥在任务意图实际应用后调用；新错误版本不允许被旧恢复覆盖。"""
@@ -1338,6 +1547,7 @@ class StationExecutionControl:
                 raise StoreNotFound("控制命令不存在")
             if command["status"] != "PENDING":
                 return self._command_result(conn, command)
+            self._check_pending_decision_actions(conn, command)
             result = json.loads(command["snapshot_json"])
             now = utc_now()
             conn.execute(
@@ -1435,7 +1645,7 @@ class StationExecutionControl:
     def resume(
         self, request: dict[str, Any], *, idempotency_key: str, operator_id: str
     ) -> dict[str, Any]:
-        """人工确认恢复；其他已知错误、在途和未知结果的数量不是门禁。"""
+        """人工确认恢复；本工站仍在途的手动动作必须先结束。"""
         with self.lock, self.store.transaction() as conn:
             existing = self._existing(
                 conn, "resume", idempotency_key, request, operator_id
@@ -1446,6 +1656,7 @@ class StationExecutionControl:
             self._confirm_resume(station, request)
             if station["active_session_id"]:
                 raise StoreConflict("active_session_conflict")
+            self._check_manual_actions_finished(conn, require_review=False)
             conn.execute(
                 "UPDATE workflow_station_control SET mode='RUNNING' WHERE station_id=?",
                 (self.station_id,),

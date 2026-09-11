@@ -85,16 +85,12 @@ class ErrorHandlingService:
         idempotency_key: str,
         operator_id: str,
     ) -> dict[str, Any]:
-        result = self.control.complete(
+        return self.control.complete(
             session_id,
             request,
             idempotency_key=idempotency_key,
             operator_id=operator_id,
         )
-        for command_id in result["result"].get("canceled_before_start", []):
-            action = self.control.manual_action(command_id)
-            self.bridge.settle_canceled_before_start(action["execution_job"]["uuid"])
-        return result
 
     def stop_manual(
         self,

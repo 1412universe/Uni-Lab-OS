@@ -29,13 +29,41 @@ export interface ManualActionJob {
   edge_command_uuid: string
   start_state: string
   uncertainty_reason?: string | null
+  review_version?: string
+  result_reviewed?: boolean
+  execution_source?: string
   action_name?: string
   device_id?: string
   control_data?: { dispatch_payload?: { action?: string; device_id?: string } }
   param?: Record<string, unknown>
   return_info?: unknown
   error_info?: unknown
+  feedback_data?: unknown
+  started_at?: string | null
+  finished_at?: string | null
   meta_data: { session_id: string; source_task_uuid: string; source_job_uuid: string; source_node_id: string }
+}
+
+export interface ManualActionReviewAudit {
+  review_version: string
+  operator_id: string
+  reviewed_at: string
+  reason: string
+}
+
+export interface HistoricalManualReviewContext {
+  station_id: string
+  session_id: string
+  session_stage: HandlingStage
+  job: ManualActionJob
+  review_version: string
+  result_reviewed: boolean
+  manual_review: ManualActionReviewAudit | null
+}
+
+export interface HistoricalManualReviewIntent {
+  key: string
+  body: { expected_review_version: string; reason: string; operator_confirmed: true }
 }
 
 export interface ControlCommandSummary {
@@ -153,6 +181,12 @@ export const loadResourceOccupancies = (signal?: AbortSignal) => request<Resourc
 export const loadHandlingCommand = (id: string, signal?: AbortSignal) => request<HandlingCommand>(`/control-commands/${encodeURIComponent(id)}`, { signal })
 export const loadManualActionDetail = (id: string, signal?: AbortSignal) =>
   request<{ execution_job: ManualActionJob; execution_task: { trace_context: unknown }; source_task_uuid: string }>(`/manual-actions/${encodeURIComponent(id)}`, { signal })
+export const loadHistoricalManualReview = (jobUuid: string, signal?: AbortSignal) =>
+  request<HistoricalManualReviewContext>(`/manual-action-jobs/${encodeURIComponent(jobUuid)}/review`, { signal })
+export const submitHistoricalManualReview = (jobUuid: string, intent: HistoricalManualReviewIntent) =>
+  request<HandlingCommand & { review_context: HistoricalManualReviewContext }>(`/manual-action-jobs/${encodeURIComponent(jobUuid)}/review`, {
+    method: 'POST', headers: { 'Idempotency-Key': intent.key }, body: JSON.stringify(intent.body),
+  })
 
 export function submitHandlingIntent(intent: HandlingIntent): Promise<HandlingCommand> {
   return request(intent.path, {
@@ -189,9 +223,13 @@ const errors: Record<string, string> = {
   decision_conflict: '这条错误已被处理或状态已变化，请按最新状态操作。',
   session_version_conflict: '人工处置会话已变化，请核对最新会话。',
   active_session_conflict: '请先完成当前人工处置会话，再处理其他错误。',
-  operator_confirmation_required: '恢复确认已过期，请重新核对现场并确认。',
+  operator_confirmation_required: '请重新核对现场，并勾选本次操作的确认项。',
   action_definition_changed: '设备动作定义已更新，请重新选择动作并检查参数。',
   occupancy_version_conflict: '逻辑占用已变化，请刷新后重新选择。',
+  manual_actions_running: '本次人工处置仍有手动动作未结束，请等待动作结束，或停止动作并确认结果后继续。',
+  manual_actions_unresolved: '本次人工处置仍有动作结果待核对，请完成现场核对后继续。',
+  manual_action_not_finished: '该手动动作尚未结束，请等待动作结束后再核对结果。',
+  manual_review_version_conflict: '动作结果已变化，请重新查看执行记录并核对现场。',
 }
 
 export function handlingErrorMessage(error: unknown) {

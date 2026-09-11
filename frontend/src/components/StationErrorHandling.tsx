@@ -4,10 +4,11 @@ import { AlertCircle, ExternalLink, Pause, RefreshCw, X } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { decisionIntent, loadHandlingCommand, sessionFields, versionFields } from '../lib/stationErrorClient'
 import type { ControlCommandSummary, StationError, StationSnapshot } from '../lib/stationErrorClient'
+import { manualSessionActions } from '../lib/manualHandlingState'
 import type { useStationErrorHandling } from '../hooks/useStationErrorHandling'
 import type { MaterialRecord, WorkflowTask } from '../types'
 import { Button } from './ui'
-import { ManualHandlingPanel } from './ManualHandlingPanel'
+import { ManualActionHistory, ManualHandlingPanel } from './ManualHandlingPanel'
 import type { HandlingSubmit } from './HandlingInventoryPanel'
 import './StationErrorHandling.css'
 
@@ -97,13 +98,16 @@ export function StationErrorHandling({ controller, materials, tasks, openRequest
   const sourceTask = tasks.find((task) => task.uuid === selected?.source_task_uuid)
   const sourceNode = sourceTask?.nodes.find((node) => node.job?.uuid === selected?.source_job_uuid || node.uuid === selected?.meta_data.source_node_id)
   const session = snapshot?.active_session
-  const manual = session?.stage === 'MANUAL_HANDLING' && session.decision_id === selected?.decision_id
+  const manualActions = manualSessionActions(snapshot?.manual_actions || [], session?.session_id)
+  const applyingSession = session?.decision_id === selected?.decision_id && selected?.stage === 'APPLYING'
+  const manual = session?.stage === 'MANUAL_HANDLING' && session.decision_id === selected?.decision_id && !applyingSession
+  const reviewWhileApplying = applyingSession && (manualActions.unresolved > 0 || manualActions.running > 0)
   const commands = snapshot?.control_commands.filter((item) => item.needs_apply) || []
   const needsAttention = snapshot?.mode === 'PAUSED' || errors.length > 0 || Boolean(unconfirmed) || commands.length > 0
   const showReadError = Boolean(readError)
   return <>
     {needsAttention || showReadError ? <div className="station-handling-banner" role="status">
-      <Pause size={20} /><div><strong>{showReadError ? '错误处置状态暂不可用' : snapshot?.mode === 'PAUSED' ? '工站调度已暂停' : '还有节点错误待处理'}</strong><span>{showReadError ? '请刷新状态后操作。' : snapshot?.mode === 'PAUSED' ? `${errors.length} 条错误待处理；等待节点暂停派发，已开始的动作继续运行。` : `${errors.length} 条错误待处理；工站已由人工恢复调度，错误任务仍等待决定。`}</span></div>
+      <Pause size={20} /><div><strong>{showReadError ? '错误处置状态暂不可用' : snapshot?.mode === 'PAUSED' ? '工站调度已暂停' : '还有节点错误待处理'}</strong><span>{showReadError ? '请刷新状态后操作。' : snapshot?.mode === 'PAUSED' ? `${errors.length} 条错误待处理；等待节点暂停派发，已开始的动作继续运行。` : `${errors.length} 条错误待处理；工站已由人工恢复调度，错误任务仍等待决定。`}</span>{manualActions.running || manualActions.unresolved ? <span>本次人工处置：{manualActions.running} 个手动动作未结束，{manualActions.unresolved} 个结果待核对。</span> : null}</div>
       <Button tone="primary" onClick={() => setOpen(true)}>{session?.stage === 'MANUAL_HANDLING' ? '继续手动处理' : '处理节点错误'}</Button>
     </div> : null}
     {open ? createPortal(<div className="handling-backdrop">
@@ -117,6 +121,10 @@ export function StationErrorHandling({ controller, materials, tasks, openRequest
             {errors.length > 1 ? <label className="form-field"><span>待处理错误（{errors.length}）</span><select value={selected?.decision_id || ''} onChange={(event) => setDecisionId(event.target.value)}>{errors.map((item) => <option key={item.decision_id} value={item.decision_id}>{tasks.find((task) => task.uuid === item.source_task_uuid)?.workflowName || '任务'} · {item.source_task_uuid.slice(0, 8)} · {item.source_job_uuid.slice(0, 8)}</option>)}</select></label> : null}
             {selected ? <div className="handling-error-context"><strong>{sourceTask?.workflowName || '工作流任务'} · {sourceNode?.name || '错误节点'}</strong><p>{selected.meta_data.message || '节点执行失败，请检查现场。'}</p><details><summary>任务与执行记录</summary><code>Task：{selected.source_task_uuid}</code><code>Job：{selected.source_job_uuid}</code>{sourceTask?.trace ? <a href={sourceTask.trace.url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> 查看 Task Trace</a> : null}</details></div> : null}
             {commands.map((command) => <PendingCommand key={command.command_uuid} command={command} writable={writable} submit={submit} />)}
+            {reviewWhileApplying && session ? <>
+              <p className="handling-note">已受理的处理选择正在等待手动动作结束及结果核对。完成核对后，请点击“继续应用”完成原操作。</p>
+              <ManualActionHistory key={session.session_id} snapshot={snapshot} session={session} tasks={tasks} writable={writable} submit={submit} />
+            </> : null}
             {manual && session ? <ManualHandlingPanel key={session.session_id} snapshot={snapshot} session={session} materials={materials} tasks={tasks} writable={writable} submit={submit} />
               : needsAttention ? <DecisionPanel key={`${snapshot.snapshot_id}:${selected?.decision_id}:${selected?.decision_version}:${session?.version}:${Boolean(readError)}`} snapshot={snapshot} error={selected} writable={writable} submit={submit} />
                 : <p className="handling-success">处理完成。可返回任务列表查看节点和任务的最新执行结果。</p>}

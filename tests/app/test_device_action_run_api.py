@@ -247,7 +247,7 @@ def _client(
 
 
 def test_error_manual_action_runs_on_busy_device_and_keeps_source_trace(tmp_path: Any) -> None:
-    """已有动作在途时仍可手动执行同一设备，完成时撤销未开始命令。"""
+    """已有动作在途时可手动执行同一设备，必须明确停止后才可完成处置。"""
     client, store, template_uuid, dispatcher, bridge = _client(tmp_path, with_scheduler=True)
     dispatcher.deferred_start = True  # 记录投递但由测试显式确认实际开始。
     try:
@@ -285,9 +285,17 @@ def test_error_manual_action_runs_on_busy_device_and_keeps_source_trace(tmp_path
         current = client.get(base + "/error-handling").json()["data"]
         completed = client.post(base + f"/sessions/{session['session_id']}/complete", headers={"Idempotency-Key": "complete"}, json={
             "expected_station_version": current["station_version"], "expected_session_version": session["version"], "summary": "已调整"})
-        assert completed.status_code == 200, completed.text
-        assert action["manual_command_id"] in completed.json()["data"]["result"]["canceled_before_start"]
+        assert completed.status_code == 409, completed.text
+        assert completed.json()["detail"] == "manual_actions_running"
+        assert store.get_job(action["execution_job"]["uuid"])["status"] == "dispatched"
+        stopped = client.post(base + f"/manual-actions/{action['manual_command_id']}/stop", json={},
+                              headers={"Idempotency-Key": "explicit-stop"})
+        assert stopped.status_code == 202, stopped.text
         assert bridge.error_control.begin_execution(action["execution_job"]["uuid"], action["manual_command_id"]) == "CANCELED"
+        current = client.get(base + "/error-handling").json()["data"]
+        completed = client.post(base + f"/sessions/{session['session_id']}/complete", headers={"Idempotency-Key": "complete"}, json={
+            "expected_station_version": current["station_version"], "expected_session_version": session["version"], "summary": "已明确停止"})
+        assert completed.status_code == 200, completed.text
     finally:
         bridge.close()
         store.close()
@@ -403,6 +411,8 @@ def test_device_action_run_creates_backend_shaped_task_and_job(tmp_path: Any) ->
         restored_job = client.get(f"/api/v1/workflow-node-jobs/{job['uuid']}").json()[
             "data"
         ]
+        # 读取接口附加现场核对资格，创建结果的所有持久字段仍须完整一致。
+        assert restored_task.pop("manual_review_attention_resolved") is False
         assert restored_task == task
         assert restored_job == job
     finally:
@@ -627,11 +637,11 @@ def test_manual_command_recovery_and_pending_retry_stop_keep_execution_identity(
         replay = client.post(base + f"/control-commands/{command_id}/apply").json()["data"]
         assert replay["command_uuid"] == command_id
         old = replay["manual_action"]["execution_job"]
-        current = snapshot()
-        completed = client.post(base + f"/sessions/{session['session_id']}/complete", headers={"Idempotency-Key": "complete"}, json={
-            "expected_station_version": current["station_version"], "expected_session_version": session["version"], "summary": "人工处理完成"}).json()["data"]["station"]
-        root_error = next(item for item in completed["errors"] if item["source_job_uuid"] == source["job"]["uuid"])
-        decide(root_error, "cancel_task", "cancel-root", session_id=session["session_id"], expected_session_version=completed["active_session"]["version"], resume_requested=True, operator_confirmed=True, confirm_snapshot_id=completed["snapshot_id"])
+        # 旧版允许动作仍运行时关闭会话；保留该历史数据形态验证停止重试。
+        with store.transaction() as conn:
+            conn.execute("UPDATE workflow_error_session SET stage='RESOLVED' WHERE session_id=?", (session["session_id"],))
+            conn.execute("UPDATE workflow_intervention SET stage='RESOLVED' WHERE decision_id=?", (root_error["decision_id"],))
+            conn.execute("UPDATE workflow_station_control SET active_session_id=NULL,mode='RUNNING' WHERE station_id='local'")
         bridge._scheduler.on_job_outcome(old["uuid"], CommittedJobOutcome("failed", {}, [], [old["edge_command_uuid"]]))
         manual_error = next(item for item in snapshot()["errors"] if item["source_job_uuid"] == old["uuid"])
         retried = decide(manual_error, "retry_current_node", "retry-manual", resume_requested=False)

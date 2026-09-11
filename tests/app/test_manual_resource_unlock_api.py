@@ -264,3 +264,85 @@ def test_manual_unlock_fails_closed_without_physical_inventory_authority(
     finally:
         client.close()
         runtime.close()
+
+
+@pytest.mark.parametrize("execution_process_restarted", [False, True])
+def test_canceled_continuous_scope_survives_restart_until_explicit_http_unlock(
+    tmp_path: Path,
+    execution_process_restarted: bool,
+) -> None:
+    """连续区间失败后取消并重启，保留整组锁与终态，只有明确命令能释放。"""
+
+    from tests.scheduler_core.test_resource_occupancy_intervals import (
+        _three_job_scoped_task,
+    )
+
+    runtime = build_core_runtime(tmp_path / "canceled-continuous-scope")
+    client = None
+    try:
+        aggregate, jobs, _plan = _three_job_scoped_task(
+            runtime, task_name="canceled-continuous-scope"
+        )
+        task_uuid = aggregate["task"]["uuid"]
+        runtime.scheduler.on_job_finished(jobs[0], False, {"error": "fixture failure"})
+        snapshot = runtime.bridge.error_control.snapshot()
+        decision = next(
+            error for error in snapshot["errors"]
+            if error["source_task_uuid"] == task_uuid
+        )
+        canceled = runtime.bridge.decide_error(
+            decision["decision_id"],
+            {
+                "action": "cancel_task",
+                "expected_decision_version": decision["decision_version"],
+                "expected_station_version": snapshot["station_version"],
+                "observed_error_epoch": snapshot["error_epoch"],
+                "resume_requested": False,
+            },
+            idempotency_key="cancel-continuous-scope",
+            operator_id="test-operator",
+        )
+        assert canceled["status"] == "APPLIED"
+        task_before = runtime.workflow_store.get_task(task_uuid)
+        jobs_before = runtime.workflow_store.list_jobs(task_uuid)
+        assert task_before["status"] == "canceled"
+        assert task_before["attention_reason"] == "resource_handoff_required"
+        assert [item["status"] for item in jobs_before] == ["failed", "canceled", "canceled"]
+        locks_before = runtime.bridge._projection.list_task_execution_locks(task_uuid)
+        assert len(locks_before["locks"]) > 1
+        assert all(not lock["can_release"] for lock in locks_before["locks"])
+        dispatched_before = list(runtime.dispatcher.dispatched)
+
+        runtime.restart_scheduler()
+        if execution_process_restarted:
+            assert runtime.bridge.recover_active_tasks(execution_process_restarted=True) == []
+        assert runtime.workflow_store.get_task(task_uuid) == task_before
+        assert runtime.workflow_store.list_jobs(task_uuid) == jobs_before
+        assert runtime.bridge._projection.list_task_execution_locks(task_uuid) == locks_before
+        assert runtime.dispatcher.dispatched == dispatched_before
+
+        client = TestClient(create_workflow_app(WorkflowService(
+            runtime.workflow_store, task_scheduler_bridge=runtime.bridge,
+        )))
+        response = client.post(
+            f"/api/v1/workflow-tasks/{task_uuid}/commands", json=_unlock_body(),
+        )
+        assert response.status_code == 201
+        command = response.json()["data"]
+        assert command["status"] == "succeeded"
+        assert command["result"]["released"]["execution_locks"] == len(locks_before["locks"])
+        assert client.get(f"/api/v1/workflow-tasks/{task_uuid}/execution-locks").json()["data"]["locks"] == []
+        restored_task = client.get(f"/api/v1/workflow-tasks/{task_uuid}").json()["data"]
+        assert restored_task["status"] == "canceled"
+        assert restored_task["cleanup_status"] == "settled"
+        assert runtime.dispatcher.dispatched == dispatched_before
+        replay = client.post(
+            f"/api/v1/workflow-tasks/{task_uuid}/commands", json=_unlock_body(),
+        ).json()["data"]
+        assert replay["uuid"] == command["uuid"]
+        events = client.get(f"/api/v1/workflow-tasks/{task_uuid}/events").json()["data"]["items"]
+        assert len([event for event in events if event["kind"] == "lock_operator_released"]) == 1
+    finally:
+        if client is not None:
+            client.close()
+        runtime.close()

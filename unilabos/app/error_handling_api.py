@@ -80,6 +80,20 @@ class StopRequest(BaseModel):
     reason: str = "用户停止手动动作"
 
 
+class ManualReviewRequest(SessionVersion):
+    session_id: str
+    expected_review_version: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=20000)
+    operator_confirmed: StrictBool
+
+
+class HistoricalManualReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_review_version: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=20000)
+    operator_confirmed: StrictBool
+
+
 class InventoryChange(BaseModel):
     model_config = ConfigDict(extra="forbid")
     material_uuid: str
@@ -282,6 +296,40 @@ def create_error_handling_router(
             body.model_dump(),
             idempotency_key=idempotency_key,
             operator_id=actor(request),
+        )
+
+    @router.post(
+        "/manual-actions/{command_id}/review", summary="确认已结束手动动作的现场核对结果"
+    )
+    def review(
+        command_id: str,
+        body: ManualReviewRequest,
+        request: Request,
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
+    ) -> dict[str, Any]:
+        return invoke(
+            service.control.review_manual, command_id, body.model_dump(),
+            idempotency_key=idempotency_key, operator_id=actor(request),
+        )
+
+    @router.get("/manual-action-jobs/{job_uuid}/review", summary="读取历史手动动作的核对上下文")
+    def historical_review_context(
+        job_uuid: str, service: ErrorHandlingService = service_dependency,
+    ) -> dict[str, Any]:
+        return invoke(service.control.manual_job_review_context, job_uuid)
+
+    @router.post("/manual-action-jobs/{job_uuid}/review", summary="保存历史手动动作的现场核对记录")
+    def historical_review(
+        job_uuid: str,
+        body: HistoricalManualReviewRequest,
+        request: Request,
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+        service: ErrorHandlingService = service_dependency,
+    ) -> dict[str, Any]:
+        return invoke(
+            service.control.review_manual_job, job_uuid, body.model_dump(),
+            idempotency_key=idempotency_key, operator_id=actor(request),
         )
 
     @router.get("/control-commands/{command_uuid}", summary="读取已受理控制命令")

@@ -4806,9 +4806,15 @@ class WorkflowService:
         except ValueError:
             raise WorkflowError("invalid_input") from None
         try:
-            return self._store.get_task(identity)
+            task = self._store.get_task(identity)
+            return self._project_manual_review_attention([task])[0]
         except StoreNotFound:
             raise WorkflowError("not_found") from None
+
+    def _project_manual_review_attention(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """展示资格独立于持久控制状态，不清除任何未结算事实。"""
+        resolved = self._store.manual_review_attention_resolved_for_tasks(task["uuid"] for task in tasks)
+        return [{**task, "manual_review_attention_resolved": resolved.get(task["uuid"], False)} for task in tasks]
 
     def list_workflow_task_execution_locks(
         self,
@@ -4988,7 +4994,7 @@ class WorkflowService:
             status=status,
             cleanup_status=cleanup_status,
         )
-        return self._store.list_tasks(
+        result = self._store.list_tasks(
             page=page,
             page_size=page_size,
             workflow_uuid=workflow_uuid,
@@ -4996,6 +5002,7 @@ class WorkflowService:
             status=status,
             cleanup_status=cleanup_status,
         )
+        return {**result, "items": self._project_manual_review_attention(result["items"])}
 
     def _normalize_task_list_filters(
         self,
@@ -5097,6 +5104,7 @@ class WorkflowService:
             view=view,
             terminal_limit=terminal_limit,
         )
+        result["items"] = self._project_manual_review_attention(result["items"])
         jobs_by_task = self._store.list_jobs_for_tasks(
             str(task["uuid"]) for task in result["items"]
         )

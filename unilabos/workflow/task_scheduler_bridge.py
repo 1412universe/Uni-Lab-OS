@@ -537,38 +537,42 @@ class TaskSchedulerBridge:
             current = self.error_control.get_command(accepted["command_uuid"])
             if current["status"] != "PENDING":
                 return current
-            if result["action"] == "retry_current_node":
-                occupancies = result.get("retry_occupancies", [])
-                if result.get("retry_previous_uncertainty"):
+            self.error_control.validate_pending_decision(accepted["command_uuid"])
+            current = self.error_control.get_command(accepted["command_uuid"])
+            if not current["result"].get("application_effects_applied"):
+                if result["action"] == "retry_current_node":
+                    occupancies = result.get("retry_occupancies", [])
+                    if result.get("retry_previous_uncertainty"):
+                        inventory = self._scheduler.station_resource_inventory
+                        if inventory is not None:
+                            # 重试只释放来源 Claim；共享 Fence 下仍运行的其他 Job 保持占用。
+                            for claim_uuid in sorted({item["claim_uuid"] for item in occupancies}):
+                                inventory.transition_dispatch_permit(claim_uuid, target_state="released")
+                        self.error_control.apply_resource_facts({
+                            **accepted, "result": {**result, "occupancies": occupancies},
+                        })
+                        self.error_control.record_operator_retry(accepted)
+                        self._scheduler.release_error_occupancies(occupancies, include_shared=False)
+                    job = self._store.get_job(result["retry_job_uuid"])
+                    self._task_by_job[job["uuid"]] = task_uuid
+                    node_id = job["control_data"].get("runtime_node_id") or job["workflow_node_uuid"]
+                    self._scheduler.retry_node(task_uuid, node_id, job["uuid"])
+                elif result["action"] == "inventory_correction":
+                    inventory = self._scheduler.station_resource_inventory
+                    if inventory is None:
+                        return self.error_control.reject_command(accepted["command_uuid"], "库存权威未装配")
+                    inventory.correct_inventory(accepted["command_uuid"], result)
+                elif result["action"] == "resource_disposition":
                     inventory = self._scheduler.station_resource_inventory
                     if inventory is not None:
-                        # 重试只释放来源 Claim；共享 Fence 下仍运行的其他 Job 保持占用。
-                        for claim_uuid in sorted({item["claim_uuid"] for item in occupancies}):
-                            inventory.transition_dispatch_permit(claim_uuid, target_state="released")
-                    self.error_control.apply_resource_facts({
-                        **accepted, "result": {**result, "occupancies": occupancies},
-                    })
-                    self.error_control.record_operator_retry(accepted)
-                    self._scheduler.release_error_occupancies(occupancies, include_shared=False)
-                job = self._store.get_job(result["retry_job_uuid"])
-                self._task_by_job[job["uuid"]] = task_uuid
-                node_id = job["control_data"].get("runtime_node_id") or job["workflow_node_uuid"]
-                self._scheduler.retry_node(task_uuid, node_id, job["uuid"])
-            elif result["action"] == "inventory_correction":
-                inventory = self._scheduler.station_resource_inventory
-                if inventory is None:
-                    return self.error_control.reject_command(accepted["command_uuid"], "库存权威未装配")
-                inventory.correct_inventory(accepted["command_uuid"], result)
-            elif result["action"] == "resource_disposition":
-                inventory = self._scheduler.station_resource_inventory
-                if inventory is not None:
-                    inventory.release_error_occupancies(result["occupancies"])
-                self.error_control.apply_resource_facts(accepted)
-                self._scheduler.release_error_occupancies(result["occupancies"])
-            elif result["action"] == "stop_manual_action":
-                self.stop_execution(result["execution_job_uuid"], command_uuid=accepted["command_uuid"], reason=result["reason"])
-            else:
-                self.cancel(task_uuid, command_uuid=accepted["command_uuid"], reason="error_decision")
+                        inventory.release_error_occupancies(result["occupancies"])
+                    self.error_control.apply_resource_facts(accepted)
+                    self._scheduler.release_error_occupancies(result["occupancies"])
+                elif result["action"] == "stop_manual_action":
+                    self.stop_execution(result["execution_job_uuid"], command_uuid=accepted["command_uuid"], reason=result["reason"])
+                else:
+                    self.cancel(task_uuid, command_uuid=accepted["command_uuid"], reason="error_decision")
+                self.error_control.mark_decision_effects_applied(accepted["command_uuid"])
             applied = self.error_control.mark_applied(accepted["command_uuid"])
         self._scheduler.reschedule()
         return applied
@@ -1221,6 +1225,10 @@ class TaskSchedulerBridge:
             job_uuid = self._required_text(job.get("uuid"), field="job.uuid")
             claim = self._projection.get_execution_claim(job_uuid)
             if claim is None:
+                # 错误处置手动通道本来不签发 Claim；仅恢复结果路由，保留待核对事实。
+                # 重试的 workflow 通道即使保留手动来源元数据，仍须持有自己的 Claim。
+                if job.get("execution_source") == "error_manual":
+                    continue
                 if self._scheduler.physical_dispatch_enabled:
                     raise StoreConflict(f"等待物理结算的作业缺少库存 Claim：{job_uuid}")
                 continue

@@ -244,7 +244,27 @@ def test_station_error_handling_swagger_is_plain_chinese() -> None:
     application.include_router(create_error_handling_router(service))
     schema = application.openapi()
     _assert_every_public_item_is_documented(schema)
-    assert len(schema["paths"]) == 16
+    review = schema["paths"]["/stations/{station_id}/manual-actions/{command_id}/review"]["post"]
+    assert review["summary"] == "确认已结束手动动作的现场核对结果"
+    request = schema["components"]["schemas"]["ManualReviewRequest"]
+    assert {"session_id", "expected_review_version", "reason", "operator_confirmed"} <= set(request["required"])
+    assert request["properties"]["operator_confirmed"]["type"] == "boolean"
+
+    historical = schema["paths"][
+        "/stations/{station_id}/manual-action-jobs/{job_uuid}/review"
+    ]
+    assert {"get", "post"} <= set(historical)
+    request_ref = historical["post"]["requestBody"]["content"]["application/json"]["schema"]["$ref"]
+    historical_request = schema["components"]["schemas"][request_ref.rsplit("/", 1)[-1]]
+    assert set(historical_request["required"]) == {
+        "expected_review_version", "reason", "operator_confirmed"
+    }
+    assert historical_request["properties"]["operator_confirmed"]["type"] == "boolean"
+    assert historical_request["additionalProperties"] is False
+    assert any(
+        parameter["name"] == "Idempotency-Key" and parameter["required"]
+        for parameter in historical["post"]["parameters"]
+    )
 
 
 def test_device_task_communication_swagger_is_plain_chinese(tmp_path: Path) -> None:

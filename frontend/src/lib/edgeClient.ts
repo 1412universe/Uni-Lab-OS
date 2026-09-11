@@ -8,6 +8,7 @@ import type {
   NodePresentationStatus,
   RunPreflightReport,
   TaskNode,
+  TaskNodeJobEvidence,
   TaskNodeWaitReason,
   TaskPresentationStatus,
   WorkflowDefinition,
@@ -412,7 +413,9 @@ function jobNodeStatus(
   if (job) {
     if (job.manual_confirmation?.status === 'pending') return 'attention'
     const status = String(job.status)
-    if (job.uncertainty_reason) return 'attention'
+    if (status === 'running' || status === 'dispatched') return 'running'
+    if (status === 'cancel_requested') return 'canceling'
+    if (job.uncertainty_reason && !reviewedManualJob(job)) return 'attention'
     if (job.wait_reason?.code || job.wait_reason?.message) return 'waiting'
     if (status === 'succeeded') return 'succeeded'
     if (status === 'running' || status === 'dispatched') return 'running'
@@ -431,6 +434,38 @@ function jobNodeStatus(
   if (taskStatus === 'intervention_required' || taskStatus === 'execution_unknown' || taskStatus === 'unknown') return 'attention'
   if (taskStatus === 'failed' && node.kind === 'workflow_output') return 'pending'
   return 'pending'
+}
+
+function reviewedManualJob(job: RawRecord): boolean {
+  const review = job.manual_review || job.control_data?.manual_review
+  return job.execution_source === 'error_manual'
+    && ['succeeded', 'failed', 'canceled', 'timeout'].includes(String(job.status))
+    && job.result_reviewed === true && Boolean(job.review_version)
+    && review?.review_version === job.review_version
+}
+
+function taskJobEvidence(job: RawRecord): TaskNodeJobEvidence {
+  const review = job.manual_review || job.control_data?.manual_review
+  return {
+    uuid: String(job.uuid || ''), executionSource: String(job.execution_source || ''), executionStatus: String(job.status || ''),
+    uncertaintyReason: job.uncertainty_reason ? String(job.uncertainty_reason) : undefined,
+    reviewVersion: job.review_version ? String(job.review_version) : undefined, resultReviewed: reviewedManualJob(job),
+    manualReview: job.execution_source === 'error_manual' && review ? {
+      reviewVersion: String(review.review_version || ''), operatorId: String(review.operator_id || ''),
+      reviewedAt: String(review.reviewed_at || ''), reason: String(review.reason || ''),
+    } : undefined,
+    attempt: job.attempt === undefined ? undefined : Number(job.attempt),
+    param: job.param, feedbackData: job.feedback_data, returnInfo: job.return_info,
+    errorInfo: Array.isArray(job.error_info) ? job.error_info : [],
+    startedAt: job.started_at ? String(job.started_at) : undefined,
+    finishedAt: job.finished_at ? String(job.finished_at) : undefined,
+    manualConfirmation: job.manual_confirmation ? {
+      status: String(job.manual_confirmation.status) as 'pending' | 'approved' | 'rejected' | 'timed_out' | 'canceled',
+      deadlineAt: String(job.manual_confirmation.deadline_at || ''),
+      actions: Array.isArray(job.manual_confirmation.actions)
+        ? job.manual_confirmation.actions.filter((action: unknown) => action === 'approve' || action === 'reject') : [],
+    } : undefined,
+  }
 }
 
 const waitReasonDefaults: Record<string, { title: string; message: string }> = {
@@ -810,6 +845,11 @@ export function adaptTask(
   const controlStatus = String(raw.control_status || 'active')
   const cleanupStatus = String(raw.cleanup_status || 'none')
   const normalisedStatus = normaliseTaskStatus(raw.status)
+  // 只有后端核实没有其他待处理执行或资源占用，才收起任务级残留核对提示。
+  const manualAttentionResolved = raw.manual_review_attention_resolved === true
+    && terminalTaskStatuses.has(normalisedStatus) && jobs.some(reviewedManualJob)
+    && jobs.every((job) => ['succeeded', 'failed', 'canceled', 'timeout', 'skipped'].includes(String(job.status))
+      && job.manual_confirmation?.status !== 'pending' && (!job.uncertainty_reason || reviewedManualJob(job)))
   const hasInFlightJob = jobs.some((job) => (
     ['dispatched', 'running', 'cancel_requested'].includes(String(job.status || ''))
   ))
@@ -817,8 +857,8 @@ export function adaptTask(
   if (normalisedStatus === 'pending' && waitMessage) status = 'admission_blocked'
   if (!terminalTaskStatuses.has(normalisedStatus) && controlStatus === 'paused' && !hasInFlightJob) status = 'paused'
   if (controlStatus === 'waiting_intervention') status = 'intervention_required'
-  if (controlStatus === 'waiting_reconciliation') status = 'execution_unknown'
-  if (cleanupStatus === 'requires_attention' || attentionMessage) status = 'intervention_required'
+  if (controlStatus === 'waiting_reconciliation' && !manualAttentionResolved) status = 'execution_unknown'
+  if ((cleanupStatus === 'requires_attention' || attentionMessage) && !manualAttentionResolved) status = 'intervention_required'
   const planNodes = Array.isArray(raw.execution_plan?.nodes) ? raw.execution_plan.nodes : []
   const sortedNodes = [...planNodes].sort(
     (left, right) => Number(left.topological_index || 0) - Number(right.topological_index || 0),
@@ -836,23 +876,10 @@ export function adaptTask(
       device: node.device_id ? String(node.device_id) : undefined,
       materialUuid: node.material_uuid ? String(node.material_uuid) : undefined,
       waitReason: presentWaitReason(job?.wait_reason, node, waitResourceLabels),
-      job: job ? {
-        uuid: String(job.uuid || ''),
-        attempt: job.attempt === undefined ? undefined : Number(job.attempt),
-        param: job.param,
-        feedbackData: job.feedback_data,
-        returnInfo: job.return_info,
-        errorInfo: Array.isArray(job.error_info) ? job.error_info : [],
-        startedAt: job.started_at ? String(job.started_at) : undefined,
-        finishedAt: job.finished_at ? String(job.finished_at) : undefined,
-        manualConfirmation: job.manual_confirmation ? {
-          status: String(job.manual_confirmation.status) as 'pending' | 'approved' | 'rejected' | 'timed_out' | 'canceled',
-          deadlineAt: String(job.manual_confirmation.deadline_at || ''),
-          actions: Array.isArray(job.manual_confirmation.actions)
-            ? job.manual_confirmation.actions.filter((action: unknown) => action === 'approve' || action === 'reject')
-            : [],
-        } : undefined,
-      } : undefined,
+      job: job ? taskJobEvidence(job) : undefined,
+      manualReviewJobs: jobs.filter((candidate) => String(candidate.workflow_node_uuid) === uuid
+        && candidate.execution_source === 'error_manual'
+        && (candidate.uncertainty_reason || candidate.manual_review || candidate.control_data?.manual_review)).map(taskJobEvidence),
     }
   })
   const incomingNodeUuids = new Map<string, string[]>()
@@ -941,7 +968,7 @@ export function adaptTask(
     sample: String(raw.input?.sample_id || raw.input?.sample || raw.meta_data?.sample_id || '未命名样品'),
     description: String(raw.description || workflowName),
     current: String(
-      waitMessage
+      (manualAttentionResolved ? raw.wait_reason?.message || raw.wait_reason?.code : waitMessage)
       || activeNode?.name
       || (status === 'succeeded'
         ? '结果已汇总'

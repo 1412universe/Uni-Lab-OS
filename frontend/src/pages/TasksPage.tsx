@@ -53,6 +53,8 @@ import type {
 import { sourceSiteOptions } from '../lib/sourceSiteOptions'
 import { taskColor } from '../lib/resourceUsage'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
+import { HistoricalManualActionReview } from '../components/HistoricalManualActionReview'
+import { TaskResourceUnlock } from '../components/TaskResourceUnlock'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
 
@@ -69,7 +71,15 @@ const nodeStatusLabels: Record<TaskNode['status'], string> = {
   skipped: '已跳过',
   canceling: '取消中',
   canceled: '已取消',
-  attention: '需要人工确认',
+  attention: '需要处理',
+}
+
+function nodeStatusLabel(node?: TaskNode) {
+  if (!node) return nodeStatusLabels.pending
+  if (node.job?.manualConfirmation?.status === 'pending') return '需要人工确认'
+  if (node.status === 'attention' && node.job?.uncertaintyReason && !node.job.resultReviewed) return '结果待核对'
+  const label = nodeStatusLabels[node.status]
+  return node.job?.resultReviewed ? `${label} · 已核对` : label
 }
 
 const taskPriorityLabels = {
@@ -160,7 +170,8 @@ function NodeMarker({
     }
   }, [tooltipVisible])
 
-  const label = `${node?.name || `节点 ${index + 1}`}，${nodeStatusLabels[status]}`
+  const statusLabel = nodeStatusLabel(node)
+  const label = `${node?.name || `节点 ${index + 1}`}，${statusLabel}`
   const remainingSeconds = awaitingConfirmation && confirmation.deadlineAt
     ? Math.max(0, Math.ceil((new Date(confirmation.deadlineAt).getTime() - now) / 1000))
     : 0
@@ -200,7 +211,7 @@ function NodeMarker({
                     ? <X size={13} />
                     : index + 1}
         </span>
-        <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {nodeStatusLabels[status]}</small>
+        <small className="matrix-node-meta">{String(index + 1).padStart(2, '0')} · {statusLabel}</small>
         <strong className="matrix-node-title">{node?.name || `节点 ${index + 1}`}</strong>
       </button>
       {awaitingConfirmation ? (
@@ -220,7 +231,7 @@ function NodeMarker({
           style={{ left: tooltipPosition.left, top: tooltipPosition.top }}
         >
           <strong>{node?.name || `节点 ${index + 1}`}</strong>
-          <p>{nodeStatusLabels[status]}</p>
+          <p>{statusLabel}</p>
           {waitReason ? (
             <>
               <em>{waitReason.title}</em>
@@ -429,7 +440,7 @@ function ErrorPolicyDialog({ intervention, connected, onNotify }: {
   )
 }
 
-function TaskNodeInspector({ task, node, onClose }: { task: WorkflowTask; node: TaskNode; onClose: () => void }) {
+function TaskNodeInspector({ task, node, connected, onNotify, onClose }: { task: WorkflowTask; node: TaskNode; connected: boolean; onNotify: (message: string) => void; onClose: () => void }) {
   return (
     <section className="panel task-node-inspector" role="region" aria-label="节点运行详情">
       <header>
@@ -440,7 +451,7 @@ function TaskNodeInspector({ task, node, onClose }: { task: WorkflowTask; node: 
         </div>
         <div className="node-inspector-status">
           <span className={`task-state-dot task-state-${task.status}`} />
-          <strong>{nodeStatusLabels[node.status]}</strong>
+          <strong>{nodeStatusLabel(node)}</strong>
           <button type="button" aria-label="关闭节点运行详情" onClick={onClose}><X size={16} /></button>
         </div>
       </header>
@@ -462,6 +473,9 @@ function TaskNodeInspector({ task, node, onClose }: { task: WorkflowTask; node: 
           <pre>{jsonEvidence(node.job?.errorInfo, '暂无错误')}</pre>
         </article>
       </div>
+      {(node.manualReviewJobs || (node.job?.executionSource === 'error_manual' && (node.job.uncertaintyReason || node.job.manualReview) ? [node.job] : [])).map((job) => (
+        <HistoricalManualActionReview key={job.uuid} job={job} taskUuid={task.uuid} taskNeedsAttention={['execution_unknown', 'intervention_required', 'unknown'].includes(task.status)} connected={connected} onNotify={onNotify} />
+      ))}
     </section>
   )
 }
@@ -535,7 +549,6 @@ function materialTransferSettlementOptions(
 /**
  * 展示工作流任务（WorkflowTask）的活动执行锁并提供安全人工处置。
  * @param taskUuid 工作流任务稳定身份。
- * @param taskStatus 当前任务业务状态。
  * @param materials 库存权威投影，用于解析实际库位和父物料身份。
  * @param connected Edge 是否可写。
  * @param onNotify 向控制台发布操作结果。
@@ -543,13 +556,11 @@ function materialTransferSettlementOptions(
  */
 function TaskExecutionLocks({
   taskUuid,
-  taskStatus,
   materials,
   connected,
   onNotify,
 }: {
   taskUuid: string
-  taskStatus: WorkflowTask['status']
   materials: MaterialRecord[]
   connected: boolean
   onNotify: (message: string) => void
@@ -558,6 +569,7 @@ function TaskExecutionLocks({
   const [releaseTarget, setReleaseTarget] = useState<WorkflowTaskExecutionLock>()
   const [releaseReason, setReleaseReason] = useState('')
   const [physicalConfirmed, setPhysicalConfirmed] = useState(false)
+  const [taskUnlockBusy, setTaskUnlockBusy] = useState(false)
   const [settlementContext, setSettlementContext] = useState<FailedMaterialTransferSettlementContext>()
   const [settlementOptions, setSettlementOptions] = useState<MaterialTransferSettlementOption[]>([])
   const [settlementSiteUuid, setSettlementSiteUuid] = useState('')
@@ -688,14 +700,15 @@ function TaskExecutionLocks({
           <AlertCircle size={15} />读取执行锁失败：{locksQuery.error instanceof Error ? locksQuery.error.message : '未知错误'}
         </div>
       ) : null}
+      <TaskResourceUnlock taskUuid={taskUuid} snapshot={locksQuery.data} connected={connected} snapshotUnavailable={locksQuery.isError} busy={releaseMutation.isPending || prepareSettlementMutation.isPending || settlementMutation.isPending || Boolean(releaseTarget || settlementContext)} onBusyChange={setTaskUnlockBusy} onNotify={onNotify} />
       {locksQuery.data ? (
         <>
           <div className="task-lock-warning" role="alert">
             <ShieldAlert size={16} />
-            <span><strong>人工释放是现场处置动作。</strong>只在设备已停止、物理现场安全且确认没有在途动作时操作；一次释放会回收该 Job 的整组执行锁。</span>
+            <span><strong>人工释放是现场处置动作。</strong>只在设备已停止、物理现场安全且确认没有在途动作时操作；请按 Job 或整个 Task 选择释放范围。</span>
           </div>
           {locksQuery.data.activeDeviceTenancyCount > 0 ? (
-            <div className="task-lock-tenancy-warning"><AlertCircle size={15} />当前任务仍有 {locksQuery.data.activeDeviceTenancyCount} 个活动设备托管，后端会禁止释放。</div>
+            <div className="task-lock-tenancy-warning"><AlertCircle size={15} />当前任务仍有 {locksQuery.data.activeDeviceTenancyCount} 个活动设备托管，不能按单个 Job 解除；任务级解锁会重新检查全部资源。</div>
           ) : null}
           {locksQuery.data.locks.length ? (
             <div className="task-lock-groups">
@@ -728,12 +741,12 @@ function TaskExecutionLocks({
                       ))}
                     </div>
                     <footer>
-                      <small>{taskStatus === 'failed' || taskStatus === 'canceled' || taskStatus === 'timeout' ? '任务已终止，可按后端资格处置' : '仅终态任务允许人工处置'}</small>
+                      <small>{['failed', 'canceled', 'timeout'].includes(locksQuery.data.taskStatus) ? '任务已终止，可按后端资格处置' : '仅终态任务允许人工处置'}</small>
                       <div className="task-lock-group-actions">
                         {settlementCandidate ? (
                           <Button
                             icon={prepareSettlementMutation.isPending ? <LoaderCircle className="spin" size={13} /> : <ShieldAlert size={13} />}
-                            disabled={!connected || prepareSettlementMutation.isPending || settlementMutation.isPending}
+                            disabled={!connected || taskUnlockBusy || prepareSettlementMutation.isPending || settlementMutation.isPending}
                             onClick={() => prepareSettlementMutation.mutate(jobUuid)}
                           >
                             {prepareSettlementMutation.isPending ? '读取结算信息' : '完成物理结算'}
@@ -742,7 +755,7 @@ function TaskExecutionLocks({
                         <Button
                           tone="danger"
                           icon={<ShieldCheck size={13} />}
-                          disabled={!connected || !releaseCandidate || releaseMutation.isPending}
+                          disabled={!connected || taskUnlockBusy || !releaseCandidate || releaseMutation.isPending}
                           onClick={() => releaseCandidate && openReleaseDialog(releaseCandidate)}
                         >
                           解除这组锁
@@ -1307,7 +1320,7 @@ export function TasksPage({
       </Panel>
 
       {selectedNodeTask && selectedNode ? (
-        <TaskNodeInspector task={selectedNodeTask} node={selectedNode} onClose={() => setSelectedNodeRef(undefined)} />
+        <TaskNodeInspector task={selectedNodeTask} node={selectedNode} connected={connected} onNotify={onNotify} onClose={() => setSelectedNodeRef(undefined)} />
       ) : null}
 
       <section className="task-detail-grid">
@@ -1336,8 +1349,8 @@ export function TasksPage({
                 </a>
               ) : null}
               <TaskExecutionLocks
+                key={selected.uuid}
                 taskUuid={selected.uuid}
-                taskStatus={selected.status}
                 materials={materials}
                 connected={connected}
                 onNotify={onNotify}

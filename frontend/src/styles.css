@@ -913,6 +913,21 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .revision-target-warning { display: block; margin-top: 3px; color: #b54708; font-size: 7px; line-height: 1.35; }
 
 .task-node-inspector { margin-top: 12px; overflow: hidden; }
+.historical-manual-review { margin: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.historical-manual-review > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.historical-manual-review > header > div { display: grid; gap: 6px; }
+.historical-manual-review small { color: var(--subtle); overflow-wrap: anywhere; }
+.historical-manual-review p { margin: 12px 0; line-height: 1.6; }
+.historical-manual-review .form-field { display: grid; gap: 8px; margin: 14px 0; }
+.historical-manual-review textarea { width: 100%; resize: vertical; padding: 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+.historical-review-confirm { display: flex; align-items: flex-start; gap: 9px; margin: 14px 0; line-height: 1.6; }
+.historical-review-confirm input { margin-top: 4px; }
+.historical-review-audit, .historical-review-pending { margin: 14px 0; padding: 12px; border-radius: 8px; background: #f6f8fc; }
+.historical-manual-review > .button { margin-right: 8px; }
+.historical-review-evidence { margin: 14px 0; }
+.historical-review-evidence summary { cursor: pointer; font-weight: 600; }
+.historical-review-evidence > small { display: block; margin: 10px 0; }
+.historical-review-evidence pre { max-height: 200px; overflow: auto; margin: 6px 0 14px; padding: 10px; background: #f6f8fc; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-node-inspector > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; background: linear-gradient(100deg, #f6f8ff, #fff); border-bottom: 1px solid var(--line); }
 .task-node-inspector > header span { color: #5f72a5; font: 8px 'JetBrains Mono', monospace; letter-spacing: .1em; }
 .task-node-inspector > header h2 { margin-top: 4px; color: #25324a; font-size: 13px; }
@@ -997,7 +1012,13 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .task-lock-settlement-options label:has(input:checked) { color: #7a2e0e; background: #fffaeb; border-color: #fdb022; }
 .task-lock-settlement-options input { flex: none; width: 14px; height: 14px; margin-top: 1px; accent-color: #b54708; }
 .task-lock-dialog > form > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; background: #f9fafb; border-top: 1px solid var(--line); }
-.task-lock-dialog .button:disabled { cursor: not-allowed; opacity: .48; transform: none; }
+.task-execution-locks .button:disabled { cursor: not-allowed; opacity: .48; transform: none; box-shadow: none; }
+.task-resource-unlock { margin: 10px 0; padding: 12px; border: 1px solid #fedf89; border-radius: 8px; background: #fffcf5; font-size: 10px; line-height: 1.6; }
+.task-resource-unlock-header { display: flex; gap: 12px; justify-content: space-between; align-items: center; }
+.task-resource-unlock-header .button { flex: none; }
+.task-resource-unlock p { margin: 4px 0 8px; color: #667085; }
+.task-unlock-result { margin: 10px 0; padding: 10px; border: 1px solid #a6f4c5; border-radius: 6px; color: #067647; background: #ecfdf3; }
+.task-unlock-pending { margin: 10px 0; padding: 10px; border: 1px solid #fedf89; border-radius: 6px; background: #fffaeb; overflow-wrap: anywhere; }
 .running-job-list { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; padding: 12px; }
 .running-job-list > button { display: grid; grid-template-columns: 10px minmax(0,1fr) auto; gap: 8px; align-items: center; min-width: 0; min-height: 61px; padding: 10px; color: #475467; background: #f4f7ff; border: 1px solid #d6dfff; border-radius: 9px; text-align: left; }
 .running-job-list strong, .running-job-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -176,6 +176,7 @@ SUMMARY_TRANSLATIONS = {
     "Remove Placement": "删除实验室摆放位置",
     "Remove Zone": "删除实验室区域",
     "Reserve": "创建入库预留",
+    "Report Error Decision Required": "上报需要人工处理的设备错误",
     "Resolve Error Decision": "提交设备错误处理结果",
     "Resolve Registered Unknown": "确认设备未知任务的处理结果",
     "Resolve Uncertain Workflow Node Job": "确认状态不确定的节点任务结果",

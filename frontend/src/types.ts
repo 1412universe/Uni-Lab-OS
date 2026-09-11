@@ -175,6 +175,17 @@ export interface ContractField {
 
 export interface TaskNodeJobEvidence {
   uuid: string
+  executionSource?: string
+  executionStatus?: string
+  uncertaintyReason?: string
+  reviewVersion?: string
+  resultReviewed?: boolean
+  manualReview?: {
+    reviewVersion: string
+    operatorId: string
+    reviewedAt: string
+    reason: string
+  }
   attempt?: number
   param: unknown
   feedbackData: unknown
@@ -199,6 +210,7 @@ export interface TaskNode {
   materialUuid?: string
   waitReason?: TaskNodeWaitReason
   job?: TaskNodeJobEvidence
+  manualReviewJobs?: TaskNodeJobEvidence[]
 }
 
 export type WorkflowTaskPriority = 'normal' | 'high'

@@ -46,6 +46,11 @@ from unilabos.workflow.graph_validation import (
     validate_graph,
 )
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
+from unilabos.workflow.manual_action_review import (
+    MANUAL_REVIEW_BASIS_FIELDS,
+    MANUAL_REVIEW_JSON_FIELDS,
+    manual_review_projection,
+)
 from unilabos.workflow.models import (
     WorkflowEdgeWrite,
     WorkflowInventoryRequirementWrite,
@@ -2606,6 +2611,60 @@ class WorkflowStore:
             "page_size": page_size,
         }
 
+    def manual_review_attention_resolved_for_tasks(
+        self, task_uuids: Iterable[str],
+    ) -> Dict[str, bool]:
+        """只读确认独立手动 Task 的剩余提醒是否仅来自已核对结果。"""
+        identities = tuple(dict.fromkeys(str(value) for value in task_uuids if value))
+        resolved = dict.fromkeys(identities, False)
+        if not identities:
+            return resolved
+        placeholders = ", ".join("?" for _ in identities)
+        required_tables = {
+            "execution_claim", "execution_lock_lease", "task_device_tenancy",
+            "workflow_task_material_claim", "workflow_task_command",
+            "workflow_intervention", "workflow_manual_confirmation", "workflow_error_session",
+        }
+        with self._lock:
+            existing_tables = {row[0] for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if not required_tables <= existing_tables:
+                return resolved
+            rows = self._conn.execute(
+                f"""SELECT j.*, t.attention_reason AS task_attention_reason
+                FROM workflow_task t JOIN workflow_node_job j ON j.workflow_task_uuid=t.uuid
+                WHERE t.uuid IN ({placeholders}) AND t.deleted_at IS NULL AND j.deleted_at IS NULL
+                AND t.status IN ('succeeded','failed','canceled','timeout')
+                AND t.control_status IN ('active','waiting_reconciliation')
+                AND t.cleanup_status IN ('none','settled','requires_attention')
+                AND j.execution_source='error_manual' AND j.current_attempt=1
+                AND j.status IN ('succeeded','failed','canceled','timeout')
+                AND (SELECT COUNT(*) FROM workflow_node_job other
+                     WHERE other.workflow_task_uuid=t.uuid AND other.deleted_at IS NULL)=1
+                AND EXISTS (SELECT 1 FROM workflow_error_session s
+                            WHERE s.session_id=json_extract(j.meta_data,'$.session_id'))
+                AND NOT EXISTS (SELECT 1 FROM execution_claim c
+                                WHERE c.workflow_task_uuid=t.uuid AND c.state!='released')
+                AND NOT EXISTS (SELECT 1 FROM execution_lock_lease l
+                                WHERE l.workflow_task_uuid=t.uuid AND l.deleted_at IS NULL AND l.state!='released')
+                AND NOT EXISTS (SELECT 1 FROM task_device_tenancy d
+                                WHERE d.workflow_task_uuid=t.uuid AND d.state!='released')
+                AND NOT EXISTS (SELECT 1 FROM workflow_task_material_claim m
+                                WHERE m.workflow_task_uuid=t.uuid AND m.deleted_at IS NULL AND m.status='active')
+                AND NOT EXISTS (SELECT 1 FROM workflow_task_command c
+                                WHERE c.workflow_task_uuid=t.uuid AND c.status='pending')
+                AND NOT EXISTS (SELECT 1 FROM workflow_intervention i
+                                WHERE i.workflow_task_uuid=t.uuid AND i.stage!='RESOLVED')
+                AND NOT EXISTS (SELECT 1 FROM workflow_manual_confirmation c
+                                WHERE c.workflow_task_uuid=t.uuid AND c.status IN ('pending','approved'))""",
+                identities,
+            ).fetchall()
+        for row in rows:
+            job = self._job_row(row)
+            if row["task_attention_reason"] in (None, "", job.get("uncertainty_reason")):
+                resolved[str(row["workflow_task_uuid"])] = bool(job.get("result_reviewed"))
+        return resolved
+
     def list_startup_mode_switch_blockers(
         self,
         *,
@@ -2620,22 +2679,31 @@ class WorkflowStore:
 
         if limit <= 0:
             raise ValueError("limit 必须大于零")
+        blockers: list[sqlite3.Row] = []
+        cursor: tuple[str, str] | None = None
+        page_size = max(20, limit)
         with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT uuid, status, cleanup_status, workflow_uuid,
-                       execution_kind, create_time
-                FROM workflow_task
-                WHERE deleted_at IS NULL
-                  AND (
-                    status IN ('pending', 'running', 'canceling')
-                    OR cleanup_status NOT IN ('none', 'settled')
-                  )
-                ORDER BY create_time, uuid
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            while len(blockers) < limit:
+                after = "AND (create_time, uuid) > (?, ?)" if cursor else ""
+                parameters = (*cursor, page_size) if cursor else (page_size,)
+                rows = self._conn.execute(
+                    f"""SELECT uuid, status, cleanup_status, workflow_uuid,
+                               execution_kind, create_time
+                    FROM workflow_task
+                    WHERE deleted_at IS NULL
+                      AND (status IN ('pending', 'running', 'canceling')
+                           OR cleanup_status NOT IN ('none', 'settled'))
+                      {after}
+                    ORDER BY create_time, uuid LIMIT ?""",
+                    parameters,
+                ).fetchall()
+                if not rows:
+                    break
+                resolved = self.manual_review_attention_resolved_for_tasks(row["uuid"] for row in rows)
+                blockers.extend(row for row in rows if not resolved.get(row["uuid"], False))
+                cursor = (str(rows[-1]["create_time"]), str(rows[-1]["uuid"]))
+                if len(rows) < page_size:
+                    break
         return [
             {
                 "task_uuid": str(row["uuid"]),
@@ -2644,7 +2712,7 @@ class WorkflowStore:
                 "workflow_uuid": str(row["workflow_uuid"]),
                 "execution_kind": str(row["execution_kind"] or "workflow"),
             }
-            for row in rows
+            for row in blockers[:limit]
         ]
 
     def list_task_presentations(
@@ -2916,10 +2984,18 @@ class WorkflowStore:
         if not identities:
             return {}
         placeholders = ", ".join("?" for _identity in identities)
+        # 完整证据只在进程内计算核对 hash，不把派发凭据加入紧凑响应。
+        review_fields = (*MANUAL_REVIEW_BASIS_FIELDS, "control_data", "execution_source")
+        review_basis_sql = ", ".join(
+            f"'{field}', " + (f"json({field})" if field in MANUAL_REVIEW_JSON_FIELDS else field)
+            for field in review_fields
+        )
         with self._lock:
             rows = self._conn.execute(
                 f"""
                 SELECT current_attempt, retry_of_job_uuid, execution_source, start_state,
+                    CASE WHEN execution_source='error_manual'
+                        THEN json_object({review_basis_sql}) ELSE NULL END AS manual_review_basis,
                     uuid,
                     create_time,
                     update_time,
@@ -4921,6 +4997,7 @@ class WorkflowStore:
             "started_at",
             "finished_at",
         )
+        result.update(manual_review_projection(result))
         return result
 
     @classmethod
@@ -4954,6 +5031,8 @@ class WorkflowStore:
             "started_at",
             "finished_at",
         )
+        if result["execution_source"] == "error_manual":
+            result.update(manual_review_projection(_load(row["manual_review_basis"], {})))
         return result
 
     @staticmethod
