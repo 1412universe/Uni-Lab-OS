@@ -10,6 +10,8 @@
 
 模板类别和数量会随 Uni-Lab OS 版本及用户设备包发生变化。接入时请以当前设备包检查报告和 Uni-Lab OS 实际识别出的设备类别、动作与状态为准，不使用固定数量判断模板是否完整。
 
+设备仓库模板地址：[Uni-Lab-package_management（instrument-category-hierarchy 分支）](https://github.com/dijkstra402/Uni-Lab-package_management/tree/feat/instrument-category-hierarchy)
+
 ## 第一次接入时如何选模板
 
 按下面顺序描述设备，比直接搜索厂商型号更容易找到可复用模板：
