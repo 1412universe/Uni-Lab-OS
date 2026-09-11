@@ -49,6 +49,7 @@ overview
 :maxdepth: 1
 
 installation
+监控、Trace 与日志（可选） <observability>
 environment
 ```
 

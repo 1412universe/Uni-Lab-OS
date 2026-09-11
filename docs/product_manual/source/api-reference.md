@@ -14,9 +14,8 @@ API 是 Uni-Lab OS 网页、Workbench 和自动化工具共用的产品能力入
 
 | 入口 | 地址 |
 | --- | --- |
-| Swagger | [打开当前演示环境 Swagger UI](http://115.190.137.109:30183/api/docs) · `<BACKEND_URL>/api/docs` |
-| OpenAPI JSON | [查看当前演示环境 OpenAPI JSON](http://115.190.137.109:30183/api/openapi.json) · `<BACKEND_URL>/api/openapi.json` |
-| Uni-Lab OS 页面 | `<BACKEND_URL>/console/` |
+| Swagger | [打开 Swagger UI](http://115.190.137.109:30183/api/docs) · `<BACKEND_URL>/api/docs` |
+| OpenAPI JSON | [查看 OpenAPI JSON](http://115.190.137.109:30183/api/openapi.json) · `<BACKEND_URL>/api/openapi.json` |
 
 :::{warning}
 当前演示 API 没有通用用户认证。不要把公网地址、真实 UUID 或示例请求直接用于生产自动化。生产集成必须经过受控网关、HTTPS、身份认证和最小权限授权。
