@@ -44,9 +44,9 @@
 
 下载 [Uni-Lab OS 0.11.4 · macOS ARM64 安装包](https://uni-lab.oss-cn-zhangjiakou.aliyuncs.com/uni-lab-installer/v0.3.0/macOS-ARM64/Uni-Lab-OS-0.11.4-osx-arm64.sh)，保存到系统的“下载”文件夹。
 
-此安装包适用于 Apple 芯片（M 系列），不适用于 Intel Mac、Windows 或 Linux。Windows 安装步骤后续补充。
+此安装包适用于 Apple 芯片（M 系列），不适用于 Intel Mac、Windows 或 Linux。Windows x64 用户请直接阅读第 3.3 节。
 
-### 3.2 安装
+### 3.2 安装（macOS）
 
 打开 macOS 的“终端”，执行以下命令，无需解压安装包：
 
@@ -60,6 +60,20 @@ bash Uni-Lab-OS-0.11.4-osx-arm64.sh
 如果默认目录已经存在，请选择另一个尚不存在、且不含空格的目录，不要覆盖或删除仍在使用的环境。若安装包保存在其他位置，请先进入实际下载目录再执行安装命令。
 
 完成后继续执行第 5 节“验证 OS 安装”。
+
+### 3.3 下载安装包（Windows x64）
+
+下载 [Uni-Lab OS 0.11.4 · Windows x64 安装包](https://uni-lab.oss-cn-zhangjiakou.aliyuncs.com/uni-lab-installer/v0.3.0/Windows-X64/Uni-Lab-OS-0.11.4-win-64.exe)，保存到系统的“下载”文件夹。
+
+此安装包适用于 Intel/AMD x64 架构的 Windows 电脑，已包含 Python 运行环境、Uni-Lab OS 和前端，无需提前安装 Python、Conda/Mamba 或克隆 OS 源码。
+
+### 3.4 安装（Windows x64）
+
+1. 双击下载的 `Uni-Lab-OS-0.11.4-win-64.exe`，无需解压。
+2. 按向导阅读并同意许可协议，选择 `Just Me`（仅当前用户）安装。
+3. 选择一个尚不存在、当前用户可写、路径较短且不含空格和中文的目录。下文以 `C:\UniLabOS` 为例；它是示例路径，请以实际选择的安装位置为准。不要覆盖或删除仍在使用的旧环境。
+4. 保持“添加到 PATH”和“注册为默认 Python”等选项不勾选，点击安装，等待向导提示完成。安装时需要解压并配置运行环境，可能需要数分钟；完成前不要关闭安装程序。
+5. 安装完成后，打开 Windows 的“命令提示符”（CMD），继续执行第 5 节“验证 OS 安装”。
 
 ## 4. 路径二：安装 `unilabos-env` 后拉取源码
 
@@ -122,13 +136,21 @@ source "$HOME/uni-lab-os/bin/activate" "$HOME/uni-lab-os"
 
 如果安装时修改了目录，请将命令中的两处 `$HOME/uni-lab-os` 都替换为实际安装路径。
 
+**一键安装包（Windows x64，CMD）：**
+
+```bat
+call "C:\UniLabOS\Scripts\activate.bat" "C:\UniLabOS"
+```
+
+请将命令中的两处 `C:\UniLabOS` 都替换为实际安装路径。此命令激活安装包自带的环境，不需要提前执行 `conda init`。
+
 **源码安装：**
 
 ```bash
 conda activate unilab
 ```
 
-激活后，两种安装方式都执行以下命令：
+激活后，两种安装方式都执行以下命令（macOS 终端和 Windows CMD 通用）：
 
 ```bash
 python -c "import sys; print(sys.executable)"
