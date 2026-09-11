@@ -14,12 +14,12 @@
 
 ## 1. 选择安装路径
 
-系统规划下面两条安装路径；当前请使用可用的源码安装路径：
+按使用方式选择下面一条安装路径：
 
 | 路径 | 适合谁 | 得到什么 |
 | --- | --- | --- |
-| **一键安装包（暂无法提供）** | 首次体验、演示和不修改 OS 源码的用户 | 已打包的 Uni-Lab OS 运行环境、命令行和操作页面 |
-| **Conda/Mamba + `unilabos-env` + 源码** | 需要创建设备包、开发驱动或修改 OS 的用户 | ROS/Python 依赖、可编辑源码，以及仓库内置的轻量操作页面 |
+| **一键安装包** | 首次体验、演示和不修改 OS 源码的用户 | 已打包的 Uni-Lab OS 运行环境和命令行；本页先提供 macOS Apple 芯片版安装步骤 |
+| **Conda/Mamba + `unilabos-env` + 源码** | 需要创建设备包、开发驱动或修改 OS 的用户 | ROS/Python 依赖和可编辑的 OS 源码 |
 
 `unilabos-full` 等仿真和可视化环境不是默认安装路径。确实需要 Gazebo、RViz 或 MoveIt 时，再按[环境与运行配置](environment.md)选择。
 
@@ -27,53 +27,37 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | Windows 10/11、Ubuntu 20.04+ 或 macOS 10.15+ |
+| 操作系统 | 本页一键安装包适用于 macOS 11.0 及以上、Apple 芯片（M 系列）；其他平台请按对应安装方式准备环境 |
 | Python | 安装路径会准备兼容的 Python 3.11 环境 |
 | 磁盘空间 | 至少 10 GB 可用空间 |
 | 网络 | 源码安装时能访问 Conda 软件源和 Git 仓库 |
-| Conda/Mamba | 两条路径都需要；推荐安装带 `mamba` 的 Miniforge |
+| Conda/Mamba | 一键安装包已包含环境管理工具，无需提前安装；源码安装需先准备，推荐 Miniforge |
 | 设备包 | **不需要提前准备**，安装 OS 后再创建 |
 
-如果终端中已经能执行 `conda --version` 或 `mamba --version`，直接选择下一节的一条路径。否则先安装 Miniforge，并重新打开终端。
+使用一键安装包时，直接继续第 3 节。选择源码安装时，如果终端中还不能执行 `conda --version` 或 `mamba --version`，请先安装 Miniforge，并重新打开终端。
 
 ## 3. 路径一：使用一键安装包
 
-:::{warning}
-**一键安装包暂无法提供。** 当前请使用第 4 节“安装 `unilabos-env` 后拉取源码”的方式安装 Uni-Lab OS。
-:::
+一键安装包已包含 Python 运行环境和 Uni-Lab OS，不需要提前安装 Conda/Mamba，也不需要克隆 OS 源码。实验室设备包在 OS 安装完成后再准备。
 
-一键安装包适合最快完成首次体验。它已经包含 Uni-Lab OS 运行环境，不需要先克隆仓库或寻找设备包。
+### 3.1 下载安装包（macOS Apple 芯片）
 
-### 3.1 获取对应平台的安装包
+下载 [Uni-Lab OS 0.11.4 · macOS ARM64 安装包](https://uni-lab.oss-cn-zhangjiakou.aliyuncs.com/uni-lab-installer/v0.3.0/macOS-ARM64/Uni-Lab-OS-0.11.4-osx-arm64.sh)，保存到系统的“下载”文件夹。
 
-从交付方取得最新的一键安装包；使用公开构建时，可进入 [GitHub Actions - Conda Pack Build](https://github.com/deepmodeling/Uni-Lab-OS/actions/workflows/conda-pack-build.yml)，选择最新的成功构建并下载对应平台的 Artifact：
+此安装包适用于 Apple 芯片（M 系列），不适用于 Intel Mac、Windows 或 Linux。Windows 安装步骤后续补充。
 
-- Windows：`unilab-pack-win-64-<branch>.zip`
-- macOS Intel：`unilab-pack-osx-64-<branch>.tar.gz`
-- macOS Apple Silicon：`unilab-pack-osx-arm64-<branch>.tar.gz`
-- Linux：`unilab-pack-linux-64-<branch>.tar.gz`
+### 3.2 安装
 
-GitHub Actions 下载的 Artifact 可能还有一层 ZIP 包装；先解开外层 ZIP，再使用里面的平台安装包和安装脚本。
-
-### 3.2 解压并安装
-
-macOS 或 Linux：
+打开 macOS 的“终端”，执行以下命令，无需解压安装包：
 
 ```bash
-tar -xzf unilab-pack-<platform>-<branch>.tar.gz
-cd unilab-pack-<platform>-<branch>
-bash install_unilab.sh
-conda activate unilab
+cd "$HOME/Downloads"
+bash Uni-Lab-OS-0.11.4-osx-arm64.sh
 ```
 
-Windows 解压 ZIP 后，双击 `install_unilab.bat`，或在命令行执行：
+按终端提示阅读许可协议，确认同意后输入 `yes`；选择安装位置时，直接按回车使用默认目录 `$HOME/uni-lab-os`（即当前用户主目录下的 `uni-lab-os`）。若询问是否初始化 Conda，可以选择 `no`，后续按第 5 节手动激活环境即可。
 
-```batch
-install_unilab.bat
-conda activate unilab
-```
-
-安装脚本会找到本机 Conda、把预打包环境安装为 `unilab`，并完成 `conda-unpack`。已有同名环境时先确认是否允许替换，不要误删仍在使用的环境。
+如果默认目录已经存在，请选择另一个尚不存在、且不含空格的目录，不要覆盖或删除仍在使用的环境。若安装包保存在其他位置，请先进入实际下载目录再执行安装命令。
 
 完成后继续执行第 5 节“验证 OS 安装”。
 
@@ -122,24 +106,38 @@ git switch product/durable-scheduler-kernel-v2
 git pull --ff-only origin product/durable-scheduler-kernel-v2
 ```
 
-源码仓库已经包含构建好的轻量操作页面，位于 `unilabos/app/web/static/console/`，会随 Uni-Lab OS 一起提供。只使用页面时不需要执行 `npm install` 或单独启动前端；只有修改 `frontend/` 源码时，才需要 Node.js 并重新执行前端测试和构建。
-
 :::{note}
 `pip install -e .` 让本地源码修改立即生效；`uv pip install` 安装运行所需的 pip 依赖。以后切换仓库分支或拉取新代码时，应重新验证依赖和命令版本。
 :::
 
 ## 5. 验证 OS 安装
 
-无论选择哪条路径，都先确认当前终端使用的是刚安装的环境：
+先按安装方式激活环境。每次新打开终端时，都需要重新激活。
+
+**一键安装包（macOS）：**
+
+```bash
+source "$HOME/uni-lab-os/bin/activate" "$HOME/uni-lab-os"
+```
+
+如果安装时修改了目录，请将命令中的两处 `$HOME/uni-lab-os` 都替换为实际安装路径。
+
+**源码安装：**
 
 ```bash
 conda activate unilab
+```
+
+激活后，两种安装方式都执行以下命令：
+
+```bash
+python -c "import sys; print(sys.executable)"
 python -c "import unilabos; print(unilabos.__version__)"
 unilab --help
 unilab workspace --help
 ```
 
-四条命令都成功，才说明 OS 已经安装。此时即使本机还没有任何用户设备包，安装也已经完成。
+确认 Python 路径指向刚安装的环境、版本号与所装版本一致，且两条帮助命令能正常显示。此时 OS 安装验证完成，即使还没有准备设备包，也可以继续下一节。
 
 ## 6. 准备并安装设备包
 
@@ -212,8 +210,6 @@ unilab workspace status \
   --workspace "$DEVICE_PACKAGE_ROOT" \
   --json
 ```
-
-操作页面地址以状态命令实际输出为准。源码路径安装时，页面由 Workspace Backend 直接从 `/console/` 提供，不需要再运行一个独立前端服务。
 
 如果启动失败，先查看组件日志，不要改用真实设备配置反复尝试：
 

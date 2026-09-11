@@ -367,7 +367,7 @@
 </div>
 <section id="id2">
 <h2>1. 选择安装路径<a class="headerlink" href="#id2" title="链接到此标题。">¶</a></h2>
-<p>系统规划下面两条安装路径；当前请使用可用的源码安装路径：</p>
+<p>按使用方式选择下面一条安装路径：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -377,13 +377,13 @@
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><strong>一键安装包（暂无法提供）</strong></p></td>
+<tr class="row-even"><td><p><strong>一键安装包</strong></p></td>
 <td><p>首次体验、演示和不修改 OS 源码的用户</p></td>
-<td><p>已打包的 Uni-Lab OS 运行环境、命令行和操作页面</p></td>
+<td><p>已打包的 Uni-Lab OS 运行环境和命令行；本页先提供 macOS Apple 芯片版安装步骤</p></td>
 </tr>
 <tr class="row-odd"><td><p><strong>Conda/Mamba + <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> + 源码</strong></p></td>
 <td><p>需要创建设备包、开发驱动或修改 OS 的用户</p></td>
-<td><p>ROS/Python 依赖、可编辑源码，以及仓库内置的轻量操作页面</p></td>
+<td><p>ROS/Python 依赖和可编辑的 OS 源码</p></td>
 </tr>
 </tbody>
 </table>
@@ -401,7 +401,7 @@
 </thead>
 <tbody>
 <tr class="row-even"><td><p>操作系统</p></td>
-<td><p>Windows 10/11、Ubuntu 20.04+ 或 macOS 10.15+</p></td>
+<td><p>本页一键安装包适用于 macOS 11.0 及以上、Apple 芯片（M 系列）；其他平台请按对应安装方式准备环境</p></td>
 </tr>
 <tr class="row-odd"><td><p>Python</p></td>
 <td><p>安装路径会准备兼容的 Python 3.11 环境</p></td>
@@ -413,7 +413,7 @@
 <td><p>源码安装时能访问 Conda 软件源和 Git 仓库</p></td>
 </tr>
 <tr class="row-even"><td><p>Conda/Mamba</p></td>
-<td><p>两条路径都需要；推荐安装带 <code class="docutils literal notranslate"><span class="pre">mamba</span></code> 的 Miniforge</p></td>
+<td><p>一键安装包已包含环境管理工具，无需提前安装；源码安装需先准备，推荐 Miniforge</p></td>
 </tr>
 <tr class="row-odd"><td><p>设备包</p></td>
 <td><p><strong>不需要提前准备</strong>，安装 OS 后再创建</p></td>
@@ -421,49 +421,33 @@
 </tbody>
 </table>
 </div>
-<p>如果终端中已经能执行 <code class="docutils literal notranslate"><span class="pre">conda</span> <span class="pre">--version</span></code> 或 <code class="docutils literal notranslate"><span class="pre">mamba</span> <span class="pre">--version</span></code>，直接选择下一节的一条路径。否则先安装 Miniforge，并重新打开终端。</p>
+<p>使用一键安装包时，直接继续第 3 节。选择源码安装时，如果终端中还不能执行 <code class="docutils literal notranslate"><span class="pre">conda</span> <span class="pre">--version</span></code> 或 <code class="docutils literal notranslate"><span class="pre">mamba</span> <span class="pre">--version</span></code>，请先安装 Miniforge，并重新打开终端。</p>
 </section>
 <section id="id4">
 <h2>3. 路径一：使用一键安装包<a class="headerlink" href="#id4" title="链接到此标题。">¶</a></h2>
-<div class="admonition warning">
-<p class="admonition-title">警告</p>
-<p><strong>一键安装包暂无法提供。</strong> 当前请使用第 4 节“安装 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 后拉取源码”的方式安装 Uni-Lab OS。</p>
-</div>
-<p>一键安装包适合最快完成首次体验。它已经包含 Uni-Lab OS 运行环境，不需要先克隆仓库或寻找设备包。</p>
-<section id="id5">
-<h3>3.1 获取对应平台的安装包<a class="headerlink" href="#id5" title="链接到此标题。">¶</a></h3>
-<p>从交付方取得最新的一键安装包；使用公开构建时，可进入 <a class="reference external" href="https://github.com/deepmodeling/Uni-Lab-OS/actions/workflows/conda-pack-build.yml">GitHub Actions - Conda Pack Build</a>，选择最新的成功构建并下载对应平台的 Artifact：</p>
-<ul class="simple">
-<li><p>Windows：<code class="docutils literal notranslate"><span class="pre">unilab-pack-win-64-&lt;branch&gt;.zip</span></code></p></li>
-<li><p>macOS Intel：<code class="docutils literal notranslate"><span class="pre">unilab-pack-osx-64-&lt;branch&gt;.tar.gz</span></code></p></li>
-<li><p>macOS Apple Silicon：<code class="docutils literal notranslate"><span class="pre">unilab-pack-osx-arm64-&lt;branch&gt;.tar.gz</span></code></p></li>
-<li><p>Linux：<code class="docutils literal notranslate"><span class="pre">unilab-pack-linux-64-&lt;branch&gt;.tar.gz</span></code></p></li>
-</ul>
-<p>GitHub Actions 下载的 Artifact 可能还有一层 ZIP 包装；先解开外层 ZIP，再使用里面的平台安装包和安装脚本。</p>
+<p>一键安装包已包含 Python 运行环境和 Uni-Lab OS，不需要提前安装 Conda/Mamba，也不需要克隆 OS 源码。实验室设备包在 OS 安装完成后再准备。</p>
+<section id="macos-apple">
+<h3>3.1 下载安装包（macOS Apple 芯片）<a class="headerlink" href="#macos-apple" title="链接到此标题。">¶</a></h3>
+<p>下载 <a class="reference external" href="https://uni-lab.oss-cn-zhangjiakou.aliyuncs.com/uni-lab-installer/v0.3.0/macOS-ARM64/Uni-Lab-OS-0.11.4-osx-arm64.sh">Uni-Lab OS 0.11.4 · macOS ARM64 安装包</a>，保存到系统的“下载”文件夹。</p>
+<p>此安装包适用于 Apple 芯片（M 系列），不适用于 Intel Mac、Windows 或 Linux。Windows 安装步骤后续补充。</p>
 </section>
-<section id="id6">
-<h3>3.2 解压并安装<a class="headerlink" href="#id6" title="链接到此标题。">¶</a></h3>
-<p>macOS 或 Linux：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>tar<span class="w"> </span>-xzf<span class="w"> </span>unilab-pack-&lt;platform&gt;-&lt;branch&gt;.tar.gz
-<span class="nb">cd</span><span class="w"> </span>unilab-pack-&lt;platform&gt;-&lt;branch&gt;
-bash<span class="w"> </span>install_unilab.sh
-conda<span class="w"> </span>activate<span class="w"> </span>unilab
+<section id="id5">
+<h3>3.2 安装<a class="headerlink" href="#id5" title="链接到此标题。">¶</a></h3>
+<p>打开 macOS 的“终端”，执行以下命令，无需解压安装包：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/Downloads"</span>
+bash<span class="w"> </span>Uni-Lab-OS-0.11.4-osx-arm64.sh
 </pre></div>
 </div>
-<p>Windows 解压 ZIP 后，双击 <code class="docutils literal notranslate"><span class="pre">install_unilab.bat</span></code>，或在命令行执行：</p>
-<div class="highlight-batch notranslate"><div class="highlight"><pre><span></span>install_unilab.bat
-conda activate unilab
-</pre></div>
-</div>
-<p>安装脚本会找到本机 Conda、把预打包环境安装为 <code class="docutils literal notranslate"><span class="pre">unilab</span></code>，并完成 <code class="docutils literal notranslate"><span class="pre">conda-unpack</span></code>。已有同名环境时先确认是否允许替换，不要误删仍在使用的环境。</p>
+<p>按终端提示阅读许可协议，确认同意后输入 <code class="docutils literal notranslate"><span class="pre">yes</span></code>；选择安装位置时，直接按回车使用默认目录 <code class="docutils literal notranslate"><span class="pre">$HOME/uni-lab-os</span></code>（即当前用户主目录下的 <code class="docutils literal notranslate"><span class="pre">uni-lab-os</span></code>）。若询问是否初始化 Conda，可以选择 <code class="docutils literal notranslate"><span class="pre">no</span></code>，后续按第 5 节手动激活环境即可。</p>
+<p>如果默认目录已经存在，请选择另一个尚不存在、且不含空格的目录，不要覆盖或删除仍在使用的环境。若安装包保存在其他位置，请先进入实际下载目录再执行安装命令。</p>
 <p>完成后继续执行第 5 节“验证 OS 安装”。</p>
 </section>
 </section>
 <section id="unilabos-env">
 <h2>4. 路径二：安装 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 后拉取源码<a class="headerlink" href="#unilabos-env" title="链接到此标题。">¶</a></h2>
 <p>这条路径适合设备包和驱动开发。<code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 只提供 ROS2、Python 依赖和 <code class="docutils literal notranslate"><span class="pre">uv</span></code> 等开发环境；Uni-Lab OS 本身随后从仓库以可编辑模式安装。</p>
-<section id="id7">
-<h3>4.1 安装来源与源码分支<a class="headerlink" href="#id7" title="链接到此标题。">¶</a></h3>
+<section id="id6">
+<h3>4.1 安装来源与源码分支<a class="headerlink" href="#id6" title="链接到此标题。">¶</a></h3>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -490,8 +474,8 @@ conda activate unilab
 </div>
 <p>Conda/Mamba 是环境管理工具，<code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 是 Conda 环境依赖包，Uni-Lab OS 才是需要指定 Git 分支的源码仓库。三者不是同一个安装包，也不共用一个“分支”概念。</p>
 </section>
-<section id="id8">
-<h3>4.2 创建并激活环境<a class="headerlink" href="#id8" title="链接到此标题。">¶</a></h3>
+<section id="id7">
+<h3>4.2 创建并激活环境<a class="headerlink" href="#id7" title="链接到此标题。">¶</a></h3>
 <p>下面的 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 安装方式与仓库根目录的 <code class="docutils literal notranslate"><span class="pre">README_zh.md</span></code> 保持一致：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>mamba<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>unilab<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11.14
 mamba<span class="w"> </span>activate<span class="w"> </span>unilab
@@ -516,7 +500,6 @@ uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </s
 git<span class="w"> </span>pull<span class="w"> </span>--ff-only<span class="w"> </span>origin<span class="w"> </span>product/durable-scheduler-kernel-v2
 </pre></div>
 </div>
-<p>源码仓库已经包含构建好的轻量操作页面，位于 <code class="docutils literal notranslate"><span class="pre">unilabos/app/web/static/console/</span></code>，会随 Uni-Lab OS 一起提供。只使用页面时不需要执行 <code class="docutils literal notranslate"><span class="pre">npm</span> <span class="pre">install</span></code> 或单独启动前端；只有修改 <code class="docutils literal notranslate"><span class="pre">frontend/</span></code> 源码时，才需要 Node.js 并重新执行前端测试和构建。</p>
 <div class="admonition note">
 <p class="admonition-title">备注</p>
 <p><code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span></code> 让本地源码修改立即生效；<code class="docutils literal notranslate"><span class="pre">uv</span> <span class="pre">pip</span> <span class="pre">install</span></code> 安装运行所需的 pip 依赖。以后切换仓库分支或拉取新代码时，应重新验证依赖和命令版本。</p>
@@ -525,32 +508,42 @@ git<span class="w"> </span>pull<span class="w"> </span>--ff-only<span class="w">
 </section>
 <section id="os">
 <h2>5. 验证 OS 安装<a class="headerlink" href="#os" title="链接到此标题。">¶</a></h2>
-<p>无论选择哪条路径，都先确认当前终端使用的是刚安装的环境：</p>
+<p>先按安装方式激活环境。每次新打开终端时，都需要重新激活。</p>
+<p><strong>一键安装包（macOS）：</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/uni-lab-os/bin/activate"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$HOME</span><span class="s2">/uni-lab-os"</span>
+</pre></div>
+</div>
+<p>如果安装时修改了目录，请将命令中的两处 <code class="docutils literal notranslate"><span class="pre">$HOME/uni-lab-os</span></code> 都替换为实际安装路径。</p>
+<p><strong>源码安装：</strong></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>activate<span class="w"> </span>unilab
-python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import unilabos; print(unilabos.__version__)&quot;</span>
+</pre></div>
+</div>
+<p>激活后，两种安装方式都执行以下命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import sys; print(sys.executable)"</span>
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import unilabos; print(unilabos.__version__)"</span>
 unilab<span class="w"> </span>--help
 unilab<span class="w"> </span>workspace<span class="w"> </span>--help
 </pre></div>
 </div>
-<p>四条命令都成功，才说明 OS 已经安装。此时即使本机还没有任何用户设备包，安装也已经完成。</p>
+<p>确认 Python 路径指向刚安装的环境、版本号与所装版本一致，且两条帮助命令能正常显示。此时 OS 安装验证完成，即使还没有准备设备包，也可以继续下一节。</p>
 </section>
-<section id="id9">
-<h2>6. 准备并安装设备包<a class="headerlink" href="#id9" title="链接到此标题。">¶</a></h2>
+<section id="id8">
+<h2>6. 准备并安装设备包<a class="headerlink" href="#id8" title="链接到此标题。">¶</a></h2>
 <p>安装 OS 后，按用途选择下面一种方式准备设备包，再执行本节末尾的安装和检查命令。</p>
-<section id="id10">
-<h3>方式一：命令创建最小设备包<a class="headerlink" href="#id10" title="链接到此标题。">¶</a></h3>
+<section id="id9">
+<h3>方式一：命令创建最小设备包<a class="headerlink" href="#id9" title="链接到此标题。">¶</a></h3>
 <p>准备开发自己的设备包时，先确认当前环境包含初始化命令，再创建一个新目录：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>unilab<span class="w"> </span>workspace<span class="w"> </span>init<span class="w"> </span>--help
 unilab<span class="w"> </span>workspace<span class="w"> </span>init<span class="w"> </span>--output<span class="w"> </span>./sample-lab
-<span class="nb">export</span><span class="w"> </span><span class="nv">DEVICE_PACKAGE_ROOT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span><span class="s2">/sample-lab&quot;</span>
-<span class="nb">cd</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DEVICE_PACKAGE_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span><span class="s2">/sample-lab"</span>
+<span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span>
 </pre></div>
 </div>
 <p>生成内容包括示例设备、<code class="docutils literal notranslate"><span class="pre">echo</span></code> 动作、普通工作流、启动图和测试，共 15 个文件。目标目录必须尚不存在。<code class="docutils literal notranslate"><span class="pre">--name</span></code>、<code class="docutils literal notranslate"><span class="pre">--json</span></code> 参数和完整文件清单见<a class="reference internal" href="workspace.html#id2"><span class="std std-ref">初始化工作区</span></a>。</p>
 <p>若当前版本没有 <code class="docutils literal notranslate"><span class="pre">init</span></code> 子命令，使用包含该功能的版本，或选择下面的示例包下载方式。</p>
 </section>
-<section id="id11">
-<h3>方式二：下载完整演示设备包<a class="headerlink" href="#id11" title="链接到此标题。">¶</a></h3>
+<section id="id10">
+<h3>方式二：下载完整演示设备包<a class="headerlink" href="#id10" title="链接到此标题。">¶</a></h3>
 <p>希望体验“标准样品称量分装”流程时，下载已准备好的示例设备包：</p>
 <div class="note admonition">
 <p class="admonition-title">示例文件下载</p>
@@ -561,15 +554,15 @@ unilab<span class="w"> </span>workspace<span class="w"> </span>init<span class="
 </div>
 <p>将下载的压缩包放到准备使用的目录，解压后进入设备包：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>unzip<span class="w"> </span>demo-lab.zip
-<span class="nb">export</span><span class="w"> </span><span class="nv">DEVICE_PACKAGE_ROOT</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span><span class="s2">/demo-lab&quot;</span>
-<span class="nb">cd</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">DEVICE_PACKAGE_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span><span class="s2">/demo-lab"</span>
+<span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span>
 </pre></div>
 </div>
 </section>
-<section id="id12">
-<h3>安装并检查所选设备包<a class="headerlink" href="#id12" title="链接到此标题。">¶</a></h3>
+<section id="id11">
+<h3>安装并检查所选设备包<a class="headerlink" href="#id11" title="链接到此标题。">¶</a></h3>
 <p>完成任意一种准备方式后，在对应设备包根目录运行：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s1">&#39;.[dev]&#39;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s1">'.[dev]'</span>
 python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q
 unilab<span class="w"> </span>package<span class="w"> </span>inspect<span class="w"> </span>--path<span class="w"> </span>.<span class="w"> </span>--out<span class="w"> </span>dist/inspect
 </pre></div>
@@ -577,13 +570,13 @@ unilab<span class="w"> </span>package<span class="w"> </span>inspect<span class=
 <p>这些检查通过后，只能说明教学设备包可以被发现和静态解析，不表示任何真实设备已经接入。</p>
 </section>
 </section>
-<section id="id13">
-<h2>7. 以安全模式启动<a class="headerlink" href="#id13" title="链接到此标题。">¶</a></h2>
+<section id="id12">
+<h2>7. 以安全模式启动<a class="headerlink" href="#id12" title="链接到此标题。">¶</a></h2>
 <p>第一次启动显式指定所选设备包自带的启动图。以上两种方式都提供 <code class="docutils literal notranslate"><span class="pre">deployment/graphs/dry-run.json</span></code>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>unilab<span class="w"> </span>workspace<span class="w"> </span>start<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--component<span class="w"> </span>all<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--graph<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/deployment/graphs/dry-run.json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--graph<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">/deployment/graphs/dry-run.json"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--runtime-mode<span class="w"> </span>dry-run<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--startup-mode<span class="w"> </span>develop<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
@@ -591,28 +584,27 @@ unilab<span class="w"> </span>package<span class="w"> </span>inspect<span class=
 </div>
 <p>查看状态：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>unilab<span class="w"> </span>workspace<span class="w"> </span>status<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
 </pre></div>
 </div>
-<p>操作页面地址以状态命令实际输出为准。源码路径安装时，页面由 Workspace Backend 直接从 <code class="docutils literal notranslate"><span class="pre">/console/</span></code> 提供，不需要再运行一个独立前端服务。</p>
 <p>如果启动失败，先查看组件日志，不要改用真实设备配置反复尝试：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>unilab<span class="w"> </span>workspace<span class="w"> </span>logs<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--component<span class="w"> </span>backend<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
 </pre></div>
 </div>
 <p>结束体验后停止工作区：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>unilab<span class="w"> </span>workspace<span class="w"> </span>stop<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--workspace<span class="w"> </span><span class="s2">"</span><span class="nv">$DEVICE_PACKAGE_ROOT</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--component<span class="w"> </span>all<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--json
 </pre></div>
 </div>
 </section>
-<section id="id14">
-<h2>8. 从示例转为真实设备包<a class="headerlink" href="#id14" title="链接到此标题。">¶</a></h2>
+<section id="id13">
+<h2>8. 从示例转为真实设备包<a class="headerlink" href="#id13" title="链接到此标题。">¶</a></h2>
 <p>确认 OS、设备包示例和 <code class="docutils literal notranslate"><span class="pre">dry-run</span></code> 都能正常工作后，再按以下顺序替换示例内容：</p>
 <ol class="arabic simple">
 <li><p>填写 <code class="docutils literal notranslate"><span class="pre">DEVICE_PACKAGE_REQUIREMENTS.md</span></code>，记录设备型号、协议、动作、单位和安全边界；</p></li>
@@ -686,25 +678,25 @@ unilab<span class="w"> </span>package<span class="w"> </span>inspect<span class=
 <li><a class="reference internal" href="#id2">1. 选择安装路径</a></li>
 <li><a class="reference internal" href="#id3">2. 安装前检查</a></li>
 <li><a class="reference internal" href="#id4">3. 路径一：使用一键安装包</a><ul>
-<li><a class="reference internal" href="#id5">3.1 获取对应平台的安装包</a></li>
-<li><a class="reference internal" href="#id6">3.2 解压并安装</a></li>
+<li><a class="reference internal" href="#macos-apple">3.1 下载安装包（macOS Apple 芯片）</a></li>
+<li><a class="reference internal" href="#id5">3.2 安装</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#unilabos-env">4. 路径二：安装 <code class="docutils literal notranslate"><span class="pre">unilabos-env</span></code> 后拉取源码</a><ul>
-<li><a class="reference internal" href="#id7">4.1 安装来源与源码分支</a></li>
-<li><a class="reference internal" href="#id8">4.2 创建并激活环境</a></li>
+<li><a class="reference internal" href="#id6">4.1 安装来源与源码分支</a></li>
+<li><a class="reference internal" href="#id7">4.2 创建并激活环境</a></li>
 <li><a class="reference internal" href="#kernel-v2-uni-lab-os">4.3 克隆 <code class="docutils literal notranslate"><span class="pre">kernel-v2</span></code> 分支并安装 Uni-Lab OS</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#os">5. 验证 OS 安装</a></li>
-<li><a class="reference internal" href="#id9">6. 准备并安装设备包</a><ul>
-<li><a class="reference internal" href="#id10">方式一：命令创建最小设备包</a></li>
-<li><a class="reference internal" href="#id11">方式二：下载完整演示设备包</a></li>
-<li><a class="reference internal" href="#id12">安装并检查所选设备包</a></li>
+<li><a class="reference internal" href="#id8">6. 准备并安装设备包</a><ul>
+<li><a class="reference internal" href="#id9">方式一：命令创建最小设备包</a></li>
+<li><a class="reference internal" href="#id10">方式二：下载完整演示设备包</a></li>
+<li><a class="reference internal" href="#id11">安装并检查所选设备包</a></li>
 </ul>
 </li>
-<li><a class="reference internal" href="#id13">7. 以安全模式启动</a></li>
-<li><a class="reference internal" href="#id14">8. 从示例转为真实设备包</a></li>
+<li><a class="reference internal" href="#id12">7. 以安全模式启动</a></li>
+<li><a class="reference internal" href="#id13">8. 从示例转为真实设备包</a></li>
 </ul>
 </li>
 </ul>
