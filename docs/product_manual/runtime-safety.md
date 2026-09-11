@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # 运行模式、安全与恢复
 
 :::{admonition} 阅读角色

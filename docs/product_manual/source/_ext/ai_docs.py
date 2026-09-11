@@ -57,13 +57,6 @@ _SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "experiment-operations",
             "complete-workflow",
             "ai-workflow-authoring",
-        ),
-    ),
-    (
-        "环境、部署、运行",
-        (
-            "deployment",
-            "runtime-safety",
             "workflows",
         ),
     ),

@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Kubernetes 部署与上线
 
 :::{admonition} 阅读角色
