@@ -41,7 +41,6 @@
 :maxdepth: 1
 
 overview
-console
 示例设备包 <demo-lab>
 ```
 
@@ -60,15 +59,6 @@ environment
 unilabos-installation
 使用 AI 设备包生成器（实验性） <repository-builder-skill>
 scenario-guide
-```
-
-```{toctree}
-:caption: 环境、部署、运行
-:maxdepth: 1
-
-deployment
-runtime-safety
-workflows
 ```
 
 ```{toctree}

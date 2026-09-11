@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # Uni-Lab OS 快速上手
 
 本页介绍 Uni-Lab OS 网页的日常入口、页面状态和基本操作。产品能力与对象关系见[认识 Uni-Lab OS](overview.md)；从零部署请先阅读[系统安装](installation.md)，设备包目录和配置规范见[设备包规范与系统启动](unilabos-installation.md)。

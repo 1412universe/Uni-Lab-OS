@@ -1184,6 +1184,11 @@ def test_restart_finishes_terminal_inventory_cleanup_without_reexecution(
         def recover_pending(self) -> None:
             """模拟跨库 Saga 已无待重放项；参数与返回均为空。"""
 
+        def pending_consumption_reconciliations(self) -> list[dict[str, str]]:
+            """该恢复场景没有尚待人工核对的消费意图。"""
+
+            return []
+
         def release_task(self, task_uuid: str, *, reason: str) -> None:
             """记录终态释放；参数为任务身份和恢复原因，返回无。"""
 

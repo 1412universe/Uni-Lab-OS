@@ -18,6 +18,7 @@ MATERIAL_TRANSFER_RECONCILIATION_REQUIRED = (
 MATERIAL_CONTENT_RECONCILIATION_REQUIRED = (
     "material_content_inventory_reconciliation_required"
 )
+QUANTITY_RECONCILIATION_REQUIRED = "workflow_quantity_reconciliation_required"
 _NON_SUCCESS_OUTCOMES = frozenset({"failed", "canceled", "timeout"})
 
 
@@ -128,6 +129,7 @@ def plan_terminal_settlement(
 __all__ = [
     "MATERIAL_CONTENT_RECONCILIATION_REQUIRED",
     "MATERIAL_TRANSFER_RECONCILIATION_REQUIRED",
+    "QUANTITY_RECONCILIATION_REQUIRED",
     "PhysicalSettlementPolicyError",
     "TerminalSettlementPlan",
     "execution_stopped_evidence",

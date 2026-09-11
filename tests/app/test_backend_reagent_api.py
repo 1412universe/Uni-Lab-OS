@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from unilabos.app.scheduler.inventory.backend_api import install_backend_resource_api
 from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
+from unilabos.app.scheduler.inventory.reagent_contract import BackendReagentService
 from unilabos.app.scheduler.inventory.schemas import InventoryLedgerEntryResponse
 from unilabos.app.scheduler.inventory.store import SCHEMA_VERSION, InventoryStore
+from unilabos.app.scheduler.inventory.workflow_quantity import WorkflowQuantityInventoryAuthority
 
 
 def _client(tmp_path) -> tuple[TestClient, InventoryStore]:
@@ -385,3 +392,190 @@ def test_reagent_requires_registered_identity_and_container_material(tmp_path) -
 
     assert missing_identity["code"] == 4001
     store.close()
+
+
+def _audited_reagent(client: TestClient) -> dict:
+    """创建有浓度、说明和批号的试剂，供业务字段更正测试复用。"""
+
+    material_uuid = _container(client)
+    info_uuid = _reagent_info(client)
+    response = client.post("/api/v1/reagents", json={
+        "material_uuid": material_uuid, "reagent_info_uuid": info_uuid,
+        "quantity": 500, "quantity_unit": "mL",
+        "concentration_value": 95, "concentration_unit": "%",
+        "description": "密封保存", "meta_data": {"batch": "A"},
+    })
+    assert response.status_code == 201
+    return response.json()["data"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"concentration_value": 5},
+    {"concentration_unit": "g/L"},
+    {"concentration_value": None, "concentration_unit": None},
+    {"description": "冷藏保存"},
+    {"description": None},
+    {"meta_data": {"batch": "B"}},
+])
+def test_non_quantity_edits_record_matching_before_after_and_outbox(tmp_path, changes) -> None:
+    """每类业务字段更正均有同修订的前后快照，省略字段不会被清空。"""
+
+    client, store = _client(tmp_path)
+    try:
+        original = _audited_reagent(client)
+        response = client.put(f"/api/v1/reagents/{original['uuid']}", json={
+            "quantity": 500, "quantity_unit": "mL", "expected_revision": 1, **changes,
+        }).json()
+        assert response["code"] == 0, response
+        updated = response["data"]
+        ledger = store.query_all(
+            "SELECT * FROM inventory_ledger WHERE aggregate_id=? ORDER BY ledger_id",
+            (original["uuid"],),
+        )
+        outbox = store.query_all(
+            "SELECT * FROM sync_outbox WHERE aggregate_id=? ORDER BY sequence",
+            (original["uuid"],),
+        )
+        assert len(ledger) == len(outbox) == 2
+        event = ledger[-1]
+        assert event["op_type"] == "reagent.adjust"
+        assert event["quantity_delta"] == 0
+        assert event["revision"] == updated["revision"] == outbox[-1]["aggregate_version"] == 2
+        assert event["entry_uuid"] == outbox[-1]["event_id"]
+        payload = json.loads(event["delta_json"])
+        assert payload == json.loads(outbox[-1]["payload_json"])
+        before, after = payload["changes"]["previous"], payload["changes"]["result"]
+        for field in ("concentration_value", "concentration_unit", "description", "meta_data", "quantity", "revision"):
+            assert before[field] == original[field]
+            assert after[field] == updated[field]
+        for field in ("description", "meta_data"):
+            if field not in changes:
+                assert updated[field] == original[field]
+    finally:
+        store.close()
+
+
+def test_unchanged_edit_preserves_revisions_description_and_audit(tmp_path) -> None:
+    """真正无变化的保存不空增修订，随后过期修订仍被拒绝。"""
+
+    client, store = _client(tmp_path)
+    try:
+        original = _audited_reagent(client)
+        path = f"/api/v1/reagents/{original['uuid']}"
+        result = client.put(path, json={
+            "quantity": 500, "quantity_unit": "mL", "expected_revision": 1,
+            "meta_data": {}, "container_capacity": {},
+        }).json()["data"]
+        assert result["revision"] == 1
+        assert result["material_revision"] == original["material_revision"]
+        assert result["update_time"] == original["update_time"]
+        assert result["description"] == "密封保存"
+        assert result["meta_data"] == {"batch": "A"}
+        assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 1
+        assert client.put(path, json={
+            "quantity": 500, "quantity_unit": "mL", "expected_revision": 1,
+            "description": "冷藏保存",
+        }).json()["code"] == 0
+        rejected = client.put(path, json={
+            "quantity": 500, "quantity_unit": "mL", "expected_revision": 1,
+        }).json()
+        assert rejected["code"] == 4002
+        assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 2
+    finally:
+        store.close()
+
+
+def test_competing_metadata_edits_commit_only_one_revision(tmp_path) -> None:
+    """两个操作者基于同一修订更正说明，只有一笔事实和事件能提交。"""
+
+    client, store = _client(tmp_path)
+    try:
+        original = _audited_reagent(client)
+        def update(description: str) -> dict:
+            return client.put(f"/api/v1/reagents/{original['uuid']}", json={
+                "quantity": 500, "quantity_unit": "mL", "expected_revision": 1,
+                "description": description,
+            }).json()
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(update, ["操作员甲更正", "操作员乙更正"]))
+        assert sorted(result["code"] for result in results) == [0, 4002]
+        winner = next(result["data"] for result in results if result["code"] == 0)
+        assert store.query_one("SELECT quantity,revision,description FROM reagent WHERE uuid=?", (original["uuid"],)) == {
+            "quantity": 500, "revision": 2, "description": winner["description"],
+        }
+        assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 2
+        assert store.query_one("SELECT COUNT(*) AS n FROM sync_outbox WHERE aggregate_type='reagent'")["n"] == 2
+    finally:
+        store.close()
+
+
+def test_audit_failure_rolls_back_metadata_edit(tmp_path, monkeypatch) -> None:
+    """事件写入失败时，业务字段、修订和原有台账一起保持不变。"""
+
+    client, store = _client(tmp_path)
+    try:
+        original = _audited_reagent(client)
+        service = BackendReagentService(store)
+        def fail_event(*args, **kwargs):
+            raise RuntimeError("测试：事件写入失败")
+
+        monkeypatch.setattr(service, "_append_history", fail_event)
+        with pytest.raises(RuntimeError, match="事件写入失败"):
+            service.update_reagent(original["uuid"], {
+                "quantity": 500, "quantity_unit": "mL", "expected_revision": 1,
+                "concentration_value": 5, "description": "冷藏", "meta_data": {"batch": "B"},
+            })
+        current = service.get_reagent(original["uuid"])
+        for key in ("quantity", "revision", "concentration_value", "description", "meta_data", "update_time"):
+            assert current[key] == original[key]
+        assert store.query_one("SELECT COUNT(*) AS n FROM inventory_ledger")["n"] == 1
+        assert store.query_one("SELECT COUNT(*) AS n FROM sync_outbox WHERE aggregate_type='reagent'")["n"] == 1
+    finally:
+        store.close()
+
+
+def test_reagent_page_aggregates_active_reservations_with_one_scan(tmp_path) -> None:
+    """多瓶列表只扫描一次活动预留，仍正确合并多作业并忽略已释放预留。"""
+
+    client, store = _client(tmp_path)
+    try:
+        template_uuid = _container_template(client)
+        info_uuid = _reagent_info(client)
+        reagents = []
+        for index in range(3):
+            material = client.post("/api/v1/materials", json={
+                "resource_template_uuid": template_uuid, "name": f"试剂瓶 {index}",
+                "barcode": f"BATCH-QUERY-{index}",
+            }).json()["data"]
+            reagents.append(client.post("/api/v1/reagents", json={
+                "material_uuid": material["uuid"], "reagent_info_uuid": info_uuid,
+                "quantity": 50, "quantity_unit": "mL",
+            }).json()["data"])
+        authority = WorkflowQuantityInventoryAuthority(store, edge_id="test", lab_id="test")
+        for task, reagent, quantity in [
+            ("task-a", reagents[0], 0.1), ("task-b", reagents[0], 0.2),
+            ("task-c", reagents[1], 4), ("task-released", reagents[2], 5),
+        ]:
+            authority.reserve_task(task, [{
+                "uuid": str(uuid4()), "workflow_node_job_uuid": str(uuid4()),
+                "inventory_type": "reagent", "inventory_uuid": reagent["uuid"],
+                "material_uuid": reagent["material_uuid"], "reserved_quantity": quantity,
+                "quantity_unit": "mL",
+            }])
+        authority.release_task("task-released", reason="测试释放")
+        statements = []
+        with store.read_connection() as connection:
+            connection.set_trace_callback(statements.append)
+        try:
+            result = client.get("/api/v1/reagents?page_size=100").json()
+        finally:
+            with store.read_connection() as connection:
+                connection.set_trace_callback(None)
+        assert result["code"] == 0, result
+        reserved = {item["uuid"]: item["active_workflow_reserved_quantity"] for item in result["data"]["items"]}
+        assert reserved == pytest.approx({reagents[0]["uuid"]: 0.3, reagents[1]["uuid"]: 4, reagents[2]["uuid"]: 0})
+        scans = [statement for statement in statements if "FROM inventory_reservation" in statement]
+        assert len(scans) == 1, scans
+    finally:
+        store.close()

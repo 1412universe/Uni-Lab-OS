@@ -217,7 +217,6 @@
   <p class="caption" role="heading"><span class="caption-text">认识与快速上手</span></p>
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="overview.html">认识 Uni-Lab OS</a></li>
-<li class="toctree-l1"><a class="reference internal" href="console.html">Uni-Lab OS 快速上手</a></li>
 <li class="toctree-l1"><a class="reference internal" href="demo-lab.html">示例设备包</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">系统安装与配置</span></p>
@@ -262,18 +261,13 @@
 <li class="toctree-l3"><a class="reference internal" href="complete-workflow.html">完整工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="first-workflow.html">手写并运行第一个工作流</a></li>
 <li class="toctree-l3"><a class="reference internal" href="ai-workflow-authoring.html">AI 编写工作流（推荐）</a></li>
+<li class="toctree-l3"><a class="reference internal" href="workflows.html">工作流发布与任务运行</a></li>
 </ul>
 </li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="repository-builder-skill.html">使用 AI 设备包生成器（实验性）</a></li>
 <li class="toctree-l1"><a class="reference internal" href="scenario-guide.html">设备包验收</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">环境、部署、运行</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="deployment.html">Kubernetes 部署与上线</a></li>
-<li class="toctree-l1"><a class="reference internal" href="runtime-safety.html">运行模式、安全与恢复</a></li>
-<li class="toctree-l1"><a class="reference internal" href="workflows.html">工作流发布与任务运行</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">参考</span></p>
 <ul class="current">
@@ -367,6 +361,7 @@
 <p>API 是 Uni-Lab OS 网页、Workbench 和自动化工具共用的产品能力入口。日常实验优先使用 Uni-Lab OS 页面；批量导入、设备单动作、调度运维和系统集成再使用 API。</p>
 <section id="id1">
 <h2>入口<a class="headerlink" href="#id1" title="链接到此标题。">¶</a></h2>
+<p>当前演示环境可直接打开以下入口；部署到其他环境时，将示例地址替换为实际的 <code class="docutils literal notranslate"><span class="pre">&lt;BACKEND_URL&gt;</span></code>：</p>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -376,10 +371,10 @@
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Swagger</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&lt;BACKEND_URL&gt;/api/docs</span></code></p></td>
+<td><p><a class="reference external" href="http://115.190.137.109:30183/api/docs">打开当前演示环境 Swagger UI</a> · <code class="docutils literal notranslate"><span class="pre">&lt;BACKEND_URL&gt;/api/docs</span></code></p></td>
 </tr>
 <tr class="row-odd"><td><p>OpenAPI JSON</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">&lt;BACKEND_URL&gt;/api/openapi.json</span></code></p></td>
+<td><p><a class="reference external" href="http://115.190.137.109:30183/api/openapi.json">查看当前演示环境 OpenAPI JSON</a> · <code class="docutils literal notranslate"><span class="pre">&lt;BACKEND_URL&gt;/api/openapi.json</span></code></p></td>
 </tr>
 <tr class="row-even"><td><p>Uni-Lab OS 页面</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">&lt;BACKEND_URL&gt;/console/</span></code></p></td>

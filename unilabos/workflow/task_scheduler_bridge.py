@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
@@ -55,6 +56,7 @@ from unilabos.workflow.material_transfer_settlement import (
 from unilabos.workflow.physical_settlement_policy import (
     MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
     MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
+    QUANTITY_RECONCILIATION_REQUIRED,
 )
 from unilabos.workflow.quantity_inventory import WorkflowQuantityInventory
 from unilabos.workflow.resource_lock_key import device_lock_key
@@ -195,6 +197,8 @@ class TaskSchedulerBridge:
             if inventory_store is not None
             else None
         )
+        # 只串行人工更正入口；普通结果回调不取得此锁，避免与 Scheduler 锁倒序。
+        self._quantity_reconciliation_lock = threading.RLock()
         self._material_transfer_settlement = MaterialTransferSettlement(
             scheduler.station_resource_inventory
         )
@@ -247,6 +251,9 @@ class TaskSchedulerBridge:
             self._on_execution_connection_lost
         )
         scheduler.set_drain_blocker_provider(self.active_or_uncertain_job_ids)
+        scheduler.set_workflow_inventory_release_guard(
+            lambda task_uuid: not self._pending_quantity_consumption(task_uuid)
+        )
 
     def prepare_inventory_allocations(
         self,
@@ -639,6 +646,8 @@ class TaskSchedulerBridge:
         jobs = self._store.list_jobs(normalized_uuid)
         if task.get("status") not in {"failed", "canceled", "timeout"}:
             raise TaskSchedulerBridgeError("任务尚未进入异常终态")
+        if self._pending_quantity_consumption(normalized_uuid):
+            raise TaskSchedulerBridgeError("任务仍有数量待对账，不能人工释放全部资源")
         if any(job.get("status") in {"dispatched", "running"} for job in jobs):
             raise TaskSchedulerBridgeError("任务仍有已派发或运行中的作业")
 
@@ -939,6 +948,90 @@ class TaskSchedulerBridge:
         except (StoreConflict, StoreNotFound, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
+    def reconcile_job_quantity(
+        self,
+        job_uuid: str,
+        *,
+        consumptions: Sequence[Mapping[str, Any]],
+        reason: str,
+    ) -> dict[str, Any]:
+        """凭已保存的设备成功证明更正数量，随后只重放结果、不重新执行动作。"""
+
+        with self._quantity_reconciliation_lock:
+            return self._reconcile_job_quantity(
+                job_uuid, consumptions=consumptions, reason=reason
+            )
+
+    def _reconcile_job_quantity(
+        self,
+        job_uuid: str,
+        *,
+        consumptions: Sequence[Mapping[str, Any]],
+        reason: str,
+    ) -> dict[str, Any]:
+        """串行保存请求和跨库结算，并以库存已接受请求校验响应丢失后的重放。"""
+
+        if self._closed or self._quantity_inventory is None:
+            raise TaskSchedulerBridgeError("当前模式没有可用的数量结算权威")
+        reason = self._required_text(reason, field="reason")
+        job = self._store.get_job(job_uuid)
+        task_uuid = str(job["workflow_task_uuid"])
+        pending = any(
+            row["task_uuid"] == task_uuid and row["job_uuid"] == job_uuid
+            for row in self._quantity_inventory.pending_consumption_reconciliations()
+        )
+        outcome = self._projection.stage_quantity_reconciliation(
+            job_uuid, consumptions=consumptions, reason=reason, can_replace=pending
+        )
+        committed = CommittedJobOutcome(**outcome)
+        if pending:
+            self._quantity_inventory.reconcile_consumption(
+                task_uuid=task_uuid, job_uuid=job_uuid, consumptions=consumptions, reason=reason
+            )
+        else:
+            committed_consumptions = self._quantity_inventory.list_job_consumptions(job_uuid)
+            request = {"consumptions": [dict(item) for item in consumptions], "reason": reason}
+            if not committed_consumptions or any(
+                ((item.get("meta_data") or {}).get("reconciliation") or {}).get("request") != request
+                for item in committed_consumptions
+            ):
+                raise StoreConflict("作业没有已提交的同一数量更正，不能直接完成结果")
+        self._complete_reconciled_quantity_result(job_uuid, committed)
+        # 同一任务可能在首个失败意图后又收到并行作业结果。只重放这些已保存的
+        # 成功证据，让每个作业分别结算；失败项仍保持待对账，不能提前释放预留。
+        for sibling in self._store.list_jobs(task_uuid):
+            if sibling["uuid"] == job_uuid or sibling.get("uncertainty_reason") != QUANTITY_RECONCILIATION_REQUIRED:
+                continue
+            evidence = (sibling.get("control_data") or {}).get("quantity_reconciliation") or {}
+            saved = evidence.get("committed_outcome")
+            if isinstance(saved, dict):
+                try:
+                    self._complete_reconciled_quantity_result(
+                        sibling["uuid"], CommittedJobOutcome(**saved)
+                    )
+                except (ValueError, StoreConflict, sqlite3.IntegrityError):
+                    logger.exception("并行作业数量仍需对账：%s", sibling["uuid"])
+        if not self._pending_quantity_consumption(task_uuid):
+            if self._quantity_restart_pending(task_uuid):
+                self._complete_deferred_quantity_restart(task_uuid)
+            elif self._scheduler.workflow_snapshot(task_uuid) is None:
+                task = self._store.get_task(task_uuid)
+                if task["status"] in {"pending", "running", "canceling"}:
+                    # 同进程重建只因数量核对暂缓还原，核对完成后仍复用原任务。
+                    self._recover_running_task(task)
+                    self.reschedule()
+        return self._store.get_job(job_uuid)
+
+    def _complete_reconciled_quantity_result(
+        self, job_uuid: str, outcome: CommittedJobOutcome
+    ) -> None:
+        """存在原调度运行时完成其在途节点；重启后只恢复持久结果投影。"""
+
+        if job_uuid in self._scheduler.snapshot().get("inflight_jobs", {}):
+            self._scheduler.on_job_outcome(job_uuid, outcome)
+        else:
+            self._replay_persisted_job_outcome(job_uuid, outcome)
+
     def settle_failed_material_transfer(
         self,
         job_uuid: str,
@@ -1079,36 +1172,53 @@ class TaskSchedulerBridge:
         """同进程调度重建可恢复路由；执行进程重启只终结旧任务，不恢复动作。"""
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
-        if execution_process_restarted:
-            self._scheduler.on_execution_process_restarted(())
-            return []
         recovered: list[dict[str, Any]] = []
         with self._scheduler.execution_control_lock:
             self.error_control.recovering = True
             try:
-                if self._quantity_inventory is not None:
-                    self._quantity_inventory.recover_pending()
-                self._register_active_recovery_routes()
-                for task in self._store.list_execution_restart_candidates():
-                    self._mark_inventory_claims_uncertain(self._aggregate(task["uuid"]))
-                    if task["uuid"] not in self._submitted_tasks:
-                        result = self._recover_running_task(task)
-                        if result is not None:
-                            recovered.append(result)
-                self._scheduler.replay_persisted_edge_projections(
-                    feedback_listener=self._on_job_feedback,
-                    outcome_listener=self._replay_persisted_job_outcome,
-                    finished_listener=self._replay_persisted_job_finished,
-                )
-                # 回执可能已结束取消；只恢复仍在等待的原截止时间，不重发停止。
-                for job_uuid in tuple(self._task_by_job):
-                    job = self._store.get_job(job_uuid)
-                    if job["status"] == "cancel_requested":
-                        self._schedule_cancel_timeout(job)
-                self._recover_terminal_inventory_cleanup()
-                self._scheduler.restore_not_started_dispatches()
-                for command in self.error_control.pending_commands():
-                    self.apply_error_command(command)
+                inventory = self._scheduler.station_resource_inventory
+                if inventory is not None:
+                    inventory.release_unprojected_dispatch_permits(
+                        known_claim_uuids=self._projection.list_active_execution_claim_uuids()
+                    )
+                if execution_process_restarted:
+                    self._scheduler.on_execution_process_restarted(())
+                else:
+                    self._recover_quantity_consumptions()
+                    self._register_active_recovery_routes()
+                    for task in self._store.list_execution_restart_candidates():
+                        task_uuid = str(task["uuid"])
+                        self._replay_saved_quantity_outcomes(task_uuid)
+                        if self._pending_quantity_consumption(task_uuid):
+                            continue
+                        if self._quantity_restart_pending(task_uuid):
+                            self._complete_deferred_quantity_restart(task_uuid)
+                            continue
+                        aggregate = self._aggregate(task_uuid)
+                        if aggregate["task"]["status"] in {"succeeded", "failed", "canceled", "timeout"} and all(
+                            job["status"] not in {"pending", "dispatched", "running", "cancel_requested"}
+                            for job in aggregate["jobs"]
+                        ):
+                            continue
+                        self._mark_inventory_claims_uncertain(aggregate)
+                        if task_uuid not in self._submitted_tasks:
+                            result = self._recover_running_task(aggregate["task"])
+                            if result is not None:
+                                recovered.append(result)
+                    self._scheduler.replay_persisted_edge_projections(
+                        feedback_listener=self._on_job_feedback,
+                        outcome_listener=self._replay_persisted_job_outcome,
+                        finished_listener=self._replay_persisted_job_finished,
+                    )
+                    # 回执可能已结束取消；只恢复仍在等待的原截止时间，不重发停止。
+                    for job_uuid in tuple(self._task_by_job):
+                        job = self._store.get_job(job_uuid)
+                        if job["status"] == "cancel_requested":
+                            self._schedule_cancel_timeout(job)
+                    self._recover_terminal_inventory_cleanup()
+                    self._scheduler.restore_not_started_dispatches()
+                    for command in self.error_control.pending_commands():
+                        self.apply_error_command(command)
             except Exception:
                 # 还原失败不开放部分恢复的调度器；修复后可幂等重入。
                 logger.exception("工站执行状态恢复失败，保持恢复屏障")
@@ -1117,6 +1227,71 @@ class TaskSchedulerBridge:
                 self.error_control.recovering = False
         self.reschedule()
         return recovered
+
+    def _recover_quantity_consumptions(self) -> None:
+        """先补齐跨库消费意图，无法结算的作业保留原预留与人工对账原因。"""
+        if self._quantity_inventory is None:
+            return
+        self._quantity_inventory.recover_pending()
+        for pending in self._quantity_inventory.pending_consumption_reconciliations():
+            try:
+                self._mark_quantity_reconciliation(
+                    pending["job_uuid"], reason=pending["reason"]
+                )
+            except (ValueError, StoreConflict, StoreNotFound, sqlite3.IntegrityError):
+                logger.exception("数量对账记录无法恢复，保留原预留：%s", pending["job_uuid"])
+
+    def _replay_saved_quantity_outcomes(self, task_uuid: str) -> None:
+        """库存更正已提交但结果未投影时，只回放已保存的设备成功证明。"""
+        for job in self._store.list_jobs(task_uuid):
+            if job.get("uncertainty_reason") != QUANTITY_RECONCILIATION_REQUIRED:
+                continue
+            evidence = (job.get("control_data") or {}).get("quantity_reconciliation") or {}
+            saved = evidence.get("committed_outcome")
+            if isinstance(saved, dict):
+                self._replay_persisted_job_outcome(job["uuid"], CommittedJobOutcome(**saved))
+
+    def _quantity_restart_pending(self, task_uuid: str) -> bool:
+        """读取延迟重启的持久证据，不能把新桥的空内存当作没有发生过重启。"""
+        with self._store.read() as connection:
+            return connection.execute(
+                "SELECT 1 FROM workflow_node_job WHERE workflow_task_uuid=? "
+                "AND deleted_at IS NULL AND "
+                "json_extract(control_data,'$.quantity_reconciliation.runtime_restart_pending')=1 LIMIT 1",
+                (task_uuid,),
+            ).fetchone() is not None
+
+    def _defer_quantity_restart(self, task_uuid: str) -> None:
+        """保留实际重启事实，但不覆盖已成功待结算的结果、状态或资源占用。"""
+        with self._store.transaction() as connection:
+            connection.execute(
+                "UPDATE workflow_node_job SET control_data=json_set(control_data, "
+                "'$.quantity_reconciliation.runtime_restart_pending',json('true'), "
+                "'$.quantity_reconciliation.runtime_restart_observed_at',COALESCE("
+                "json_extract(control_data,'$.quantity_reconciliation.runtime_restart_observed_at'),?)) "
+                "WHERE workflow_task_uuid=? AND deleted_at IS NULL AND uncertainty_reason=?",
+                (utc_now(), task_uuid, QUANTITY_RECONCILIATION_REQUIRED),
+            )
+            if not self._quantity_restart_pending(task_uuid):
+                raise StoreConflict("数量待对账任务缺少可保存重启事实的作业")
+        self._runtime_restart_cleanup_pending_tasks.add(task_uuid)
+
+    def _complete_deferred_quantity_restart(self, task_uuid: str) -> None:
+        """数量更正后收口实际重启的旧任务；持久完成之前始终保留重试标记。"""
+        if self._pending_quantity_consumption(task_uuid):
+            return
+        aggregate = self._projection.project_execution_process_restarted(task_uuid)
+        self.error_control.close_restarted_task(task_uuid)
+        self._release_runtime_restart_resources(aggregate or self._aggregate(task_uuid))
+        with self._store.transaction() as connection:
+            connection.execute(
+                "UPDATE workflow_node_job SET control_data=json_set(control_data, "
+                "'$.quantity_reconciliation.runtime_restart_pending',json('false')) "
+                "WHERE workflow_task_uuid=? AND deleted_at IS NULL AND "
+                "json_extract(control_data,'$.quantity_reconciliation.runtime_restart_pending')=1",
+                (task_uuid,),
+            )
+        self._runtime_restart_cleanup_pending_tasks.discard(task_uuid)
 
     def _recover_terminal_inventory_cleanup(self) -> None:
         """补齐终态 Task 在进程退出前未完成的库存释放与清理提交。
@@ -1142,6 +1317,11 @@ class TaskSchedulerBridge:
                 )
                 for task in task_page["items"]:
                     task_uuid = str(task["uuid"])
+                    if self._pending_quantity_consumption(task_uuid):
+                        continue
+                    if self._quantity_restart_pending(task_uuid):
+                        self._complete_deferred_quantity_restart(task_uuid)
+                        continue
                     jobs = self._store.list_jobs(task_uuid)
                     from unilabos.workflow.resource_lock_plan import (
                         failed_explicit_resource_interval_ids,
@@ -1297,10 +1477,22 @@ class TaskSchedulerBridge:
         本方法只做投递重放（DeliveryReplay），不会再次派发物理作业。
         """
 
-        if self._scheduler.has_inflight_job(job_uuid):
-            self._scheduler.on_job_outcome(job_uuid, outcome)
+        try:
+            if self._scheduler.has_inflight_job(job_uuid):
+                self._scheduler.on_job_outcome(job_uuid, outcome)
+                return
+            self._on_job_outcome(job_uuid, outcome)
+        except (ValueError, StoreConflict, sqlite3.IntegrityError):
+            job = self._store.get_job(job_uuid)
+            evidence = (job.get("control_data") or {}).get("quantity_reconciliation") or {}
+            if (
+                job.get("uncertainty_reason") != QUANTITY_RECONCILIATION_REQUIRED
+                or evidence.get("committed_outcome") != outcome.as_dict()
+            ):
+                raise
+            # 只隔离有同一成功证明的数量异常，其他结果或存储错误仍须上抛。
+            logger.exception("库存消费等待人工对账，保留执行占用：%s", job_uuid)
             return
-        self._on_job_outcome(job_uuid, outcome)
         success = outcome.outcome == "succeeded"
         ret_value = outcome.return_info.get("return_value", outcome.return_info)
         self._on_job_settled(
@@ -1313,12 +1505,21 @@ class TaskSchedulerBridge:
     def _on_execution_process_restarted(self, job_uuids: tuple[str, ...]) -> None:
         """确认执行进程更换后终结全部活动任务，清理失败可幂等重入。"""
         self.error_control.recovering = True
+        self._recover_quantity_consumptions()
         # 事件中的 Job 列表仅是执行端观测，不得遗漏暂停、排队或节点间隙的任务。
         candidates = {
             task["uuid"] for task in self._store.list_execution_restart_candidates()
         }
         candidates.update(self._runtime_restart_cleanup_pending_tasks)
         with self._store.read() as conn:
+            candidates.update(
+                row[0] for row in conn.execute(
+                    "SELECT DISTINCT j.workflow_task_uuid FROM workflow_node_job j "
+                    "JOIN workflow_task t ON t.uuid=j.workflow_task_uuid "
+                    "WHERE j.deleted_at IS NULL AND t.deleted_at IS NULL AND "
+                    "json_extract(j.control_data,'$.quantity_reconciliation.runtime_restart_pending')=1"
+                )
+            )
             candidates.update(
                 row[0]
                 for row in conn.execute(
@@ -1331,6 +1532,13 @@ class TaskSchedulerBridge:
                 )
             )
         for task_uuid in sorted(candidates):
+            self._replay_saved_quantity_outcomes(task_uuid)
+            if self._pending_quantity_consumption(task_uuid):
+                self._defer_quantity_restart(task_uuid)
+                continue
+            if self._quantity_restart_pending(task_uuid):
+                self._complete_deferred_quantity_restart(task_uuid)
+                continue
             self._runtime_restart_cleanup_pending_tasks.add(task_uuid)
             aggregate = self._projection.project_execution_process_restarted(task_uuid)
             self.error_control.close_restarted_task(task_uuid)
@@ -1354,6 +1562,8 @@ class TaskSchedulerBridge:
                 continue
             if job.get("start_state") == "NOT_STARTED":
                 continue
+            if job.get("uncertainty_reason") == QUANTITY_RECONCILIATION_REQUIRED:
+                continue
             if job["status"] in {"dispatched", "running", "cancel_requested"}:
                 self.error_control.report_error(
                     job_uuid,
@@ -1369,6 +1579,8 @@ class TaskSchedulerBridge:
         """释放中断任务的软件执行占用；不请求或推断实际库存对账。"""
         task_uuid = str(aggregate["task"]["uuid"])
         jobs = aggregate["jobs"]
+        if self._pending_quantity_consumption(task_uuid):
+            return
         inventory = self._scheduler.station_resource_inventory
         for job in jobs:
             job_uuid = str(job["uuid"])
@@ -1536,6 +1748,7 @@ class TaskSchedulerBridge:
             self._on_execution_connection_lost
         )
         self._scheduler.set_drain_blocker_provider(None)
+        self._scheduler.set_workflow_inventory_release_guard(None)
         self._task_by_job.clear()
         self._submitted_tasks.clear()
         self._admission_pending_tasks.clear()
@@ -2875,11 +3088,18 @@ class TaskSchedulerBridge:
                 receipts=outcome.material_aliquot_receipts,
             )
         if outcome.outcome == "succeeded" and self._quantity_inventory is not None:
-            self._quantity_inventory.consume_successful_job(
-                task_uuid=task_uuid,
-                job_uuid=job_uuid,
-                consumptions=outcome.inventory_consumptions,
-            )
+            try:
+                self._quantity_inventory.consume_successful_job(
+                    task_uuid=task_uuid,
+                    job_uuid=job_uuid,
+                    consumptions=outcome.inventory_consumptions,
+                )
+            except (ValueError, StoreConflict, sqlite3.IntegrityError) as error:
+                if self._pending_quantity_consumption(task_uuid):
+                    self._mark_quantity_reconciliation(
+                        job_uuid, reason=str(error), outcome=outcome
+                    )
+                raise
         self._project_job_result(
             task_uuid=task_uuid,
             job_uuid=job_uuid,
@@ -2889,6 +3109,36 @@ class TaskSchedulerBridge:
             manual_confirmation_status=None,
             inventory_reconciliation=inventory_reconciliation,
         )
+
+    def _pending_quantity_consumption(self, task_uuid: str) -> bool:
+        """判断任务是否有尚未结算的实际用量，禁止任何收尾路径释放占用。"""
+
+        return self._quantity_inventory is not None and (any(
+            item["task_uuid"] == task_uuid
+            for item in self._quantity_inventory.pending_consumption_reconciliations()
+        ) or any(
+            job.get("uncertainty_reason") == QUANTITY_RECONCILIATION_REQUIRED
+            for job in self._store.list_jobs(task_uuid)
+        ))
+
+    def _mark_quantity_reconciliation(
+        self,
+        job_uuid: str,
+        *,
+        reason: str,
+        outcome: CommittedJobOutcome | None = None,
+    ) -> None:
+        """冻结库存和工作流 Claim，保留原始成功结果供显式数量更正。"""
+
+        self._projection.project_quantity_consumption_attention(
+            job_uuid, reason=reason,
+            outcome=outcome.as_dict() if outcome is not None else None,
+        )
+        if self._projection.get_execution_claim(job_uuid) is not None:
+            self._transition_inventory_claim(job_uuid, target_state="uncertain")
+        elif self._scheduler.physical_dispatch_enabled:
+            raise StoreConflict(f"数量对账作业缺少库存 Claim：{job_uuid}")
+        self._cancel_cancel_timer(job_uuid)
 
     @staticmethod
     def _requires_runtime_restart_cleanup(

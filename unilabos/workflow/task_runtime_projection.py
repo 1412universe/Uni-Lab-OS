@@ -54,6 +54,7 @@ from unilabos.workflow.manual_confirmation import (
 )
 from unilabos.workflow.material_source import MaterialCustodyPolicy
 from unilabos.workflow.physical_settlement_policy import (
+    QUANTITY_RECONCILIATION_REQUIRED,
     MATERIAL_CONTENT_RECONCILIATION_REQUIRED,
     MATERIAL_TRANSFER_RECONCILIATION_REQUIRED,
     PhysicalSettlementPolicyError,
@@ -2603,6 +2604,95 @@ class TaskRuntimeProjection:
                 now=opened_at,
             )
             return self._aggregate(connection, task_uuid)
+
+    def project_quantity_consumption_attention(
+        self,
+        job_uuid: str,
+        *,
+        reason: str,
+        outcome: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """保存已执行但数量未结算的证据，并保持任务和资源等待人工核对。"""
+
+        with self._store.transaction() as connection:
+            job = self._job_row(connection, job_uuid)
+            task_uuid = str(job["workflow_task_uuid"])
+            task = self._task_row(connection, task_uuid)
+            control = _decode_json_field(job["control_data"], fallback={})
+            if not isinstance(control, dict):
+                raise StoreConflict("数量结算控制证据损坏")
+            evidence = dict(control.get("quantity_reconciliation") or {})
+            if outcome is not None:
+                if outcome.get("outcome") != "succeeded" or outcome.get("unknown_command_ids"):
+                    raise StoreConflict("数量对账缺少明确成功的设备结果")
+                committed = dict(outcome)
+                if evidence.get("committed_outcome") not in (None, committed):
+                    raise StoreConflict("数量对账的设备结果与首次提交不一致")
+                evidence["committed_outcome"] = committed
+            evidence["error"] = str(reason)
+            control["quantity_reconciliation"] = evidence
+            encoded = _encode_json_field(control, field_name="control_data")
+            if (
+                job["uncertainty_reason"] == QUANTITY_RECONCILIATION_REQUIRED
+                and job["control_data"] == encoded
+                and task["control_status"] == "waiting_reconciliation"
+            ):
+                return self._aggregate(connection, task_uuid)
+            now = utc_now()
+            connection.execute(
+                """UPDATE workflow_node_job
+                SET uncertainty_reason=?,control_data=?,update_time=?,
+                    cancel_ack_deadline_at=NULL,cancel_complete_deadline_at=NULL
+                WHERE uuid=? AND deleted_at IS NULL""",
+                (QUANTITY_RECONCILIATION_REQUIRED, encoded, now, job_uuid),
+            )
+            connection.execute(
+                """UPDATE workflow_task SET control_status='waiting_reconciliation',
+                cleanup_status='requires_attention',attention_reason=?,
+                reconciliation_resume_control_status=COALESCE(
+                    reconciliation_resume_control_status, control_status),
+                wait_reason='{}',update_time=? WHERE uuid=? AND deleted_at IS NULL""",
+                (QUANTITY_RECONCILIATION_REQUIRED, now, task_uuid),
+            )
+            mark_execution_locks_uncertain(connection, job_uuid=job_uuid, now=now)
+            append_runtime_event(
+                connection, task_uuid=task_uuid, job_uuid=job_uuid,
+                kind="uncertainty_opened", from_status=str(job["status"]),
+                to_status=str(job["status"]),
+                data={"reason": QUANTITY_RECONCILIATION_REQUIRED, "error": str(reason)},
+                now=now,
+            )
+            self._append_invalidation(connection, task_uuid=task_uuid, now=now)
+            return self._aggregate(connection, task_uuid)
+
+    def stage_quantity_reconciliation(
+        self,
+        job_uuid: str,
+        *,
+        consumptions: Sequence[Mapping[str, Any]],
+        reason: str,
+        can_replace: bool,
+    ) -> dict[str, Any]:
+        """在跨库存事务前保存更正请求，使响应丢失后的同请求可安全重放。"""
+
+        request = {"consumptions": [dict(item) for item in consumptions], "reason": reason}
+        with self._store.transaction() as connection:
+            job = self._job_row(connection, job_uuid)
+            control = _decode_json_field(job["control_data"], fallback={})
+            evidence = control.get("quantity_reconciliation") if isinstance(control, dict) else None
+            if not isinstance(evidence, dict) or not isinstance(evidence.get("committed_outcome"), dict):
+                raise StoreConflict("数量对账缺少原始设备成功结果，须先恢复结果投递")
+            previous = evidence.get("requested_correction")
+            if previous == request:
+                return dict(evidence["committed_outcome"])
+            if not can_replace or job["uncertainty_reason"] != QUANTITY_RECONCILIATION_REQUIRED:
+                raise StoreConflict("数量消费已经结算，不能提交另一份更正")
+            evidence["requested_correction"] = request
+            connection.execute(
+                "UPDATE workflow_node_job SET control_data=?,update_time=? WHERE uuid=?",
+                (_encode_json_field(control, field_name="control_data"), utc_now(), job_uuid),
+            )
+            return dict(evidence["committed_outcome"])
 
     def project_execution_process_restarted(
         self,

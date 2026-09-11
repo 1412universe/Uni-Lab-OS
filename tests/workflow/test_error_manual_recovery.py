@@ -83,6 +83,10 @@ def test_physical_recovery_freezes_existing_manual_claim(tmp_path):
         def __init__(self):
             self.transitions = []
 
+        def release_unprojected_dispatch_permits(self, *, known_claim_uuids):
+            assert known_claim_uuids == ("50000000-0000-4000-8000-000000000001",)
+            return ()
+
         def transition_dispatch_permit(self, claim_uuid, *, target_state):
             super().transition_dispatch_permit(claim_uuid, target_state=target_state)
             self.transitions.append((claim_uuid, target_state))

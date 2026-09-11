@@ -369,6 +369,7 @@ class EdgeScheduler:
         # 标准 Task/Job 持久层可能保留重启后不允许重放的物理不确定作业；提供者
         # 只返回身份，排空状态在读取时合并，不复制或改写持久权威。
         self._drain_blocker_provider: Callable[[], set[str]] | None = None
+        self._workflow_inventory_release_guard: Callable[[str], bool] | None = None
         # 长生命周期根 span：workflow → action/job。只保存上下文/句柄，不保存 payload。
         self._workflow_spans: dict[str, DetachedSpan] = {}
         self._job_spans: dict[str, DetachedSpan] = {}
@@ -3391,7 +3392,11 @@ class EdgeScheduler:
                     and plan is not None
                     and any(interval.explicit_boundary for interval in plan.intervals)
                 )
-                if wid in self._material_workflows and not retains_explicit_failure:
+                if (
+                    wid in self._material_workflows
+                    and not retains_explicit_failure
+                    and self._can_release_workflow_inventory(wid)
+                ):
                     self._safe_inventory_call(
                         "release_workflow",
                         wid,
@@ -3407,6 +3412,24 @@ class EdgeScheduler:
             if workflow_trace is not None:
                 workflow_trace.end()
                 self._workflow_spans.pop(wid, None)
+
+    def set_workflow_inventory_release_guard(
+        self, guard: Callable[[str], bool] | None
+    ) -> None:
+        """由持久工作流权威判断终态通知是否可以释放任务库存预留。"""
+        with self._lock:
+            self._workflow_inventory_release_guard = guard
+
+    def _can_release_workflow_inventory(self, workflow_id: str) -> bool:
+        """内存终态不证明跨库结算完成；权威读取失败时仍保留全部预留。"""
+        guard = self._workflow_inventory_release_guard
+        if guard is None:
+            return True
+        try:
+            return guard(workflow_id) is True
+        except Exception:
+            logger.exception("[EdgeScheduler] 无法确认库存结算，保留任务预留：%s", workflow_id)
+            return False
 
     def _safe_inventory_call(self, method: str, *args: Any, **kwargs: Any) -> None:
         """调用 inventory（release/quarantine 等善后操作）；失败记日志不阻断调度。"""

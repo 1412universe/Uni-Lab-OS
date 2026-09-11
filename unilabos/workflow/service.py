@@ -486,6 +486,13 @@ class WorkflowTaskSchedulerBridge(Protocol):
 
         ...
 
+    def reconcile_job_quantity(
+        self, job_uuid: str, *, consumptions: Sequence[Mapping[str, Any]], reason: str
+    ) -> dict[str, Any]:
+        """更正已执行作业的实际数量并只重放结算结果。"""
+
+        ...
+
     def settle_failed_material_transfer(
         self,
         job_uuid: str,
@@ -5299,6 +5306,27 @@ class WorkflowService:
                 identity,
                 reason=normalized_reason,
                 device_command_id=command_id,
+            )
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except (StoreConflict, TaskSchedulerBridgeError):
+            raise WorkflowConflict("conflict") from None
+
+    def reconcile_job_quantity(
+        self, job_uuid: str, *, consumptions: Sequence[Mapping[str, Any]], reason: str
+    ) -> dict[str, Any]:
+        """在人工核对实际用量后完成待处理的库存结算。"""
+
+        try:
+            identity = validate_uuid(job_uuid)
+            if not reason.strip() or not consumptions:
+                raise ValueError
+            if self._task_scheduler_bridge is None:
+                raise StoreConflict("当前模式没有本地数量结算端口")
+            return self._task_scheduler_bridge.reconcile_job_quantity(
+                identity, consumptions=consumptions, reason=reason.strip()
             )
         except ValueError:
             raise WorkflowError("invalid_input") from None

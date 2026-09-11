@@ -10,6 +10,7 @@ import {
   createReagentInfo,
   deleteReagentInfo,
   EdgeApiError,
+  InventoryCommandRejectedError,
   deleteReagent,
   dispenseReagent,
   instantiateMaterial,
@@ -180,7 +181,27 @@ describe('dispenseReagent', () => {
   it('surfaces a business rejection with the server reason', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response({ command_id: 'cmd-2', status: 'rejected', error: 'dispense total 999.0 exceeds source quantity 100.0', error_code: '1000' })))
     await expect(dispenseReagent({ commandId: 'cmd-2', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 999 }] }))
-      .rejects.toThrow('exceeds source quantity')
+      .rejects.toMatchObject({ name: 'InventoryCommandRejectedError', code: '1000', message: expect.stringContaining('exceeds source quantity') })
+  })
+
+  it.each([
+    { name: '已受理但未完成', body: { command_id: 'cmd-1', status: 'accepted' } },
+    { name: '成功响应缺少结果', body: { command_id: 'cmd-1', status: 'completed' } },
+    { name: '响应属于另一请求', body: { ...completed, command_id: 'another-command' } },
+    { name: '旧请求的分装量不同', body: { ...completed, result: { ...completed.result, targets: [{ ...completed.result.targets[0], quantity: 10 }] } } },
+    { name: '目标容器不匹配', body: { ...completed, result: { ...completed.result, targets: [{ ...completed.result.targets[0], material_uuid: 'other-target' }] } } },
+  ])('$name保留为结果未知，不能作为明确拒绝后重新提交', async ({ body }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(body)))
+    const result = dispenseReagent({ commandId: 'cmd-1', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 50 }] })
+    await expect(result).rejects.toThrow()
+    await expect(result).rejects.not.toBeInstanceOf(InventoryCommandRejectedError)
+  })
+
+  it('网络失败不伪装成服务端拒绝', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    const result = dispenseReagent({ commandId: 'cmd-1', sourceReagentUuid: 'src', quantityUnit: 'mL', targets: [{ materialUuid: 'm-1', quantity: 50 }] })
+    await expect(result).rejects.toThrow('Failed to fetch')
+    await expect(result).rejects.not.toBeInstanceOf(InventoryCommandRejectedError)
   })
 })
 

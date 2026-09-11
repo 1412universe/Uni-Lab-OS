@@ -9,11 +9,15 @@
 
 from __future__ import annotations
 
+import math
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from unilabos.app.scheduler.inventory.api import create_router
 from unilabos.app.scheduler.inventory.backend_api import install_backend_resource_api
 from unilabos.app.scheduler.inventory.backend_contract import BackendResourceService
 from unilabos.app.scheduler.inventory.commands import execute_command
@@ -446,3 +450,96 @@ def test_emptied_bottle_with_a_record_is_not_an_empty_container(tmp_path) -> Non
     assert back_into_source["status"] == "rejected", back_into_source
     assert back_into_source["error_code"] == "4002"
     assert _reagent(scene.client, child["uuid"])["quantity"] == 500
+
+
+@pytest.mark.parametrize("quantity,parts", [
+    (0.3, [0.1, 0.2]),
+    (0.6, [0.1, 0.2, 0.3]),
+    (1.0, [0.1] * 10),
+    (0.000003, [0.000001, 0.000002]),
+])
+def test_decimal_dispense_drains_source_without_500_and_replays_once(tmp_path, quantity, parts) -> None:
+    """小数全量分装归零且守恒，HTTP 重放不二次扣量或新增目标。"""
+
+    scene = _Scene(tmp_path, empty_containers=len(parts))
+    try:
+        scene.client.app.include_router(create_router(scene.service))
+        client = TestClient(scene.client.app, raise_server_exceptions=False)
+        source = client.put(f"/api/v1/reagents/{scene.source['uuid']}", json={
+            "quantity": quantity, "quantity_unit": "mL",
+        }).json()["data"]
+        command = _dispense_command(
+            "decimal-drain", source["uuid"], source["revision"],
+            [{"material_uuid": target, "quantity": amount} for target, amount in zip(scene.targets, parts)],
+        )
+        before = len(_ledger(scene.store))
+        response = client.post("/api/v1/inventory/commands", json=command)
+        assert response.status_code == 200, response.text
+        completed = response.json()
+        assert completed["status"] == "completed", completed
+        assert completed["result"]["source"]["quantity"] == 0
+        assert _reagent(scene.client, source["uuid"])["quantity"] == 0
+        targets = completed["result"]["targets"]
+        assert math.fsum(target["quantity"] for target in targets) == pytest.approx(quantity)
+        events = _ledger(scene.store)[before:]
+        assert len(events) == len(parts) + 1
+        source_event = next(event for event in events if event["op_type"] == "reagent.dispense_source")
+        assert source_event["quantity_delta"] == -quantity
+        assert source_event["revision"] == source["revision"] + 1
+        replay = client.post("/api/v1/inventory/commands", json=command).json()
+        assert replay["status"] == "completed"
+        assert replay["replayed"] is True
+        assert replay["result"] == completed["result"]
+        assert len(_ledger(scene.store)) == before + len(parts) + 1
+    finally:
+        scene.store.close()
+
+
+def test_decimal_dispense_rejects_real_overdraw_without_partial_changes(tmp_path) -> None:
+    """真实超量即使小于旧绝对容差也拒绝，源瓶、目标和台账全部保持原样。"""
+
+    scene = _Scene(tmp_path, empty_containers=2)
+    try:
+        source = scene.client.put(f"/api/v1/reagents/{scene.source['uuid']}", json={
+            "quantity": 0.3, "quantity_unit": "mL",
+        }).json()["data"]
+        before = _ledger(scene.store)
+        response = execute_command(scene.service, _dispense_command(
+            "decimal-overdraw", source["uuid"], source["revision"],
+            [{"material_uuid": scene.targets[0], "quantity": 0.1},
+             {"material_uuid": scene.targets[1], "quantity": 0.2000000001}],
+        ))
+        assert response["status"] == "rejected", response
+        assert response["error_code"] == "1000"
+        assert _reagent(scene.client, source["uuid"]) == source
+        assert all(_reagents_on(scene.client, target) == [] for target in scene.targets)
+        assert _ledger(scene.store) == before
+    finally:
+        scene.store.close()
+
+
+def test_concurrent_decimal_dispense_preserves_source_revision_guard(tmp_path) -> None:
+    """同一源瓶修订发起两笔分装只能成功一笔，不会丢失扣量或覆盖来源。"""
+
+    scene = _Scene(tmp_path, empty_containers=2)
+    try:
+        source = scene.client.put(f"/api/v1/reagents/{scene.source['uuid']}", json={
+            "quantity": 0.3, "quantity_unit": "mL",
+        }).json()["data"]
+        commands = [
+            _dispense_command(f"decimal-race-{index}", source["uuid"], source["revision"],
+                              [{"material_uuid": target, "quantity": 0.2}])
+            for index, target in enumerate(scene.targets)
+        ]
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(lambda command: execute_command(scene.service, command), commands))
+        assert sorted(result["status"] for result in results) == ["completed", "rejected"]
+        assert next(result for result in results if result["status"] == "rejected")["error_code"] == "4002"
+        final_source = _reagent(scene.client, source["uuid"])
+        assert final_source["quantity"] == pytest.approx(0.1)
+        assert final_source["revision"] == source["revision"] + 1
+        assert sum(len(_reagents_on(scene.client, target)) for target in scene.targets) == 1
+        events = [event for event in _ledger(scene.store) if event["op_type"].startswith("reagent.dispense_")]
+        assert len(events) == 2
+    finally:
+        scene.store.close()
