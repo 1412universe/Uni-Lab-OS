@@ -567,8 +567,31 @@ class EdgeControlClient(BaseCommunicationClient):
         material_uuids = self.data_plane.material_uuids_by_barcode(
             all_barcodes
         )
+        unresolved_node_ids = {
+            local_id
+            for local_id, resource in nodes.items()
+            if normalize_resource_instance_barcode(
+                resource.get("barcode"), local_id
+            )
+            not in material_uuids
+        }
+        site_uuids_by_local_id = (
+            self.data_plane.site_uuids_by_local_id(unresolved_node_ids)
+            if unresolved_node_ids
+            else {}
+        )
+        resolved_site_barcodes = {
+            normalize_resource_instance_barcode(
+                nodes[local_id].get("barcode"), local_id
+            )
+            for local_id in site_uuids_by_local_id
+            if local_id in nodes
+        }
         missing = sorted(
-            barcode for barcode in all_barcodes if barcode not in material_uuids
+            barcode
+            for barcode in all_barcodes
+            if barcode not in material_uuids
+            and barcode not in resolved_site_barcodes
         )
         if missing:
             raise RuntimeError(
@@ -579,7 +602,11 @@ class EdgeControlClient(BaseCommunicationClient):
             install_production_resource_nodes,
         )
 
-        install_production_resource_nodes(resource_trees, material_uuids)
+        install_production_resource_nodes(
+            resource_trees,
+            material_uuids,
+            resource_uuids_by_local_id=site_uuids_by_local_id,
+        )
 
         devices: list[dict[str, Any]] = []
         for candidate in candidates:

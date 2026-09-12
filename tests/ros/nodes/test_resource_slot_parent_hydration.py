@@ -345,6 +345,54 @@ def test_production_resource_projection_uses_backend_identity_and_parent_tree() 
     ]
 
 
+def test_production_resource_projection_uses_backend_site_identity() -> None:
+    """PLR well/tip spot nodes use Site UUIDs while their owner remains Material."""
+
+    local_plate_uuid = "50000000-0000-4000-8000-000000000121"
+    local_well_uuid = "50000000-0000-4000-8000-000000000122"
+    backend_plate_uuid = "50000000-0000-4000-8000-000000000123"
+    backend_site_uuid = "50000000-0000-4000-8000-000000000124"
+    install_production_resource_nodes(
+        [[
+            {
+                **_raw_resource(local_plate_uuid),
+                "id": "plate",
+                "name": "Plate",
+                "type": "plate",
+                "class": "plate",
+                "barcode": "UNILAB-GRAPH-plate",
+                "config": {},
+                "data": {},
+                "extra": {},
+            },
+            {
+                **_raw_resource(local_well_uuid, parent_uuid=local_plate_uuid),
+                "id": "plate_well_A1",
+                "name": "plate_well_A1",
+                "type": "well",
+                "class": "",
+                "barcode": "UNILAB-GRAPH-plate_well_A1",
+                "config": {},
+                "data": {},
+                "extra": {},
+            },
+        ]],
+        {"UNILAB-GRAPH-plate": backend_plate_uuid},
+        resource_uuids_by_local_id={"plate_well_A1": backend_site_uuid},
+    )
+
+    rows = query_production_resource_nodes_sync([backend_plate_uuid])
+
+    assert [row["uuid"] for row in rows] == [
+        backend_plate_uuid,
+        backend_site_uuid,
+    ]
+    assert rows[1]["parent_uuid"] == backend_plate_uuid
+    assert rows[1]["extra"][PRODUCTION_SOURCE_RUNTIME_UUID_EXTRA] == (
+        local_well_uuid
+    )
+
+
 def test_production_projection_resolves_exact_local_runtime_resource(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -26,17 +26,26 @@ def install_production_resource_nodes(
     resource_trees: Sequence[Mapping[str, Any]]
     | Sequence[Sequence[Mapping[str, Any]]],
     material_uuids_by_barcode: Mapping[str, str],
+    *,
+    resource_uuids_by_local_id: Mapping[str, str] | None = None,
 ) -> None:
     """安装生产 Edge 的 Backend 身份资源投影。
 
     参数说明：``resource_trees`` 是工作区设备图提供的物理资源形状；
-    ``material_uuids_by_barcode`` 是 Backend 返回的稳定物料身份。返回：无。
+    ``material_uuids_by_barcode`` 是 Backend 返回的稳定物料身份；
+    ``resource_uuids_by_local_id`` 承载 well/tip spot 等 Backend Site 身份。
+    返回：无。
 
     所有运行资源必须能映射到 Backend；本投影只驻留内存，不创建本地 Scheduler
     或库存数据库。缺失身份、重复身份或父关系无法重写时失败关闭。
     """
 
     source_nodes = [deepcopy(dict(node)) for node in _flatten_resource_nodes(resource_trees)]
+    local_resource_uuids = {
+        str(local_id).strip(): str(resource_uuid).strip()
+        for local_id, resource_uuid in (resource_uuids_by_local_id or {}).items()
+        if str(local_id).strip() and str(resource_uuid).strip()
+    }
     backend_uuid_by_local_uuid: dict[str, str] = {}
     backend_uuid_by_local_id: dict[str, str] = {}
     projected_uuid_by_index: list[str] = []
@@ -46,7 +55,10 @@ def install_production_resource_nodes(
         if not local_id:
             raise ResourceSlotHydrationError("生产资源投影行缺少本地 ID")
         barcode = normalize_resource_instance_barcode(node.get("barcode"), local_id)
-        backend_uuid = str(material_uuids_by_barcode.get(barcode) or "").strip()
+        backend_uuid = (
+            local_resource_uuids.get(local_id)
+            or str(material_uuids_by_barcode.get(barcode) or "").strip()
+        )
         if not backend_uuid:
             missing_barcodes.append(barcode)
             projected_uuid_by_index.append("")

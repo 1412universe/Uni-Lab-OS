@@ -293,6 +293,28 @@ class FakeRegistrationResourcesWithClass:
         }]]
 
 
+class FakeRegistrationResourcesWithSite:
+    def dump(self) -> list[list[dict[str, Any]]]:
+        return [[
+            {
+                "id": "robot-01",
+                "uuid": "50000000-0000-4000-8000-000000000201",
+                "name": "Robot 01",
+                "type": "device",
+                "barcode": "ROBOT-01",
+                "parent_uuid": None,
+            },
+            {
+                "id": "robot-01_well_A1",
+                "uuid": "50000000-0000-4000-8000-000000000202",
+                "name": "robot-01_well_A1",
+                "type": "well",
+                "barcode": "ROBOT-01-WELL-A1",
+                "parent_uuid": "50000000-0000-4000-8000-000000000201",
+            },
+        ]]
+
+
 class FakeRegistrationHostNode:
     def __init__(self) -> None:
         self.resources_config = FakeRegistrationResources()
@@ -345,6 +367,23 @@ class FakeRegistrationDataPlane:
         self, barcodes: Iterable[str]
     ) -> dict[str, str]:
         return {barcode: str(uuid.uuid4()) for barcode in barcodes}
+
+
+class FakeRegistrationDataPlaneWithSite:
+    def __init__(self) -> None:
+        self.robot_uuid = str(uuid.uuid4())
+        self.site_uuid = str(uuid.uuid4())
+
+    def material_uuids_by_barcode(
+        self, barcodes: Iterable[str]
+    ) -> dict[str, str]:
+        return {"ROBOT-01": self.robot_uuid}
+
+    def site_uuids_by_local_id(
+        self, local_ids: Iterable[str]
+    ) -> dict[str, str]:
+        assert set(local_ids) == {"robot-01_well_A1"}
+        return {"robot-01_well_A1": self.site_uuid}
 
 
 class FakeResponse:
@@ -498,6 +537,31 @@ def test_registration_includes_host_node_as_default_system_device(
     assert devices[0]["barcode"] == "UNILAB-GRAPH-host_node"
     assert devices[0]["actions"] == [
         {"name": "transfer_resource", "type": "UniLabJsonCommandAsync"},
+    ]
+    client.store.close()
+
+
+def test_registration_resolves_resource_site_identity(tmp_path: Path) -> None:
+    host_node = FakeRegistrationHostNode()
+    host_node.resources_config = FakeRegistrationResourcesWithSite()
+    data_plane = FakeRegistrationDataPlaneWithSite()
+    client = EdgeControlClient(
+        _settings(tmp_path / "runtime.db"),
+        data_plane=data_plane,  # type: ignore[arg-type]
+        host_node_provider=lambda: host_node,
+    )
+
+    devices = client._registration_devices()
+
+    assert devices[0]["material_uuid"] == data_plane.robot_uuid
+    from unilabos.ros.nodes.resource_slot_hydration import (
+        query_production_resource_nodes_sync,
+    )
+
+    projected = query_production_resource_nodes_sync([data_plane.robot_uuid])
+    assert [row["uuid"] for row in projected] == [
+        data_plane.robot_uuid,
+        data_plane.site_uuid,
     ]
     client.store.close()
 
@@ -1461,6 +1525,53 @@ def test_material_identity_lookup_includes_child_resources() -> None:
 
     assert resolved == {"CHILD-01": "material-01"}
     assert session.params["with_children"] == "true"
+
+
+def test_site_identity_lookup_uses_backend_material_graph() -> None:
+    """Production registration resolves PLR site nodes from Backend Site facts."""
+
+    class MaterialGraphSession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.url = ""
+
+        def request(self, _method: str, url: str, **_kwargs: Any) -> FakeResponse:
+            self.url = url
+            return FakeResponse(
+                {
+                    "code": 0,
+                    "data": {
+                        "nodes": [
+                            {
+                                "sites": [
+                                    {
+                                        "uuid": "50000000-0000-4000-8000-000000000211",
+                                        "name": "display-name",
+                                        "meta_data": {
+                                            "source_node_id": "plate_well_A1"
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                }
+            )
+
+    plane = EdgeDataPlane(
+        "http://backend:8080",
+        "http://scheduler:8081",
+        "edge-secret",
+    )
+    session = MaterialGraphSession()
+    plane._session = session  # type: ignore[assignment]
+
+    resolved = plane.site_uuids_by_local_id(["plate_well_A1", "unknown"])
+
+    assert resolved == {
+        "plate_well_A1": "50000000-0000-4000-8000-000000000211"
+    }
+    assert session.url == "http://backend:8080/api/v1/materials/graph"
 
 
 def test_http_data_plane_injects_w3c_trace_headers(monkeypatch) -> None:
