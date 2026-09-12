@@ -1,4 +1,9 @@
-import type { ActionSchema, ManualDeviceAction } from '../lib/stationErrorClient'
+import type { ActionSchema, MaterialRecord } from '../types'
+
+export interface ParameterizedAction {
+  parameter_schema: ActionSchema
+  defaults: Record<string, unknown>
+}
 
 export function parameterType(schema: ActionSchema): string {
   const types = Array.isArray(schema.type) ? schema.type : [schema.type]
@@ -7,14 +12,14 @@ export function parameterType(schema: ActionSchema): string {
   return schema.anyOf?.find((item) => item.type !== 'null')?.type as string || 'string'
 }
 
-export function parameterDefaults(action: ManualDeviceAction): Record<string, string> {
+export function parameterDefaults(action: ParameterizedAction): Record<string, string> {
   const values = { ...Object.fromEntries(Object.entries(action.parameter_schema.properties || {})
     .filter(([, schema]) => schema.default !== undefined).map(([key, schema]) => [key, schema.default])), ...action.defaults }
   return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]))
 }
 
 /** 只处理输入格式；执行资格及完整 Schema 校验由 Edge 决定。 */
-export function parseManualParameters(action: ManualDeviceAction, drafts: Record<string, string>, raw: string, asJson = false): Record<string, unknown> {
+export function parseManualParameters(action: ParameterizedAction, drafts: Record<string, string>, raw: string, asJson = false): Record<string, unknown> {
   const properties = action.parameter_schema.properties
   if (asJson || !properties || !Object.keys(properties).length) {
     const value = JSON.parse(raw || '{}')
@@ -50,24 +55,47 @@ export function parseManualParameters(action: ManualDeviceAction, drafts: Record
   return values
 }
 
-export function ManualActionParameters({ action, drafts, raw, disabled, onDraft, onRaw, asJson = false }: {
-  action: ManualDeviceAction
+function selectedMaterialUuid(value: string): string {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && typeof parsed.uuid === 'string' ? parsed.uuid : ''
+  } catch {
+    return ''
+  }
+}
+
+function materialCandidates(schema: ActionSchema, materials: MaterialRecord[]): MaterialRecord[] {
+  const allowed = Array.isArray(schema.allowed_resource_template_uuids)
+    ? schema.allowed_resource_template_uuids.map(String)
+    : undefined
+  return materials.filter((material) => allowed === undefined || Boolean(
+    material.resourceTemplateUuid && allowed.includes(material.resourceTemplateUuid),
+  ))
+}
+
+export function ManualActionParameters({ action, drafts, raw, disabled, onDraft, onRaw, asJson = false, materials }: {
+  action: ParameterizedAction
   drafts: Record<string, string>
   raw: string
   disabled: boolean
   onDraft: (key: string, value: string) => void
   onRaw: (value: string) => void
   asJson?: boolean
+  materials?: MaterialRecord[]
 }) {
   const properties = Object.entries(action.parameter_schema.properties || {})
   if (asJson || !properties.length) return <label className="form-field"><span>动作参数（JSON 对象）</span><textarea rows={4} disabled={disabled} value={raw} onChange={(event) => onRaw(event.target.value)} /></label>
-  return <div className="handling-parameter-grid">{properties.map(([name, schema]) => {
+  return <div className="action-parameter-grid handling-parameter-grid">{properties.map(([name, schema]) => {
     const type = parameterType(schema)
     const choices = schema.enum || (type === 'boolean' ? [true, false] : undefined)
     const label = schema.title || name
+    const isMaterial = typeof schema['x-unilabos-material-lock'] === 'boolean' || schema.$slot === 'ResourceSlot'
+    const candidates = isMaterial && materials ? materialCandidates(schema, materials) : []
     return <label className="form-field" key={name}>
       <span>{label}{action.parameter_schema.required?.includes(name) ? ' *' : ''}</span>
-      {choices ? <select aria-label={label} value={drafts[name] ?? ''} disabled={disabled} onChange={(event) => onDraft(name, event.target.value)}>
+      {isMaterial && materials ? <select aria-label={label} value={selectedMaterialUuid(drafts[name] ?? '')} disabled={disabled} onChange={(event) => onDraft(name, event.target.value ? JSON.stringify({ uuid: event.target.value }) : '')}>
+        <option value="">请选择物料</option>{candidates.map((material) => <option key={material.uuid} value={material.uuid}>{material.name} · {material.sourceNodeId || material.uuid.slice(0, 8)}</option>)}
+      </select> : choices ? <select aria-label={label} value={drafts[name] ?? ''} disabled={disabled} onChange={(event) => onDraft(name, event.target.value)}>
         <option value="">请选择</option>{choices.map((value, index) => <option key={index} value={typeof value === 'string' ? value : JSON.stringify(value)}>{typeof value === 'boolean' ? value ? '是' : '否' : String(value)}</option>)}
       </select> : type === 'array' || type === 'object' ? <textarea aria-label={label} rows={3} value={drafts[name] ?? ''} disabled={disabled} onChange={(event) => onDraft(name, event.target.value)} />
         : <input aria-label={label} type={type === 'integer' || type === 'number' ? 'number' : 'text'} step={type === 'integer' ? 1 : 'any'} min={schema.minimum} max={schema.maximum} value={drafts[name] ?? ''} disabled={disabled} onChange={(event) => onDraft(name, event.target.value)} />}

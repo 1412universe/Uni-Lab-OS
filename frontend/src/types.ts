@@ -1,4 +1,4 @@
-export type PageId = 'overview' | 'materials' | 'reagents' | 'operations' | 'workflows' | 'tasks'
+export type PageId = 'overview' | 'materials' | 'devices' | 'reagents' | 'operations' | 'workflows' | 'tasks'
 
 export type ConnectionMode = 'loading' | 'connected' | 'reconnecting' | 'demo' | 'error'
 
@@ -378,6 +378,87 @@ export interface ActionTemplateRecord {
   type: string
   nodeType: string
   resourceTemplate: { uuid: string; name: string; displayName: string }
+}
+
+/** JSON Schema 子集，用于把设备动作输入渲染为可编辑表单。 */
+export interface ActionSchema {
+  type?: string | string[]
+  title?: string
+  description?: string
+  properties?: Record<string, ActionSchema>
+  required?: string[]
+  enum?: unknown[]
+  default?: unknown
+  minimum?: number
+  maximum?: number
+  items?: ActionSchema
+  anyOf?: ActionSchema[]
+  [key: string]: unknown
+}
+
+/** Edge 当前可见的设备实例及其运行时动作能力。 */
+export interface DeviceRuntimeRecord {
+  localId: string
+  materialUuid?: string
+  name: string
+  online: boolean
+  dispatchable: boolean
+  source: 'backend' | 'local_runtime'
+  actions: Array<{
+    name: string
+    displayName: string
+    type: string
+    riskLevel: string
+    busy: boolean
+  }>
+}
+
+/** 单点动作详情；字段名兼容通用 Schema 参数编辑器。 */
+export interface DeviceActionDefinition {
+  action_id: string
+  action_version: string
+  name: string
+  display_name: string
+  description?: string
+  parameter_schema: ActionSchema
+  defaults: Record<string, unknown>
+  device_binding: { material_uuid: string; edge_local_id: string }
+}
+
+/** 一次设备单点动作的稳定创建意图；结果未知时必须复用同一幂等键。 */
+export interface DeviceActionRunIntent {
+  materialUuid: string
+  workflowNodeTemplateUuid: string
+  param: Record<string, unknown>
+  executionTimeoutSeconds: number
+  idempotencyKey: string
+  description: string
+}
+
+export interface DeviceActionRunReference {
+  taskUuid: string
+  jobUuid: string
+  created: boolean
+  taskStatus: string
+  jobStatus: string
+}
+
+/** 单点动作页面轮询的任务与作业权威状态。 */
+export interface DeviceActionRunStatus {
+  taskUuid: string
+  jobUuid: string
+  taskStatus: string
+  controlStatus: string
+  jobStatus: string
+  actionName: string
+  param: Record<string, unknown>
+  feedback: unknown
+  result: unknown
+  errors: unknown[]
+  waitReason?: unknown
+  startedAt?: string
+  finishedAt?: string
+  updatedAt?: string
 }
 
 /** 调度器结构控制节点模板；它没有设备句柄，参数保存在工作流节点 param 中。 */

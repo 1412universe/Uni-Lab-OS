@@ -1,6 +1,6 @@
 import type { PageId, WorkflowTarget } from '../types'
 
-const supportedPages = new Set<PageId>(['overview', 'materials', 'reagents', 'operations', 'workflows', 'tasks'])
+const supportedPages = new Set<PageId>(['overview', 'materials', 'devices', 'reagents', 'operations', 'workflows', 'tasks'])
 
 export function pageFromSearch(search: string): PageId {
   const page = new URLSearchParams(search).get('page')
@@ -11,6 +11,7 @@ export function searchWithPage(search: string, page: PageId): string {
   const params = new URLSearchParams(search)
   params.set('page', page)
   if (page !== 'materials') params.delete('usageTask')
+  if (page !== 'devices') params.delete('device')
   if (page !== 'workflows') {
     params.delete('workflow')
     params.delete('revision')

@@ -4,24 +4,31 @@ import {
   adaptTask,
   adaptWorkflow,
   createExperimentOperation,
+  createDeviceActionRun,
   createWorkflowTask,
   decideWorkflowIntervention,
   createReagent,
   createReagentInfo,
   deleteReagentInfo,
   EdgeApiError,
+  DeviceActionRunRequestError,
+  TaskCommandRequestError,
   InventoryCommandRejectedError,
   deleteReagent,
   dispenseReagent,
   instantiateMaterial,
   lookupCompoundByCas,
   loadActionTemplates,
+  loadDeviceActionDefinition,
+  loadDeviceActionRunStatus,
+  loadDeviceRuntimeCatalog,
   loadControlTemplates,
   loadEdgeSnapshot,
   loadReagentHistory,
   loadWorkflowGraph,
   loadWorkflowTaskDetail,
   loadWorkflowTaskGraph,
+  commandWorkflowTask,
   startupModeSwitchBlockers,
   switchStartupMode,
   unwrapEnvelope,
@@ -289,6 +296,204 @@ describe('工作流控制节点模板', () => {
     await expect(loadControlTemplates()).resolves.toEqual([expect.objectContaining({
       uuid: 'condition-1', nodeType: 'condition', parameterSchema: { type: 'object', description: '条件参数' },
     })])
+  })
+})
+
+describe('设备单点动作 API', () => {
+  it('优先采用 Backend 设备身份，并用本地目录补充动作展示信息', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/devices')) return response({ code: 0, data: [{
+        binding: { local_id: 'pump-1', material_uuid: 'material-authoritative', name: '一号泵' },
+        material: { uuid: 'material-authoritative', name: '一号泵' },
+        edge_status: 'online', dispatchable: true,
+        actions: [{ name: 'hold', type: 'UniLabJsonCommand' }],
+      }] })
+      if (url.endsWith('/authoring/device-catalog')) return response({ code: 0, data: { items: [{
+        id: 'pump-1', materialUuid: 'runtime-graph-uuid', name: '运行时一号泵', online: true,
+        actions: [{ id: 'hold', name: '保持', typeName: 'UniLabJsonCommand', riskLevel: 'guarded', busy: true }],
+      }] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+
+    await expect(loadDeviceRuntimeCatalog()).resolves.toEqual([{
+      localId: 'pump-1', materialUuid: 'material-authoritative', name: '一号泵', online: true,
+      dispatchable: true, source: 'backend',
+      actions: [{ name: 'hold', displayName: '保持', type: 'UniLabJsonCommand', riskLevel: 'guarded', busy: true }],
+    }])
+  })
+
+  it('独立 Workspace 没有 Backend 注册时返回本地运行时设备', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/devices')) return response({ code: 0, data: [] })
+      if (url.endsWith('/authoring/device-catalog')) return response({ code: 0, data: { items: [{
+        id: 'PRCXI', materialUuid: 'runtime-uuid', name: 'PRCXI 仿真', online: true,
+        actions: [{ id: 'execute_titration_81', name: 'PRCXI 81 次滴注', typeName: 'UniLabJsonCommandAsync' }],
+      }] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+
+    await expect(loadDeviceRuntimeCatalog()).resolves.toEqual([expect.objectContaining({
+      localId: 'PRCXI', materialUuid: 'runtime-uuid', online: true, dispatchable: true, source: 'local_runtime',
+      actions: [expect.objectContaining({ name: 'execute_titration_81', displayName: 'PRCXI 81 次滴注' })],
+    })])
+  })
+
+  it('Backend 设备目录读取失败时不使用本地在线事实放行写操作', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/devices')) throw new TypeError('backend offline')
+      if (url.endsWith('/authoring/device-catalog')) return response({ code: 0, data: { items: [{
+        id: 'PRCXI', online: true, actions: [{ id: 'execute_titration_81', typeName: 'UniLabJsonCommandAsync' }],
+      }] } })
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+
+    await expect(loadDeviceRuntimeCatalog()).rejects.toThrow('backend offline')
+  })
+
+  it('从冻结动作合同读取参数 Schema 和默认值', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: { template: {
+      uuid: 'template-hold', name: 'hold', display_name: '保持', description: '保持指定秒数',
+      schema: JSON.stringify({ type: 'object', properties: { wrong: { type: 'string' } } }),
+      goal_default: { duration_seconds: 2 },
+      meta_data: { unilab: { action_contract_schema: { properties: { goal: {
+        type: 'object', required: ['duration_seconds'], properties: { duration_seconds: { type: 'integer', minimum: 1 } },
+      } } } } },
+    }, handles: [] } })))
+
+    await expect(loadDeviceActionDefinition('template-hold', {
+      materialUuid: 'material-pump', localId: 'pump-1',
+    })).resolves.toMatchObject({
+      action_id: 'template-hold', name: 'hold', display_name: '保持', defaults: { duration_seconds: 2 },
+      parameter_schema: { required: ['duration_seconds'], properties: { duration_seconds: { type: 'integer', minimum: 1 } } },
+      device_binding: { material_uuid: 'material-pump', edge_local_id: 'pump-1' },
+    })
+  })
+
+  it('按 data_key 合并目标 ResourceSlot 句柄的物料模板约束', async () => {
+    const materialRef = {
+      type: 'object', properties: { uuid: { type: 'string', format: 'uuid' } },
+      required: ['uuid'], additionalProperties: false, 'x-unilabos-material-lock': true,
+    }
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: {
+      template: {
+        uuid: 'template-hold', name: 'hold',
+        meta_data: { unilab: { action_contract_schema: { properties: { goal: {
+          type: 'object', properties: { source: { ...materialRef, title: '源板' }, seconds: { type: 'integer' } },
+        } } } } },
+      },
+      handles: [
+        { io_type: 'target', data_key: 'source', handle_key: 'legacy-port', type: 'ResourceSlot', meta_data: { unilab: {
+          value_schema: materialRef, editor_control: 'material_port', allowed_resource_template_uuids: ['plate-template'],
+        } } },
+        { io_type: 'source', data_key: 'source', handle_key: 'source', data_source: 'executor', type: 'ResourceSlot', meta_data: { unilab: {
+          value_schema: materialRef, allowed_resource_template_uuids: ['wrong-template'],
+        } } },
+      ],
+    } })))
+
+    const result = await loadDeviceActionDefinition('template-hold', { materialUuid: 'device-1', localId: 'pump-1' })
+    expect(result.parameter_schema.properties?.source).toMatchObject({
+      title: '源板', $slot: 'ResourceSlot', allowed_resource_template_uuids: ['plate-template'],
+    })
+    expect(result.parameter_schema.properties?.seconds).not.toHaveProperty('allowed_resource_template_uuids')
+  })
+
+  it.each([
+    { schema: ['plate-template'], handle: ['other-template'], message: '存在冲突' },
+    { schema: undefined, handle: [], message: '非空且不重复' },
+    { schema: undefined, handle: [42], message: '只能包含 UUID 字符串' },
+  ])('物料模板约束损坏时关闭动作定义：$message', async ({ schema, handle, message }) => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 0, data: {
+      template: { uuid: 'template-hold', schema: JSON.stringify({ type: 'object', properties: {
+        source: { $slot: 'ResourceSlot', ...(schema ? { allowed_resource_template_uuids: schema } : {}) },
+      } }) },
+      handles: [{ io_type: 'target', data_key: 'source', type: 'ResourceSlot', meta_data: { unilab: {
+        allowed_resource_template_uuids: handle,
+      } } }],
+    } })))
+
+    await expect(loadDeviceActionDefinition('template-hold', { materialUuid: 'device-1', localId: 'pump-1' }))
+      .rejects.toThrow(message)
+  })
+
+  it('发送 Backend DTO，并把结果未知的失败标记为必须重放原请求', async () => {
+    const intent = {
+      materialUuid: 'material-pump', workflowNodeTemplateUuid: 'template-hold',
+      param: { duration_seconds: 3 }, executionTimeoutSeconds: 120,
+      idempotencyKey: 'device-action-key', description: '一号泵 · 保持',
+    }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({
+      code: 0, data: { created: true, task: { uuid: 'task-1', status: 'running' }, job: { uuid: 'job-1', status: 'dispatched' } },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(createDeviceActionRun(intent)).resolves.toEqual({
+      taskUuid: 'task-1', jobUuid: 'job-1', created: true, taskStatus: 'running', jobStatus: 'dispatched',
+    })
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      material_uuid: 'material-pump', workflow_node_template_uuid: 'template-hold',
+      param: { duration_seconds: 3 }, execution_policy: { execution_timeout_seconds: 120 },
+      idempotency_key: 'device-action-key', description: '一号泵 · 保持',
+      meta_data: { source: 'unilabos-frontend-device-page' },
+    })
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('connection reset') }))
+    await expect(createDeviceActionRun(intent)).rejects.toMatchObject({ outcomeUnknown: true })
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not-json', { status: 201 })))
+    await expect(createDeviceActionRun(intent)).rejects.toMatchObject({ outcomeUnknown: true })
+
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 1000, error: { msg: '参数不合法' } })))
+    const rejected = await createDeviceActionRun(intent).catch((error) => error)
+    expect(rejected).toBeInstanceOf(DeviceActionRunRequestError)
+    expect(rejected).toMatchObject({ outcomeUnknown: false, message: '参数不合法' })
+  })
+
+  it('组合 Task 与 Job 的权威状态和执行结果', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/workflow-tasks/task-1')) return response({ code: 0, data: {
+        uuid: 'task-1', status: 'succeeded', control_status: 'active', update_time: '2026-09-13T08:00:00Z',
+      } })
+      if (url.endsWith('/workflow-node-jobs/job-1')) return response({ code: 0, data: {
+        uuid: 'job-1', action_name: 'hold', status: 'succeeded', param: { duration_seconds: 3 },
+        feedback_data: { progress: 1 }, return_info: { completed: true }, error_info: { warning: 'none' },
+        started_at: '2026-09-13T07:59:00Z', finished_at: '2026-09-13T08:00:00Z',
+      } })
+      throw new Error(`Unexpected URL: ${url}`)
+    }))
+
+    await expect(loadDeviceActionRunStatus('task-1', 'job-1')).resolves.toMatchObject({
+      taskStatus: 'succeeded', jobStatus: 'succeeded', actionName: 'hold',
+      feedback: { progress: 1 }, result: { completed: true }, errors: [{ warning: 'none' }],
+    })
+  })
+
+  it('区分任务控制命令的明确拒绝与结果未知，并保留调用方幂等键', async () => {
+    const calls: Array<Record<string, unknown>> = []
+    vi.stubGlobal('fetch', vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push(JSON.parse(String(init?.body)))
+      return response({ code: 0, data: { status: 'rejected', result: { reason: 'task_is_terminal' } } })
+    }))
+    const rejected = await commandWorkflowTask('task-1', 'cancel', undefined, 'cancel-key').catch((error) => error)
+    expect(rejected).toBeInstanceOf(TaskCommandRequestError)
+    expect(rejected).toMatchObject({ outcomeUnknown: false, message: 'task_is_terminal' })
+    expect(calls[0]).toMatchObject({ type: 'cancel', idempotency_key: 'cancel-key' })
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('connection reset') }))
+    await expect(commandWorkflowTask('task-1', 'cancel', undefined, 'cancel-key'))
+      .rejects.toMatchObject({ outcomeUnknown: true })
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not-json', { status: 201 })))
+    await expect(commandWorkflowTask('task-1', 'cancel', undefined, 'cancel-key'))
+      .rejects.toMatchObject({ outcomeUnknown: true })
+
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 1000, error: { msg: '命令不合法' } })))
+    await expect(commandWorkflowTask('task-1', 'cancel', undefined, 'cancel-key'))
+      .rejects.toMatchObject({ outcomeUnknown: false, message: '命令不合法' })
   })
 })
 

@@ -13,6 +13,7 @@ import { TasksPage } from './pages/TasksPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
 import { OperationsPage } from './pages/OperationsPage'
 import { ReagentsPage } from './pages/ReagentsPage'
+import { DevicesPage } from './pages/DevicesPage'
 import type { PageId, StartupModeSwitchBlocker, WorkflowTarget } from './types'
 
 export default function App() {
@@ -57,6 +58,15 @@ export default function App() {
     setSearchParams((current) => {
       const next = new URLSearchParams(searchWithPage(`?${current.toString()}`, 'materials'))
       next.set('usageTask', taskUuid)
+      return next
+    })
+  }, [setSearchParams])
+
+  const selectDevice = useCallback((materialUuid: string) => {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(searchWithPage(`?${current.toString()}`, 'devices'))
+      if (materialUuid) next.set('device', materialUuid)
+      else next.delete('device')
       return next
     })
   }, [setSearchParams])
@@ -149,6 +159,17 @@ export default function App() {
         <OverviewPage tasks={snapshot.tasks} materialTotal={snapshot.materialTotal} workflowLoaded={snapshot.workflowLoaded} connection={connection} onNavigate={navigate} onNotify={setToast} />
       ) : page === 'materials' ? (
         <LiveMaterialsPage key={searchParams.get('usageTask') || 'all'} materials={snapshot.materials} tasks={snapshot.tasks} connected={connection === 'connected'} onNotify={setToast} onRefresh={refresh} onOpenTask={openTask} targetTaskUuid={searchParams.get('usageTask') || undefined} />
+      ) : page === 'devices' ? (
+        <DevicesPage
+          materials={snapshot.materials}
+          connected={connection === 'connected'}
+          startupMode={snapshot.startupMode}
+          targetDeviceUuid={searchParams.get('device') || undefined}
+          onSelectDevice={selectDevice}
+          onOpenTask={openTask}
+          onRefresh={refresh}
+          onNotify={setToast}
+        />
       ) : page === 'operations' ? (
         <OperationsPage materials={snapshot.materials} connected={connection === 'connected'} onNotify={setToast} />
       ) : page === 'reagents' ? (

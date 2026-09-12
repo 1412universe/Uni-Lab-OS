@@ -32,6 +32,7 @@ import type {
   ControlTemplateRecord,
   ActionParameterRecord,
   ActionOutputRecord,
+  ActionSchema,
   OperationCategoryRecord,
   ReagentInfoRecord,
   ReagentRecord,
@@ -41,6 +42,11 @@ import type {
   StartupModeSwitchBlocker,
   StartupModeSwitchResult,
   WorkflowInventoryRequirement,
+  DeviceRuntimeRecord,
+  DeviceActionDefinition,
+  DeviceActionRunIntent,
+  DeviceActionRunReference,
+  DeviceActionRunStatus,
 } from '../types'
 
 type RawRecord = Record<string, any>
@@ -75,6 +81,22 @@ export class EdgeApiError extends Error {
     this.name = 'EdgeApiError'
     this.code = options.code
     this.details = options.details || {}
+  }
+}
+
+/** 设备动作创建失败；outcomeUnknown 表示服务端可能已经受理，重试必须复用原请求。 */
+export class DeviceActionRunRequestError extends Error {
+  constructor(message: string, readonly outcomeUnknown: boolean) {
+    super(message)
+    this.name = 'DeviceActionRunRequestError'
+  }
+}
+
+/** 任务控制命令失败；结果未知时调用方必须复用原幂等键。 */
+export class TaskCommandRequestError extends Error {
+  constructor(message: string, readonly outcomeUnknown: boolean) {
+    super(message)
+    this.name = 'TaskCommandRequestError'
   }
 }
 
@@ -1130,6 +1152,260 @@ export async function loadActionTemplates(signal?: AbortSignal): Promise<ActionT
     type: String(raw.type || ''), nodeType: String(raw.node_type || ''),
     resourceTemplate: { uuid: String(raw.resource_template?.uuid || ''), name: String(raw.resource_template?.name || ''), displayName: String(raw.resource_template?.display_name || raw.resource_template?.name || '') },
   }))
+}
+
+function adaptRuntimeAction(raw: RawRecord, fallback?: RawRecord): DeviceRuntimeRecord['actions'][number] {
+  const name = String(raw.id || raw.name || fallback?.id || fallback?.name || '')
+  return {
+    name,
+    displayName: String(raw.display_name || (raw.id ? raw.name : '') || fallback?.display_name || (fallback?.id ? fallback.name : '') || name),
+    type: String(raw.type || raw.typeName || fallback?.type || fallback?.typeName || ''),
+    riskLevel: String(raw.riskLevel || raw.risk_level || fallback?.riskLevel || fallback?.risk_level || 'normal'),
+    busy: Boolean(raw.busy || fallback?.busy),
+  }
+}
+
+/**
+ * 读取当前可执行设备目录。连接 Backend 时优先使用正式 DeviceOverview；独立
+ * Workspace 没有注册会话时，用本地运行时目录补齐在线事实。
+ */
+export async function loadDeviceRuntimeCatalog(signal?: AbortSignal): Promise<DeviceRuntimeRecord[]> {
+  const [backendResult, localResult] = await Promise.allSettled([
+    requestData<RawRecord[]>('/devices', signal),
+    requestData<RawRecord>('/authoring/device-catalog', signal),
+  ])
+  const localItems = localResult.status === 'fulfilled' && Array.isArray(localResult.value.items)
+    ? localResult.value.items as RawRecord[]
+    : []
+  const localById = new Map(localItems.map((item) => [String(item.id || ''), item]))
+  const backendItems = backendResult.status === 'fulfilled' && Array.isArray(backendResult.value)
+    ? backendResult.value
+    : []
+  if (backendItems.length) {
+    return backendItems.map((raw) => {
+      const binding = raw.binding && typeof raw.binding === 'object' ? raw.binding as RawRecord : {}
+      const material = raw.material && typeof raw.material === 'object' ? raw.material as RawRecord : {}
+      const localId = String(binding.local_id || '')
+      const local = localById.get(localId)
+      const localActions = new Map(
+        (Array.isArray(local?.actions) ? local.actions : []).map((item: RawRecord) => [String(item.id || item.name || ''), item]),
+      )
+      return {
+        localId,
+        materialUuid: String(material.uuid || binding.material_uuid || '') || undefined,
+        name: String(binding.name || material.name || local?.name || localId),
+        online: raw.edge_status === 'online',
+        dispatchable: Boolean(raw.dispatchable),
+        source: 'backend' as const,
+        actions: (Array.isArray(raw.actions) ? raw.actions : []).map((item: RawRecord) => {
+          const localAction = localActions.get(String(item.name || ''))
+          return adaptRuntimeAction(item, localAction)
+        }).filter((item) => item.name),
+      }
+    })
+  }
+  // `/devices` 是 Backend 权威在线状态。只有它明确成功且返回空数组时，才说明
+  // 当前是没有注册会话的独立 Workspace，可以使用同一次读取的本地目录。
+  if (backendResult.status === 'rejected') {
+    throw backendResult.reason instanceof Error
+      ? backendResult.reason
+      : new Error('Backend 设备目录读取失败')
+  }
+  if (localResult.status === 'fulfilled') {
+    return localItems.map((raw) => ({
+      localId: String(raw.id || ''),
+      // 旧 Workspace 目录中的 materialUuid 可能是运行图 UUID；页面会优先按
+      // localId 连接库存物料，再把库存 UUID 交给 DeviceActionRun。
+      materialUuid: String(raw.materialUuid || '') || undefined,
+      name: String(raw.name || raw.id || ''),
+      online: raw.online === true,
+      dispatchable: raw.online === true,
+      source: 'local_runtime' as const,
+      actions: (Array.isArray(raw.actions) ? raw.actions : [])
+        .map((item: RawRecord) => adaptRuntimeAction(item))
+        .filter((item) => item.name),
+    })).filter((item) => item.localId)
+  }
+  throw localResult.reason instanceof Error
+    ? localResult.reason
+    : new Error('设备运行时目录读取失败')
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...(value as Record<string, unknown>) }
+    : {}
+}
+
+function templateGoalSchema(template: RawRecord): ActionSchema {
+  const frozen = template.meta_data?.unilab?.action_contract_schema?.properties?.goal
+  if (frozen && typeof frozen === 'object' && !Array.isArray(frozen)) return { ...frozen }
+  const source = typeof template.schema === 'string'
+    ? (() => { try { return JSON.parse(template.schema) } catch { return {} } })()
+    : template.schema
+  return source && typeof source === 'object' && !Array.isArray(source)
+    ? { ...(source as ActionSchema) }
+    : { type: 'object', properties: {} }
+}
+
+function goalSchemaWithHandleConstraints(schema: ActionSchema, handles: unknown): ActionSchema {
+  if (!Array.isArray(handles) || !schema.properties) return schema
+  const properties = { ...schema.properties }
+  const normalizeAllowlist = (value: unknown, label: string): string[] | undefined => {
+    if (value === undefined || value === null) return undefined
+    if (!Array.isArray(value)) throw new Error(`${label}无效`)
+    if (value.some((item) => typeof item !== 'string')) throw new Error(`${label}只能包含 UUID 字符串`)
+    const normalized = value as string[]
+    if (!normalized.length || normalized.some((item) => !item.trim()) || new Set(normalized).size !== normalized.length) {
+      throw new Error(`${label}必须是非空且不重复的 UUID 数组`)
+    }
+    return normalized
+  }
+  const embeddedAllowlists = (value: unknown): unknown[] => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+    const record = value as RawRecord
+    return [
+      ...(record.allowed_resource_template_uuids === undefined ? [] : [record.allowed_resource_template_uuids]),
+      ...embeddedAllowlists(record.items),
+      ...(Array.isArray(record.anyOf) ? record.anyOf.flatMap((item: unknown) => embeddedAllowlists(item)) : []),
+    ]
+  }
+  handles.forEach((raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return
+    const handle = raw as RawRecord
+    if (handle.io_type !== 'target' || (handle.data_source && handle.data_source !== 'goal')) return
+    const key = String(handle.data_key || handle.handle_key || '')
+    if (!key || !properties[key]) return
+    const unilab = handle.meta_data?.unilab
+    if (!unilab || typeof unilab !== 'object' || Array.isArray(unilab)) return
+    const valueSchema = unilab.value_schema && typeof unilab.value_schema === 'object' && !Array.isArray(unilab.value_schema)
+      ? unilab.value_schema as ActionSchema
+      : {}
+    const handleAllowed = unilab.allowed_resource_template_uuids
+    const schemaAllowlists = [...embeddedAllowlists(properties[key]), ...embeddedAllowlists(valueSchema)]
+      .map((value) => normalizeAllowlist(value, `${key} 的物料模板允许集合`)!)
+    const normalizedSchemaAllowed = schemaAllowlists[0]
+    if (schemaAllowlists.some((item) => JSON.stringify(item) !== JSON.stringify(normalizedSchemaAllowed))) {
+      throw new Error(`${key} 的物料模板允许集合存在冲突`)
+    }
+    const normalizedHandleAllowed = normalizeAllowlist(handleAllowed, `${key} 的连接点物料模板允许集合`)
+    if (normalizedSchemaAllowed && normalizedHandleAllowed
+      && JSON.stringify(normalizedSchemaAllowed) !== JSON.stringify(normalizedHandleAllowed)) {
+      throw new Error(`${key} 的物料模板允许集合存在冲突`)
+    }
+    const allowed = normalizedHandleAllowed ?? normalizedSchemaAllowed
+    properties[key] = {
+      ...properties[key],
+      ...(handle.type === 'ResourceSlot' ? { $slot: 'ResourceSlot' } : {}),
+      ...(allowed ? { allowed_resource_template_uuids: allowed } : {}),
+    }
+  })
+  return { ...schema, properties }
+}
+
+/** 读取动作的冻结输入 Schema 和默认值，供单点动作参数表单使用。 */
+export async function loadDeviceActionDefinition(
+  templateUuid: string,
+  binding: { materialUuid: string; localId: string },
+  signal?: AbortSignal,
+): Promise<DeviceActionDefinition> {
+  const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`, signal)
+  const template = detail.template && typeof detail.template === 'object' ? detail.template as RawRecord : {}
+  const parameterSchema = goalSchemaWithHandleConstraints(templateGoalSchema(template), detail.handles)
+  return {
+    action_id: String(template.uuid || templateUuid),
+    action_version: '',
+    name: String(template.name || templateUuid),
+    display_name: String(template.display_name || template.name || templateUuid),
+    description: template.description ? String(template.description) : undefined,
+    parameter_schema: parameterSchema,
+    defaults: objectValue(template.goal_default),
+    device_binding: { material_uuid: binding.materialUuid, edge_local_id: binding.localId },
+  }
+}
+
+/** 使用标准 DeviceActionRun 合同创建一次持久设备动作。 */
+export async function createDeviceActionRun(intent: DeviceActionRunIntent): Promise<DeviceActionRunReference> {
+  let response: Response
+  try {
+    response = await fetch(`${EDGE_API_BASE}/device-action-runs`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        material_uuid: intent.materialUuid,
+        workflow_node_template_uuid: intent.workflowNodeTemplateUuid,
+        param: intent.param,
+        execution_policy: { execution_timeout_seconds: intent.executionTimeoutSeconds },
+        idempotency_key: intent.idempotencyKey,
+        description: intent.description,
+        meta_data: { source: 'unilabos-frontend-device-page' },
+      }),
+    })
+  } catch (error) {
+    throw new DeviceActionRunRequestError(
+      `请求结果未知：${error instanceof Error ? error.message : '网络连接中断'}。请重试原请求，避免重复执行设备动作。`,
+      true,
+    )
+  }
+  const body = await response.json().catch(() => null) as EdgeEnvelope<RawRecord> | null
+  if (!response.ok) {
+    throw new DeviceActionRunRequestError(
+      formatApiError(body, response.status),
+      response.status === 408 || response.status >= 500,
+    )
+  }
+  if (!body || typeof body !== 'object') {
+    throw new DeviceActionRunRequestError('Edge 已响应，但响应内容无法解析；请重试原请求确认结果。', true)
+  }
+  let data: RawRecord
+  try {
+    data = unwrapEnvelope(body as EdgeEnvelope<RawRecord>)
+  } catch (error) {
+    throw new DeviceActionRunRequestError(
+      error instanceof Error ? error.message : 'Edge 拒绝了设备动作',
+      false,
+    )
+  }
+  const task = data.task && typeof data.task === 'object' ? data.task as RawRecord : {}
+  const job = data.job && typeof data.job === 'object' ? data.job as RawRecord : {}
+  if (!task.uuid || !job.uuid) {
+    throw new DeviceActionRunRequestError('Edge 已响应，但缺少 Task 或 Job 身份；请重试原请求确认结果。', true)
+  }
+  return {
+    taskUuid: String(task.uuid),
+    jobUuid: String(job.uuid),
+    created: data.created === true,
+    taskStatus: String(task.status || 'pending'),
+    jobStatus: String(job.status || 'pending'),
+  }
+}
+
+/** 轮询单点动作生成的标准 Task 和 Job，不从前端推断物理执行结果。 */
+export async function loadDeviceActionRunStatus(
+  taskUuid: string,
+  jobUuid: string,
+  signal?: AbortSignal,
+): Promise<DeviceActionRunStatus> {
+  const [task, job] = await Promise.all([
+    requestData<RawRecord>(`/workflow-tasks/${encodeURIComponent(taskUuid)}`, signal),
+    requestData<RawRecord>(`/workflow-node-jobs/${encodeURIComponent(jobUuid)}`, signal),
+  ])
+  return {
+    taskUuid: String(task.uuid || taskUuid),
+    jobUuid: String(job.uuid || jobUuid),
+    taskStatus: String(task.status || 'unknown'),
+    controlStatus: String(task.control_status || 'active'),
+    jobStatus: String(job.status || 'unknown'),
+    actionName: String(job.action_name || job.control_data?.dispatch_payload?.action || ''),
+    param: objectValue(job.param),
+    feedback: job.feedback_data ?? {},
+    result: job.return_info ?? {},
+    errors: Array.isArray(job.error_info) ? job.error_info : job.error_info ? [job.error_info] : [],
+    waitReason: job.wait_reason ?? task.wait_reason,
+    startedAt: job.started_at ? String(job.started_at) : undefined,
+    finishedAt: job.finished_at ? String(job.finished_at) : undefined,
+    updatedAt: String(job.update_time || task.update_time || '') || undefined,
+  }
 }
 
 /** 读取条件与循环模板，并从详情接口取得调度器实际使用的参数说明。 */
@@ -2874,20 +3150,59 @@ export async function commandWorkflowTask(
   taskUuid: string,
   type: 'step' | 'pause' | 'resume' | 'cancel',
   targetNodeUuid?: string,
+  idempotencyKey?: string,
 ): Promise<RawRecord> {
-  const generatedKey = globalThis.crypto?.randomUUID?.()
+  const generatedKey = idempotencyKey || globalThis.crypto?.randomUUID?.()
     || `${type}-${Date.now()}-${Math.random().toString(16).slice(2)}`
-  const command = await postData<RawRecord>(
-    `/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`,
-    {
+  const path = `/workflow-tasks/${encodeURIComponent(taskUuid)}/commands`
+  let response: Response
+  try {
+    response = await fetch(`${EDGE_API_BASE}${path}`, {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({
       type,
       target_node_uuid: targetNodeUuid || null,
       idempotency_key: generatedKey,
       meta_data: { source: 'unilabos-frontend' },
-    },
-  )
+      }),
+    })
+  } catch (error) {
+    throw new TaskCommandRequestError(
+      `任务控制命令结果未知：${error instanceof Error ? error.message : '网络连接中断'}`,
+      true,
+    )
+  }
+  const body = await response.json().catch(() => null) as EdgeEnvelope<RawRecord> | null
+  if (!response.ok) {
+    throw new TaskCommandRequestError(
+      formatApiError(body, response.status),
+      response.status === 408 || response.status >= 500,
+    )
+  }
+  if (!body || typeof body !== 'object') {
+    throw new TaskCommandRequestError('Edge 已响应，但任务控制命令响应无法解析', true)
+  }
+  let command: RawRecord
+  try {
+    command = unwrapEnvelope(body)
+  } catch (error) {
+    throw new TaskCommandRequestError(
+      error instanceof Error ? error.message : 'Edge 拒绝了任务控制命令',
+      false,
+    )
+  }
+  if (!['pending', 'succeeded', 'rejected'].includes(String(command.status || ''))
+    || (command.workflow_task_uuid && String(command.workflow_task_uuid) !== taskUuid)
+    || (command.type && String(command.type) !== type)
+    || (command.idempotency_key && String(command.idempotency_key) !== generatedKey)) {
+    throw new TaskCommandRequestError('Edge 已响应，但任务控制命令身份或状态不完整', true)
+  }
   if (command.status === 'rejected') {
-    throw new Error(String(command.result?.reason || '调度器拒绝了任务控制命令'))
+    throw new TaskCommandRequestError(
+      String(command.result?.reason || '调度器拒绝了任务控制命令'),
+      false,
+    )
   }
   return command
 }

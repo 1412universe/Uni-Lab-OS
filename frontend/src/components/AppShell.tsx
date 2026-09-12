@@ -4,6 +4,7 @@ import {
   BookOpen,
   Boxes,
   Code2,
+  Cpu,
   FileJson,
   FlaskConical,
   LayoutDashboard,
@@ -20,6 +21,7 @@ import type { ConnectionMode, PageId } from '../types'
 const navigation: { page: PageId; label: string; icon: typeof LayoutDashboard }[] = [
   { page: 'overview', label: '总监控', icon: LayoutDashboard },
   { page: 'materials', label: '物料', icon: Boxes },
+  { page: 'devices', label: '设备', icon: Cpu },
   { page: 'reagents', label: '试剂', icon: TestTubes },
   { page: 'operations', label: '实验室操作', icon: FlaskRound },
   { page: 'workflows', label: '工作流', icon: Workflow },
@@ -29,6 +31,7 @@ const navigation: { page: PageId; label: string; icon: typeof LayoutDashboard }[
 const pageLabels: Record<PageId, string> = {
   overview: '总监控',
   materials: '物料',
+  devices: '设备',
   reagents: '试剂',
   operations: '实验室操作',
   workflows: '工作流',

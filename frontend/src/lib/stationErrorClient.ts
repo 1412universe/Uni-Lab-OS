@@ -1,4 +1,7 @@
 import { EDGE_API_BASE, unwrapEnvelope } from './edgeClient'
+import type { ActionSchema } from '../types'
+
+export type { ActionSchema } from '../types'
 
 export type ErrorDecisionAction = 'cancel_task' | 'retry_current_node' | 'enter_manual_handling'
 export type HandlingStage = 'DECISION_REQUIRED' | 'MANUAL_HANDLING' | 'APPLYING' | 'RESOLVED'
@@ -93,21 +96,6 @@ export interface HandlingCommand {
   station: StationSnapshot
   application_error?: string
   dispatch_error?: string
-}
-
-export interface ActionSchema {
-  type?: string | string[]
-  title?: string
-  description?: string
-  properties?: Record<string, ActionSchema>
-  required?: string[]
-  enum?: unknown[]
-  default?: unknown
-  minimum?: number
-  maximum?: number
-  items?: ActionSchema
-  anyOf?: ActionSchema[]
-  [key: string]: unknown
 }
 
 export interface ManualDeviceAction {
