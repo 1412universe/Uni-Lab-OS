@@ -18,6 +18,7 @@ device-template
 material-template
 startup-files
 workflow
+5. 参考文档 <参考文档/index>
 ```
 
 ## 工作区（设备包组成结构）
