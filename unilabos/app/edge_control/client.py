@@ -31,6 +31,7 @@ from unilabos.app.edge_control.store import EdgeControlStore, StoredEvent, Store
 from unilabos.app.scheduler.execution_outcome import normalize_executor_outcome
 from unilabos.config.config import BasicConfig, EdgeControlConfig, HTTPConfig
 from unilabos.resources.instance_identity import normalize_resource_instance_barcode
+from unilabos.resources.resource_graph_node_kind import is_site_resource_node
 from unilabos.utils.log import get_comm_logger
 from unilabos.utils.tracing import (
     extract_trace_context,
@@ -557,46 +558,43 @@ class EdgeControlClient(BaseCommunicationClient):
         if not candidates:
             raise RuntimeError("Edge production registration requires a device barcode")
 
-        all_barcodes = {
-            normalize_resource_instance_barcode(
-                resource.get("barcode"), str(resource.get("id") or "").strip()
-            )
-            for resource in nodes.values()
-        }
-        all_barcodes.update(candidate["barcode"] for candidate in candidates)
-        material_uuids = self.data_plane.material_uuids_by_barcode(
-            all_barcodes
-        )
-        unresolved_node_ids = {
+        site_node_ids = {
             local_id
             for local_id, resource in nodes.items()
-            if normalize_resource_instance_barcode(
+            if is_site_resource_node(resource)
+        }
+        material_barcodes = {
+            normalize_resource_instance_barcode(
                 resource.get("barcode"), local_id
             )
-            not in material_uuids
+            for local_id, resource in nodes.items()
+            if local_id not in site_node_ids
         }
+        material_barcodes.update(candidate["barcode"] for candidate in candidates)
+        material_uuids = self.data_plane.material_uuids_by_barcode(
+            material_barcodes
+        )
         site_uuids_by_local_id = (
-            self.data_plane.site_uuids_by_local_id(unresolved_node_ids)
-            if unresolved_node_ids
+            self.data_plane.site_uuids_by_local_id(site_node_ids)
+            if site_node_ids
             else {}
         )
-        resolved_site_barcodes = {
+        missing = {
+            barcode
+            for barcode in material_barcodes
+            if barcode not in material_uuids
+        }
+        missing.update(
             normalize_resource_instance_barcode(
                 nodes[local_id].get("barcode"), local_id
             )
-            for local_id in site_uuids_by_local_id
-            if local_id in nodes
-        }
-        missing = sorted(
-            barcode
-            for barcode in all_barcodes
-            if barcode not in material_uuids
-            and barcode not in resolved_site_barcodes
+            for local_id in site_node_ids
+            if local_id not in site_uuids_by_local_id
         )
         if missing:
             raise RuntimeError(
                 "Edge production resources have not been initialized in Backend: "
-                + ", ".join(missing)
+                + ", ".join(sorted(missing))
             )
         from unilabos.ros.nodes.resource_slot_hydration import (
             install_production_resource_nodes,

@@ -23,8 +23,8 @@ from unilabos.registry.local_template_identity import (
 )
 from unilabos.registry.template_snapshot import RegistryTemplateSnapshot
 from unilabos.resources.instance_identity import normalize_resource_instance_barcode
+from unilabos.resources.resource_graph_node_kind import is_site_resource_node
 
-_SITE_TYPES = frozenset({"well", "tipspot", "tip_spot", "tip-spot"})
 _SOURCE_KEY = "resource_graph_bootstrap_source"
 _FINGERPRINT_KEY = "resource_graph_bootstrap_fingerprint"
 _FINGERPRINT_VERSION_KEY = "resource_graph_bootstrap_fingerprint_version"
@@ -923,14 +923,8 @@ def _is_site_node(node: Mapping[str, Any]) -> bool:
     异常：配置不是对象时由 JSON 校验原样关闭式失败。
     """
 
-    config = _json_object(node.get("config"), "node.config")
-    candidates = {
-        str(node.get("type") or "").replace("-", "_").casefold(),
-        str(node.get("class") or "").replace("-", "_").casefold(),
-        str(config.get("category") or "").replace("-", "_").casefold(),
-        str(config.get("type") or "").replace("-", "_").casefold(),
-    }
-    return bool(candidates & {value.replace("-", "_") for value in _SITE_TYPES})
+    _json_object(node.get("config"), "node.config")
+    return is_site_resource_node(node)
 
 
 def _site_content_types(

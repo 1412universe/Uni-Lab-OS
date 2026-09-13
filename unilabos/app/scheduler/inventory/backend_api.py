@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from unilabos.app.scheduler.inventory.backend_contract import (
+    MAX_SITE_IDENTITY_RESOLUTION_IDS,
     TEMPLATE_DATA_CONFLICT,
     BackendContractError,
     BackendResourceService,
@@ -140,6 +141,33 @@ class MaterialStateRequest(BackendModel):
     observed_at: Optional[str] = None
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class SiteIdentityResolveRequest(BackendModel):
+    """Edge 注册阶段批量解析库位业务身份的窄请求。"""
+
+    source_node_ids: List[str] = Field(
+        max_length=MAX_SITE_IDENTITY_RESOLUTION_IDS
+    )
+
+    @field_validator("source_node_ids", mode="before")
+    @classmethod
+    def normalize_source_node_ids(cls, value: Any) -> Any:
+        """在批量上限校验前去除空白和重复字符串。"""
+
+        if not isinstance(value, list):
+            return value
+        normalized: List[Any] = []
+        seen: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                normalized.append(item)
+                continue
+            identity = item.strip()
+            if identity and identity not in seen:
+                seen.add(identity)
+                normalized.append(identity)
+        return normalized
 
 
 def create_backend_resource_router(
@@ -277,6 +305,12 @@ def create_backend_resource_router(
     @router.get("/materials/graph")
     def get_material_graph() -> JSONResponse:
         return _call(service.material_graph)
+
+    @router.post("/materials/sites/resolve-identities")
+    def resolve_site_identities(body: SiteIdentityResolveRequest) -> JSONResponse:
+        """把资源图 Site 业务 ID 批量解析为 Backend 稳定 UUID。"""
+
+        return _call(service.resolve_site_identities, body.source_node_ids)
 
     @router.get("/materials/{material_uuid}")
     def get_material(material_uuid: UUID) -> JSONResponse:

@@ -61,6 +61,7 @@ MATERIAL_SITE_TEMPLATE_NOT_ALLOWED = 6008
 MATERIAL_SITE_CYCLE = 6009
 MATERIAL_IDENTITY_CONFLICT = 6010
 MATERIAL_ACTIVE_CLAIM_CONFLICT = 6011
+MAX_SITE_IDENTITY_RESOLUTION_IDS = 500
 
 
 def _now() -> str:
@@ -971,6 +972,61 @@ class BackendResourceService:
 
     # Site and state ----------------------------------------------------
 
+    def resolve_site_identities(
+        self, source_node_ids: List[str]
+    ) -> Dict[str, Dict[str, str]]:
+        """批量解析资源图业务 ID 对应的活动库位（Site）UUID。
+
+        参数：``source_node_ids`` 是 Edge 资源树中的库位业务 ID；空白会被去除，
+        重复值只解析一次。返回：请求范围内已找到的 ID 到稳定 Site UUID 映射，
+        未知 ID 不出现在结果中。异常：请求超过批量上限，或一个 ID 对应多个活动
+        Site UUID 时抛出 ``BackendContractError`` 并关闭式失败。
+        """
+
+        wanted = {
+            str(source_node_id or "").strip()
+            for source_node_id in source_node_ids
+            if str(source_node_id or "").strip()
+        }
+        if len(wanted) > MAX_SITE_IDENTITY_RESOLUTION_IDS:
+            raise BackendContractError(
+                INVALID_PARAMETER,
+                "source_node_ids exceeds the batch limit",
+            )
+        if not wanted:
+            return {"site_uuids_by_source_node_id": {}}
+
+        resolved: Dict[str, str] = {}
+        # 该端点只读取身份解析所需的活动 Site 窄投影，避免注册阶段下载完整物料图。
+        rows = self.store.query_all(
+            "SELECT uuid,name,meta_data FROM site "
+            "WHERE deleted_at IS NULL ORDER BY uuid"
+        )
+        for row in rows:
+            meta_data = _json(row.get("meta_data"), {})
+            source_node_id = ""
+            if isinstance(meta_data, dict):
+                source_node_id = str(meta_data.get("source_node_id") or "").strip()
+            # 兼容尚未写入 source_node_id 的旧 Site 行；新数据始终使用元数据身份。
+            if not source_node_id:
+                source_node_id = str(row.get("name") or "").strip()
+            if source_node_id not in wanted:
+                continue
+            site_uuid = str(row.get("uuid") or "").strip()
+            previous = resolved.get(source_node_id)
+            if previous is not None and previous != site_uuid:
+                raise BackendContractError(
+                    RESOURCE_DATA_CONFLICT,
+                    f"source_node_id maps to multiple active Sites: {source_node_id}",
+                )
+            resolved[source_node_id] = site_uuid
+        return {
+            "site_uuids_by_source_node_id": {
+                source_node_id: resolved[source_node_id]
+                for source_node_id in sorted(resolved)
+            }
+        }
+
     def list_sites(self, material_uuid: str) -> List[Dict[str, Any]]:
         rows = self.store.query_all(
             "SELECT * FROM site WHERE material_uuid=? AND deleted_at IS NULL "
@@ -1572,4 +1628,8 @@ class BackendResourceService:
         return result
 
 
-__all__ = ["BackendContractError", "BackendResourceService"]
+__all__ = [
+    "BackendContractError",
+    "BackendResourceService",
+    "MAX_SITE_IDENTITY_RESOLUTION_IDS",
+]

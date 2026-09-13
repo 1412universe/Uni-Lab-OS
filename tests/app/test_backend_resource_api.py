@@ -12,6 +12,7 @@ from unilabos.app.scheduler.inventory.backend_api import (
     install_backend_resource_api,
 )
 from unilabos.app.scheduler.inventory.backend_contract import (
+    MAX_SITE_IDENTITY_RESOLUTION_IDS,
     BackendResourceService,
 )
 from unilabos.app.scheduler.inventory.domain import MaterialRequirement
@@ -595,7 +596,188 @@ def test_openapi_exposes_backend_resource_paths_not_only_inventory_paths(tmp_pat
     paths = client.get("/openapi.json").json()["paths"]
     assert "/api/v1/resource-templates" in paths
     assert "/api/v1/materials" in paths
+    assert "/api/v1/materials/sites/resolve-identities" in paths
     assert "/api/v1/materials/{material_uuid}/sites" in paths
     assert "/api/v1/materials/{material_uuid}/states" in paths
     assert "/api/v1/sites/{site_uuid}" in paths
+    store.close()
+
+
+def test_site_identity_resolution_uses_metadata_with_legacy_name_fallback(tmp_path):
+    """批量解析应优先使用 source_node_id，并兼容旧 Site 名称。"""
+
+    client, store = _client(tmp_path)
+    template_uuid = _sync_template(client)
+    owner = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "barcode": "IDENTITY-OWNER",
+            "name": "Identity Owner",
+        },
+    ).json()["data"]
+    with store.transaction() as connection:
+        connection.executemany(
+            """
+            INSERT INTO site(
+                uuid,create_time,update_time,meta_data,material_uuid,name,
+                sort_order,allowed_resource_template_uuids,
+                position_x,position_y,position_z,depth,length,width
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                (
+                    "10000000-0000-4000-8000-000000000001",
+                    "2026-09-13T00:00:00Z",
+                    "2026-09-13T00:00:00Z",
+                    '{"source_node_id":"rack-A1"}',
+                    owner["uuid"],
+                    "Display A1",
+                    0,
+                    "[]",
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                ),
+                (
+                    "10000000-0000-4000-8000-000000000002",
+                    "2026-09-13T00:00:00Z",
+                    "2026-09-13T00:00:00Z",
+                    "{}",
+                    owner["uuid"],
+                    "legacy-B1",
+                    1,
+                    "[]",
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                ),
+                (
+                    "10000000-0000-4000-8000-000000000003",
+                    "2026-09-13T00:00:00Z",
+                    "2026-09-13T00:00:00Z",
+                    '{"source_node_id":"deleted-C1"}',
+                    owner["uuid"],
+                    "Deleted C1",
+                    2,
+                    "[]",
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                ),
+            ),
+        )
+        connection.execute(
+            "UPDATE site SET deleted_at=? WHERE uuid=?",
+            (
+                "2026-09-13T00:01:00Z",
+                "10000000-0000-4000-8000-000000000003",
+            ),
+        )
+
+    response = client.post(
+        "/api/v1/materials/sites/resolve-identities",
+        json={
+            "source_node_ids": [
+                " rack-A1 ",
+                "rack-A1",
+                "",
+                " legacy-B1 ",
+                "deleted-C1",
+                "unknown",
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "code": 0,
+        "data": {
+            "site_uuids_by_source_node_id": {
+                "legacy-B1": "10000000-0000-4000-8000-000000000002",
+                "rack-A1": "10000000-0000-4000-8000-000000000001",
+            }
+        },
+    }
+    store.close()
+
+
+def test_site_identity_resolution_fails_closed_on_ambiguous_active_sites(tmp_path):
+    """一个业务 ID 对应多个活动 Site 时不得返回部分解析结果。"""
+
+    client, store = _client(tmp_path)
+    template_uuid = _sync_template(client)
+    owner = client.post(
+        "/api/v1/materials",
+        json={
+            "resource_template_uuid": template_uuid,
+            "barcode": "AMBIGUOUS-OWNER",
+            "name": "Ambiguous Owner",
+        },
+    ).json()["data"]
+    with store.transaction() as connection:
+        for index in (1, 2):
+            connection.execute(
+                """
+                INSERT INTO site(
+                    uuid,create_time,update_time,meta_data,material_uuid,name,
+                    sort_order,allowed_resource_template_uuids,
+                    position_x,position_y,position_z,depth,length,width
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    f"20000000-0000-4000-8000-00000000000{index}",
+                    "2026-09-13T00:00:00Z",
+                    "2026-09-13T00:00:00Z",
+                    '{"source_node_id":"duplicate-site"}',
+                    owner["uuid"],
+                    f"Duplicate {index}",
+                    index,
+                    "[]",
+                    0,
+                    0,
+                    0,
+                    1,
+                    1,
+                    1,
+                ),
+            )
+
+    response = client.post(
+        "/api/v1/materials/sites/resolve-identities",
+        json={"source_node_ids": ["duplicate-site"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 4002
+    assert "data" not in response.json()
+    store.close()
+
+
+def test_site_identity_resolution_rejects_oversized_batch(tmp_path):
+    """请求体应在进入库存扫描前限制批量身份数量。"""
+
+    client, store = _client(tmp_path)
+
+    response = client.post(
+        "/api/v1/materials/sites/resolve-identities",
+        json={
+            "source_node_ids": [
+                f"site-{index}"
+                for index in range(MAX_SITE_IDENTITY_RESOLUTION_IDS + 1)
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["code"] == 1000
     store.close()

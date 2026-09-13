@@ -13,6 +13,7 @@ from unilabos.utils.tracing import inject_trace_context, span
 
 
 BACKEND_UNAUTHORIZED_BUSINESS_CODE = 1001
+SITE_IDENTITY_RESOLUTION_BATCH_SIZE = 500
 
 
 class EdgeProtocolHTTPError(RuntimeError):
@@ -137,9 +138,9 @@ class EdgeDataPlane:
         """从正式 Backend 解析设备图库位（Site）的稳定身份。
 
         ``local_ids`` 是 Edge 资源树中的业务 ID。Backend 首次资源图投影会把
-        同一 ID 保存在 Site ``meta_data.source_node_id`` 中；物料图因此是把
-        PLR 的 well/tip spot 恢复为生产 Site UUID 的唯一权威边界。返回已解析
-        的 ID 到 UUID 映射；未知 ID 留给注册门禁统一报错。
+        同一 ID 保存在 Site ``meta_data.source_node_id`` 中。请求体批量传递待解析
+        身份，避免设备注册下载完整物料图，也避免大量 ID 超过代理 URL 长度限制。
+        返回已解析的 ID 到 UUID 映射；未知 ID 留给注册门禁统一报错。
         """
 
         wanted = {
@@ -149,46 +150,40 @@ class EdgeDataPlane:
         }
         if not wanted:
             return {}
-        result = self._request(
-            "GET",
-            f"{self.backend_api}/materials/graph",
-            span_name="edge.http.material.graph",
-            http_route="/api/v1/materials/graph",
-            api_key=self.backend_api_key,
-        )
-        graph_nodes = result.get("nodes")
-        if not isinstance(graph_nodes, list):
-            raise EdgeProtocolHTTPError("GET /materials/graph returned invalid nodes")
         resolved: Dict[str, str] = {}
-        for graph_node in graph_nodes:
-            if not isinstance(graph_node, dict):
-                continue
-            sites = graph_node.get("sites")
-            if not isinstance(sites, list):
+        ordered = sorted(wanted)
+        for offset in range(0, len(ordered), SITE_IDENTITY_RESOLUTION_BATCH_SIZE):
+            source_node_ids = ordered[
+                offset : offset + SITE_IDENTITY_RESOLUTION_BATCH_SIZE
+            ]
+            result = self._request(
+                "POST",
+                f"{self.backend_api}/materials/sites/resolve-identities",
+                span_name="edge.http.site_identity.resolve",
+                http_route="/api/v1/materials/sites/resolve-identities",
+                api_key=self.backend_api_key,
+                json={"source_node_ids": source_node_ids},
+            )
+            identities = result.get("site_uuids_by_source_node_id")
+            if not isinstance(identities, dict):
                 raise EdgeProtocolHTTPError(
-                    "GET /materials/graph returned invalid sites"
+                    "POST /materials/sites/resolve-identities returned invalid identities"
                 )
-            for site in sites:
-                if not isinstance(site, dict):
+            for source_node_id, site_uuid in identities.items():
+                normalized_source_node_id = str(source_node_id or "").strip()
+                normalized_site_uuid = str(site_uuid or "").strip()
+                if (
+                    normalized_source_node_id not in wanted
+                    or not normalized_site_uuid
+                ):
                     continue
-                meta_data = site.get("meta_data")
-                source_node_id = (
-                    str(meta_data.get("source_node_id") or "").strip()
-                    if isinstance(meta_data, dict)
-                    else ""
-                )
-                if not source_node_id:
-                    source_node_id = str(site.get("name") or "").strip()
-                site_uuid = str(site.get("uuid") or "").strip()
-                if source_node_id not in wanted or not site_uuid:
-                    continue
-                previous = resolved.get(source_node_id)
-                if previous is not None and previous != site_uuid:
+                previous = resolved.get(normalized_source_node_id)
+                if previous is not None and previous != normalized_site_uuid:
                     raise EdgeProtocolHTTPError(
-                        "GET /materials/graph returned duplicate Site identity "
-                        f"for {source_node_id}"
+                        "POST /materials/sites/resolve-identities returned duplicate "
+                        f"Site identity for {normalized_source_node_id}"
                     )
-                resolved[source_node_id] = site_uuid
+                resolved[normalized_source_node_id] = normalized_site_uuid
         return resolved
 
     def fetch_job(self, job: StoredJob) -> Dict[str, Any]:

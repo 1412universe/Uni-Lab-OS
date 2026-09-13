@@ -26,6 +26,7 @@ from unilabos.app.edge_control.http import (
 )
 from unilabos.app.edge_control.store import EdgeControlStore, StoredJob
 from unilabos.config.config import BasicConfig, EdgeControlConfig, HTTPConfig
+from unilabos.resources.resource_graph_node_kind import is_site_resource_node
 
 
 class FakeDataPlane:
@@ -117,7 +118,7 @@ def _claim_fields(
     }
 
 
-def test_edge_control_settings_derives_split_scheduler_address(
+def test_edge_control_settings_defaults_to_local_control_plane(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -130,8 +131,8 @@ def test_edge_control_settings_derives_split_scheduler_address(
 
     settings = EdgeControlSettings.from_config()
 
-    assert settings.backend_address == "http://[::1]:8080"
-    assert settings.scheduler_address == "http://[::1]:8081"
+    assert settings.backend_address == "http://127.0.0.1:8002"
+    assert settings.scheduler_address == "http://127.0.0.1:8002"
 
 
 def test_runtime_device_status_refreshes_scheduler_registration(
@@ -315,6 +316,28 @@ class FakeRegistrationResourcesWithSite:
         ]]
 
 
+class FakeRegistrationResourcesWithSiteBarcodeCollision:
+    def dump(self) -> list[list[dict[str, Any]]]:
+        return [[
+            {
+                "id": "robot-01",
+                "uuid": "50000000-0000-4000-8000-000000000201",
+                "name": "Robot 01",
+                "type": "device",
+                "barcode": "SHARED-BARCODE",
+                "parent_uuid": None,
+            },
+            {
+                "id": "robot-01_well_A1",
+                "uuid": "50000000-0000-4000-8000-000000000202",
+                "name": "robot-01_well_A1",
+                "type": "well",
+                "barcode": "SHARED-BARCODE",
+                "parent_uuid": "50000000-0000-4000-8000-000000000201",
+            },
+        ]]
+
+
 class FakeRegistrationHostNode:
     def __init__(self) -> None:
         self.resources_config = FakeRegistrationResources()
@@ -384,6 +407,16 @@ class FakeRegistrationDataPlaneWithSite:
     ) -> dict[str, str]:
         assert set(local_ids) == {"robot-01_well_A1"}
         return {"robot-01_well_A1": self.site_uuid}
+
+
+class FakeRegistrationDataPlaneWithSiteBarcodeCollision(
+    FakeRegistrationDataPlaneWithSite
+):
+    def material_uuids_by_barcode(
+        self, barcodes: Iterable[str]
+    ) -> dict[str, str]:
+        assert set(barcodes) == {"SHARED-BARCODE"}
+        return {"SHARED-BARCODE": self.robot_uuid}
 
 
 class FakeResponse:
@@ -564,6 +597,51 @@ def test_registration_resolves_resource_site_identity(tmp_path: Path) -> None:
         data_plane.site_uuid,
     ]
     client.store.close()
+
+
+def test_registration_keeps_site_identity_when_barcode_matches_material(
+    tmp_path: Path,
+) -> None:
+    host_node = FakeRegistrationHostNode()
+    host_node.resources_config = FakeRegistrationResourcesWithSiteBarcodeCollision()
+    data_plane = FakeRegistrationDataPlaneWithSiteBarcodeCollision()
+    client = EdgeControlClient(
+        _settings(tmp_path / "runtime.db"),
+        data_plane=data_plane,  # type: ignore[arg-type]
+        host_node_provider=lambda: host_node,
+    )
+
+    devices = client._registration_devices()
+
+    assert devices[0]["material_uuid"] == data_plane.robot_uuid
+    from unilabos.ros.nodes.resource_slot_hydration import (
+        query_production_resource_nodes_sync,
+    )
+
+    projected = query_production_resource_nodes_sync([data_plane.robot_uuid])
+    assert [row["uuid"] for row in projected] == [
+        data_plane.robot_uuid,
+        data_plane.site_uuid,
+    ]
+    client.store.close()
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        {"type": "well"},
+        {"type": "TipSpot"},
+        {"type": "tip_spot"},
+        {"type": "tip-spot"},
+        {"class": "TipSpot"},
+        {"config": {"category": "well"}},
+        {"config": {"type": "tip-spot"}},
+    ],
+)
+def test_site_resource_classifier_matches_bootstrap_aliases(
+    node: dict[str, Any],
+) -> None:
+    assert is_site_resource_node(node) is True
 
 
 def test_store_persists_command_job_and_event_ack(tmp_path: Path) -> None:
@@ -1527,33 +1605,32 @@ def test_material_identity_lookup_includes_child_resources() -> None:
     assert session.params["with_children"] == "true"
 
 
-def test_site_identity_lookup_uses_backend_material_graph() -> None:
-    """Production registration resolves PLR site nodes from Backend Site facts."""
+def test_site_identity_lookup_uses_backend_batch_resolution() -> None:
+    """Production registration resolves only requested Backend Site identities."""
 
-    class MaterialGraphSession:
+    class SiteIdentitySession:
         def __init__(self) -> None:
             self.headers: dict[str, str] = {}
+            self.method = ""
             self.url = ""
+            self.payload: dict[str, Any] = {}
 
-        def request(self, _method: str, url: str, **_kwargs: Any) -> FakeResponse:
+        def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+            self.method = method
             self.url = url
+            self.payload = kwargs["json"]
             return FakeResponse(
                 {
                     "code": 0,
                     "data": {
-                        "nodes": [
-                            {
-                                "sites": [
-                                    {
-                                        "uuid": "50000000-0000-4000-8000-000000000211",
-                                        "name": "display-name",
-                                        "meta_data": {
-                                            "source_node_id": "plate_well_A1"
-                                        },
-                                    }
-                                ]
-                            }
-                        ]
+                        "site_uuids_by_source_node_id": {
+                            "plate_well_A1": (
+                                "50000000-0000-4000-8000-000000000211"
+                            ),
+                            "unrequested": (
+                                "50000000-0000-4000-8000-000000000212"
+                            ),
+                        }
                     },
                 }
             )
@@ -1563,15 +1640,147 @@ def test_site_identity_lookup_uses_backend_material_graph() -> None:
         "http://scheduler:8081",
         "edge-secret",
     )
-    session = MaterialGraphSession()
+    session = SiteIdentitySession()
     plane._session = session  # type: ignore[assignment]
 
-    resolved = plane.site_uuids_by_local_id(["plate_well_A1", "unknown"])
+    resolved = plane.site_uuids_by_local_id(
+        ["unknown", "plate_well_A1", "plate_well_A1"]
+    )
 
     assert resolved == {
         "plate_well_A1": "50000000-0000-4000-8000-000000000211"
     }
-    assert session.url == "http://backend:8080/api/v1/materials/graph"
+    assert session.method == "POST"
+    assert session.url == (
+        "http://backend:8080/api/v1/materials/sites/resolve-identities"
+    )
+    assert session.payload == {
+        "source_node_ids": ["plate_well_A1", "unknown"],
+    }
+
+
+def test_site_identity_lookup_chunks_more_than_backend_batch_limit() -> None:
+    class ChunkedSiteIdentitySession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.calls: list[dict[str, Any]] = []
+
+        def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+            payload = kwargs["json"]
+            self.calls.append({"method": method, "url": url, "payload": payload})
+            return FakeResponse(
+                {
+                    "code": 0,
+                    "data": {
+                        "site_uuids_by_source_node_id": {
+                            source_node_id: f"uuid-{source_node_id}"
+                            for source_node_id in payload["source_node_ids"]
+                        }
+                    },
+                }
+            )
+
+    plane = EdgeDataPlane(
+        "http://backend:8080",
+        "http://scheduler:8081",
+        "edge-secret",
+    )
+    session = ChunkedSiteIdentitySession()
+    plane._session = session  # type: ignore[assignment]
+    local_ids = [f"site-{index:03d}" for index in range(501)]
+
+    resolved = plane.site_uuids_by_local_id(
+        [*local_ids, local_ids[-1], "", "   "]
+    )
+
+    assert [len(call["payload"]["source_node_ids"]) for call in session.calls] == [
+        500,
+        1,
+    ]
+    assert [
+        source_node_id
+        for call in session.calls
+        for source_node_id in call["payload"]["source_node_ids"]
+    ] == local_ids
+    assert resolved == {
+        source_node_id: f"uuid-{source_node_id}"
+        for source_node_id in local_ids
+    }
+
+
+def test_site_identity_lookup_rejects_conflict_across_batches() -> None:
+    class ConflictingSiteIdentitySession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.call_count = 0
+
+        def request(self, _method: str, _url: str, **kwargs: Any) -> FakeResponse:
+            self.call_count += 1
+            source_node_ids = kwargs["json"]["source_node_ids"]
+            identities = {
+                source_node_id: f"uuid-{source_node_id}"
+                for source_node_id in source_node_ids
+            }
+            if self.call_count == 1:
+                identities["site-500"] = "uuid-site-500-from-first-batch"
+            return FakeResponse(
+                {
+                    "code": 0,
+                    "data": {"site_uuids_by_source_node_id": identities},
+                }
+            )
+
+    plane = EdgeDataPlane(
+        "http://backend:8080",
+        "http://scheduler:8081",
+        "edge-secret",
+    )
+    session = ConflictingSiteIdentitySession()
+    plane._session = session  # type: ignore[assignment]
+
+    with pytest.raises(EdgeProtocolHTTPError, match="duplicate Site identity"):
+        plane.site_uuids_by_local_id(
+            [f"site-{index:03d}" for index in range(501)]
+        )
+
+    assert session.call_count == 2
+
+
+def test_site_identity_lookup_rejects_invalid_later_batch() -> None:
+    class InvalidSiteIdentitySession:
+        def __init__(self) -> None:
+            self.headers: dict[str, str] = {}
+            self.call_count = 0
+
+        def request(self, _method: str, _url: str, **kwargs: Any) -> FakeResponse:
+            self.call_count += 1
+            identities: Any = {
+                source_node_id: f"uuid-{source_node_id}"
+                for source_node_id in kwargs["json"]["source_node_ids"]
+            }
+            if self.call_count == 2:
+                identities = []
+            return FakeResponse(
+                {
+                    "code": 0,
+                    "data": {"site_uuids_by_source_node_id": identities},
+                }
+            )
+
+    plane = EdgeDataPlane(
+        "http://backend:8080",
+        "http://scheduler:8081",
+        "edge-secret",
+    )
+    session = InvalidSiteIdentitySession()
+    plane._session = session  # type: ignore[assignment]
+
+    with pytest.raises(EdgeProtocolHTTPError, match="invalid identities"):
+        plane.site_uuids_by_local_id(
+            [f"site-{index:03d}" for index in range(501)]
+        )
+
+    assert session.call_count == 2
 
 
 def test_http_data_plane_injects_w3c_trace_headers(monkeypatch) -> None:
