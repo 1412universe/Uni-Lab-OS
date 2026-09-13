@@ -277,7 +277,7 @@ export function DevicesPage({ materials, connected, startupMode, targetDeviceUui
       localId: device!.runtime?.localId || device!.material.sourceNodeId || '',
     }, signal),
     enabled: connected && Boolean(selectedActionUuid && device),
-    retry: 1,
+    retry: false,
   })
   const definition = actionDefinitionQuery.data
 
@@ -492,7 +492,7 @@ export function DevicesPage({ materials, connected, startupMode, targetDeviceUui
 
       <Panel className="device-parameter-panel">
         <PanelHeader title="3. 参数与执行" description={definition?.description || selectedAction?.description || '动作参数由已发布的冻结 Schema 生成。'} />
-        {!selectedAction ? <EmptyState title="等待选择动作" description="选择动作后填写参数并确认现场安全。" /> : actionDefinitionQuery.isLoading ? <div className="device-loading">正在读取动作 Schema…</div> : actionDefinitionQuery.isError ? <div className="device-inline-error" role="alert">动作参数读取失败：{actionDefinitionQuery.error.message}</div> : definition ? <form className="device-action-form" onSubmit={(event) => { event.preventDefault(); void performRun() }}>
+        {!selectedAction ? <EmptyState title="等待选择动作" description="选择动作后填写参数并确认现场安全。" /> : actionDefinitionQuery.isLoading ? <div className="device-loading">正在读取动作 Schema…</div> : actionDefinitionQuery.isError ? <div className="device-inline-error" role="alert"><span>动作参数读取失败：{actionDefinitionQuery.error.message}</span><Button tone="ghost" icon={<RefreshCw size={13} />} disabled={actionDefinitionQuery.isFetching} onClick={() => { void actionDefinitionQuery.refetch() }}>{actionDefinitionQuery.isFetching ? '正在重新读取' : '重新读取动作参数'}</Button></div> : definition ? <form className="device-action-form" onSubmit={(event) => { event.preventDefault(); void performRun() }}>
           <div className="device-action-summary"><span><FlaskConical size={16} /></span><div><strong>{definition.display_name}</strong><code>{definition.name}</code></div></div>
           <label className="device-json-toggle"><input type="checkbox" checked={asJson} disabled={formFrozen} onChange={(event) => {
             if (event.target.checked) {

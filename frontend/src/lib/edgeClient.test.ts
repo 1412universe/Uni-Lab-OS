@@ -372,6 +372,76 @@ describe('设备单点动作 API', () => {
     })
   })
 
+  it('动作详情连接无响应时在十秒后返回可重试的超时错误', async () => {
+    vi.useFakeTimers()
+    let requestSignal: AbortSignal | null | undefined
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      requestSignal = init?.signal
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    })))
+
+    try {
+      let settled = false
+      const request = loadDeviceActionDefinition('template-hold', {
+        materialUuid: 'material-pump', localId: 'pump-1',
+      })
+      void request.then(() => { settled = true }, () => { settled = true })
+      const result = expect(request).rejects.toThrow('动作参数读取超时，请检查 Edge 服务后重试')
+
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(settled).toBe(false)
+      expect(requestSignal?.aborted).toBe(false)
+
+      await vi.advanceTimersByTimeAsync(1)
+      await result
+      expect(requestSignal).toMatchObject({ aborted: true, reason: { name: 'TimeoutError' } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('动作详情请求跟随调用方取消且不误报为超时', async () => {
+    const caller = new AbortController()
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+    })))
+    const result = expect(loadDeviceActionDefinition('template-hold', {
+      materialUuid: 'material-pump', localId: 'pump-1',
+    }, caller.signal)).rejects.toMatchObject({ name: 'AbortError', message: '页面已切换' })
+
+    caller.abort(new DOMException('页面已切换', 'AbortError'))
+
+    await result
+  })
+
+  it('调用方先取消且 fetch 延迟拒绝跨过超时点时仍保留调用方取消原因', async () => {
+    vi.useFakeTimers()
+    const caller = new AbortController()
+    let requestSignal: AbortSignal | null | undefined
+    let rejectRequest: ((reason?: unknown) => void) | undefined
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      requestSignal = init?.signal
+      rejectRequest = reject
+    })))
+
+    try {
+      const request = loadDeviceActionDefinition('template-hold', {
+        materialUuid: 'material-pump', localId: 'pump-1',
+      }, caller.signal)
+      const result = expect(request).rejects.toMatchObject({ name: 'AbortError', message: '页面已切换' })
+
+      caller.abort(new DOMException('页面已切换', 'AbortError'))
+      expect(requestSignal).toMatchObject({ aborted: true, reason: { name: 'AbortError', message: '页面已切换' } })
+
+      await vi.advanceTimersByTimeAsync(10_000)
+      rejectRequest?.(requestSignal?.reason)
+
+      await result
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('按 data_key 合并目标 ResourceSlot 句柄的物料模板约束', async () => {
     const materialRef = {
       type: 'object', properties: { uuid: { type: 'string', format: 'uuid' } },

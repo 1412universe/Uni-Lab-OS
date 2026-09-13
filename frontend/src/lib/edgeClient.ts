@@ -1309,18 +1309,34 @@ export async function loadDeviceActionDefinition(
   binding: { materialUuid: string; localId: string },
   signal?: AbortSignal,
 ): Promise<DeviceActionDefinition> {
-  const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`, signal)
-  const template = detail.template && typeof detail.template === 'object' ? detail.template as RawRecord : {}
-  const parameterSchema = goalSchemaWithHandleConstraints(templateGoalSchema(template), detail.handles)
-  return {
-    action_id: String(template.uuid || templateUuid),
-    action_version: '',
-    name: String(template.name || templateUuid),
-    display_name: String(template.display_name || template.name || templateUuid),
-    description: template.description ? String(template.description) : undefined,
-    parameter_schema: parameterSchema,
-    defaults: objectValue(template.goal_default),
-    device_binding: { material_uuid: binding.materialUuid, edge_local_id: binding.localId },
+  const controller = new AbortController()
+  const timeoutReason = new DOMException('动作参数读取超时', 'TimeoutError')
+  const abortFromCaller = () => controller.abort(signal?.reason)
+  if (signal?.aborted) abortFromCaller()
+  else signal?.addEventListener('abort', abortFromCaller, { once: true })
+  const timeout = window.setTimeout(() => {
+    if (!controller.signal.aborted) controller.abort(timeoutReason)
+  }, 10_000)
+  try {
+    const detail = await requestData<RawRecord>(`/workflow-node-templates/${encodeURIComponent(templateUuid)}`, controller.signal)
+    const template = detail.template && typeof detail.template === 'object' ? detail.template as RawRecord : {}
+    const parameterSchema = goalSchemaWithHandleConstraints(templateGoalSchema(template), detail.handles)
+    return {
+      action_id: String(template.uuid || templateUuid),
+      action_version: '',
+      name: String(template.name || templateUuid),
+      display_name: String(template.display_name || template.name || templateUuid),
+      description: template.description ? String(template.description) : undefined,
+      parameter_schema: parameterSchema,
+      defaults: objectValue(template.goal_default),
+      device_binding: { material_uuid: binding.materialUuid, edge_local_id: binding.localId },
+    }
+  } catch (error) {
+    if (controller.signal.reason === timeoutReason) throw new Error('动作参数读取超时，请检查 Edge 服务后重试')
+    throw error
+  } finally {
+    window.clearTimeout(timeout)
+    signal?.removeEventListener('abort', abortFromCaller)
   }
 }
 

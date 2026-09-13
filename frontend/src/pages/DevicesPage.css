@@ -49,6 +49,7 @@
 .device-run-panel { grid-column: 1 / -1; }
 .device-loading { padding: 20px; color: var(--muted); font-size: 10px; text-align: center; }
 .device-inline-error { margin: 10px 13px; padding: 9px 10px; color: #b42318; background: #fff1f0; border: 1px solid #fecdca; border-radius: 8px; font-size: 9px; line-height: 1.5; }
+.device-inline-error .button { margin-top: 8px; }
 
 .device-picker-list,
 .device-action-list { display: grid; max-height: 580px; padding: 9px; overflow-y: auto; }

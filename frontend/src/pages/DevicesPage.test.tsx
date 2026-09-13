@@ -131,6 +131,22 @@ afterEach(() => {
 })
 
 describe('DevicesPage', () => {
+  it('动作参数读取失败后允许重新读取并恢复参数表单', async () => {
+    vi.mocked(edgeClient.loadDeviceActionDefinition)
+      .mockRejectedValueOnce(new Error('动作参数读取超时，请检查 Edge 服务后重试'))
+      .mockResolvedValueOnce(definition)
+    renderPage()
+
+    fireEvent.click(await screen.findByRole('button', { name: /保持hold/ }))
+    expect(await screen.findByRole('alert', {}, { timeout: 3_000 })).toHaveTextContent('动作参数读取超时')
+    expect(edgeClient.loadDeviceActionDefinition).toHaveBeenCalledOnce()
+
+    fireEvent.click(screen.getByRole('button', { name: '重新读取动作参数' }))
+
+    expect(await screen.findByLabelText('持续秒数')).toHaveValue(2)
+    expect(edgeClient.loadDeviceActionDefinition).toHaveBeenCalledTimes(2)
+  })
+
   it('只展示设备运行时声明的匹配模板，并以类型化参数创建持久单点任务', async () => {
     const { onOpenTask } = renderPage()
     expect(await screen.findByText('一号泵')).toBeInTheDocument()
