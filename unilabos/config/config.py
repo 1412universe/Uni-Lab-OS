@@ -98,6 +98,8 @@ class EdgeControlConfig:
     state_db = ""
     reconnect_interval = 5.0
     request_timeout = 10.0
+    # Edge 首次连接控制面的等待预算；运行中请求仍使用 request_timeout。
+    readiness_timeout = 30.0
     event_retry_interval = 5.0
 
 

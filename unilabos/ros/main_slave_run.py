@@ -43,7 +43,7 @@ from unilabos.ros.executor import RuntimeExecutor, ensure_executor_thread_runnin
 from unilabos.ros.logging import close_ros_logging, prepare_ros_logging
 from unilabos.ros.nodes.presets.host_node import HostNode
 from unilabos.utils import logger
-from unilabos.config.config import BasicConfig
+from unilabos.config.config import BasicConfig, EdgeControlConfig
 from unilabos.utils.type_check import TypeEncoder
 
 
@@ -67,6 +67,28 @@ def exit() -> None:
         rclpy.shutdown()
     finally:
         close_ros_logging()
+
+
+def _wait_for_control_plane(bridges: List[Any], thread: threading.Thread) -> None:
+    """在可配置预算内等待 Edge 控制桥完成首次连接。"""
+
+    deadline = time.monotonic() + float(EdgeControlConfig.readiness_timeout)
+    control_bridges = [
+        bridge
+        for bridge in bridges
+        if callable(getattr(bridge, "is_connected", None))
+    ]
+    while control_bridges and time.monotonic() < deadline:
+        ensure_executor_thread_running(thread)
+        if all(bridge.is_connected() for bridge in control_bridges):
+            break
+        time.sleep(0.05)
+    if control_bridges and not all(
+        bridge.is_connected() for bridge in control_bridges
+    ):
+        raise RuntimeError(
+            "Edge Runtime failed to connect its control plane before readiness"
+        )
 
 
 def main(
@@ -147,23 +169,7 @@ def main(
     )
 
     if BasicConfig.process_role == "edge_runtime":
-        deadline = time.monotonic() + 30.0
-        control_bridges = [
-            bridge
-            for bridge in bridges
-            if callable(getattr(bridge, "is_connected", None))
-        ]
-        while control_bridges and time.monotonic() < deadline:
-            ensure_executor_thread_running(thread)
-            if all(bridge.is_connected() for bridge in control_bridges):
-                break
-            time.sleep(0.05)
-        if control_bridges and not all(
-            bridge.is_connected() for bridge in control_bridges
-        ):
-            raise RuntimeError(
-                "Edge Runtime failed to connect its control plane before readiness"
-            )
+        _wait_for_control_plane(bridges, thread)
         publish_edge_runtime_ready_signal()
 
     while True:
