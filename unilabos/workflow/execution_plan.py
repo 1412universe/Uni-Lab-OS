@@ -49,6 +49,100 @@ DYNAMIC_ITERATION_CAPABILITY = "dynamic_iteration_jobs_v1"
 class ExecutionPlanBuilder:
     """隐藏拓扑收敛、运行连接点实例化和短期物料需求投影。"""
 
+    @staticmethod
+    def refresh_resource_plan(
+        *,
+        graph: Mapping[str, Any],
+        plan: dict[str, Any],
+        jobs: list[dict[str, Any]],
+    ) -> None:
+        """在任务输入绑定后重新投影动作资源计划。
+
+        首次建计划时，工作流输入尚未写入动作参数；含动态 ResourceSlot 的动作
+        因此只能先冻结设备和固定资源。输入冻结后必须用同一份执行图重新计算
+        资源区间，确保即将派发的动作申请与任务已冻结的资源计划一致。
+        """
+
+        planned_nodes = [
+            deepcopy(dict(node))
+            for node in plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        ]
+        planned_edges = [
+            dict(edge)
+            for edge in plan.get("edges", [])
+            if isinstance(edge, Mapping)
+        ]
+        resource_plan = ExecutionPlanBuilder._resource_plan(
+            graph=graph,
+            planned_nodes=planned_nodes,
+            planned_edges=planned_edges,
+        )
+        if resource_plan is None:
+            plan.pop("resource_plan", None)
+            for node in plan.get("nodes", []):
+                if not isinstance(node, dict):
+                    continue
+                for field in (
+                    "resource_plan_id",
+                    "resource_interval_ids",
+                    "resource_acquire_set_id",
+                ):
+                    node.pop(field, None)
+            for job in jobs:
+                for field in (
+                    "resource_plan_id",
+                    "resource_interval_ids",
+                    "resource_acquire_set_id",
+                ):
+                    job.pop(field, None)
+            return
+
+        plan["resource_plan"] = serialize_resource_plan(resource_plan)
+        capabilities = plan.setdefault("capabilities", [])
+        if not isinstance(capabilities, list):
+            capabilities = []
+            plan["capabilities"] = capabilities
+        for capability in resource_plan.capabilities:
+            if capability not in capabilities:
+                capabilities.append(capability)
+
+        for node in plan.get("nodes", []):
+            if not isinstance(node, dict):
+                continue
+            node_uuid = str(node.get("uuid") or "")
+            projection = resource_plan_for_node(resource_plan, node_uuid)
+            node["resource_plan_id"] = resource_plan.plan_id
+            intervals = projection["intervals"]
+            acquire_sets = projection["acquire_sets"]
+            if intervals:
+                node["resource_interval_ids"] = [
+                    str(item["interval_id"]) for item in intervals
+                ]
+            else:
+                node.pop("resource_interval_ids", None)
+            if acquire_sets:
+                node["resource_acquire_set_id"] = str(
+                    acquire_sets[0]["acquire_set_id"]
+                )
+            else:
+                node.pop("resource_acquire_set_id", None)
+
+        node_by_uuid = {
+            str(node.get("uuid") or ""): node
+            for node in plan.get("nodes", [])
+            if isinstance(node, Mapping)
+        }
+        for job in jobs:
+            node = node_by_uuid.get(str(job.get("workflow_node_uuid") or ""))
+            if node is None:
+                continue
+            job["resource_plan_id"] = resource_plan.plan_id
+            job["resource_interval_ids"] = list(node.get("resource_interval_ids") or [])
+            job["resource_acquire_set_id"] = str(
+                node.get("resource_acquire_set_id") or ""
+            )
+
     def build(
         self,
         graph: Mapping[str, Any],
