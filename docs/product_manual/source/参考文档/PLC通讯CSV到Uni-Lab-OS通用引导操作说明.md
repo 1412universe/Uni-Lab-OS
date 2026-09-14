@@ -31,11 +31,11 @@ PLC 通讯变量表到 Uni-Lab OS
 
 需要引用安装或示例时，请直接打开下列地址：
 
-PLC-Sim 产品手册：https://github.com/raoyi971102-gif/Uni-Lab-Sim/tree/main/PLC-Sim/docs/product_manual
+PLC-Sim 产品手册：[https://github.com/raoyi971102-gif/Uni-Lab-Sim/tree/main/PLC-Sim/docs/product_manual](https://github.com/raoyi971102-gif/Uni-Lab-Sim/tree/main/PLC-Sim/docs/product_manual)
 
-Uni-Lab OS 安装说明：http://115.190.137.109:30184/unilabos-installation.html
+Uni-Lab OS 安装说明：[http://115.190.137.109:30184/unilabos-installation.html](http://115.190.137.109:30184/unilabos-installation.html)
 
-Demo Lab 案例：http://115.190.137.109:30184/demo-lab.html
+Demo Lab 案例：[http://115.190.137.109:30184/demo-lab.html](http://115.190.137.109:30184/demo-lab.html)
 
 链接属于外部参考；本手册不复制其中的本机路径、固定端口或版本专属内容。
 
@@ -151,42 +151,23 @@ write_summary(<输出摘要>, row_count, encoding, sha256, duplicate_names)
 
 ### 设备和动作声明（示意代码）
 
-```text
+```python
 @device(
-```
-
 id="<transport_device_type>",
-
 category=["custom", "robot", "material_transfer"],
-
 displayname="示例物料搬运机器人",
-
 )
-
 class TransferRobot(PLCFlowDevice):
-
-```text
 @action(displayname="托盘上料")
-```
-
 def run_loading(self, task_no: int, pick_place: list[int],
-
 resource: ResourceSlot, target_site: str):
-
 payload = {
-
 "上料流程通讯数据2.任务号": task_no,
-
 "上料流程通讯数据2.取放编号[0].取编号": pick_place[0],
-
 "上料流程通讯数据2.取放编号[0].放编号": pick_place[1],
-
-```text
 }
-```
-
 return self.run_and_confirm("上料", payload, resource, target_site)
-
+```
 示意代码中的装饰器、基类和返回类型以目标 Uni-Lab OS 版本的开发规范为准。重点是对象关系和变量映射，不是复制某一套本机源码。
 
 ## 五、资源、库位、物料和试剂
@@ -230,27 +211,13 @@ return self.run_and_confirm("上料", payload, resource, target_site)
 
 ### 库存查询与受控摆放（接口示意）
 
-```text
+```http
 GET  {API_BASE}/materials/graph
-```
-
-```text
 GET  {API_BASE}/materials/{material_uuid}
-```
-
-```text
 PUT  {API_BASE}/materials/{material_uuid}
-```
-
-```text
 {
-```
-
 "site_placement": {"action": "place", "site_uuid": "<target_site_uuid>"},
-
 "expected_revision": <revision_from_latest_read>
-
-```text
 }
 ```
 
@@ -271,30 +238,19 @@ PUT  {API_BASE}/materials/{material_uuid}
 
 ### 实验操作一（示意代码）
 
-```text
+```python
 @workflow(workflow_uuid="<operation_uuid>",
-```
-
 displayname="样品上料与加样操作",
-
 workflow_type="experiment_operation")
-
 def sample_loading_operation(sample, ethanol, task_no, dose_g=12.5):
-
 tray = material_source(sample, site="T01")
-
 loaded = transport_robot.run_loading(
-
 task_no=task_no, pick_place=[1, 2], resource=tray, target_site="D01")
-
 return dosing_station.run_dosing(
-
 task_no=task_no, source_position=1, target_position=2,
-
 dose_g=dose_g, tolerance_g=0.5,
-
 sample=loaded.resource, reagent=material_source(ethanol, site="E01"))
-
+```
 ### 6.2 操作二：烧结与声共振
 
 | 顺序 | 节点类型 | 节点内容 | 输入/输出 |
@@ -308,46 +264,27 @@ sample=loaded.resource, reagent=material_source(ethanol, site="E01"))
 
 ### 实验操作二（示意代码）
 
-```text
+```python
 @workflow(workflow_uuid="<operation_uuid>",
-```
-
 displayname="烧结与声共振操作",
-
 workflow_type="experiment_operation")
-
 def sintering_resonance_operation(crucible, powder, tray, task_no):
-
 sintered = sintering_station.run_sintering(
-
 task_no=task_no, crucible_position=1,
-
 temperature_c=850, hold_s=600,
-
 resource=material_source(crucible, site="C01"),
-
 reagent=material_source(powder, site="A01"))
-
 loaded = transport_robot.run_resonance_load(
-
 task_no=task_no, source_position=2,
-
 acceleration_g=2, frequency_hz=1000, time_s=30,
-
 resource=material_source(tray, site="T02"))
-
 transport_robot.run_resonance_unload(
-
 task_no=task_no, source_position=1, target_position=2,
-
 resource=loaded.resource)
-
 return transport_robot.run_unloading(
-
 task_no=task_no, pick_position=1, place_position=1,
-
 graphite_boat_type=0, resource=sintered.resource)
-
+```
 发布门禁：两个操作的 workflow_type 都是 experiment_operation；每个操作至少有一个动作节点；节点 UUID 唯一；所引用设备、动作、资源和库位都已经注册。
 
 ## 七、建立父工作流并发布
@@ -361,37 +298,20 @@ graphite_boat_type=0, resource=sintered.resource)
 
 ### 父工作流与子操作关系（示意代码）
 
-```text
+```python
 @workflow(workflow_uuid="<parent_uuid>",
-```
-
 displayname="样品上料与加样工作流",
-
 workflow_type="normal")
-
 def sample_loading_workflow(inputs):
-
 return sample_loading_operation(
-
 sample=inputs.sample, ethanol=inputs.ethanol,
-
 task_no=inputs.task_no, dose_g=inputs.dose_g)
-
-```text
 # 1) child 发布成功
-```
-
-```text
 # 2) parent 保存并 apply authoring
-```
-
-```text
 # 3) parent 发布时使用当前 revision 和 child contract/version
-```
-
 | 不要手填旧的 contract UUID、revision 或 digest。每次新建工作区都从当前服务的 authoring 和 publication 响应读取这些值，并把响应保存为本轮证据。 |
 | --- |
-
+```
 ## 八、启动 PLC-Sim 与 Uni-Lab OS 服务
 
 启动前先确认目标环境的 Python/依赖、PLC-Sim 模式和 Uni-Lab OS 版本。安装背景和 PLC-Sim 操作可参考本手册开头的在线地址。
@@ -406,25 +326,10 @@ task_no=inputs.task_no, dose_g=inputs.dose_g)
 
 ```text
 export LAB_ROOT='<包工作区>'
-```
-
-```text
 export API_BASE='<Uni-Lab OS API 地址>'
-```
-
-```text
 export PLC_ENDPOINT='<PLC-Sim 或真实 PLC 地址>'
-```
-
-```text
 unilab workspace status --workspace "$LAB_ROOT" --json
-```
-
-```text
 curl -s "$API_BASE/health"
-```
-
-```text
 # PLC_ENDPOINT 只用于当前环境配置，不复制到工作流业务逻辑
 ```
 
@@ -444,19 +349,10 @@ curl -s "$API_BASE/health"
 
 ### 加载与静态检查（命令示意）
 
-```text
+```python
 unilab package inspect --path "$LAB_ROOT"
-```
-
-```text
 unilab package validate --path "$LAB_ROOT"
-```
-
-```text
 unilab device action-smoke --device <设备实例 ID> --action <动作名>
-```
-
-```text
 # 通过标准：设备可注册，动作可发现，dry-run 返回结构化 success/message/result
 ```
 
@@ -474,23 +370,11 @@ unilab device action-smoke --device <设备实例 ID> --action <动作名>
 
 常用接口（路径示意；以目标服务 OpenAPI 为准）
 
-```text
+```http
 GET  {API_BASE}/health
-```
-
-```text
 GET  {API_BASE}/workflows/{workflow_uuid}/authoring
-```
-
-```text
 POST {API_BASE}/workflows/{workflow_uuid}/publications
-```
-
-```text
 POST {API_BASE}/workflows/{workflow_uuid}/run-preflight
-```
-
-```text
 GET  {API_BASE}/materials/graph
 ```
 
@@ -510,7 +394,7 @@ GET  {API_BASE}/materials/graph
 
 ### 实验任务输入（示意 JSON）
 
-```text
+```json
 {
 ```
 
@@ -536,9 +420,6 @@ GET  {API_BASE}/materials/graph
 
 ```text
 }
-```
-
-```text
 }
 ```
 
@@ -578,23 +459,11 @@ GET  {API_BASE}/materials/graph
 
 ### 任务状态和证据查询（接口示意）
 
-```text
+```http
 POST {API_BASE}/workflow-tasks
-```
-
-```text
 GET  {API_BASE}/workflow-tasks/{task_uuid}
-```
-
-```text
 GET  {API_BASE}/workflow-tasks/{task_uuid}/jobs
-```
-
-```text
 GET  {API_BASE}/workflow-tasks/{task_uuid}/events
-```
-
-```text
 GET  {API_BASE}/workflow-tasks/{task_uuid}/inventory-consumptions
 ```
 
