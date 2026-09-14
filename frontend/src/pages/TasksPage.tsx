@@ -558,11 +558,15 @@ function TaskExecutionLocks({
   taskUuid,
   materials,
   connected,
+  cleanupStatus,
+  manualReviewAttentionResolved,
   onNotify,
 }: {
   taskUuid: string
   materials: MaterialRecord[]
   connected: boolean
+  cleanupStatus?: string
+  manualReviewAttentionResolved?: boolean
   onNotify: (message: string) => void
 }) {
   const queryClient = useQueryClient()
@@ -700,7 +704,7 @@ function TaskExecutionLocks({
           <AlertCircle size={15} />读取执行锁失败：{locksQuery.error instanceof Error ? locksQuery.error.message : '未知错误'}
         </div>
       ) : null}
-      <TaskResourceUnlock taskUuid={taskUuid} snapshot={locksQuery.data} connected={connected} snapshotUnavailable={locksQuery.isError} busy={releaseMutation.isPending || prepareSettlementMutation.isPending || settlementMutation.isPending || Boolean(releaseTarget || settlementContext)} onBusyChange={setTaskUnlockBusy} onNotify={onNotify} />
+      <TaskResourceUnlock taskUuid={taskUuid} snapshot={locksQuery.data} connected={connected} snapshotUnavailable={locksQuery.isError} cleanupStatus={cleanupStatus} manualReviewAttentionResolved={manualReviewAttentionResolved} busy={releaseMutation.isPending || prepareSettlementMutation.isPending || settlementMutation.isPending || Boolean(releaseTarget || settlementContext)} onBusyChange={setTaskUnlockBusy} onNotify={onNotify} />
       {locksQuery.data ? (
         <>
           <div className="task-lock-warning" role="alert">
@@ -1353,6 +1357,8 @@ export function TasksPage({
                 taskUuid={selected.uuid}
                 materials={materials}
                 connected={connected}
+                cleanupStatus={selected.cleanupStatus}
+                manualReviewAttentionResolved={selected.manualReviewAttentionResolved}
                 onNotify={onNotify}
               />
             </>

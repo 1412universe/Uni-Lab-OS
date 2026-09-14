@@ -1008,6 +1008,9 @@ export function adaptTask(
     runMode: String(raw.run_mode || raw.execution_plan?.run_mode || 'normal'),
     executionMode: String(raw.execution_mode || raw.run_mode || 'normal') as WorkflowTask['executionMode'],
     controlStatus,
+    cleanupStatus,
+    attentionReason: attentionMessage ? String(attentionMessage) : undefined,
+    manualReviewAttentionResolved: manualAttentionResolved,
     matrixGroupKey: matrixGroupKey(raw),
     trace: taskTraceReference(raw, traceUiUrl),
   }

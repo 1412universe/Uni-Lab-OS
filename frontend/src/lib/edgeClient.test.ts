@@ -1232,6 +1232,11 @@ describe('Edge view model adapters', () => {
     })
 
     expect(task.status).toBe('intervention_required')
+    expect(task).toMatchObject({
+      cleanupStatus: 'requires_attention',
+      attentionReason: 'inventory_claim_uncertain',
+      manualReviewAttentionResolved: false,
+    })
     expect(task.current).toBe('inventory_claim_uncertain')
     expect(task.nodes[0].status).toBe('waiting')
     expect(task.nodes[0].waitReason).toMatchObject({

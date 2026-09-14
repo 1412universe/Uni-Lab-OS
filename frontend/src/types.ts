@@ -223,6 +223,12 @@ export interface WorkflowTask {
   status: TaskPresentationStatus
   /** 原始任务终态，独立于界面的“需要干预”等提示状态。 */
   executionStatus?: string
+  /** 后端持久化的任务清理状态，用于展示终态任务的残留处置入口。 */
+  cleanupStatus?: string
+  /** 后端记录的任务级注意原因。 */
+  attentionReason?: string
+  /** 已完成人工结果核对的任务不再显示同一类清理入口。 */
+  manualReviewAttentionResolved?: boolean
   priority: WorkflowTaskPresentationPriority
   sample: string
   description: string

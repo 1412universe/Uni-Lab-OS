@@ -11,6 +11,8 @@ const blockReason = '连续区间锁必须通过任务级人工解锁整组释�
 const reason = '已现场确认机械臂和设备停止，无在途动作，物料已盘点'
 const devices = ['2d5e79ab-bb6f-5e10-82fe-8b421b56b3e5', '140b9210-e7b1-53a9-89d8-7445993c6512', '9e4fc6ec-7552-5390-a3cf-56d673b15edf']
 let taskStatus: string
+let cleanupStatus: string | undefined
+let manualReviewAttentionResolved: boolean
 let released: boolean
 let activeTenancies: number
 let locksReadFailure: boolean
@@ -23,7 +25,7 @@ const commandResponse = (status: string, result: Record<string, unknown> = {}) =
 
 beforeEach(() => {
   sessionStorage.clear()
-  taskStatus = 'canceled'; released = false; activeTenancies = 0; locksReadFailure = false; writes = []; reads = []
+  taskStatus = 'canceled'; cleanupStatus = undefined; manualReviewAttentionResolved = false; released = false; activeTenancies = 0; locksReadFailure = false; writes = []; reads = []
   style = document.createElement('style'); style.textContent = styles; document.head.appendChild(style)
   handlePost = async () => {
     released = true
@@ -50,7 +52,7 @@ afterEach(() => { style.remove(); vi.unstubAllGlobals() })
 function mountTask(selectedUuid = taskUuid) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   const notify = vi.fn()
-  const view = (connected: boolean, uuid: string) => <QueryClientProvider client={client}><TasksPage tasks={[{ ...demoTasks[0], uuid, status: 'intervention_required', executionStatus: 'canceled' }]} workflows={[]} materials={[]} connected={connected} onRefresh={vi.fn()} onNotify={notify} onOpenWorkflow={vi.fn()} /></QueryClientProvider>
+  const view = (connected: boolean, uuid: string) => <QueryClientProvider client={client}><TasksPage tasks={[{ ...demoTasks[0], uuid, status: 'intervention_required', executionStatus: 'canceled', cleanupStatus, manualReviewAttentionResolved }]} workflows={[]} materials={[]} connected={connected} onRefresh={vi.fn()} onNotify={notify} onOpenWorkflow={vi.fn()} /></QueryClientProvider>
   const rendered = render(view(true, selectedUuid))
   return { ...rendered, client, notify, update: (connected: boolean, uuid = selectedUuid) => rendered.rerender(view(connected, uuid)) }
 }
@@ -65,7 +67,7 @@ async function openTaskUnlock() {
 function confirmTaskUnlock(dialog: HTMLElement) {
   fireEvent.change(within(dialog).getByRole('textbox', { name: /任务解锁说明/ }), { target: { value: reason } })
   fireEvent.click(within(dialog).getByRole('checkbox', { name: /现场确认/ }))
-  fireEvent.click(within(dialog).getByRole('button', { name: '确认解除任务全部锁' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: /^确认(解除任务全部锁|清理交接残留)$/ }))
 }
 
 describe('任务级人工解锁', () => {
@@ -183,6 +185,28 @@ describe('任务级人工解锁', () => {
     expect(dialog).toHaveTextContent('全部执行锁及相关资源占用')
     expect(screen.getByText(/不能按单个 Job 解除/)).toBeInTheDocument()
     expect(writes).toEqual([])
+  })
+
+  it('无活动锁但清理需人工处理时，显示清理交接残留入口并提交任务级命令', async () => {
+    cleanupStatus = 'requires_attention'; released = true
+    mountTask()
+    const button = await screen.findByRole('button', { name: '清理交接残留' })
+    await waitFor(() => expect(button).toBeEnabled())
+    fireEvent.click(button)
+    const dialog = screen.getByRole('dialog', { name: '清理任务交接残留' })
+    expect(dialog).toHaveTextContent('不会重新执行机器人动作')
+    confirmTaskUnlock(dialog)
+    await screen.findByText('任务交接残留已清理，清理状态已更新。')
+    expect(button).toBeDisabled()
+    expect(writes).toHaveLength(1)
+    expect(writes[0].body).toMatchObject({ type: 'unlock_resources', meta_data: { confirmed_physical_safe: true } })
+  })
+
+  it('清理状态已由人工核对完成时不显示残留清理入口', async () => {
+    cleanupStatus = 'requires_attention'; manualReviewAttentionResolved = true; released = true
+    mountTask()
+    expect(await screen.findByRole('button', { name: '解除任务全部锁' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '清理交接残留' })).not.toBeInTheDocument()
   })
 
   it('原请求未知且刷新后锁读取失败时，仍保留明确确认入口；断线时禁用', async () => {
