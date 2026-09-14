@@ -119,6 +119,7 @@ function demoTask(
     materialUuids: [],
     runMode: 'normal',
     executionMode: 'normal',
+    dispatchGate: 'active',
     controlStatus: 'active',
     matrixGroupKey: 'single-sample-atomic-v3',
   }

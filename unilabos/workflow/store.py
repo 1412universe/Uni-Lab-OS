@@ -391,6 +391,8 @@ CREATE TABLE IF NOT EXISTS workflow_task (
     run_mode TEXT NOT NULL,
     execution_mode TEXT NOT NULL DEFAULT 'normal'
         CHECK (execution_mode IN ('normal', 'switching_to_step', 'step')),
+    dispatch_gate TEXT NOT NULL DEFAULT 'active'
+        CHECK (dispatch_gate IN ('active', 'paused')),
     target_node_uuid TEXT,
     control_status TEXT NOT NULL,
     cleanup_status TEXT NOT NULL,
@@ -420,7 +422,7 @@ CREATE TABLE IF NOT EXISTS workflow_task_command (
     meta_data TEXT NOT NULL,
     workflow_task_uuid TEXT NOT NULL,
     type TEXT NOT NULL CHECK (
-        type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources')
+        type IN ('step', 'switch_to_step', 'pause', 'resume', 'cancel', 'unlock_resources')
     ),
     target_node_uuid TEXT,
     idempotency_key TEXT NOT NULL,
@@ -2277,17 +2279,19 @@ class WorkflowStore:
             effective_run_mode = str(plan["run_mode"])
             effective_target = plan.get("target_node_uuid")
             control_status = "paused" if effective_run_mode == "step" else "active"
+            dispatch_gate = "paused" if effective_run_mode == "step" else "active"
             conn.execute(
                 """
                 INSERT INTO workflow_task(
                     uuid, create_time, update_time, deleted_at, description,
                     meta_data, workflow_uuid, status, workflow_snapshot,
-                    execution_plan, run_mode, execution_mode, target_node_uuid,
+                    execution_plan, run_mode, execution_mode, dispatch_gate,
+                    target_node_uuid,
                     control_status,
                     cleanup_status, trace_context, input, output, error_info,
                     backend_task_uuid, invocation_key, priority,
                     request_fingerprint, revision_fingerprint, timeout_at
-                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, NULL, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?,
                           'none', '{}', ?, '{}', '[]', ?, ?, ?, ?, ?, ?)
                 """,
                 (
@@ -2301,6 +2305,7 @@ class WorkflowStore:
                     _json(plan),
                     effective_run_mode,
                     "step" if effective_run_mode == "step" else "normal",
+                    dispatch_gate,
                     effective_target,
                     control_status,
                     _json(prepared.resolved_input),
@@ -2864,6 +2869,7 @@ class WorkflowStore:
                     ) AS execution_plan,
                     task.run_mode,
                     task.execution_mode,
+                    task.dispatch_gate,
                     task.target_node_uuid,
                     task.control_status,
                     task.cleanup_status,
@@ -3133,21 +3139,99 @@ class WorkflowStore:
             if row["status"] in {"succeeded", "failed", "canceled", "timeout"}:
                 raise StoreConflict("终态任务不能修改控制状态")
             previous = str(row["control_status"])
+            requested_gate = control_status if control_status in {"active", "paused"} else None
             if previous == "error_waiting":
                 control_status = "error_waiting"
-            if previous != control_status:
+            current_gate = str(row["dispatch_gate"] or "active")
+            changed = previous != control_status or (
+                requested_gate is not None and current_gate != requested_gate
+            )
+            if changed:
                 conn.execute(
                     """
                     UPDATE workflow_task
-                    SET control_status = ?, update_time = ?
+                    SET control_status = ?,
+                        dispatch_gate = COALESCE(?, dispatch_gate),
+                        update_time = ?
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
-                    (control_status, now, task_uuid),
+                    (control_status, requested_gate, now, task_uuid),
                 )
                 self._append_event(
                     conn,
                     event="workflow.runtime.changed",
                     data={"workflow_task_uuid": task_uuid},
+                    now=now,
+                )
+            updated = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?", (task_uuid,)
+            ).fetchone()
+            return self._task_row(updated)
+
+    def set_task_dispatch_gate(
+        self,
+        task_uuid: str,
+        *,
+        dispatch_gate: str,
+    ) -> Dict[str, Any]:
+        """原子修改普通 Task 的派发闸门，不改变单步执行模式。
+
+        ``dispatch_gate`` 是操作员意图；当任务正在等待错误处置或物理对账时，
+        对外 ``control_status`` 继续保留更高优先级的等待状态，但新的闸门意图
+        会被保存，待处置结束后按该意图恢复。
+        """
+
+        if dispatch_gate not in {"active", "paused"}:
+            raise StoreConflict("任务派发闸门状态非法")
+        now = utc_now()
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
+                (task_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            if row["status"] in {"succeeded", "failed", "canceled", "timeout"}:
+                raise StoreConflict("终态任务不能修改派发闸门")
+            current_gate = str(row["dispatch_gate"] or "active")
+            current_status = str(row["control_status"] or "active")
+            visible_status = (
+                dispatch_gate
+                if current_status in {"active", "paused"}
+                else current_status
+            )
+            changed = current_gate != dispatch_gate or current_status != visible_status
+            if changed:
+                conn.execute(
+                    """
+                    UPDATE workflow_task
+                    SET dispatch_gate = ?, control_status = ?,
+                        reconciliation_resume_control_status = CASE
+                            WHEN control_status = 'waiting_reconciliation' THEN ?
+                            ELSE reconciliation_resume_control_status
+                        END,
+                        update_time = ?
+                    WHERE uuid = ? AND deleted_at IS NULL
+                    """,
+                    (dispatch_gate, visible_status, dispatch_gate, now, task_uuid),
+                )
+                # 如果任务正在等待标准人工干预，新的操作员意图也要写入尚未
+                # 关闭的干预记录，避免交付成功后恢复到旧状态。
+                conn.execute(
+                    """
+                    UPDATE workflow_intervention
+                    SET resume_control_status = ?, update_time = ?
+                    WHERE workflow_task_uuid = ? AND status IN ('open', 'selected')
+                    """,
+                    (dispatch_gate, now, task_uuid),
+                )
+                self._append_event(
+                    conn,
+                    event="workflow.runtime.changed",
+                    data={
+                        "workflow_task_uuid": task_uuid,
+                        "dispatch_gate": dispatch_gate,
+                    },
                     now=now,
                 )
             updated = conn.execute(
@@ -3161,13 +3245,22 @@ class WorkflowStore:
         *,
         execution_mode: str,
         control_status: str,
+        dispatch_gate: str | None = None,
     ) -> Dict[str, Any]:
-        """原子保存当前执行控制模式及其派发闸门状态。"""
+        """原子保存调试执行模式及其派发闸门状态。"""
 
         if execution_mode not in {"normal", "switching_to_step", "step"}:
             raise StoreConflict("任务执行模式非法")
         if control_status not in {"active", "paused"}:
             raise StoreConflict("任务控制状态非法")
+        if dispatch_gate is None:
+            dispatch_gate = (
+                "paused" if execution_mode in {"switching_to_step", "step"} else "active"
+            )
+        if dispatch_gate not in {"active", "paused"}:
+            raise StoreConflict("任务派发闸门状态非法")
+        if execution_mode in {"switching_to_step", "step"}:
+            dispatch_gate = "paused"
         now = utc_now()
         with self.transaction() as conn:
             row = conn.execute(
@@ -3184,14 +3277,16 @@ class WorkflowStore:
             if (
                 str(row["execution_mode"]) != execution_mode
                 or str(row["control_status"]) != control_status
+                or str(row["dispatch_gate"] or "active") != dispatch_gate
             ):
                 conn.execute(
                     """
                     UPDATE workflow_task
-                    SET execution_mode = ?, control_status = ?, update_time = ?
+                    SET execution_mode = ?, control_status = ?, dispatch_gate = ?,
+                        update_time = ?
                     WHERE uuid = ? AND deleted_at IS NULL
                     """,
-                    (execution_mode, control_status, now, task_uuid),
+                    (execution_mode, control_status, dispatch_gate, now, task_uuid),
                 )
                 self._append_event(
                     conn,
@@ -4854,6 +4949,24 @@ class WorkflowStore:
         cls._add_optional(result, row, "data_source", "data_key")
         return result
 
+    @staticmethod
+    def _task_control_values(row: sqlite3.Row) -> tuple[str, str]:
+        """兼容解码旧 Task 的调试模式与独立派发闸门。"""
+
+        execution_mode = str(row["execution_mode"] or "normal")
+        # 兼容在执行模式迁移前直接写入的 step 任务：默认 execution_mode 可能
+        # 暂时是 normal，但 paused 控制事实仍明确表示尚未进入自动运行。
+        if (
+            execution_mode == "normal"
+            and str(row["run_mode"] or "normal") == "step"
+            and str(row["control_status"] or "active") == "paused"
+        ):
+            execution_mode = "step"
+        dispatch_gate = str(row["dispatch_gate"] or "active")
+        if execution_mode in {"switching_to_step", "step"}:
+            dispatch_gate = "paused"
+        return execution_mode, dispatch_gate
+
     @classmethod
     def _task_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
         """把工作流任务（WorkflowTask）数据库行恢复为公共领域投影。
@@ -4862,6 +4975,7 @@ class WorkflowStore:
         ``execution_kind`` 的字典；内部幂等键与请求指纹不对外暴露。
         """
 
+        execution_mode, dispatch_gate = cls._task_control_values(row)
         result = {
             **cls._base(row),
             "workflow_uuid": row["workflow_uuid"],
@@ -4871,7 +4985,8 @@ class WorkflowStore:
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),
             "run_mode": row["run_mode"],
-            "execution_mode": row["execution_mode"],
+            "execution_mode": execution_mode,
+            "dispatch_gate": dispatch_gate,
             "control_status": row["control_status"],
             "cleanup_status": row["cleanup_status"],
             "wait_reason": _load(row["wait_reason"], {}),
@@ -4904,6 +5019,7 @@ class WorkflowStore:
     def _task_presentation_row(cls, row: sqlite3.Row) -> Dict[str, Any]:
         """解码已经由 SQLite 裁剪的 Edge Task 展示行。"""
 
+        execution_mode, dispatch_gate = cls._task_control_values(row)
         result = {
             "uuid": row["uuid"],
             "create_time": row["create_time"],
@@ -4916,7 +5032,8 @@ class WorkflowStore:
             "workflow_snapshot": _load(row["workflow_snapshot"], {}),
             "execution_plan": _load(row["execution_plan"], {}),
             "run_mode": row["run_mode"],
-            "execution_mode": row["execution_mode"],
+            "execution_mode": execution_mode,
+            "dispatch_gate": dispatch_gate,
             "control_status": row["control_status"],
             "cleanup_status": row["cleanup_status"],
             "wait_reason": _load(row["wait_reason"], {}),

@@ -447,7 +447,29 @@ class TaskSchedulerBridge:
             self._submitted_tasks.add(task_uuid)
             registered = True
             self._begin_submission_phase(task_uuid)
-            submission = self._scheduler.submit_workflow(spec)
+            execution_mode = str(
+                persisted_task.get("execution_mode")
+                or persisted_task.get("run_mode")
+                or "normal"
+            )
+            dispatch_gate = str(
+                persisted_task.get("dispatch_gate")
+                or (
+                    "paused"
+                    if execution_mode in {"switching_to_step", "step"}
+                    else "active"
+                )
+            )
+            if execution_mode == "normal" and dispatch_gate == "active":
+                # 保持既有调度器替身/扩展只接收 spec 的兼容性；默认控制态
+                # 与旧 submit 合同完全一致。
+                submission = self._scheduler.submit_workflow(spec)
+            else:
+                submission = self._scheduler.submit_workflow(
+                    spec,
+                    execution_mode=execution_mode,
+                    dispatch_gate=dispatch_gate,
+                )
             # 调度器返回即表示同步控制/派发回调全部成功；后续 Trace 或首次
             # 状态投影异常不应被误判为“回调内部失败”。
             self._finish_submission_phase(task_uuid)
@@ -806,42 +828,107 @@ class TaskSchedulerBridge:
         return aggregate
 
     def pause(self, task_uuid: str) -> dict[str, Any]:
-        """请求 normal→step，并等待当前 Task 的在途 Job 自然排空。"""
+        """暂停普通 Task 的后续派发，不改变执行模式或中断在途 Job。"""
 
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         normalized_uuid = self._required_text(task_uuid, field="task_uuid")
         try:
-            result = self._scheduler.switch_to_step(normalized_uuid)
-            task = self._store.set_task_execution_mode(
-                normalized_uuid,
-                execution_mode=str(result["execution_mode"]),
-                control_status="paused",
+            current = self._store.get_task(normalized_uuid)
+            execution_mode = str(
+                current.get("execution_mode") or current.get("run_mode") or "normal"
             )
+            if execution_mode != "normal":
+                raise ValueError("任务不在普通执行模式")
+            # 先落持久闸门，再切内存闸门；两者之间即使进程退出，恢复也不会
+            # 把已经暂停的普通 Task 重新派发。
+            task = self._store.set_task_dispatch_gate(
+                normalized_uuid,
+                dispatch_gate="paused",
+            )
+            if normalized_uuid in self._admission_pending_tasks:
+                return {"task": task, "scheduler": None}
+            if self._scheduler.workflow_snapshot(normalized_uuid) is None:
+                if task.get("status") == "pending":
+                    return {"task": task, "scheduler": None}
+                raise ValueError("工作流任务尚未提交到本地调度器")
+            result = self._scheduler.pause_workflow(normalized_uuid)
+            task = self._store.get_task(normalized_uuid)
             return {"task": task, "scheduler": result}
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
     def resume(self, task_uuid: str) -> dict[str, Any]:
-        """把稳定暂停的 step Task 切换为自动调度。"""
+        """恢复普通 Task，或把稳定暂停的 step Task 切换为自动调度。"""
 
         if self._closed:
             raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
         normalized_uuid = self._required_text(task_uuid, field="task_uuid")
         try:
-            result = self._scheduler.continue_automatic(normalized_uuid)
             task = self._store.get_task(normalized_uuid)
-            if task.get("status") not in {
-                "succeeded",
-                "failed",
-                "canceled",
-                "timeout",
-            }:
-                task = self._store.set_task_execution_mode(
-                    normalized_uuid,
-                    execution_mode="normal",
-                    control_status="active",
-                )
+            execution_mode = str(
+                task.get("execution_mode") or task.get("run_mode") or "normal"
+            )
+            if execution_mode == "step":
+                if (
+                    task.get("control_status") != "paused"
+                    or task.get("dispatch_gate") != "paused"
+                ):
+                    raise ValueError("单步任务当前不在可恢复的暂停状态")
+                # 调试恢复必须先让 Scheduler 放行本次重排；防御性派发门禁会
+                # 允许 step 模式的显式单步/自动继续派发。
+                result = self._scheduler.continue_automatic(normalized_uuid)
+                task = self._store.get_task(normalized_uuid)
+                if task.get("status") not in {
+                    "succeeded",
+                    "failed",
+                    "canceled",
+                    "timeout",
+                }:
+                    task = self._store.set_task_execution_mode(
+                        normalized_uuid,
+                        execution_mode="normal",
+                        control_status="active",
+                        dispatch_gate="active",
+                    )
+                return {"task": task, "scheduler": result}
+            if execution_mode != "normal":
+                raise ValueError("任务不在可恢复的普通执行模式")
+            # 先落持久闸门，确保 Scheduler 产生的首个新 Job 能通过同一门禁。
+            task = self._store.set_task_dispatch_gate(
+                normalized_uuid,
+                dispatch_gate="active",
+            )
+            if self._scheduler.workflow_snapshot(normalized_uuid) is None:
+                if normalized_uuid in self._admission_pending_tasks or task.get("status") == "pending":
+                    self._admission_pending_tasks.discard(normalized_uuid)
+                    return self.submit(task)
+                raise ValueError("工作流任务尚未提交到本地调度器")
+            result = self._scheduler.resume_workflow(normalized_uuid)
+            return {"task": self._store.get_task(normalized_uuid), "scheduler": result}
+        except (StoreConflict, ValueError) as error:
+            raise TaskSchedulerBridgeError(str(error)) from error
+
+    def switch_to_step(self, task_uuid: str) -> dict[str, Any]:
+        """开发模式下把普通 Task 安全切换为单步，排空当前在途 Job。"""
+
+        if self._closed:
+            raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        normalized_uuid = self._required_text(task_uuid, field="task_uuid")
+        try:
+            task = self._store.get_task(normalized_uuid)
+            execution_mode = str(
+                task.get("execution_mode") or task.get("run_mode") or "normal"
+            )
+            if execution_mode != "normal":
+                raise ValueError("任务不在普通执行模式")
+            result = self._scheduler.switch_to_step(normalized_uuid)
+            task = self._store.set_task_execution_mode(
+                normalized_uuid,
+                execution_mode=str(result["execution_mode"]),
+                control_status="paused",
+                dispatch_gate="paused",
+            )
             return {"task": task, "scheduler": result}
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
@@ -1664,7 +1751,24 @@ class TaskSchedulerBridge:
                     "operator_released_keys": data.get("operator_released_keys") or [],
                     "resource_interval_ids_by_lock": data["resource_interval_ids_by_lock"]})
         restored = self._scheduler.restore_workflow(
-            spec, completed, restored_jobs, {}, handoffs, execution_facts=jobs,
+            spec,
+            completed,
+            restored_jobs,
+            {},
+            handoffs,
+            execution_facts=jobs,
+            execution_mode=str(
+                task.get("execution_mode") or task.get("run_mode") or "normal"
+            ),
+            dispatch_gate=str(
+                task.get("dispatch_gate")
+                or (
+                    "paused"
+                    if str(task.get("execution_mode") or task.get("run_mode") or "normal")
+                    in {"switching_to_step", "step"}
+                    else "active"
+                )
+            ),
         )
         self._submitted_tasks.add(task_uuid)
         self._project_scheduler_trace_context(task_uuid, restored.get("trace_context"))
@@ -1838,6 +1942,17 @@ class TaskSchedulerBridge:
         task_uuid = self._task_by_job.get(job_uuid)
         if task_uuid is None:
             raise StoreConflict(f"派发作业不属于当前持久调度权威：{job_uuid}")
+        persisted_task = self._store.get_task(task_uuid)
+        execution_mode = str(
+            persisted_task.get("execution_mode")
+            or persisted_task.get("run_mode")
+            or "normal"
+        )
+        dispatch_gate = str(persisted_task.get("dispatch_gate") or "active")
+        if dispatch_gate != "active" and execution_mode != "step":
+            # 普通暂停和 normal→step 排空都必须在最后一道持久准入门禁再次
+            # 复验，防止暂停命令与重排线程并发时让新 Job 越过物理边界。
+            return False
         # 先登记阶段再校验其余派发摘要；任一校验、库存准入或持久投影异常都
         # 属于“已进入派发回调”的失败，不能走早期提交的终止/释放语义。
         self._mark_submission_phase(task_uuid, _SUBMISSION_PHASE_PRE_DISPATCH)
@@ -3368,6 +3483,7 @@ class TaskSchedulerBridge:
                     task_uuid,
                     execution_mode="step",
                     control_status="paused",
+                    dispatch_gate="paused",
                 )
         # ``continue`` 只在下一个节点没有断点时复用既有单步派发原语；断点或
         # 显式 ``step`` 会先创建新 Hold，绝不越过物理派发边界。

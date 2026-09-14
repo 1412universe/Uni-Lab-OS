@@ -1179,6 +1179,7 @@ export function TasksPage({
   })
   const stepState = stepStateQuery.data
   const effectiveExecutionMode = stepState?.executionMode || selected?.executionMode || 'normal'
+  const ordinaryTaskPaused = effectiveExecutionMode === 'normal' && selected?.dispatchGate === 'paused'
   const readyNodeUuids = useMemo(
     () => new Set(stepState?.candidates.map((candidate) => candidate.nodeUuid) || []),
     [stepState?.candidates],
@@ -1193,12 +1194,18 @@ export function TasksPage({
     }
   }, [stepState, selectedStepNodeUuid])
   const controlMutation = useMutation({
-    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => {
+    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'switch_to_step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => {
       if (!connected) throw new Error('Edge 未连接，写操作已暂停')
       return commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid)
     },
     onSuccess: (_command, variables) => {
-      const labels = { step: '单步命令已提交', pause: '已进入单步切换', resume: '已继续自动运行', cancel: '取消命令已提交' }
+      const labels = {
+        step: '单步命令已提交',
+        switch_to_step: '已进入单步切换',
+        pause: '任务暂停命令已提交',
+        resume: '任务继续命令已提交',
+        cancel: '取消命令已提交',
+      }
       onNotify(labels[variables.type])
       void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: ['workflow-task-step-state', selected?.uuid] })
@@ -1224,8 +1231,8 @@ export function TasksPage({
       {showStepControls ? (
         <header>
           <span>
-            <strong>{effectiveExecutionMode === 'normal' ? '自动运行' : effectiveExecutionMode === 'switching_to_step' ? '正在切换' : '单步调试'}</strong>
-            <small>{effectiveExecutionMode === 'switching_to_step' ? '等待在途 Job 结束' : '调度模式'}</small>
+            <strong>{effectiveExecutionMode === 'normal' ? (ordinaryTaskPaused ? '任务已暂停' : '自动运行') : effectiveExecutionMode === 'switching_to_step' ? '正在切换' : '单步调试'}</strong>
+            <small>{effectiveExecutionMode === 'switching_to_step' ? '等待在途 Job 结束' : effectiveExecutionMode === 'normal' && ordinaryTaskPaused ? '等待继续命令' : '调度模式'}</small>
           </span>
           <code>{effectiveExecutionMode}</code>
         </header>
@@ -1252,8 +1259,17 @@ export function TasksPage({
         <small className="task-step-inline-note">当前没有可执行节点</small>
       ) : null}
       <div className="task-step-inline-actions">
-        {showStepControls && effectiveExecutionMode === 'normal' ? (
-          <Button icon={<Pause size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'pause' })}>切换为单步</Button>
+        {effectiveExecutionMode === 'normal' ? (
+          <Button
+            icon={ordinaryTaskPaused ? <Play size={12} /> : <Pause size={12} />}
+            disabled={!connected || controlMutation.isPending}
+            onClick={() => controlMutation.mutate({ type: ordinaryTaskPaused ? 'resume' : 'pause' })}
+          >
+            {ordinaryTaskPaused ? '继续任务' : '暂停任务'}
+          </Button>
+        ) : null}
+        {showStepControls && effectiveExecutionMode === 'normal' && !ordinaryTaskPaused ? (
+          <Button icon={<StepForward size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'switch_to_step' })}>切换为单步</Button>
         ) : null}
         {showStepControls && effectiveExecutionMode === 'switching_to_step' ? <Button icon={<Pause size={12} />} disabled>等待切换</Button> : null}
         {showStepControls && effectiveExecutionMode === 'step' ? (

@@ -53,14 +53,34 @@ class _RepeatRuntime:
 class WorkflowRun:
     """一个已提交工作流的运行态。"""
 
-    def __init__(self, spec: WorkflowSpec):
+    def __init__(
+        self,
+        spec: WorkflowSpec,
+        *,
+        execution_mode: str | None = None,
+        dispatch_gate: str | None = None,
+    ):
         self.spec = spec
-        # ``run_mode`` 是冻结的创建事实；运行期间的自动/单步切换只修改这里的
-        # 调度闸门，不能反向篡改 ExecutionPlan。
-        self.execution_mode = "step" if spec.run_mode == "step" else "normal"
-        # 单步任务创建后必须停在首个节点之前；只有显式 step 命令可以临时放行。
+        # ``run_mode`` 是冻结的创建事实；运行期间的自动/单步切换只修改
+        # ``execution_mode`` 与 ``dispatch_gate``，不能反向篡改 ExecutionPlan。
+        self.execution_mode = execution_mode or (
+            "step" if spec.run_mode == "step" else "normal"
+        )
+        if self.execution_mode not in {"normal", "switching_to_step", "step"}:
+            raise ValueError(f"invalid workflow execution mode: {self.execution_mode}")
+        self.dispatch_gate = dispatch_gate or (
+            "paused"
+            if self.execution_mode in {"switching_to_step", "step"}
+            else "active"
+        )
+        if self.dispatch_gate not in {"active", "paused"}:
+            raise ValueError(f"invalid workflow dispatch gate: {self.dispatch_gate}")
+        # 单步任务和 normal→step 排空态必须停在首个节点之前；普通任务暂停时
+        # 保持 RUNNING/WAITING_MATERIAL，由独立闸门阻止新的 Job 派发。
         self.state = (
-            WorkflowState.PAUSED if spec.run_mode == "step" else WorkflowState.RUNNING
+            WorkflowState.PAUSED
+            if self.execution_mode in {"switching_to_step", "step"}
+            else WorkflowState.RUNNING
         )
 
         self._nodes: Dict[str, WorkflowNode] = {}
@@ -1362,6 +1382,7 @@ class WorkflowRun:
             "task_id": self.spec.task_id,
             "state": self.state.value,
             "execution_mode": self.execution_mode,
+            "dispatch_gate": self.dispatch_gate,
             "nodes": {
                 node_id: {
                     "state": state.value,

@@ -3,7 +3,7 @@ import type { ResourceOccupancy } from '../lib/stationErrorClient'
 import type { WorkflowTask } from '../types'
 
 export function usageTask(overrides: Partial<WorkflowTask> = {}): WorkflowTask {
-  return { uuid: 'task-1', workflowUuid: 'wf-1', workflowName: '物料转运', status: 'running', priority: 'normal', sample: '样品', description: '', current: '转运', progress: 50, updatedAt: '12:00', nodes: [{ uuid: 'node-1', name: '转运到目标库位', kind: 'device_action', index: 0, status: 'running', device: 'robot-local', job: { uuid: 'job-1', param: {}, feedbackData: {}, returnInfo: {}, errorInfo: [] } }], materialUuids: [], runMode: 'normal', executionMode: 'normal', controlStatus: 'active', matrixGroupKey: 'wf-1', trace: { url: 'http://127.0.0.1:30081/trace/trace-1', mode: 'trace' }, ...overrides }
+  return { uuid: 'task-1', workflowUuid: 'wf-1', workflowName: '物料转运', status: 'running', priority: 'normal', sample: '样品', description: '', current: '转运', progress: 50, updatedAt: '12:00', nodes: [{ uuid: 'node-1', name: '转运到目标库位', kind: 'device_action', index: 0, status: 'running', device: 'robot-local', job: { uuid: 'job-1', param: {}, feedbackData: {}, returnInfo: {}, errorInfo: [] } }], materialUuids: [], runMode: 'normal', executionMode: 'normal', dispatchGate: 'active', controlStatus: 'active', matrixGroupKey: 'wf-1', trace: { url: 'http://127.0.0.1:30081/trace/trace-1', mode: 'trace' }, ...overrides }
 }
 export function usageLock(lock_key: string, overrides: Partial<ResourceOccupancy> = {}): ResourceOccupancy {
   return { uuid: lock_key, lock_key, state: 'running', occupancy_kind: 'execution_lock', version: 'v1', workflow_task_uuid: 'task-1', workflow_node_job_uuid: 'job-1', create_time: '2026-09-10T04:00:00Z', ...overrides }

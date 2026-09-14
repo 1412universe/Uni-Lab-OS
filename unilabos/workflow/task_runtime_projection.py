@@ -582,7 +582,8 @@ class TaskRuntimeProjection:
             """
             UPDATE workflow_task
             SET control_status = CASE WHEN control_status='error_waiting' THEN 'error_waiting'
-                    ELSE COALESCE(reconciliation_resume_control_status, 'active') END,
+                    ELSE COALESCE(reconciliation_resume_control_status, dispatch_gate, 'active') END,
+                dispatch_gate = COALESCE(reconciliation_resume_control_status, dispatch_gate, 'active'),
                 cleanup_status = ?, attention_reason = NULL,
                 reconciliation_resume_control_status = NULL,
                 update_time = ?
@@ -981,7 +982,7 @@ class TaskRuntimeProjection:
             connection.execute(
                 """
                 UPDATE workflow_task
-                SET status = 'canceled', control_status = 'active',
+                SET status = 'canceled', control_status = 'active', dispatch_gate = 'active',
                     cleanup_status = 'required',
                     wait_reason = '{}', finished_at = ?, update_time = ?
                 WHERE uuid = ? AND deleted_at IS NULL
@@ -1208,7 +1209,7 @@ class TaskRuntimeProjection:
             connection.execute(
                 """
                 UPDATE workflow_task
-                SET status = ?, cleanup_status = ?, control_status = ?,
+                SET status = ?, cleanup_status = ?, control_status = ?, dispatch_gate = 'active',
                     wait_reason = '{}', finished_at = ?, update_time = ?
                 WHERE uuid = ? AND deleted_at IS NULL
                 """,
@@ -1849,7 +1850,7 @@ class TaskRuntimeProjection:
             connection.execute(
                 """
                 UPDATE workflow_task
-                SET cleanup_status='settled', control_status='active',
+                SET cleanup_status='settled', control_status='active', dispatch_gate='active',
                     attention_reason=NULL,
                     reconciliation_resume_control_status=NULL,
                     wait_reason='{}', update_time=?
@@ -2555,9 +2556,13 @@ class TaskRuntimeProjection:
             if changed != 1:
                 raise StoreConflict(f"作业物理对账状态发生并发变化：{job_uuid}")
             resume_control = (
-                str(task_row["control_status"])
+                str(task_row["dispatch_gate"] or "active")
                 if task_row["control_status"] != "waiting_reconciliation"
-                else str(task_row["reconciliation_resume_control_status"] or "active")
+                else str(
+                    task_row["reconciliation_resume_control_status"]
+                    or task_row["dispatch_gate"]
+                    or "active"
+                )
             )
             connection.execute(
                 """
@@ -2650,7 +2655,8 @@ class TaskRuntimeProjection:
                 """UPDATE workflow_task SET control_status='waiting_reconciliation',
                 cleanup_status='requires_attention',attention_reason=?,
                 reconciliation_resume_control_status=COALESCE(
-                    reconciliation_resume_control_status, control_status),
+                    reconciliation_resume_control_status, dispatch_gate, control_status),
+                dispatch_gate=dispatch_gate,
                 wait_reason='{}',update_time=? WHERE uuid=? AND deleted_at IS NULL""",
                 (QUANTITY_RECONCILIATION_REQUIRED, now, task_uuid),
             )
@@ -4182,7 +4188,10 @@ class TaskRuntimeProjection:
                     """
                     UPDATE workflow_task
                     SET control_status = COALESCE(
-                            reconciliation_resume_control_status, 'active'
+                            reconciliation_resume_control_status, dispatch_gate, 'active'
+                        ),
+                        dispatch_gate = COALESCE(
+                            reconciliation_resume_control_status, dispatch_gate, 'active'
                         ),
                         cleanup_status = 'none', attention_reason = NULL,
                         reconciliation_resume_control_status = NULL,
@@ -4265,9 +4274,13 @@ class TaskRuntimeProjection:
                 )
             if requires_inventory_reconciliation:
                 resume_control = (
-                    str(task_row["control_status"])
+                    str(task_row["dispatch_gate"] or "active")
                     if task_row["control_status"] != "waiting_reconciliation"
-                    else str(task_row["reconciliation_resume_control_status"] or "active")
+                    else str(
+                        task_row["reconciliation_resume_control_status"]
+                        or task_row["dispatch_gate"]
+                        or "active"
+                    )
                 )
                 connection.execute(
                     """

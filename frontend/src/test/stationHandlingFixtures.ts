@@ -19,7 +19,7 @@ export const handlingDevice: MaterialRecord = {
 export const handlingTask: WorkflowTask = {
   uuid: 'task-1', workflowUuid: 'workflow-1', workflowName: '错误测试', status: 'intervention_required',
   priority: 'normal', sample: '', description: '', current: '失败节点', progress: 33, updatedAt: '', materialUuids: [],
-  runMode: 'normal', executionMode: 'normal', controlStatus: 'error_waiting', matrixGroupKey: 'test',
+  runMode: 'normal', executionMode: 'normal', dispatchGate: 'active', controlStatus: 'error_waiting', matrixGroupKey: 'test',
   nodes: [{ uuid: 'node-1', name: '注入节点错误', kind: 'action', index: 1, status: 'failed' }],
   trace: { traceId: 'trace-1', mode: 'trace', url: 'http://localhost:30081/trace/trace-1' },
 }

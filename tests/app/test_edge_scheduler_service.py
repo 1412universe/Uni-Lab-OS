@@ -530,12 +530,14 @@ class TestPauseResumeControl:
         submitted = scheduler.submit_workflow(_chain_spec("wf-paused"))
 
         paused = scheduler.pause_workflow("wf-paused")
-        assert paused["state"] == "paused"
+        assert paused["state"] == "running"
+        assert paused["execution_mode"] == "normal"
+        assert paused["dispatch_gate"] == "paused"
 
         settled = scheduler.on_job_finished(
             submitted["dispatched"][0]["job_id"], success=True, ret_value={}
         )
-        assert settled["workflow_state"] == "paused"
+        assert settled["workflow_state"] == "running"
         assert settled["dispatched"] == []
         assert [item["node_id"] for item in dispatcher.dispatched] == ["A"]
 

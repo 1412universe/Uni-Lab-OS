@@ -240,6 +240,7 @@ export interface WorkflowTask {
   workflowRevision?: number
   runMode: string
   executionMode: 'normal' | 'switching_to_step' | 'step'
+  dispatchGate: 'active' | 'paused'
   controlStatus: string
   matrixGroupKey: string
   trace?: {

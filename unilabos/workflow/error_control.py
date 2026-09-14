@@ -131,7 +131,8 @@ class StationExecutionControl:
                 (self.station_id,),
             ).fetchone()
             task = conn.execute(
-                "SELECT control_status FROM workflow_task WHERE uuid=?", (task_uuid,)
+                "SELECT control_status, dispatch_gate, execution_mode FROM workflow_task WHERE uuid=?",
+                (task_uuid,),
             ).fetchone()
             pending = conn.execute(
                 "SELECT 1 FROM workflow_intervention WHERE workflow_task_uuid=? AND decision_kind='edge_node_error' AND stage!='RESOLVED' LIMIT 1",
@@ -142,6 +143,11 @@ class StationExecutionControl:
                 and station[0] == "RUNNING"
                 and pending is None
                 and (task is None or task[0] != "error_waiting")
+                and (
+                    task is None
+                    or task[1] != "paused"
+                    or task[2] == "step"
+                )
             )
 
     def is_current(self, job_uuid: str) -> bool:
@@ -1611,7 +1617,7 @@ class StationExecutionControl:
             ).fetchone()
             if unresolved is None:
                 conn.execute(
-                    """UPDATE workflow_task SET control_status=CASE WHEN execution_mode IN ('step','switching_to_step') THEN 'paused' ELSE 'active' END,update_time=?
+                    """UPDATE workflow_task SET control_status=CASE WHEN dispatch_gate='paused' THEN 'paused' ELSE 'active' END,update_time=?
                     WHERE uuid=? AND control_status='error_waiting'""",
                     (now, decision["workflow_task_uuid"]),
                 )
@@ -1803,14 +1809,21 @@ class StationExecutionControl:
                 (self.station_id,),
             ).fetchone()[0]
             revision = self._next_decision_revision(conn, job_uuid)
-            resume_status = task["control_status"]
-            if resume_status == "error_waiting":
+            if task["control_status"] == "error_waiting":
                 previous = conn.execute(
                     """SELECT resume_control_status FROM workflow_intervention
                     WHERE workflow_task_uuid=? AND decision_kind='edge_node_error' ORDER BY opened_at LIMIT 1""",
                     (task_uuid,),
                 ).fetchone()
                 resume_status = previous[0] if previous else "active"
+            else:
+                resume_status = str(task["dispatch_gate"] or task["control_status"] or "active")
+                if resume_status not in {"active", "paused"}:
+                    resume_status = (
+                        "paused"
+                        if task["execution_mode"] in {"step", "switching_to_step"}
+                        else "active"
+                    )
             conn.execute(
                 """INSERT INTO workflow_intervention(uuid,create_time,update_time,meta_data,
                 workflow_task_uuid,workflow_node_job_uuid,decision_id,revision,status,options,

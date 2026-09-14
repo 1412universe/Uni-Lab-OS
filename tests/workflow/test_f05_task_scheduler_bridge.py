@@ -24,6 +24,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
     TransferResourceFacts,
 )
 from unilabos.app.scheduler.service import EdgeScheduler
+from unilabos.app.startup_mode import reset_startup_mode, set_startup_mode
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
@@ -779,9 +780,12 @@ def test_step_state_api_is_authoritative_and_blocks_overlapping_step(
         bridge.close()
 
 
+@pytest.mark.parametrize("startup_mode", ["develop", "product"])
 def test_pause_resume_command_api_updates_standard_task_control_status(
     store: WorkflowStore,
+    startup_mode: str,
 ) -> None:
+    set_startup_mode(startup_mode)
     task = _seed_task(store, with_material=False, with_successor=True)
     plan = task["execution_plan"]
     plan["nodes"][1]["param_schema"] = {"type": "object", "properties": {"goal": {"type": "object", "properties": {}}}}
@@ -805,14 +809,21 @@ def test_pause_resume_command_api_updates_standard_task_control_status(
             json={"type": "pause", "idempotency_key": "pause-once"},
         )
         assert paused_replay.json()["data"] == paused.json()["data"]
-        switching = store.get_task(TASK_UUID)
-        assert switching["control_status"] == "paused"
-        assert switching["execution_mode"] == "switching_to_step"
+        paused_task = store.get_task(TASK_UUID)
+        assert paused_task["control_status"] == "paused"
+        assert paused_task["execution_mode"] == "normal"
+        assert paused_task["dispatch_gate"] == "paused"
+        matrix_items = client.get(
+            "/api/v1/workflow-task-presentations?view=matrix"
+        ).json()["data"]["items"]
+        matrix_task = next(item for item in matrix_items if item["uuid"] == TASK_UUID)
+        assert matrix_task["dispatch_gate"] == "paused"
 
         scheduler.on_job_finished(JOB_UUID, True, {})
-        switched = store.get_task(TASK_UUID)
-        assert switched["execution_mode"] == "step"
-        assert switched["run_mode"] == "normal"
+        paused_after_finish = store.get_task(TASK_UUID)
+        assert paused_after_finish["execution_mode"] == "normal"
+        assert paused_after_finish["dispatch_gate"] == "paused"
+        assert paused_after_finish["run_mode"] == "normal"
 
         resumed = client.post(
             f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
@@ -828,9 +839,11 @@ def test_pause_resume_command_api_updates_standard_task_control_status(
         automatic = store.get_task(TASK_UUID)
         assert automatic["control_status"] == "active"
         assert automatic["execution_mode"] == "normal"
+        assert automatic["dispatch_gate"] == "active"
         assert automatic["run_mode"] == "normal"
     finally:
         bridge.close()
+        reset_startup_mode()
 
 
 def _seed_two_node_debug_task(store: WorkflowStore) -> dict[str, Any]:
@@ -952,6 +965,32 @@ def test_restart_preserves_pending_paused_step_task_without_dispatch(
         assert store.get_task(TASK_UUID)["control_status"] == "paused"
         assert store.get_job(JOB_UUID)["status"] == "pending"
         assert store.get_job(JOB_UUID)["error_info"] == []
+    finally:
+        bridge.close()
+
+
+def test_restart_preserves_pending_paused_normal_task_without_dispatch(
+    store: WorkflowStore,
+) -> None:
+    """普通暂停意图在调度器重建后仍关闭新 Job 派发。"""
+
+    _seed_task(store, with_material=False, run_mode="normal")
+    store.set_task_dispatch_gate(TASK_UUID, dispatch_gate="paused")
+    dispatcher = RecordingDispatcher()
+    scheduler = EdgeScheduler(dispatcher=dispatcher)
+    bridge = _bridge(store, scheduler)
+    try:
+        recovered = bridge.recover_active_tasks()
+
+        assert [item["task"]["uuid"] for item in recovered] == [TASK_UUID]
+        assert dispatcher.dispatched == []
+        recovered_task = store.get_task(TASK_UUID)
+        assert recovered_task["status"] == "pending"
+        assert recovered_task["run_mode"] == "normal"
+        assert recovered_task["execution_mode"] == "normal"
+        assert recovered_task["control_status"] == "paused"
+        assert recovered_task["dispatch_gate"] == "paused"
+        assert store.get_job(JOB_UUID)["status"] == "pending"
     finally:
         bridge.close()
 

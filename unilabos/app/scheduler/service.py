@@ -1113,7 +1113,13 @@ class EdgeScheduler:
 
     # ── 触发点 1：任务进来 ────────────────────────────────────
 
-    def submit_workflow(self, spec: WorkflowSpec) -> dict[str, Any]:
+    def submit_workflow(
+        self,
+        spec: WorkflowSpec,
+        *,
+        execution_mode: str | None = None,
+        dispatch_gate: str | None = None,
+    ) -> dict[str, Any]:
         with self._lock:
             if (
                 spec.workflow_id in self._workflows
@@ -1146,7 +1152,11 @@ class EdgeScheduler:
                     },
                 ),
             ):
-                result = self._submit_workflow(spec)
+                result = self._submit_workflow(
+                    spec,
+                    execution_mode=execution_mode,
+                    dispatch_gate=dispatch_gate,
+                )
                 trace_context = getattr(workflow_trace, "trace_context", None)
                 result["trace_context"] = (
                     trace_context() if callable(trace_context) else {}
@@ -1158,7 +1168,13 @@ class EdgeScheduler:
             self._workflow_spans.pop(spec.workflow_id, None)
             raise
 
-    def _submit_workflow(self, spec: WorkflowSpec) -> dict[str, Any]:
+    def _submit_workflow(
+        self,
+        spec: WorkflowSpec,
+        *,
+        execution_mode: str | None = None,
+        dispatch_gate: str | None = None,
+    ) -> dict[str, Any]:
         """提交工作流并立即重排。返回本次下发结果。
 
         带物料需求时：入队前整 DAG all-or-nothing 预留；不足则置
@@ -1168,7 +1184,11 @@ class EdgeScheduler:
             if spec.workflow_id in self._workflows:
                 raise ValueError(f"workflow {spec.workflow_id} already submitted")
             self._validate_station_admission(spec)
-            run = WorkflowRun(spec)  # 构图 + 环检测，失败直接抛
+            run = WorkflowRun(
+                spec,
+                execution_mode=execution_mode,
+                dispatch_gate=dispatch_gate,
+            )  # 构图 + 环检测，失败直接抛
             self._workflows[spec.workflow_id] = run
 
             requirements = spec.material_requirements_by_node()
@@ -1213,6 +1233,8 @@ class EdgeScheduler:
         return {
             "workflow_id": spec.workflow_id,
             "state": state,
+            "execution_mode": run.execution_mode,
+            "dispatch_gate": run.dispatch_gate,
             "dispatched": dispatched,
         }
 
@@ -1319,6 +1341,7 @@ class EdgeScheduler:
             if run.state in self._TERMINAL_STATES:
                 raise ValueError(f"workflow {workflow_id} is terminal")
             run.execution_mode = "switching_to_step"
+            run.dispatch_gate = "paused"
             run.state = WorkflowState.PAUSED
             self._complete_step_transition_locked(run)
             return self.step_state(workflow_id)
@@ -1337,6 +1360,7 @@ class EdgeScheduler:
             if self._workflow_in_flight_count_locked(workflow_id):
                 raise ValueError(f"workflow {workflow_id} step is still in progress")
             run.execution_mode = "normal"
+            run.dispatch_gate = "active"
             run.state = WorkflowState.RUNNING
             dispatched = self._reschedule_locked()
             notifications = self._collect_terminal_notifications()
@@ -1344,6 +1368,7 @@ class EdgeScheduler:
                 "workflow_id": workflow_id,
                 "state": run.state.value,
                 "execution_mode": run.execution_mode,
+                "dispatch_gate": run.dispatch_gate,
                 "dispatched": dispatched,
             }
         self._fire_notifications(notifications)
@@ -1440,18 +1465,61 @@ class EdgeScheduler:
             and self._workflow_in_flight_count_locked(run.spec.workflow_id) == 0
         ):
             run.execution_mode = "step"
+            run.dispatch_gate = "paused"
             if run.state not in self._TERMINAL_STATES:
                 run.state = WorkflowState.PAUSED
 
     def pause_workflow(self, workflow_id: str) -> dict[str, Any]:
-        """兼容标准 pause 命令：请求当前自动任务安全切换到单步。"""
+        """暂停普通任务的后续派发，不改变其执行模式或在途 Job。"""
 
-        return self.switch_to_step(workflow_id)
+        with self._lock:
+            run = self._workflows.get(workflow_id)
+            if run is None:
+                raise ValueError(f"workflow {workflow_id} not found")
+            if run.execution_mode != "normal":
+                raise ValueError(f"workflow {workflow_id} is not in normal mode")
+            if run.state in self._TERMINAL_STATES:
+                raise ValueError(f"workflow {workflow_id} is terminal")
+            run.dispatch_gate = "paused"
+            return {
+                "workflow_id": workflow_id,
+                "state": run.state.value,
+                "execution_mode": run.execution_mode,
+                "dispatch_gate": run.dispatch_gate,
+                "in_flight_job_count": self._workflow_in_flight_count_locked(
+                    workflow_id
+                ),
+                "dispatched": [],
+            }
 
     def resume_workflow(self, workflow_id: str) -> dict[str, Any]:
-        """兼容标准 resume 命令：从单步暂停态继续自动调度。"""
+        """恢复普通任务的后续派发，继续复用同一 WorkflowRun。"""
 
-        return self.continue_automatic(workflow_id)
+        with self._lock:
+            run = self._workflows.get(workflow_id)
+            if run is None:
+                raise ValueError(f"workflow {workflow_id} not found")
+            if run.execution_mode != "normal":
+                raise ValueError(f"workflow {workflow_id} is not in normal mode")
+            if run.state in self._TERMINAL_STATES:
+                raise ValueError(f"workflow {workflow_id} is terminal")
+            run.dispatch_gate = "active"
+            if run.state is WorkflowState.PAUSED:
+                run.state = WorkflowState.RUNNING
+            dispatched = self._reschedule_locked()
+            notifications = self._collect_terminal_notifications()
+            result = {
+                "workflow_id": workflow_id,
+                "state": run.state.value,
+                "execution_mode": run.execution_mode,
+                "dispatch_gate": run.dispatch_gate,
+                "in_flight_job_count": self._workflow_in_flight_count_locked(
+                    workflow_id
+                ),
+                "dispatched": dispatched,
+            }
+        self._fire_notifications(notifications)
+        return result
 
     def restore_workflow(
         self,
@@ -1461,6 +1529,8 @@ class EdgeScheduler:
         skipped_nodes: Mapping[str, str] | None = None,
         restored_interval_handoffs: Sequence[Mapping[str, Any]] = (),
         execution_facts: Sequence[Mapping[str, Any]] = (),
+        execution_mode: str | None = None,
+        dispatch_gate: str | None = None,
     ) -> dict[str, Any]:
         """从持久成功事实恢复一个未终态工作流（Workflow）。
 
@@ -1500,7 +1570,11 @@ class EdgeScheduler:
         try:
             with workflow_trace.activate(), self._lock:
                 self._validate_station_admission(spec)
-                run = WorkflowRun(spec)
+                run = WorkflowRun(
+                    spec,
+                    execution_mode=execution_mode,
+                    dispatch_gate=dispatch_gate,
+                )
                 self._workflows[spec.workflow_id] = run
                 requirements = spec.material_requirements_by_node()
                 if requirements and self._inventory is not None:
@@ -1588,6 +1662,8 @@ class EdgeScheduler:
             result = {
                 "workflow_id": spec.workflow_id,
                 "state": run.state.value,
+                "execution_mode": run.execution_mode,
+                "dispatch_gate": run.dispatch_gate,
                 "dispatched": dispatched,
             }
             result["trace_context"] = workflow_trace.trace_context()
@@ -2384,8 +2460,10 @@ class EdgeScheduler:
                     else span("workflow.material.retry")
                 )
                 with activation:
-                    reserved = run.state is WorkflowState.WAITING_MATERIAL and self._try_reserve(
-                        run
+                    reserved = (
+                        run.dispatch_gate == "active"
+                        and run.state is WorkflowState.WAITING_MATERIAL
+                        and self._try_reserve(run)
                     )
                 if reserved:
                     run.state = WorkflowState.RUNNING
@@ -2407,9 +2485,11 @@ class EdgeScheduler:
         for run in self._workflows.values():
             if run.state is not WorkflowState.RUNNING:
                 continue
+            step_target = self._step_targets.get(run.spec.workflow_id)
+            if run.dispatch_gate != "active" and step_target is None:
+                continue
             if self._station_control is not None and not self._station_control.allows_task(run.spec.task_id):
                 continue
-            step_target = self._step_targets.get(run.spec.workflow_id)
             stepped_local_control = False
             while True:
                 evaluation = run.prepare_local_control()
@@ -2462,6 +2542,12 @@ class EdgeScheduler:
 
         dispatched: list[dict[str, Any]] = manual_dispatched + list(continued)
         for task in ordered:
+            run = self._workflows[task.workflow_id]
+            if (
+                run.dispatch_gate != "active"
+                and self._step_targets.get(task.workflow_id) is None
+            ):
+                continue
             if self._station_control is not None and self._station_control.is_manual(task.node.job_id):
                 continue
             if self._station_control is not None and not self._station_control.allows_task(task.workflow_id):
@@ -2473,7 +2559,6 @@ class EdgeScheduler:
             # ``job_id`` 优先复用标准工作流节点作业（WorkflowNodeJob）身份；旧整图
             # 没有提供时才维持历史随机身份行为。等待与派发必须使用同一身份。
             job_id = task.node.job_id or uuid_mod.uuid4().hex
-            run = self._workflows[task.workflow_id]
             continuation_keys = self._continuation_resource_keys(
                 task.workflow_id,
                 task.node,

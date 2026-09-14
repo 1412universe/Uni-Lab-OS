@@ -149,10 +149,11 @@ def ensure_station_task_submission_schema(connection: sqlite3.Connection) -> Non
 
 
 def ensure_workflow_task_control_schema(connection: sqlite3.Connection) -> None:
-    """补齐 WorkflowTask 可变执行控制模式。
+    """补齐 WorkflowTask 可变执行控制模式与普通派发闸门。
 
     ``run_mode`` 继续保存创建时冻结模式；``execution_mode`` 只表示当前调度
-    闸门。旧库中的 step 任务按原创建事实初始化，其余任务保持 normal。
+    调试模式；``dispatch_gate`` 独立保存普通 Task 的暂停意图。旧库中的 step
+    或已暂停任务按已有事实初始化为 paused，其余任务保持 active。
     """
 
     task_columns = {
@@ -167,11 +168,33 @@ def ensure_workflow_task_control_schema(connection: sqlite3.Connection) -> None:
                 CHECK (execution_mode IN ('normal', 'switching_to_step', 'step'))
             """
         )
+        task_columns.add("execution_mode")
         connection.execute(
             """
             UPDATE workflow_task
             SET execution_mode = 'step'
             WHERE run_mode = 'step'
+            """
+        )
+
+    if "dispatch_gate" not in task_columns:
+        connection.execute(
+            """
+            ALTER TABLE workflow_task
+            ADD COLUMN dispatch_gate TEXT NOT NULL DEFAULT 'active'
+                CHECK (dispatch_gate IN ('active', 'paused'))
+            """
+        )
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET dispatch_gate = CASE
+                WHEN run_mode = 'step'
+                  OR execution_mode IN ('step', 'switching_to_step')
+                  OR control_status = 'paused'
+                THEN 'paused'
+                ELSE 'active'
+            END
             """
         )
 
@@ -189,7 +212,9 @@ def ensure_task_resource_unlock_command_schema(
 
     old = "type IN ('step', 'pause', 'resume', 'cancel')"
     intermediate = "type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources')"
-    new = "type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources', 'retry_node', 'execute_manual_action', 'stop_manual_action', 'resource_disposition', 'inventory_correction')"
+    step_intermediate = "type IN ('step', 'switch_to_step', 'pause', 'resume', 'cancel', 'unlock_resources')"
+    legacy_new = "type IN ('step', 'pause', 'resume', 'cancel', 'unlock_resources', 'retry_node', 'execute_manual_action', 'stop_manual_action', 'resource_disposition', 'inventory_correction')"
+    new = "type IN ('step', 'switch_to_step', 'pause', 'resume', 'cancel', 'unlock_resources', 'retry_node', 'execute_manual_action', 'stop_manual_action', 'resource_disposition', 'inventory_correction')"
     row = connection.execute(
         "SELECT sql FROM sqlite_schema "
         "WHERE type='table' AND name='workflow_task_command'"
@@ -197,7 +222,11 @@ def ensure_task_resource_unlock_command_schema(
     table_sql = str(row["sql"] or "") if row is not None else ""
     if new in table_sql:
         return
-    if intermediate in table_sql:
+    if legacy_new in table_sql:
+        old = legacy_new
+    elif step_intermediate in table_sql:
+        old = step_intermediate
+    elif intermediate in table_sql:
         old = intermediate
     if table_sql.count(old) != 1 or new in table_sql:
         raise sqlite3.OperationalError(

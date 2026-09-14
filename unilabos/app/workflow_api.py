@@ -1893,7 +1893,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     ) -> JSONResponse:
         """幂等提交一次工作流任务控制命令。"""
 
-        if body.type in {"step", "pause", "resume"}:
+        if body.type in {"step", "switch_to_step"}:
             _require_develop_execution()
         return _success(
             service.command_workflow_task(

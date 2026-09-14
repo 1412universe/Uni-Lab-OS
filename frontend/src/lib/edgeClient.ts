@@ -865,6 +865,11 @@ export function adaptTask(
     : raw.attention_reason?.message || raw.attention_reason?.code
   const waitMessage = raw.wait_reason?.message || raw.wait_reason?.code || attentionMessage
   const controlStatus = String(raw.control_status || 'active')
+  const executionMode = String(raw.execution_mode || raw.run_mode || 'normal') as WorkflowTask['executionMode']
+  const dispatchGate = raw.dispatch_gate === 'paused'
+    || (!raw.dispatch_gate && (executionMode === 'step' || executionMode === 'switching_to_step' || controlStatus === 'paused'))
+    ? 'paused'
+    : 'active'
   const cleanupStatus = String(raw.cleanup_status || 'none')
   const normalisedStatus = normaliseTaskStatus(raw.status)
   // 只有后端核实没有其他待处理执行或资源占用，才收起任务级残留核对提示。
@@ -1006,7 +1011,8 @@ export function adaptTask(
     materialUuids: collectTaskMaterialUuids(raw, jobs, inputContract, knownMaterialUuids),
     workflowRevision: Number(raw.workflow_snapshot?.workflow?.revision || raw.workflow?.revision || 0) || undefined,
     runMode: String(raw.run_mode || raw.execution_plan?.run_mode || 'normal'),
-    executionMode: String(raw.execution_mode || raw.run_mode || 'normal') as WorkflowTask['executionMode'],
+    executionMode,
+    dispatchGate,
     controlStatus,
     cleanupStatus,
     attentionReason: attentionMessage ? String(attentionMessage) : undefined,
@@ -3167,7 +3173,7 @@ export async function loadWorkflowTaskStepState(
 
 export async function commandWorkflowTask(
   taskUuid: string,
-  type: 'step' | 'pause' | 'resume' | 'cancel',
+  type: 'step' | 'switch_to_step' | 'pause' | 'resume' | 'cancel',
   targetNodeUuid?: string,
   idempotencyKey?: string,
 ): Promise<RawRecord> {

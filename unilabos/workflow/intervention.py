@@ -136,7 +136,7 @@ class WorkflowInterventionStore:
                 return _row(existing)
             task = connection.execute(
                 """
-                SELECT control_status FROM workflow_task
+                SELECT control_status, dispatch_gate, execution_mode FROM workflow_task
                 WHERE uuid = ? AND deleted_at IS NULL
                 """,
                 (task_uuid,),
@@ -152,9 +152,16 @@ class WorkflowInterventionStore:
                 (job_uuid,),
             ).fetchone()
             revision = 1 if latest is None else int(latest["revision"]) + 1
-            resume_status = str(task["control_status"] or "active")
-            if resume_status == "waiting_intervention" and latest is not None:
+            if task["control_status"] == "waiting_intervention" and latest is not None:
                 resume_status = str(latest["resume_control_status"])
+            else:
+                resume_status = str(task["dispatch_gate"] or task["control_status"] or "active")
+                if resume_status not in {"active", "paused"}:
+                    resume_status = (
+                        "paused"
+                        if task["execution_mode"] in {"step", "switching_to_step"}
+                        else "active"
+                    )
             if resume_status not in {"active", "paused"}:
                 raise StoreConflict("任务当前不能进入人工干预等待状态")
             if latest is not None and str(latest["status"]) in {"open", "selected"}:
@@ -403,10 +410,15 @@ class WorkflowInterventionStore:
                 connection.execute(
                     """
                     UPDATE workflow_task
-                    SET control_status = ?, update_time = ?
+                    SET control_status = ?, dispatch_gate = ?, update_time = ?
                     WHERE uuid = ? AND control_status = 'waiting_intervention'
                     """,
-                    (row["resume_control_status"], now, row["workflow_task_uuid"]),
+                    (
+                        row["resume_control_status"],
+                        row["resume_control_status"],
+                        now,
+                        row["workflow_task_uuid"],
+                    ),
                 )
             updated = connection.execute(
                 "SELECT * FROM workflow_intervention WHERE uuid = ?",

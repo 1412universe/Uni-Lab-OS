@@ -4195,7 +4195,7 @@ class WorkflowService:
     ) -> dict[str, Any]:
         """幂等执行本地工作流任务控制命令。
 
-        暂停只阻止后续派发，不中断已在途设备动作；恢复、单步和取消都复用
+        暂停只阻止后续派发，不中断已在途设备动作；恢复、单步切换和取消都复用
         同一个 Task 身份。返回与 Backend 相同的 WorkflowTaskCommand 投影。
         """
 
@@ -4203,6 +4203,7 @@ class WorkflowService:
             task_uuid = validate_uuid(task_uuid)
             if command_type not in {
                 "step",
+                "switch_to_step",
                 "pause",
                 "resume",
                 "cancel",
@@ -4280,29 +4281,46 @@ class WorkflowService:
             execution_mode = str(
                 task.get("execution_mode") or task.get("run_mode") or "normal"
             )
+            dispatch_gate = str(task.get("dispatch_gate") or "active")
             if command_type == "step" and (
                 execution_mode != "step"
                 or task.get("control_status") != "paused"
+                or dispatch_gate != "paused"
             ):
                 return self._store.complete_task_command(
                     command["uuid"],
                     status="rejected",
                     result={"reason": "task_is_not_paused_step"},
                 )
-            if command_type == "pause" and execution_mode != "normal":
+            if command_type in {"pause", "switch_to_step"} and execution_mode != "normal":
                 return self._store.complete_task_command(
                     command["uuid"],
                     status="rejected",
                     result={"reason": "task_is_not_in_normal_mode"},
                 )
+            normal_resume_invalid = (
+                execution_mode == "normal" and dispatch_gate != "paused"
+            )
+            step_resume_invalid = execution_mode == "step" and (
+                task.get("control_status") != "paused" or dispatch_gate != "paused"
+            )
             if command_type == "resume" and (
-                execution_mode != "step"
-                or task.get("control_status") != "paused"
+                execution_mode not in {"normal", "step"}
+                or normal_resume_invalid
+                or step_resume_invalid
             ):
                 return self._store.complete_task_command(
                     command["uuid"],
                     status="rejected",
-                    result={"reason": "task_is_not_paused_step"},
+                    result={
+                        "reason": (
+                            "task_is_not_paused_step"
+                            if execution_mode == "step"
+                            else "task_is_not_paused"
+                            if execution_mode == "normal"
+                            else "task_is_not_resumable"
+                        )
+                    },
                 )
             if self._task_scheduler_bridge is None:
                 return self._store.complete_task_command(
@@ -4316,6 +4334,8 @@ class WorkflowService:
                         task_uuid,
                         target_node_uuid=target_node_uuid,
                     )
+                elif command_type == "switch_to_step":
+                    result = self._task_scheduler_bridge.switch_to_step(task_uuid)
                 elif command_type == "pause":
                     result = self._task_scheduler_bridge.pause(task_uuid)
                 elif command_type == "resume":

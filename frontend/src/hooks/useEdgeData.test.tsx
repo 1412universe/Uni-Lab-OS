@@ -97,7 +97,7 @@ describe('useEdgeData', () => {
         uuid: 'task-new', workflowUuid: 'wf-1', workflowName: '流程', status: 'running',
         priority: 'normal',
         sample: 'sample-1', description: 'task', current: '运行中', progress: 0,
-        updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal', controlStatus: 'active', matrixGroupKey: 'wf-1',
+        updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal', dispatchGate: 'active', controlStatus: 'active', matrixGroupKey: 'wf-1',
       }])
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const wrapper = ({ children }: { children: ReactNode }) => (
@@ -121,7 +121,7 @@ describe('useEdgeData', () => {
       uuid: 'task-previous', workflowUuid: 'wf-1', workflowName: '流程', status: 'running' as const,
       priority: 'normal' as const,
       sample: 'sample-1', description: 'task', current: '运行中', progress: 20,
-      updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal' as const,
+        updatedAt: '12:00', nodes: [], materialUuids: [], runMode: 'normal', executionMode: 'normal' as const, dispatchGate: 'active' as const,
       controlStatus: 'active', matrixGroupKey: 'wf-1',
     }
     vi.mocked(loadEdgeSnapshot).mockResolvedValue({

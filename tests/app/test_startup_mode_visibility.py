@@ -567,7 +567,9 @@ def test_product_mode_blocks_definition_writes_but_allows_visible_task_creation(
             f"/api/v1/workflow-tasks/{created_task.json()['data']['uuid']}/commands",
             json={"type": "pause", "idempotency_key": "product-pause"},
         )
-        assert pause_task.json()["error"]["code"] == "develop_mode_required"
+        assert pause_task.status_code == 201
+        assert pause_task.json()["data"]["status"] == "rejected"
+        assert pause_task.json()["data"]["result"]["reason"] == "scheduler_unavailable"
         step_state = client.get(
             f"/api/v1/workflow-tasks/{created_task.json()['data']['uuid']}/step-state"
         )

@@ -701,7 +701,10 @@ describe('TasksPage', () => {
     fireEvent.click(taskRow)
     const controls = within(taskRow).getByLabelText('Task 行内任务控制')
     const cancel = within(controls).getByRole('button', { name: '取消任务' })
-    expect(within(controls).getAllByRole('button')).toEqual([cancel])
+    const pause = executionMode === 'normal'
+      ? within(controls).getByRole('button', { name: '暂停任务' })
+      : undefined
+    expect(within(controls).getAllByRole('button')).toEqual(pause ? [pause, cancel] : [cancel])
     expect(within(controls).queryByRole('combobox')).not.toBeInTheDocument()
     expect(within(controls).queryByText('调度模式')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Task 行内单步调度控制')).not.toBeInTheDocument()
@@ -720,6 +723,50 @@ describe('TasksPage', () => {
     completeCancel(response({ code: 0, data: { status: 'succeeded', result: {} } }))
     await waitFor(() => expect(onNotify).toHaveBeenCalledWith('取消命令已提交'))
     expect(cancel).toBeEnabled()
+    expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/step-state'))).toBe(false)
+  })
+
+  it.each([
+    { dispatchGate: 'active' as const, label: '暂停任务', command: 'pause', notice: '任务暂停命令已提交' },
+    { dispatchGate: 'paused' as const, label: '继续任务', command: 'resume', notice: '任务继续命令已提交' },
+  ])('submits $command for a normal task in product mode', async ({ dispatchGate, label, command, notice }) => {
+    const task = {
+      ...demoTasks[1],
+      uuid: `product-${command}-task`,
+      executionMode: 'normal' as const,
+      dispatchGate,
+      controlStatus: dispatchGate,
+    }
+    const onNotify = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith(`/workflow-tasks/${task.uuid}/commands`) && init?.method === 'POST') {
+        return response({ code: 0, data: { status: 'succeeded', result: {} } })
+      }
+      throw new Error(`Unexpected URL: ${String(input)}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="product"
+        onRefresh={vi.fn()}
+        onNotify={onNotify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: label }))
+
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith(notice))
+    const commands = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(commands).toHaveLength(1)
+    expect(JSON.parse(String(commands[0][1]?.body))).toMatchObject({
+      type: command,
+      target_node_uuid: null,
+    })
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/step-state'))).toBe(false)
   })
 
