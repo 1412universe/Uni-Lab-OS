@@ -219,6 +219,7 @@ interface DragSession {
   nodeUuids: string[]
   initialOffsets: Record<string, WorkflowNodeOffset>
   bounds: { minX: number; minY: number; maxX: number; maxY: number }
+  canvas: { width: number; height: number }
 }
 
 type DragBounds = DragSession['bounds']
@@ -237,8 +238,10 @@ export function WorkflowDag({
   onRetry?: () => void
 }) {
   const regionRef = useRef<HTMLElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const dragSessionRef = useRef<DragSession | null>(null)
   const [ranksPerBand, setRanksPerBand] = useState(4)
+  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 })
   const [viewMode, setViewMode] = useState<'focus' | 'complete'>('focus')
   const [selectedEdgeUuid, setSelectedEdgeUuid] = useState<string>()
   const [nodeOffsets, setNodeOffsets] = useState<Record<string, WorkflowNodeOffset>>({})
@@ -332,15 +335,24 @@ export function WorkflowDag({
 
   useEffect(() => {
     const region = regionRef.current
+    const scroll = scrollRef.current
     if (!region) return
-    const updateRanksPerBand = () => {
+    const updateLayoutMetrics = () => {
       if (!region.clientWidth) return
       setRanksPerBand(Math.max(2, Math.min(6, Math.floor((region.clientWidth + 76) / (188 + 76)))))
+      if (scroll) {
+        setViewportSize((current) => (
+          current.width === scroll.clientWidth && current.height === scroll.clientHeight
+            ? current
+            : { width: scroll.clientWidth, height: scroll.clientHeight }
+        ))
+      }
     }
-    updateRanksPerBand()
+    updateLayoutMetrics()
     if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(updateRanksPerBand)
+    const observer = new ResizeObserver(updateLayoutMetrics)
     observer.observe(region)
+    if (scroll) observer.observe(scroll)
     return () => observer.disconnect()
   }, [])
 
@@ -363,6 +375,14 @@ export function WorkflowDag({
     event.preventDefault()
     const draggedNodes = layout.nodes.filter((node) => requestedNodeUuids.includes(node.node.uuid))
     if (!draggedNodes.length && !requestedBounds) return
+    const bounds = requestedBounds || {
+      minX: Math.min(...draggedNodes.map((node) => node.x)),
+      minY: Math.min(...draggedNodes.map((node) => node.y)),
+      maxX: Math.max(...draggedNodes.map((node) => node.x + node.width)),
+      maxY: Math.max(...draggedNodes.map((node) => node.y + node.height)),
+    }
+    const visibleWidth = scrollRef.current?.clientWidth || 0
+    const visibleHeight = scrollRef.current?.clientHeight || 0
     const initialOffsets = Object.fromEntries(requestedNodeUuids.map((uuid) => [
       uuid,
       nodeOffsets[uuid] || { x: 0, y: 0 },
@@ -373,11 +393,10 @@ export function WorkflowDag({
       startClientY: event.clientY,
       nodeUuids: requestedNodeUuids,
       initialOffsets,
-      bounds: requestedBounds || {
-        minX: Math.min(...draggedNodes.map((node) => node.x)),
-        minY: Math.min(...draggedNodes.map((node) => node.y)),
-        maxX: Math.max(...draggedNodes.map((node) => node.x + node.width)),
-        maxY: Math.max(...draggedNodes.map((node) => node.y + node.height)),
+      bounds,
+      canvas: {
+        width: Math.max(layout.width, viewportSize.width, visibleWidth),
+        height: Math.max(layout.height, viewportSize.height, visibleHeight),
       },
     }
     setDraggingNodeUuids(new Set(requestedNodeUuids))
@@ -411,8 +430,8 @@ export function WorkflowDag({
     if (!session || session.pointerId !== event.pointerId) return
     const requestedX = event.clientX - session.startClientX
     const requestedY = event.clientY - session.startClientY
-    const deltaX = Math.max(-session.bounds.minX, Math.min(layout.width - session.bounds.maxX, requestedX))
-    const deltaY = Math.max(-session.bounds.minY, Math.min(layout.height - session.bounds.maxY, requestedY))
+    const deltaX = Math.max(-session.bounds.minX, Math.min(session.canvas.width - session.bounds.maxX, requestedX))
+    const deltaY = Math.max(-session.bounds.minY, Math.min(session.canvas.height - session.bounds.maxY, requestedY))
     setNodeOffsets((current) => {
       const next = { ...current }
       session.nodeUuids.forEach((uuid) => {
@@ -560,12 +579,19 @@ export function WorkflowDag({
               </div>
             </section>
           ) : null}
-          <div className="workflow-dag-scroll" onClick={clearEdgeSelectionFromBlankSpace}>
+          <div ref={scrollRef} className="workflow-dag-scroll" onClick={clearEdgeSelectionFromBlankSpace}>
             <div
               className="workflow-dag-stage"
-              style={{ width: layout.width, height: layout.height }}
+              style={{
+                width: Math.max(layout.width, viewportSize.width),
+                height: Math.max(layout.height, viewportSize.height),
+              }}
             >
-              <svg className="workflow-dag-edges" width={layout.width} height={layout.height}>
+              <svg
+                className="workflow-dag-edges"
+                width={Math.max(layout.width, viewportSize.width)}
+                height={Math.max(layout.height, viewportSize.height)}
+              >
                 <defs>
                   {(Object.keys(edgeKindMetadata) as WorkflowEdgeKind[]).map((kind) => (
                     <marker

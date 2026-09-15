@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4, uuid5
 
+from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.json_codec import clone_json
 from unilabos.workflow.models import validate_uuid
 from unilabos.workflow.schema import (
@@ -102,6 +103,11 @@ def prepare_task_input(
             jobs=prepared_jobs,
             resolver=site_selection_resolver,
             resolved_input=resolved,
+        )
+        ExecutionPlanBuilder.refresh_resource_plan(
+            graph=snapshot,
+            plan=plan,
+            jobs=prepared_jobs,
         )
         output_bindings = flatten_output_bindings(
             graph_nodes=snapshot.get("nodes", []),

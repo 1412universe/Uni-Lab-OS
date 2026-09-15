@@ -29,6 +29,7 @@ exclude_patterns = [
     ".DS_Store",
     "._*",
     "_static/example-package/README.md",
+    "参考文档/PLC通讯CSV到Uni-Lab-OS工作流执行全流程skill.md",
 ]
 
 myst_enable_extensions = [

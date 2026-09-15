@@ -14,7 +14,10 @@ RUN pip install --no-cache-dir \
 
 RUN pip install --no-cache-dir "furo>=2024.8.6"
 
-COPY docs/product_manual /src/manual
+# Build from the canonical Markdown source tree. The parent directory also
+# contains previously generated HTML and Markdown artifacts, which would be
+# discovered as duplicate Sphinx documents if copied into the build root.
+COPY docs/product_manual/source /src/manual
 
 RUN sphinx-build -W --keep-going -b html \
     -d /tmp/unilabos-manual-doctrees \

@@ -312,6 +312,27 @@ describe('WorkflowDag', () => {
     expect(Number.parseFloat(frame.style.left)).toBe(initial.frameX)
   })
 
+  it('uses the visible canvas as the drag boundary for a compact graph', () => {
+    const { container } = render(
+      <WorkflowDag nodes={[action('single', '单个节点', 0)]} edges={[]} loading={false} error={false} />,
+    )
+    const scroll = container.querySelector('.workflow-dag-scroll') as HTMLElement
+    Object.defineProperty(scroll, 'clientWidth', { configurable: true, value: 800 })
+    Object.defineProperty(scroll, 'clientHeight', { configurable: true, value: 360 })
+    const node = screen.getByRole('article', { name: /^单个节点/ })
+    const initialX = Number.parseFloat(node.style.left)
+    const initialY = Number.parseFloat(node.style.top)
+
+    fireEvent.pointerDown(node, { pointerId: 4, button: 0, clientX: 100, clientY: 100 })
+    fireEvent.pointerMove(node, { pointerId: 4, buttons: 1, clientX: 1_000, clientY: 1_000 })
+    fireEvent.pointerUp(node, { pointerId: 4, clientX: 1_000, clientY: 1_000 })
+
+    expect(Number.parseFloat(node.style.left)).toBe(800 - 164)
+    expect(Number.parseFloat(node.style.top)).toBe(360 - 82)
+    expect(Number.parseFloat(node.style.left)).toBeGreaterThan(initialX)
+    expect(Number.parseFloat(node.style.top)).toBeGreaterThan(initialY)
+  })
+
   it('renders adjacent members of one presentation group inside one labelled frame', () => {
     const nodes = [
       group('return-group', '主物料返回 S03 起始库位', 0),

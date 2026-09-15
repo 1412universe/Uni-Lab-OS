@@ -14,6 +14,7 @@ from unilabos.app.workflow_api import create_workflow_app
 from unilabos.config.config import EdgeControlConfig
 from unilabos.workflow.execution_plan import ExecutionPlanBuilder
 from unilabos.workflow.json_codec import encode_json
+from unilabos.workflow.resource_lock_plan import deserialize_resource_plan
 from unilabos.workflow.service import WorkflowService
 from unilabos.workflow.store import WorkflowStore
 from unilabos.workflow.task_input import (
@@ -1406,3 +1407,174 @@ def test_resource_slot_task_input_is_resolved_by_material_authority() -> None:
                 "resource_template_uuid": WORKFLOW_UUID,
             },
         )
+
+
+def test_dynamic_material_inputs_are_added_to_resource_plan_after_binding() -> None:
+    """动态 ResourceSlot 参数绑定后必须刷新动作物料资源计划。"""
+
+    action_node_uuid = "66000000-0000-4000-8000-000000000001"
+    action_template_uuid = "67000000-0000-4000-8000-000000000001"
+    source_handle_uuid = "68000000-0000-4000-8000-000000000001"
+    target_handle_uuid = "68000000-0000-4000-8000-000000000002"
+    source_uuid = "69000000-0000-4000-8000-000000000001"
+    target_uuid = "69000000-0000-4000-8000-000000000002"
+    device_uuid = "66000000-0000-4000-8000-000000000003"
+    graph = {
+        "workflow": {
+            "uuid": WORKFLOW_UUID,
+            "revision": 1,
+            "name": "dynamic material action",
+            "meta_data": {
+                "unilab": {
+                    "input_contract": {
+                        "version": 1,
+                        "parameters": [
+                            {
+                                "name": "source",
+                                "schema": {"$slot": "ResourceSlot"},
+                                "required": True,
+                            },
+                            {
+                                "name": "target",
+                                "schema": {"$slot": "ResourceSlot"},
+                                "required": True,
+                            },
+                        ],
+                    },
+                    "output_contract": {
+                        "version": 1,
+                        "outputs": [
+                            {
+                                "name": "source",
+                                "schema": {"$slot": "ResourceSlot"},
+                                "implicit": True,
+                            },
+                            {
+                                "name": "target",
+                                "schema": {"$slot": "ResourceSlot"},
+                                "implicit": True,
+                            },
+                        ],
+                    },
+                    "output_bindings": {
+                        "source": {"kind": "workflow_input", "parameter": "source"},
+                        "target": {"kind": "workflow_input", "parameter": "target"},
+                    },
+                }
+            },
+        },
+        "nodes": [
+            {
+                "uuid": action_node_uuid,
+                "workflow_node_template_uuid": action_template_uuid,
+                "name": "dynamic material action",
+                "pose": {},
+                "material_uuid": device_uuid,
+                "type": "ILab",
+                "action_name": "transfer",
+                "action_type": "UniLabJsonCommandAsync",
+                "param": {},
+                "execution_policy": {},
+                "disabled": False,
+                "meta_data": {
+                    "unilab": {
+                        "executor_binding": {"mode": "fixed", "device_id": device_uuid},
+                        "input_bindings": {
+                            source_handle_uuid: {"parameter": "source"},
+                            target_handle_uuid: {"parameter": "target"},
+                        },
+                    }
+                },
+            }
+        ],
+        "edges": [],
+        "node_templates": [
+            {
+                "uuid": action_template_uuid,
+                "node_type": "ILab",
+                "type": "UniLabJsonCommandAsync",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "object", "x-unilabos-material-lock": True},
+                        "target": {"type": "object", "x-unilabos-material-lock": True},
+                    },
+                },
+                "meta_data": {
+                    "unilab": {
+                        "action_contract_schema": {
+                            "type": "object",
+                            "properties": {
+                                "goal": {
+                                    "type": "object",
+                                    "properties": {
+                                        "source": {
+                                            "type": "object",
+                                            "x-unilabos-material-lock": True,
+                                        },
+                                        "target": {
+                                            "type": "object",
+                                            "x-unilabos-material-lock": True,
+                                        },
+                                    },
+                                }
+                            },
+                                "x-unilabos-action-contract": {
+                                    "version": 2,
+                                },
+                        }
+                    }
+                },
+            }
+        ],
+        "handle_templates": [
+            {
+                "uuid": source_handle_uuid,
+                "workflow_node_template_uuid": action_template_uuid,
+                "handle_key": "source",
+                "data_key": "source",
+                "data_source": "goal",
+                "io_type": "target",
+                "type": "ResourceSlot",
+                "required": True,
+                "meta_data": {"unilab": {"value_schema": {"$slot": "ResourceSlot"}}},
+            },
+            {
+                "uuid": target_handle_uuid,
+                "workflow_node_template_uuid": action_template_uuid,
+                "handle_key": "target",
+                "data_key": "target",
+                "data_source": "goal",
+                "io_type": "target",
+                "type": "ResourceSlot",
+                "required": True,
+                "meta_data": {"unilab": {"value_schema": {"$slot": "ResourceSlot"}}},
+            },
+        ],
+    }
+    plan, jobs = ExecutionPlanBuilder().build(
+        graph,
+        run_mode="normal",
+        target_node_uuid=None,
+    )
+
+    prepared = prepare_task_input(
+        graph=graph,
+        raw_input={
+            "source": {"uuid": source_uuid},
+            "target": {"uuid": target_uuid},
+        },
+        execution_plan=plan,
+        jobs=jobs,
+        resource_resolver=lambda material_uuid: {
+            "uuid": material_uuid,
+            "resource_template_uuid": TEMPLATE_UUID,
+        },
+    )
+
+    resource_plan = deserialize_resource_plan(
+        prepared.execution_plan["resource_plan"]
+    )
+    resource_keys = {resource.canonical_key for resource in resource_plan.resources}
+    assert f"material/{source_uuid}/exclusive" in resource_keys
+    assert f"material/{target_uuid}/exclusive" in resource_keys
