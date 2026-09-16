@@ -274,7 +274,17 @@ class TimeSchedulingAdapter:
                 try:
                     params = run.resolve_params(node.id)
                     policy = resolve_execution_resource_policy(node.execution_policy, params)
-                    resource_keys = scheduler._resource_lock_keys(node, params) | set(policy.device_lock_keys)
+                    # 库位选择保存在冻结执行策略中，设备参数要经库存权威解析后
+                    # 才完整。规划只读取身份；占用可用性仍由派发事务重新复验。
+                    params, resolved_site = scheduler._resolve_transfer_site_target(
+                        node, params,
+                        transfer_contract=scheduler._transfer_resource_contract(node),
+                        site_uuids=policy.target_site_uuids,
+                        require_available=False,
+                    )
+                    resource_keys = scheduler._resource_lock_keys(
+                        node, params, resolved_site=resolved_site,
+                    ) | set(policy.device_lock_keys)
                     resource_keys = self._active_keys(scheduler, run, node, resource_keys)
                     alternatives = []
                     for target in self._devices(scheduler, node):
