@@ -118,9 +118,16 @@ class LiveValidation:
         completed: dict[str, Any] = {}
         for identity in self.report["task_ids"]:
             jobs = self.request(f"/api/v1/workflow-tasks/{identity}/jobs")
-            if len(jobs) != 3 or any(job["status"] != "succeeded" for job in jobs):
+            device_jobs = [job for job in jobs if job.get("executor_kind") == "device_action"]
+            if len(device_jobs) != 3 or any(job["status"] != "succeeded" for job in jobs):
                 raise RuntimeError("每个软件任务应恰好有三个真实成功的节点尝试")
-            for job in jobs:
+            # 输入、输出等纯数据节点也出现在 Job 列表，但没有设备实际起止事件。
+            actions = set()
+            for job in device_jobs:
+                payload = job.get("control_data", {}).get("dispatch_payload", {})
+                if payload.get("device_id") != DEVICE_ID:
+                    raise RuntimeError("实际派发设备不属于已核对的软件探针")
+                actions.add(payload.get("action"))
                 if job.get("uncertainty_reason") or not job.get("started_at") or not job.get("finished_at"):
                     raise RuntimeError("成功节点缺少实际起止证据或仍有不确定性")
                 start = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
@@ -128,6 +135,8 @@ class LiveValidation:
                 if finish < start:
                     raise RuntimeError("实际事件时间顺序无效")
                 intervals.append((start, finish, job["uuid"]))
+            if actions != ACTIONS:
+                raise RuntimeError("实际完成动作不符合三个软件探针动作合同")
             locks = self.request(f"/api/v1/workflow-tasks/{identity}/execution-locks")
             if locks.get("locks") or locks.get("active_device_tenancy_count") != 0:
                 raise RuntimeError("实际成功后仍有未释放的动作占用或设备托管")
