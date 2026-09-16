@@ -197,6 +197,7 @@ class TimeSchedulingAdapter:
     def _build(self, scheduler: EdgeScheduler, ready: list[ReadyTask], now: float) -> tuple[
         PlanningSnapshot, dict[tuple[str, str, str], ResolvedDeviceTarget], set[tuple[str, str]],
     ]:
+        ready_keys = {(task.workflow_id, task.node.id) for task in ready}
         inflight = {(job.workflow_id, job.node_id): job for job in scheduler._inflight.values()}
         priorities = {key: self._priority(scheduler, key, ready, now) for key in scheduler._workflows}
         nodes: dict[tuple[str, str], PlanningNode] = {}
@@ -275,12 +276,13 @@ class TimeSchedulingAdapter:
                     params = run.resolve_params(node.id)
                     policy = resolve_execution_resource_policy(node.execution_policy, params)
                     # 库位选择保存在冻结执行策略中，设备参数要经库存权威解析后
-                    # 才完整。规划只读取身份；占用可用性仍由派发事务重新复验。
+                    # 才完整。当前候选不能为已被占用的库位预占时间，否则会挤走
+                    # 能释放该库位的动作；未来节点只解析身份，派发仍原子复验。
                     params, resolved_site = scheduler._resolve_transfer_site_target(
                         node, params,
                         transfer_contract=scheduler._transfer_resource_contract(node),
                         site_uuids=policy.target_site_uuids,
-                        require_available=False,
+                        require_available=key in ready_keys,
                     )
                     resource_keys = scheduler._resource_lock_keys(
                         node, params, resolved_site=resolved_site,
