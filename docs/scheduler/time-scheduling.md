@@ -105,6 +105,8 @@ JSON 只允许内置公式名，不执行表达式。规则错误、重复键或
 
 - 节点间最大衔接时限、关键资源时间窗的完整保障，以及设备 Runtime 保存、授权和执行限时动作段的协议没有接通。接口明确返回 `guaranteed_hard_time_limits=false`。统计分位和增加余量不等于硬时限保证。
 - 未知 if 的多场景分支保护、未知循环轮数的前瞻展开、人工等待分布预测、未知参数范围的暂排尚未接入生产适配层。
+- 当前按已确定的资源身份检查互斥和连续占用，尚未把设备与库位联合选择、可共享容量、物料数量和运行配额一起纳入时间优化。库存与这些执行条件仍由既有派发检查约束，候选计划本身不证明它们已得到完整保障。
+- 等待时间提级目前只在调度进程内累计，尚未持久保存。调度进程重启后重新累计等待时间，不能保证重启前的提级结果继续保留。
 - 自动特征学习、梯度提升分位模型、漂移检测、自动校准集划分和模型自动回滚尚未实现；当前使用公式、显式分组和经验统计。
 - 旧普通异常仍可能触发全站暂停，尚未实现完整的局部异常隔离。旧人工处置入口和显式人工资源释放合同仍保留，不能说它们已经完成新设计要求的全部资源授权和物理结算校验。
 - 不保证每次找到可行计划，也不保证有限模型的可行候选达到所有优先级目标的全局最优；状态、范围和已证明层级必须一起解释。
@@ -113,4 +115,4 @@ JSON 只允许内置公式名，不执行表达式。规则错误、重复键或
 
 主要实现位于 `unilabos/app/scheduler/`：`workflow_planning.py` 提取当前可排路径，`time_scheduling.py` 对接执行事实，`time_planning.py` 建模和验证，`estimation.py`、`timing.py`、`timing_config.py`、`timing_store.py` 负责估时和样本。持久结果接入在 `workflow/task_scheduler_bridge.py` 与 `workflow/task_runtime_projection.py`。
 
-独立验证脚本为 `scripts/validation/validate_time_plan.py`、`validate_time_scheduling.py` 和 `validate_time_scheduling_live.py`。前两者使用隔离模型或记录执行器；最后一个需指向待验证服务。它们不替代真实设备工艺验证，也不据通过结果升级硬时限保证。
+独立验证脚本位于 `scripts/validation/`：`validate_time_plan.py` 与 `validate_time_scheduling.py` 使用隔离模型或记录执行器；`validate_time_scheduling_live.py` 验证在线纯软件工作流；`validate_time_scheduling_continuous_live.py` 验证 PLC-Sim 和软件机械臂上的连续持锁工作流。后两者需指向待验证服务。它们不替代真实设备工艺验证，也不据通过结果升级硬时限保证。
