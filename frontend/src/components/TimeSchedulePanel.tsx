@@ -19,6 +19,7 @@ const reasonLabels: Record<string, string> = {
   actual_completion_overdue_unknown: '已超过预计时长，实际完成待核实',
   resource_or_dependency_completion_unknown: '资源释放或依赖完成时间待定',
   new_open_scope_deferred: '先等待另一连续占用区间完成',
+  'parent ret value missing': '等待上游节点返回结果',
 }
 
 function reasonLabel(reason: string): string {

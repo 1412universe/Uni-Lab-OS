@@ -58,6 +58,8 @@ class ContinuousLiveValidation:
             "status": "running", "run_id": str(uuid4()), "base_url": self.base_url,
             "hold_seconds": hold_seconds, "task_ids": [], "task_labels": {},
             "requests": [], "plan_observations": [], "run_observations": [],
+            "historical_cleanup_checks": [],
+            "historical_cleanup_policy": "只读核实旧终态任务的占用和作业证据，不清理、不处置、不修改旧记录",
             "scope": "仅 PLC-Sim S06/S07 与软件机械臂；验证实际 Job 观测区间与锁释放，不证明物理硬时限",
         }
 
@@ -109,23 +111,102 @@ class ContinuousLiveValidation:
                 raise RuntimeError(f"在线模拟类、设备类型或通道/端点配置不严格匹配：{identity}")
             confirmed.append(resource)
         self.report["confirmed_resources"] = confirmed
+        self._resources_by_id = {str(resource["id"]): resource for resource in resources}
         self.report["driver_boundary"] = "在线注册身份和精确配置与已审源码一致；不声称已校验远端驱动文件哈希"
+
+    def uncertain_job_disjoint_proof(self, task: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+        """只接受范围完整的旧单设备未发送作业，不把历史不确定性直接忽略。"""
+        plan = task.get("execution_plan", {})
+        nodes = plan.get("nodes", [])
+        if (plan.get("version") != 1 or plan.get("run_mode") != "single_node"
+                or len(nodes) != 1 or plan.get("edges") or plan.get("handles") or plan.get("resource_plan")):
+            raise RuntimeError("旧不确定作业缺少可完整核实的单设备资源范围")
+        node = nodes[0]
+        device_id, material_uuid = node.get("device_id"), node.get("material_uuid")
+        if (node.get("uuid") != job.get("workflow_node_uuid") or node.get("kind") != "device_action"
+                or not isinstance(device_id, str) or not device_id
+                or not isinstance(material_uuid, str) or not material_uuid
+                or job.get("material_uuid") != material_uuid
+                or node.get("action_resource_contract") != {} or node.get("material_requirements") != []
+                or node.get("execution_policy") != {} or job.get("execution_policy") != {}
+                or node.get("inputs") != [] or job.get("expected_change_set") not in ({}, {"kind": "no_inventory_change"})):
+            raise RuntimeError("旧不确定作业的设备、输入或额外资源需求无法完整核实")
+        control = job.get("control_data", {})
+        if (job.get("start_state") != "NOT_STARTED" or control.get("canceled_before_start") is not True
+                or job.get("return_info", {}).get("cancel_reason") != "local_no_send_proof"
+                or any(control.get(key) for key in ("dispatch_payload", "execution_locks", "dispatch_fences",
+                                                   "resource_interval_ids", "resource_plan_id"))):
+            raise RuntimeError("旧不确定作业缺少明确未发送证据，或仍有未核实执行/资源记录")
+        resource = self._resources_by_id.get(device_id)
+        if not resource or resource.get("type") != "device" or not resource.get("uuid"):
+            raise RuntimeError("旧不确定作业设备没有可核实的在线身份")
+        keys = {f"/devices/{device_id}", f"/devices/{material_uuid}", f"/materials/{material_uuid}",
+                f"/devices/{resource['uuid']}"}
+        target_keys = set(self.report.get("validation_resource_keys", []))
+        if not target_keys:
+            raise RuntimeError("尚未核对本轮工作流的绑定资源身份")
+        if device_id in EXPECTED_CONFIGS or any(
+            a == b or a.startswith(b + "/") or b.startswith(a + "/") for a in keys for b in target_keys
+        ):
+            raise RuntimeError("旧不确定作业涉及本轮设备或资源，拒绝提交验证任务")
+        return {"job_uuid": job["uuid"], "uncertainty_reason": job["uncertainty_reason"],
+                "device_id": device_id, "material_uuid": material_uuid, "online_resource": resource,
+                "frozen_node": node, "control_data": control, "return_info": job.get("return_info"),
+                "checked_resource_keys": sorted(keys), "validation_resource_keys": sorted(target_keys),
+                "basis": "冻结计划只要求该独立设备，且有明确未发送证据；所有已核实资源身份均与本轮无交集",
+                "uncertainty_left_unchanged": True}
+
+    def check_historical_cleanup(self, identity: str) -> None:
+        """历史清理状态可保留，但任务、全部尝试和实际占用必须逐一核对。"""
+        task = self.request(f"/api/v1/workflow-tasks/{identity}")
+        jobs = self.request(f"/api/v1/workflow-tasks/{identity}/jobs")
+        locks = self.request(f"/api/v1/workflow-tasks/{identity}/execution-locks")
+        evidence: dict[str, Any] = {"checked_at": datetime.now(timezone.utc).isoformat(),
+                                   "task": task, "jobs": jobs, "execution_locks": locks,
+                                   "decision": "checking", "uncertain_job_proofs": []}
+        self.report["historical_cleanup_checks"].append(evidence)
+        self.save()
+        if task.get("uuid") != identity or task.get("status") not in TERMINAL:
+            raise RuntimeError("未结清理记录对应任务尚未终态，拒绝创建验证任务")
+        count = locks.get("active_device_tenancy_count")
+        if (locks.get("workflow_task_uuid") != identity or locks.get("task_status") != task.get("status")
+                or locks.get("locks") != [] or type(count) is not int or count != 0):
+            raise RuntimeError("旧任务仍有执行锁、设备托管或占用证据不完整")
+        if not isinstance(jobs, list) or not jobs:
+            raise RuntimeError("旧任务缺少完整作业证据")
+        for job in jobs:
+            if (job.get("workflow_task_uuid") != identity or job.get("status") not in TERMINAL | {"skipped"}
+                    or not job.get("finished_at")):
+                raise RuntimeError("旧任务存在非终态或缺少结束时间的作业")
+            timestamp(job["finished_at"])
+            if job.get("uncertainty_reason"):
+                evidence["uncertain_job_proofs"].append(self.uncertain_job_disjoint_proof(task, job))
+        evidence["decision"] = "does_not_block_this_validation"
+        evidence["historical_record_unchanged"] = True
+        self.save()
 
     def check_no_foreign_active_tasks(self) -> None:
         allowed = set(self.report["task_ids"])
-        # 同时排除未结清理的旧终态任务，不能仅凭业务失败判断设备已经空闲。
-        filters = [f"status={status}" for status in ("pending", "running", "canceling")]
-        filters += [f"cleanup_status={status}" for status in ("pending", "canceling", "requires_attention")]
-        for query in filters:
+        filters = [(f"status={status}", False) for status in ("pending", "running", "canceling")]
+        filters += [(f"cleanup_status={status}", True) for status in ("pending", "canceling", "requires_attention")]
+        checked_cleanup: set[str] = set()
+        for query, historical in filters:
             result = self.request("/api/v1/workflow-tasks?page=1&page_size=100&" + query)
             items, total = result.get("items"), result.get("total")
             if (not isinstance(items, list) or not isinstance(total, int) or isinstance(total, bool)
                     or total < 0 or total != len(items)):
                 raise RuntimeError("活动任务列表不完整或形状未知，拒绝提交更多任务")
             foreign = [task for task in items if task.get("uuid") not in allowed]
-            if foreign:
+            if foreign and not historical:
                 self.report["foreign_active_tasks"] = foreign
-                raise RuntimeError("已有其他活动任务或未结清理；请核实，脚本不自动取消或释放")
+                raise RuntimeError("已有其他活动任务；脚本不自动取消或释放")
+            for task in foreign:
+                identity = task.get("uuid")
+                if not isinstance(identity, str) or not identity:
+                    raise RuntimeError("旧清理记录缺少任务身份")
+                if identity not in checked_cleanup:
+                    self.check_historical_cleanup(identity)
+                    checked_cleanup.add(identity)
 
     def check_graph(self, label: str) -> dict[str, Any]:
         workflow_uuid, node_ids = WORKFLOWS[label]
@@ -140,6 +221,15 @@ class ContinuousLiveValidation:
             if (binding != {"device_id": device_id, "mode": "fixed"}
                     or node.get("action_name") != action or node.get("disabled")):
                 raise RuntimeError(f"{label} 节点不是已核对的固定模拟动作：{identity}")
+            material_uuid = node.get("material_uuid")
+            if not isinstance(material_uuid, str) or not material_uuid:
+                raise RuntimeError(f"{label} 节点缺少确定的设备物料身份")
+            resource_keys = set(self.report.get("validation_resource_keys", []))
+            resource_keys.update((f"/devices/{device_id}", f"/devices/{material_uuid}", f"/materials/{material_uuid}"))
+            online = self._resources_by_id.get(device_id, {})
+            if online.get("uuid"):
+                resource_keys.add(f"/devices/{online['uuid']}")
+            self.report["validation_resource_keys"] = sorted(resource_keys)
         edges = {(edge.get("source_node_uuid"), edge.get("target_node_uuid")) for edge in graph.get("edges", [])}
         if edges != set(zip(node_ids, node_ids[1:])):
             raise RuntimeError(f"{label} 不再是来源、目标、机械臂的严格串行流程")
