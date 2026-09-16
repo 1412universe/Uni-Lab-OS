@@ -385,6 +385,8 @@ def setup_edge_scheduler(
         mode=os.environ.get("ULAB_ESTIMATE_MODE", "auto").strip() or "auto",
         default_s=float(os.environ.get("ULAB_ESTIMATE_DEFAULT_S", "60")),
     )
+    from unilabos.app.scheduler.timing_config import load_timing_rules
+    load_timing_rules(estimator)
 
     orderer = StableLocalOrderer(
         aging_interval_seconds=float(
@@ -440,6 +442,8 @@ def setup_edge_scheduler(
             )
         logger.info("[EdgeSchedulerIntegration] workflow history store: %s", history_db)
 
+    from unilabos.app.scheduler.time_scheduling import configured_time_planner
+
     scheduler, backend = create_edge_stack(
         orderer=orderer,
         host_node_getter=host_node_getter,
@@ -449,6 +453,7 @@ def setup_edge_scheduler(
         monitor=monitor_bus,
         device_state_store=device_state_store,
         history=history_store,
+        time_planner=configured_time_planner(),
     )
     _scheduler, _backend = scheduler, backend
 
@@ -457,7 +462,7 @@ def setup_edge_scheduler(
 
     logger.info(
         "[EdgeSchedulerIntegration] edge scheduler ready (ordering=%s)",
-        "local-stable",
+        "CP-SAT" if scheduler.time_scheduling_enabled else "local-stable",
     )
     return scheduler, backend
 
@@ -504,6 +509,8 @@ def shutdown_edge_services() -> None:
 
     # 先拒绝新 Slave/物料请求，再关闭请求会触达的调度与存储组件。
     shutdown_network_services()
+    if _scheduler is not None:
+        _scheduler.close()
     if _backend is not None:
         _backend.stop()
         device_state = getattr(_backend, "device_state", None)

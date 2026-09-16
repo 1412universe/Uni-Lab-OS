@@ -1,4 +1,4 @@
-"""设备执行进程重启后的工作流任务（WorkflowTask）失败收敛。"""
+"""设备执行进程重启后的证据核实，以及显式保留的旧失败兼容入口。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,10 @@ from unilabos.workflow.event_writer import (
 from unilabos.workflow.job_evidence import record_job_result
 from unilabos.workflow.json_codec import decode_json_bytes, encode_json
 from unilabos.workflow.manual_confirmation import close_pending_manual_confirmation
-from unilabos.workflow.execution_lock_lease import release_task_execution_locks
+from unilabos.workflow.execution_lock_lease import (
+    mark_execution_locks_uncertain,
+    release_task_execution_locks,
+)
 from unilabos.workflow.station_status_projection import (
     append_job_state_event,
     append_task_state_event,
@@ -22,6 +25,7 @@ from unilabos.workflow.store import StoreConflict, StoreNotFound, utc_now
 
 EXECUTION_PROCESS_RESTARTED = "execution_process_restarted"
 TASK_ABORTED_BY_RUNTIME_RESTART = "task_aborted_by_runtime_restart"
+EXECUTION_RESTART_RECONCILIATION_REQUIRED = "execution_restart_reconciliation_required"
 _IN_FLIGHT_JOB_STATES = frozenset({"dispatched", "running", "cancel_requested"})
 _TERMINAL_JOB_STATES = frozenset(
     {"succeeded", "failed", "skipped", "canceled", "timeout"}
@@ -29,6 +33,84 @@ _TERMINAL_JOB_STATES = frozenset(
 _SUPPORTED_TASK_STATES = frozenset(
     {"pending", "running", "canceling", "succeeded", "failed", "canceled", "timeout"}
 )
+
+
+def preserve_task_after_execution_process_restart(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    now: str | None = None,
+) -> bool:
+    """只登记重启的不确定性，不把进程退出当作物理完成证明。
+
+    调用方必须持有写事务。已用开始许可的原尝试保留主状态、取消期限、
+    结果和全部占用；未用许可的命令仍只能经原身份的开始闸门恢复。
+    重复观测幂等，结算继续使用正常结果或显式物理核实入口。
+    """
+
+    task = connection.execute(
+        "SELECT * FROM workflow_task WHERE uuid=? AND deleted_at IS NULL",
+        (task_uuid,),
+    ).fetchone()
+    if task is None:
+        raise StoreNotFound(f"工作流任务不存在：{task_uuid}")
+    jobs = connection.execute(
+        "SELECT * FROM workflow_node_job WHERE workflow_task_uuid=? "
+        "AND deleted_at IS NULL ORDER BY topological_index,uuid",
+        (task_uuid,),
+    ).fetchall()
+    observed_at = now or utc_now()
+    changed = False
+    unresolved = False
+    for job in jobs:
+        if job["status"] not in _IN_FLIGHT_JOB_STATES:
+            continue
+        # NOT_STARTED 是现有持久开始闸门的事实，不是根据预计时间推断。
+        if "start_state" in job.keys() and job["start_state"] == "NOT_STARTED":
+            continue
+        unresolved = True
+        job_uuid = str(job["uuid"])
+        control = decode_json_bytes(str(job["control_data"] or "{}").encode())
+        if not isinstance(control, dict):
+            raise StoreConflict(f"重启作业控制证据已损坏：{job_uuid}")
+        if "execution_recovery" not in control:
+            control["execution_recovery"] = {
+                "reason": EXECUTION_RESTART_RECONCILIATION_REQUIRED,
+                "observed_at": observed_at,
+                "previous_uncertainty_reason": job["uncertainty_reason"],
+                "policy": "reconcile",
+            }
+            connection.execute(
+                "UPDATE workflow_node_job SET control_data=?, "
+                "uncertainty_reason=COALESCE(NULLIF(uncertainty_reason,''),?), "
+                "update_time=? WHERE uuid=?",
+                (encode_json(control, sort_keys=True).decode(),
+                 EXECUTION_RESTART_RECONCILIATION_REQUIRED, observed_at, job_uuid),
+            )
+            append_runtime_event(
+                connection, task_uuid=task_uuid, job_uuid=job_uuid,
+                kind="uncertainty_opened",
+                from_status=str(job["status"]), to_status=str(job["status"]),
+                data={"reason": EXECUTION_RESTART_RECONCILIATION_REQUIRED},
+                now=observed_at,
+            )
+            changed = True
+        mark_execution_locks_uncertain(connection, job_uuid=job_uuid, now=observed_at)
+    if unresolved:
+        connection.execute(
+            "UPDATE workflow_task SET control_status=CASE "
+            "WHEN control_status='error_waiting' THEN control_status "
+            "ELSE 'waiting_reconciliation' END, cleanup_status='requires_attention', "
+            "attention_reason=COALESCE(attention_reason,?), "
+            "reconciliation_resume_control_status=COALESCE("
+            "reconciliation_resume_control_status,dispatch_gate), update_time=? "
+            "WHERE uuid=?",
+            (EXECUTION_RESTART_RECONCILIATION_REQUIRED, observed_at, task_uuid),
+        )
+    if changed:
+        append_frontend_event(connection, event="workflow.runtime.changed",
+                              data={"workflow_task_uuid": task_uuid}, now=observed_at)
+    return changed
 
 
 def fail_task_after_execution_process_restart(
@@ -325,4 +407,6 @@ __all__ = [
     "EXECUTION_PROCESS_RESTARTED",
     "TASK_ABORTED_BY_RUNTIME_RESTART",
     "fail_task_after_execution_process_restart",
+    "preserve_task_after_execution_process_restart",
+    "EXECUTION_RESTART_RECONCILIATION_REQUIRED",
 ]

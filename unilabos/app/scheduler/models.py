@@ -278,6 +278,8 @@ class DispatchedJob:
     # 下发时刻的预估执行时长（泳道图预估终点）与来源（declared/historical/default）
     estimated_s: float = 0.0
     estimate_source: str = "default"
+    # 只有本进程亲自记录的首次派发起点能用于完整耗时样本；恢复推断不算观测。
+    timing_origin_observed: bool = False
 
 
 # 与 lab-scheduler api/schemas.py PRIORITY_WEIGHTS 一致

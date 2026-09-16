@@ -45,10 +45,13 @@ from unilabos.utils.tracing import initialize_tracing
 
 
 def build_estimator() -> DurationEstimator:
-    return DurationEstimator(
+    from unilabos.app.scheduler.timing_config import load_timing_rules
+    estimator = DurationEstimator(
         mode=os.environ.get("ULAB_ESTIMATE_MODE", "auto").strip() or "auto",
         default_s=float(os.environ.get("ULAB_ESTIMATE_DEFAULT_S", "60")),
     )
+    load_timing_rules(estimator)
+    return estimator
 
 
 def _positive_env_int(name: str, default: int) -> int:
@@ -117,6 +120,8 @@ def build_scheduler(inventory=None, history=None) -> EdgeScheduler:
     异常：预估器或调度器初始化错误原样传播。
     """
 
+    from unilabos.app.scheduler.time_scheduling import configured_time_planner
+
     # ``estimator`` 由排序展示与调度器共享，历史样本只积累一份。
     estimator = build_estimator()
     return EdgeScheduler(
@@ -130,6 +135,7 @@ def build_scheduler(inventory=None, history=None) -> EdgeScheduler:
             inventory.station_resources if inventory is not None else None
         ),
         estimator=estimator,
+        time_planner=configured_time_planner(),
         monitor=monitor_bus,
         history=history,
         max_in_flight_jobs=_positive_env_int(
@@ -168,7 +174,8 @@ def build_workflow_service(
         persist_workflow_definitions=False,
     )
     workflow_definitions = WorkflowStore(":memory:")
-    bridge = TaskSchedulerBridge(workflow_store, scheduler=scheduler)
+    bridge = TaskSchedulerBridge(workflow_store, scheduler=scheduler,
+                                 time_scheduling_enabled=scheduler.time_scheduling_enabled)
     try:
         service = WorkflowService(
             workflow_store,

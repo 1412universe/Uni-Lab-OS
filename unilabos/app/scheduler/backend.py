@@ -726,6 +726,7 @@ def create_edge_stack(
     monitor: Any = None,
     device_state_store: Any = None,
     history: Any = None,
+    time_planner: Any = None,
 ) -> tuple[Any, Any]:
     """组装本地调度器（EdgeScheduler）与作业执行微后端（composition root）。
 
@@ -794,6 +795,7 @@ def create_edge_stack(
         estimator=estimator,
         monitor=monitor,
         history=history,
+        time_planner=time_planner,
     )
     add_outcome_listener = getattr(backend, "add_job_outcome_listener", None)
     if callable(add_outcome_listener):

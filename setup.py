@@ -15,6 +15,7 @@ setup(
         'pylabrobot==0.2.1',
         'python-multipart>=0.0.9,<1',
         'openpyxl>=3.1,<4',
+        'ortools==9.12.4544',
     ],
     extras_require={
         'mcp': ['mcp>=1.10,<2'],

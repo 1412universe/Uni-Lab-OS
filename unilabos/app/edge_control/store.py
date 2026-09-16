@@ -362,7 +362,17 @@ class EdgeControlStore:
         payload = envelope.get("payload")
         if not isinstance(payload, dict):
             raise ValueError("command payload must be an object")
-        with self._lock:
+        with self._lock, self._immediate_transaction():
+            existing = self._connection.execute(
+                "SELECT sequence,type,payload_json FROM edge_command WHERE command_uuid=?",
+                (command_uuid,),
+            ).fetchone()
+            if existing is not None:
+                if (int(existing["sequence"]) != int(envelope.get("sequence") or 0)
+                        or existing["type"] != str(envelope.get("type") or "")
+                        or json.loads(existing["payload_json"]) != payload):
+                    raise ValueError("重复命令身份的内容发生变化")
+                return False
             cursor = self._connection.execute(
                 """
                 INSERT OR IGNORE INTO edge_command(
@@ -381,7 +391,6 @@ class EdgeControlStore:
                     time.time(),
                 ),
             )
-            self._connection.commit()
             return cursor.rowcount == 1
 
     def command_status(self, command_uuid: str) -> str:
@@ -931,6 +940,21 @@ class EdgeControlStore:
                 (job_uuid,),
             )
             # 已发生的事件仍留在 outbox，由新会话照常 ACK；它们不能重开终态任务。
+
+    def preserve_restarted_job(self, job_uuid: str, *, not_started: bool) -> None:
+        """保留原回执；仅有持久未启动证明时重新开放同一命令的取参。"""
+        with self._lock, self._immediate_transaction():
+            self._connection.execute(
+                "UPDATE edge_job_runtime SET status=?,updated_at=? WHERE job_uuid=? "
+                "AND status IN ('received','fetch_retry','dispatching','running','cancel_requested') "
+                "AND NOT EXISTS(SELECT 1 FROM edge_job_outcome_pending WHERE job_uuid=?)",
+                ("received" if not_started else "running", time.time(), job_uuid, job_uuid),
+            )
+            self._connection.execute(
+                "INSERT INTO edge_control_meta(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"recovery_policy:{job_uuid}", "reconcile"),
+            )
 
     def defer_not_started_job(self, job_uuid: str) -> None:
         """只撤回本次尚未开始的 dispatching，不覆盖并发取消或真实终态。"""

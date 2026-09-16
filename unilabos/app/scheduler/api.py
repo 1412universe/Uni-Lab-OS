@@ -255,6 +255,11 @@ def create_scheduler_router(
         """泳道图数据：执行中 + 窗口内已完结 job 的起止/预估 + 预估器统计。"""
         return _sched().timeline(window_s=window_s)
 
+    @router.get("/scheduler/time-plan", summary="读取时间排程计划")
+    def time_plan() -> Dict[str, Any]:
+        """读取时间候选计划与覆盖边界，候选时间不是启动授权。"""
+        return _sched().time_schedule_snapshot()
+
     # ── 实时监控（SSE 四通道：material / device / action / scheduler） ──
 
     @router.get("/monitor/events")

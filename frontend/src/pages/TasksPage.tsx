@@ -55,6 +55,7 @@ import { taskColor } from '../lib/resourceUsage'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from '../components/ui'
 import { HistoricalManualActionReview } from '../components/HistoricalManualActionReview'
 import { TaskResourceUnlock } from '../components/TaskResourceUnlock'
+import { TimeSchedulePanel } from '../components/TimeSchedulePanel'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
 
@@ -1342,6 +1343,8 @@ export function TasksPage({
       {selectedNodeTask && selectedNode ? (
         <TaskNodeInspector task={selectedNodeTask} node={selectedNode} connected={connected} onNotify={onNotify} onClose={() => setSelectedNodeRef(undefined)} />
       ) : null}
+
+      <TimeSchedulePanel connected={connected} tasks={tasks} />
 
       <section className="task-detail-grid">
         <Panel className="selected-task-card">

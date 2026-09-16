@@ -24,3 +24,6 @@ crcmod-plus
 pymodbus
 matplotlib
 pylibftdi
+
+# 有界时间排程；此版本兼容现有 NumPy 1.x 驱动环境。
+ortools==9.12.4544

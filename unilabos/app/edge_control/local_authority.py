@@ -193,6 +193,7 @@ class LocalEdgeAuthorityStore:
                 ("claim_uuid", "TEXT"),
                 ("attempt", "INTEGER"),
                 ("fences_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("resolution_outcome_json", "TEXT"),
             ):
                 if name not in job_columns:
                     self._connection.execute(
@@ -388,10 +389,12 @@ class LocalEdgeAuthorityStore:
             rows = connection.execute(
                 """
                 SELECT job_uuid FROM local_edge_job
-                WHERE status IN ('dispatched', 'running', 'unknown')
+                WHERE (status IN ('dispatched', 'running', 'unknown')
+                    OR (? AND status='pending'))
                   AND outcome_json IS NULL
                 ORDER BY created_at, job_uuid
-                """
+                """,
+                (bool(getattr(self, "time_scheduling_enabled", False)),),
             ).fetchall()
             affected = tuple(str(row["job_uuid"]) for row in rows)
             for job_uuid in affected:
@@ -1146,9 +1149,9 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT job_uuid, outcome_json
+                SELECT job_uuid, COALESCE(resolution_outcome_json,outcome_json) AS outcome_json
                 FROM local_edge_job
-                WHERE outcome_json IS NOT NULL
+                WHERE (resolution_outcome_json IS NOT NULL OR outcome_json IS NOT NULL)
                   AND projected_at IS NULL
                 ORDER BY updated_at, job_uuid
                 LIMIT ?
@@ -1248,21 +1251,29 @@ class LocalEdgeAuthorityStore:
 
     def resolve_unknown_committed(self, job_uuid: str) -> bool:
         normalized = str(uuid.UUID(job_uuid))
-        with self._lock:
+        with self._lock, self._connection:
             row = self._connection.execute(
-                "SELECT status FROM local_edge_job WHERE job_uuid = ?", (normalized,)
+                "SELECT status,resolution_outcome_json FROM local_edge_job WHERE job_uuid = ?", (normalized,)
             ).fetchone()
+            if row is not None and row["resolution_outcome_json"] is not None:
+                # 前次已保存物理核实结果、投影中断：重投同一证据继续完成投影。
+                return True
             if row is None or row["status"] != "unknown":
                 return False
+            resolution = json.dumps({
+                "outcome": "canceled", "return_info": {}, "error_info": [],
+                "unknown_command_ids": [], "inventory_consumptions": [],
+                "material_aliquot_receipts": [],
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             self._connection.execute(
                 """
                 UPDATE local_edge_job SET status = 'outcome_pending',
-                    unknown_command_ids_json = '[]', projected_at = NULL, updated_at = ?
+                    unknown_command_ids_json = '[]', resolution_outcome_json=?,
+                    projected_at = NULL, updated_at = ?
                 WHERE job_uuid = ?
                 """,
-                (time.time(), normalized),
+                (resolution, time.time(), normalized),
             )
-            self._connection.commit()
         return True
 
     def fail_restarted_jobs(self, job_uuids: Sequence[str]) -> list[str]:
@@ -1507,6 +1518,9 @@ class LocalEdgeControlAuthority:
 
     def bind_execution_control(self, control: Any, on_started: Callable[[str], None]) -> None:
         self.execution_control = control
+        self.store.time_scheduling_enabled = bool(
+            getattr(control, "time_scheduling_enabled", False)
+        )
         self._execution_started = on_started
 
     def start(self) -> None:
@@ -1969,6 +1983,11 @@ def create_local_edge_control_router(
         result["station_controlled"] = authority.execution_control is not None
         if authority.execution_control is not None:
             result["execution_start_state"] = authority.execution_control.execution_start_state(job_uuid)
+            result["recovery_policy"] = (
+                "reconcile"
+                if getattr(authority.execution_control, "time_scheduling_enabled", False)
+                else "legacy_abort"
+            )
         return _envelope(result)
 
     @router.post("/jobs/{job_uuid}/begin", summary="确认设备动作开始执行")
