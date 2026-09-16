@@ -8,12 +8,14 @@ import {
   AlertCircle,
   Check,
   ChevronRight,
+  ChartGantt,
   Circle,
   Clock3,
   ExternalLink,
   FlaskConical,
   LoaderCircle,
   Lock,
+  LayoutList,
   Plus,
   Pause,
   Play,
@@ -56,6 +58,7 @@ import { Button, EmptyState, PageHeader, Panel, PanelHeader, StatusBadge } from 
 import { HistoricalManualActionReview } from '../components/HistoricalManualActionReview'
 import { TaskResourceUnlock } from '../components/TaskResourceUnlock'
 import { TimeSchedulePanel } from '../components/TimeSchedulePanel'
+import { TaskGantt } from '../components/TaskGantt'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
 
@@ -1111,6 +1114,13 @@ export function TasksPage({
 }) {
   const queryClient = useQueryClient()
   const [filter, setFilter] = useState<TaskFilter>('all')
+  const [view, setView] = useState<'matrix' | 'gantt'>(() => {
+    try { return localStorage.getItem('unilabos-task-view') === 'gantt' ? 'gantt' : 'matrix' } catch { return 'matrix' }
+  })
+  const changeView = (next: 'matrix' | 'gantt') => {
+    setView(next)
+    try { localStorage.setItem('unilabos-task-view', next) } catch { /* 存储不可用时仍可切换当前视图。 */ }
+  }
   const [selectedId, setSelectedId] = useState(targetTaskUuid || tasks[0]?.uuid || '')
   const [selectedNodeRef, setSelectedNodeRef] = useState<{ taskUuid: string; nodeUuid: string }>()
   const [selectedStepNodeUuid, setSelectedStepNodeUuid] = useState('')
@@ -1290,8 +1300,8 @@ export function TasksPage({
     <div className="page tasks-page">
       <PageHeader
         eyebrow="PARALLEL TASK MONITOR"
-        title="并行任务运行矩阵"
-        description="不同工作流连续逐行展示；节点轨道同步横向滚动，运行到哪个节点，哪个节点就亮起。"
+        title={view === 'gantt' ? '多任务时间甘特图' : '并行任务运行矩阵'}
+        description={view === 'gantt' ? '在同一时间轴比较多个任务的实际执行与预计安排；点击节点时间条查看详情。' : '不同工作流连续逐行展示；节点轨道同步横向滚动，运行到哪个节点，哪个节点就亮起。'}
         actions={
           <>
             <Button icon={<RefreshCw size={16} />} onClick={onRefresh}>刷新状态</Button>
@@ -1315,16 +1325,28 @@ export function TasksPage({
               <button key={key} className={filter === key ? 'active' : ''} onClick={() => setFilter(key)}>{label}<span>{counts[key]}</span></button>
             ))}
           </div>
-          <div className="matrix-legend" aria-label="节点状态颜色">
+          <div className="task-view-switch" role="group" aria-label="任务展示方式">
+            <button type="button" aria-pressed={view === 'matrix'} onClick={() => changeView('matrix')}><LayoutList size={15} />节点矩阵</button>
+            <button type="button" aria-pressed={view === 'gantt'} onClick={() => changeView('gantt')}><ChartGantt size={15} />时间甘特图</button>
+          </div>
+          {view === 'matrix' ? <div className="matrix-legend" aria-label="节点状态颜色">
             <span><i className="node-done" />运行成功</span>
             <span><i className="node-running" />正在运行</span>
             <span><i className="node-waiting" />等待运行</span>
             <span><i className="node-failed" />运行失败</span>
             <span><i className="node-pending" />未运行</span>
-          </div>
+          </div> : null}
         </div>
         {filtered.length ? (
-          <TaskMatrix
+          view === 'gantt' ? <TaskGantt
+            connected={connected}
+            tasks={filtered}
+            selectedId={selected?.uuid || ''}
+            selectedNode={selectedNodeRef}
+            onSelect={selectTask}
+            onSelectNode={selectNode}
+            onViewResources={onViewResources}
+          /> : <TaskMatrix
             tasks={filtered}
             selectedId={selected?.uuid || ''}
             selectedNode={selectedNodeRef}
@@ -1338,6 +1360,7 @@ export function TasksPage({
             onViewResources={onViewResources}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
+        {view === 'gantt' && selectedTaskControl ? <div className="gantt-selected-controls"><strong>{selected?.workflowName}</strong>{selectedTaskControl}</div> : null}
       </Panel>
 
       {selectedNodeTask && selectedNode ? (
@@ -1348,7 +1371,7 @@ export function TasksPage({
 
       <section className="task-detail-grid">
         <Panel className="selected-task-card">
-          <PanelHeader title="选中任务" description="点击矩阵中的任意行切换" action={selected ? <StatusBadge status={selected.status} /> : null} />
+          <PanelHeader title="选中任务" description="点击任务名称或节点切换" action={selected ? <StatusBadge status={selected.status} /> : null} />
           {selected ? (
             <>
               <div className="selected-task-identity"><span><FlaskConical size={18} /></span><div><strong>{selected.uuid}</strong><small>{selected.workflowName}</small></div><ChevronRight size={17} /></div>
@@ -1381,7 +1404,7 @@ export function TasksPage({
                 onNotify={onNotify}
               />
             </>
-          ) : <EmptyState title="没有选中任务" description="从矩阵中选择任务查看详情。" />}
+          ) : <EmptyState title="没有选中任务" description="选择一个任务查看详情。" />}
         </Panel>
 
         <Panel className="running-jobs-card">

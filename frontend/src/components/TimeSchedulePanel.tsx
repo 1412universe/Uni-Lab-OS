@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { RefreshCw } from 'lucide-react'
-import { loadTimeSchedule } from '../lib/timeScheduleClient'
+import { currentTimeCandidate, loadTimeSchedule } from '../lib/timeScheduleClient'
+import { formatTimeScheduleReason } from '../lib/timeScheduleFormatting'
 import type { WorkflowTask } from '../types'
 import { Button, Panel, PanelHeader } from './ui'
 import './TimeSchedulePanel.css'
@@ -9,21 +10,6 @@ const statusLabels: Record<string, string> = {
   FEASIBLE: '可行候选（未证最优）', OPTIMAL: '当前模型求解完成',
   UNKNOWN: '预算内未得到可用解', INFEASIBLE: '当前模型无可行解',
   MODEL_INVALID: '模型无效', ERROR: '求解异常',
-}
-
-const reasonLabels: Record<string, string> = {
-  condition_unresolved: '条件结果待定', loop_tail_unknown: '循环后续待定',
-  human_confirmation_required: '等待人工确认', workflow_dispatch_paused: '任务派发已暂停',
-  predecessor_not_successful: '前驱尚未成功', dependency_unavailable: '依赖尚未确定',
-  task_control_blocked: '运行控制暂不允许派发', planning_scope_budget: '等待进入本轮规划范围',
-  actual_completion_overdue_unknown: '已超过预计时长，实际完成待核实',
-  resource_or_dependency_completion_unknown: '资源释放或依赖完成时间待定',
-  new_open_scope_deferred: '先等待另一连续占用区间完成',
-  'parent ret value missing': '等待上游节点返回结果',
-}
-
-function reasonLabel(reason: string): string {
-  return reason.split(';').map((part) => reasonLabels[part.split(':')[0]] || part).join('；')
 }
 
 function plannedTime(origin: number, offset: number): string {
@@ -39,7 +25,7 @@ export function TimeSchedulePanel({ connected, tasks }: { connected: boolean; ta
   const snapshot = query.data
   const latest = snapshot?.latest
   const current = Boolean(connected && !query.isError && !snapshot?.input_error && latest && latest.revision === snapshot?.input.revision)
-  const candidate = current && latest?.validated && ['FEASIBLE', 'OPTIMAL'].includes(latest.status) ? latest : null
+  const candidate = currentTimeCandidate(snapshot, connected, query.isError)
   const taskName = (id: string): string => tasks.find((task) => task.uuid === id)?.workflowName || id
   const nodeName = (taskId: string, nodeId: string): string => tasks.find((task) => task.uuid === taskId)?.nodes.find((node) => node.uuid === nodeId)?.name || nodeId
   const state = !connected ? '连接不可用'
@@ -78,7 +64,7 @@ export function TimeSchedulePanel({ connected, tasks }: { connected: boolean; ta
     {connected && !query.isError && !snapshot?.input_error && snapshot?.input.blocked.length ? <details className="time-schedule-blocked" open>
       <summary>待定原因（{snapshot.input.blocked.length}）</summary>
       <ul>{snapshot.input.blocked.map(([taskId, nodeId, reason], index) => <li key={`${taskId}:${nodeId}:${index}`}>
-        <span title={`${taskId} / ${nodeId}`}>{taskName(taskId)} · {nodeName(taskId, nodeId)}</span><strong title={reason}>{reasonLabel(reason)}</strong>
+        <span title={`${taskId} / ${nodeId}`}>{taskName(taskId)} · {nodeName(taskId, nodeId)}</span><strong title={reason}>{formatTimeScheduleReason(reason)}</strong>
       </li>)}</ul>
     </details> : null}
   </Panel>

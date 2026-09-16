@@ -24,6 +24,14 @@ export interface TimeScheduleSnapshot {
   }
 }
 
+/** 计划与当前输入一致且已验证时才能展示，连接中断或读取错误时不沿用旧预测。 */
+export function currentTimeCandidate(snapshot: TimeScheduleSnapshot | undefined, connected: boolean, failed: boolean) {
+  const latest = snapshot?.latest
+  return connected && !failed && snapshot?.enabled && !snapshot.input_error
+    && latest?.revision === snapshot.input.revision && latest?.validated
+    && ['FEASIBLE', 'OPTIMAL'].includes(latest.status) ? latest : null
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('时间计划数据格式无效')
   return value as Record<string, unknown>
