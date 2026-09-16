@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Clock3, Minus, Plus, RefreshCw } from 'lucide-react'
+import { Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Layers3, Minus, Plus, RefreshCw } from 'lucide-react'
 import type { WorkflowTask } from '../types'
 import { currentTimeCandidate, loadTimeSchedule } from '../lib/timeScheduleClient'
 import { buildTaskGantt, formatGanttDuration, formatGanttTime } from '../lib/taskGantt'
@@ -15,6 +15,51 @@ const MIN_WINDOW = 30_000
 const terminalStatuses = new Set(['succeeded', 'failed', 'canceled', 'timeout'])
 const kindLabels: Record<GanttBar['kind'], string> = {
   actual: '实际执行', running: '已运行，结束未确认', planned: '预计执行', remaining: '预计剩余',
+}
+const actionLabels: Record<string, string> = {
+  transfer_material_atomic: '物料搬运', add_liquid_with_mounted_tips: '试剂移液',
+  measure_density_with_mounted_tips: '测量密度', stir_beaker: '烧杯搅拌',
+  dose_powder_with_two_materials: '粉末加料', add_solvent_with_materials: '溶剂加液',
+  inspect_beaker: '拍照检测', pick_pour_place_atomic: '取料、倒液与放料',
+  process_liquid_reagent_100ml_cap_with_material: '试剂瓶开关盖',
+  process_sample_vial_250ml_cap_with_material: '样品瓶开关盖',
+}
+const nodeLabel = (name: string) => actionLabels[name] || name
+
+/** 无时间区间的记录仍可查看，但不挤占时间轴，也不将已结束的节点误称为待执行。 */
+function PendingNodes({ row, onSelectNode }: { row: GanttRow; onSelectNode: (taskUuid: string, nodeUuid: string) => void }) {
+  const nodes = new Map(row.task.nodes.map((node) => [node.uuid, node]))
+  const groups = [
+    { key: 'waiting', label: '时间待定', items: [] as GanttRow['pending'] },
+    { key: 'attention', label: '需要关注', items: [] as GanttRow['pending'] },
+    { key: 'history', label: '时间记录', items: [] as GanttRow['pending'] },
+  ]
+  for (const pending of row.pending) {
+    const node = nodes.get(pending.nodeUuid)
+    const status = node?.status
+    const start = node?.job?.startedAt ? Date.parse(node.job.startedAt) : null
+    const end = node?.job?.finishedAt ? Date.parse(node.job.finishedAt) : null
+    const invalidTime = (start !== null && !Number.isFinite(start)) || (end !== null && !Number.isFinite(end))
+      || (start !== null && end !== null && end < start)
+    const missingActionTime = node?.kind === 'device_action' && status === 'succeeded' && (start === null || end === null)
+    const needsAttention = status === 'attention' || status === 'failed' || Boolean(node?.job?.uncertaintyReason)
+      || invalidTime || missingActionTime || pending.reason.includes('已超过预计')
+    const ended = ['succeeded', 'skipped', 'canceled'].includes(status || '')
+      || terminalStatuses.has(row.task.executionStatus || row.task.status)
+    groups[needsAttention ? 1 : ended ? 2 : 0].items.push(pending)
+  }
+  return <details className="gantt-pending">
+    <summary aria-label={`查看 ${row.task.workflowName} ${row.task.uuid.slice(0, 8)} 的节点时间说明：${groups.filter((group) => group.items.length).map((group) => `${group.label} ${group.items.length}`).join('，')}`}>
+      <Layers3 size={13} /><span className="gantt-pending-counts">{groups.filter((group) => group.items.length).map((group) => <span className={group.key} key={group.key}>{group.label}<b>{group.items.length}</b></span>)}</span>
+      <span className="gantt-expand-label">查看节点</span><ChevronDown size={14} className="gantt-disclosure-chevron" />
+    </summary>
+    <div className="gantt-pending-list">{groups.filter((group) => group.items.length).map((group) => <div className="gantt-pending-group" key={group.key}>
+      <h4>{group.label}<span>{group.items.length}</span>{group.key === 'history' ? <small>已结束或跳过，未绘制完整时间条</small> : null}</h4>
+      {group.items.map((node) => <button type="button" key={node.nodeUuid} title={`${node.name}\n${node.reason}`} disabled={!nodes.has(node.nodeUuid)} onClick={() => onSelectNode(row.task.uuid, node.nodeUuid)}>
+        <span className="gantt-pending-node-name">{nodeLabel(node.name)}</span><span className="gantt-pending-reason">{node.reason}</span><ChevronRight size={13} />
+      </button>)}
+    </div>)}</div>
+  </details>
 }
 
 function extent(bars: GanttBar[], fallback: number): WindowRange {
@@ -91,7 +136,7 @@ export function TaskGantt({ connected, tasks, selectedId, selectedNode, onSelect
 
   return <section className="task-gantt" aria-label="多任务时间甘特图">
     <div className="gantt-tools">
-      <div className="gantt-plan-state"><i className={candidate ? 'synced' : ''} /><span>{planState}</span><small>每 2 秒同步计划</small></div>
+      <div className="gantt-heading"><span className="gantt-heading-icon"><Activity size={18} /></span><div><strong>任务时间轴</strong><div className="gantt-plan-state"><i className={candidate ? 'synced' : ''} /><span>{planState}</span><small>每 2 秒同步</small></div></div></div>
       <div className="gantt-range-tools">
         <div className="gantt-range-switch" role="group" aria-label="时间范围">
           <button type="button" aria-pressed={!manualRange && rangeMode === 'recent'} onClick={() => { setRangeMode('recent'); setManualRange(null) }}>当前 / 最近</button>
@@ -106,7 +151,7 @@ export function TaskGantt({ connected, tasks, selectedId, selectedNode, onSelect
       </div>
     </div>
     <div className="gantt-caption">
-      <span><strong>{visibleRows.length}</strong> / {tasks.length} 个筛选任务 · {formatGanttTime(range.start, true)} — {formatGanttTime(range.end, true)}</span>
+      <span className="gantt-window-caption"><strong>{visibleRows.length} / {tasks.length} 个任务</strong><span>{formatGanttTime(range.start, true)} — {formatGanttTime(range.end, true)}</span></span>
       <div className="gantt-legend" aria-label="甘特图图例"><span><i className="actual" />实际执行</span><span><i className="running" />正在运行</span><span><i className="planned" />预计执行 / 剩余</span><span><i className="unknown" />时间待定</span></div>
     </div>
     <div className="gantt-scroll" tabIndex={0} role="region" aria-label="可横向滚动的任务时间轴">
@@ -116,19 +161,30 @@ export function TaskGantt({ connected, tasks, selectedId, selectedNode, onSelect
           <div className="gantt-axis">{ticks.map((tick, index) => <span key={index} style={{ left: `${index * 12.5}%` }}>
             {new Date(range.start).toDateString() !== new Date(range.end).toDateString() ? <small>{new Date(tick).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</small> : null}
             {formatGanttTime(tick)}
-          </span>)}</div>
+          </span>)}{nowPercent >= 0 && nowPercent <= 100 ? <i className="gantt-axis-now" style={{ left: `${nowPercent}%` }}>现在</i> : null}</div>
         </div>
-        {visibleRows.map((row) => <div className={`gantt-row ${row.task.uuid === selectedId ? 'selected' : ''}`} key={row.task.uuid} style={{ '--task-color': taskColor(row.task.uuid) } as CSSProperties}>
+        {visibleRows.map((row) => {
+          const running = row.task.nodes.filter((node) => ['running', 'canceling'].includes(node.status))
+          const completed = row.task.nodes.filter((node) => node.status === 'succeeded').length
+          const skipped = row.task.nodes.filter((node) => node.status === 'skipped').length
+          const progress = Math.max(0, Math.min(100, row.task.progress || 0))
+          return <div className={`gantt-row ${row.task.uuid === selectedId ? 'selected' : ''}`} key={row.task.uuid} style={{ '--task-color': taskColor(row.task.uuid) } as CSSProperties}>
           <div className="gantt-identity">
-            <button type="button" className="gantt-task-name" aria-label={`选择任务 ${row.task.workflowName} ${row.task.uuid}`} onClick={() => onSelect(row.task.uuid)}><i /><strong>{row.task.workflowName}</strong></button>
-            <code title={row.task.uuid}>{row.task.uuid.slice(0, 8)}</code><StatusBadge status={row.task.status} />
-            <small className="gantt-task-sample">{row.task.sample} · {row.task.progress}%</small>
-            {onViewResources ? <button type="button" className="gantt-resource-link" onClick={() => onViewResources(row.task.uuid)}>占用资源</button> : null}
+            <div className="gantt-task-meta"><span title={row.task.sample}>{row.task.sample}</span><StatusBadge status={row.task.status} /></div>
+            <button type="button" className="gantt-task-name" title={row.task.workflowName} aria-label={`选择任务 ${row.task.workflowName} ${row.task.uuid}`} onClick={() => onSelect(row.task.uuid)}><i /><strong>{row.task.workflowName}</strong></button>
+            <div className="gantt-task-progress"><span>{completed} / {row.task.nodes.length} 完成{skipped ? ` · ${skipped} 跳过` : ''}</span><strong>{progress}%</strong></div>
+            <div className="gantt-progress-track" role="progressbar" aria-label={`${row.task.sample} 任务进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><i style={{ width: `${progress}%` }} /></div>
+            <div className="gantt-task-footer"><code title={row.task.uuid}>{row.task.uuid.slice(0, 8)}</code>{onViewResources ? <button type="button" className="gantt-resource-link" onClick={() => onViewResources(row.task.uuid)}>占用资源<ChevronRight size={11} /></button> : null}</div>
           </div>
           <div className="gantt-row-content">
-            <div className="gantt-tracks" style={{ height: Math.max(78, row.laneCount * 38 + 24) }}>
+            <div className={`gantt-activity ${running.length ? 'is-running' : ''}`}>
+              {running.length ? <><Activity size={13} /><span>正在执行</span><strong title={running.map((node) => node.name).join('、')}>{running.map((node) => nodeLabel(node.name)).join('、')}</strong></>
+                : (row.task.executionStatus || row.task.status) === 'succeeded' ? <><Check size={13} /><strong>任务已完成</strong></>
+                  : <><Clock3 size={13} /><span>执行记录与预计安排</span></>}
+            </div>
+            <div className="gantt-tracks" style={{ height: Math.max(58, row.laneCount * 38 + 20) }}>
               {ticks.map((_, index) => <i className="gantt-grid-line" key={index} style={{ left: `${index * 12.5}%` }} />)}
-              {nowPercent >= 0 && nowPercent <= 100 ? <i className="gantt-now-line" style={{ left: `${nowPercent}%` }}><span>现在</span></i> : null}
+              {nowPercent >= 0 && nowPercent <= 100 ? <><div className="gantt-future" style={{ left: `${nowPercent}%` }} /><i className="gantt-now-line" style={{ left: `${nowPercent}%` }} /></> : null}
               {row.bars.filter(inRange).map((bar) => {
                 const left = Math.max(0, (bar.startMs - range.start) / span * 100)
                 const right = Math.min(100, (bar.endMs - range.start) / span * 100)
@@ -136,23 +192,23 @@ export function TaskGantt({ connected, tasks, selectedId, selectedNode, onSelect
                 const detailAvailable = row.task.nodes.some((node) => node.uuid === bar.nodeUuid)
                 return <button type="button" key={bar.id}
                   className={`gantt-bar gantt-bar-${bar.kind} gantt-status-${bar.status} ${selected ? 'selected' : ''} ${bar.endIsOpen ? 'open-ended' : ''}`}
-                  style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%`, top: 15 + bar.lane * 38 }}
+                  style={{ left: `${left}%`, width: `${Math.max(0, right - left)}%`, top: 10 + bar.lane * 38 }}
                   aria-label={`${row.task.workflowName} · ${barSummary(bar)}`} aria-pressed={selected} title={`${barSummary(bar)}${detailAvailable ? '' : '\n节点详情正在同步'}`} disabled={!detailAvailable}
                   onClick={() => onSelectNode(bar.taskUuid, bar.nodeUuid)}
                   onMouseEnter={() => setHoveredId(bar.id)} onMouseLeave={() => setHoveredId(null)}
                   onFocus={() => setHoveredId(bar.id)} onBlur={() => setHoveredId(null)}>
-                  <strong>{bar.name}</strong><small>{formatGanttDuration(bar.endMs - bar.startMs)}</small>
+                  <span className="gantt-bar-label"><strong>{nodeLabel(bar.name)}</strong><small>{formatGanttDuration(bar.endMs - bar.startMs)}</small></span>
                 </button>
               })}
               {!row.bars.some(inRange) ? <span className="gantt-row-empty">{row.bars.length ? '执行时间不在当前窗口' : '暂无确定的执行时间'}</span> : null}
             </div>
-            {row.pending.length ? <div className="gantt-pending"><span>时间待定</span>{row.pending.map((node) => <button type="button" key={node.nodeUuid} title={node.reason} disabled={!row.task.nodes.some((item) => item.uuid === node.nodeUuid)} onClick={() => onSelectNode(row.task.uuid, node.nodeUuid)}><Clock3 size={12} /><strong>{node.name}</strong><small>{node.reason}</small></button>)}</div> : null}
+            {row.pending.length ? <PendingNodes row={row} onSelectNode={onSelectNode} /> : null}
           </div>
-        </div>)}
+        </div>})}
       </div>
     </div>
     {!visibleRows.length ? <EmptyState title="当前时间窗口没有任务" description="点击“全部时间”查看历史，或切回“当前 / 最近”查看最近执行。" /> : null}
-    <div className="gantt-detail-strip">{hovered ? <><strong>{hovered.name}</strong><span>{kindLabels[hovered.kind]} · {formatGanttTime(hovered.startMs, true)} → {formatGanttTime(hovered.endMs, true)}{hovered.endIsOpen ? '（结束未确认）' : ''}</span><code>{hovered.deviceId || '设备未指定'}</code><span>点击查看节点详情</span></> : <span>点击时间条查看节点详情；虚线条会随重排更新，时间待定的节点不会被画成零耗时。</span>}</div>
-    <p className="gantt-footnote">预计区间不是启动指令，也不代表资源已经释放。仅展示当前已加载任务；正常完成的数据输入/输出不占时间条，未确定分支和循环后续不推测完成时间。</p>
+    <div className="gantt-detail-strip">{hovered ? <><strong>{nodeLabel(hovered.name)}</strong><span>{kindLabels[hovered.kind]} · {formatGanttTime(hovered.startMs, true)} → {formatGanttTime(hovered.endMs, true)}{hovered.endIsOpen ? '（结束未确认）' : ''}</span><code>{hovered.name}</code><span>点击查看节点详情</span></> : <><span className="gantt-hint-dot" /><span>悬停查看时间，点击查看节点详情；展开“查看节点”了解等待原因。</span></>}</div>
+    <p className="gantt-footnote">虚线为预计时间，会随排程更新，不代表资源已释放。时间未知的节点不绘制时长，仅展示已加载任务。</p>
   </section>
 }
