@@ -366,7 +366,15 @@ class WorkflowRun:
                 if node.executor_kind == "repeat_until" and status not in {"succeeded", "skipped", "failed", "timeout", "canceled"}:
                     continue
                 if status == "succeeded":
-                    self.mark_finished(node_id, job.get("return_info") or {})
+                    return_info = job.get("return_info") or {}
+                    # 与正常完成回调一致，只解包一层执行回执；本地输入和
+                    # 物料来源的平铺结果保持原样，不能把回执元数据当作节点输出。
+                    ret_value = (
+                        return_info.get("return_value", return_info)
+                        if isinstance(return_info, Mapping)
+                        else return_info
+                    )
+                    self.mark_finished(node_id, ret_value)
                 elif status == "skipped":
                     self.mark_skipped(node_id, reason="persisted_branch_decision")
                 elif status in {"failed", "timeout"}:
