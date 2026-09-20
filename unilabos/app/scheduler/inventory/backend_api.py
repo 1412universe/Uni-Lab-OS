@@ -117,6 +117,7 @@ class MaterialCreateRequest(MaterialRequest):
     """创建物料时可选地在同一事务装入试剂。"""
 
     reagent: Optional[MaterialReagentRequest] = None
+    uuid: Optional[UUID] = None
 
 
 class MaterialUpdateRequest(BackendModel):

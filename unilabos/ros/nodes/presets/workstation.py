@@ -150,31 +150,25 @@ class ROS2WorkstationNode(BaseROS2DeviceNode):
             self.protocol_action_mappings[protocol_name] = get_action_type(protocol_type)
 
     def initialize_device(self, device_id, device_config):
-        """初始化设备并创建相应的动作客户端"""
-        # device_id_abs = f"{self.device_id}/{device_id}"
+        """初始化工站子设备，并登记到 Host 供 Edge / 控制台派发。"""
         device_id_abs = f"{device_id}"
         self.lab_logger().info(f"初始化子设备: {device_id_abs}")
         d = self.sub_devices[device_id] = initialize_device_from_dict(device_id_abs, device_config)
+        if d is None:
+            return d
 
-        # 为子设备的每个动作创建动作客户端
-        if d is not None and hasattr(d, "ros_node_instance"):
-            node = d.ros_node_instance
-            node.resource_tracker = self.resource_tracker  # 站内应当共享资源跟踪器
-            for action_name, action_mapping in node._action_value_mappings.items():
-                if action_name.startswith("auto-") or str(action_mapping.get("type", "")).startswith(
-                    "UniLabJsonCommand"
-                ):
-                    continue
-                action_id = f"/devices/{device_id_abs}/{action_name}"
-                if action_id not in self._action_clients:
-                    try:
-                        self._action_clients[action_id] = ActionClient(
-                            self, action_mapping["type"], action_id, callback_group=self.callback_group
-                        )
-                    except Exception as ex:
-                        self.lab_logger().error(f"创建动作客户端失败: {action_id}, 错误: {ex}")
-                        continue
-                    self.lab_logger().trace(f"为子设备 {device_id} 创建动作客户端: {action_name}")
+        node = getattr(d, "ros_node_instance", None) or getattr(d, "_ros_node", None)
+        if node is not None:
+            node.resource_tracker = self.resource_tracker
+        try:
+            from unilabos.ros.nodes.presets.host_node import HostNode
+
+            host = HostNode.peek_instance() or HostNode.get_instance(timeout=5.0)
+            if host is None:
+                raise RuntimeError("HostNode 尚未就绪，无法登记工站子设备")
+            host.attach_initialized_device(device_id_abs, d)
+        except Exception as ex:
+            self.lab_logger().error(f"Host 登记子设备失败: {device_id_abs}: {ex}")
         return d
 
     def create_device(self, device_id: str, config: ResourceDictType) -> dict:

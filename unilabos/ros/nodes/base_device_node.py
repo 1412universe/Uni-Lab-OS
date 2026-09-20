@@ -4055,14 +4055,17 @@ class ROS2DeviceNode:
         self.driver_is_workstation = False
         self.resource_tracker = DeviceNodeResourceTracker()
 
-        # use_pylabrobot_creator 使用 cls的包路径检测
-        use_pylabrobot_creator = (
-            driver_class.__module__.startswith("pylabrobot")
-            or driver_class.__name__ == "LiquidHandlerAbstract"
-            or driver_class.__name__ == "LiquidHandlerBiomek"
-            or driver_class.__name__ == "PRCXI9300Handler"
-            or driver_class.__name__ == "TransformXYZHandler"
-            or driver_class.__name__ == "OpcUaClient"
+        # 设备包薄包装（如 GN_PRCXI9300Handler）改了类名，必须沿 MRO 识别 PLR 驱动。
+        _plr_creator_names = {
+            "LiquidHandlerAbstract",
+            "LiquidHandlerBiomek",
+            "PRCXI9300Handler",
+            "TransformXYZHandler",
+            "OpcUaClient",
+        }
+        use_pylabrobot_creator = driver_class.__module__.startswith("pylabrobot") or any(
+            cls.__name__ in _plr_creator_names
+            for cls in getattr(driver_class, "__mro__", (driver_class,))
         )
 
         # 创建设备类实例

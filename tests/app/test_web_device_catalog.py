@@ -241,3 +241,46 @@ def test_project_backend_device_overviews_matches_go_backend_shape() -> None:
 
 def test_project_backend_device_overviews_does_not_guess_without_registration() -> None:
     assert project_backend_device_overviews(registration=None, materials=[]) == []
+
+
+def test_project_backend_device_overviews_keeps_device_row_without_resource_template() -> None:
+    """设备物料的模板在 device catalog，不在 resource_template；缺模板行仍要出目录。"""
+
+    material_uuid = "10000000-0000-4000-8000-000000000011"
+    result = project_backend_device_overviews(
+        registration={
+            "edge_uuid": "20000000-0000-4000-8000-000000000011",
+            "connected": True,
+            "created_at": 0.0,
+            "updated_at": 1.0,
+            "devices": [
+                {
+                    "local_id": "PRCXI",
+                    "material_uuid": material_uuid,
+                    "name": "PRCXI",
+                    "actions": [{"name": "transfer_liquid", "type": "UniLabJsonCommandAsync"}],
+                }
+            ],
+        },
+        materials=[
+            {
+                "uuid": material_uuid,
+                "create_time": "2026-09-20T00:00:00.000Z",
+                "update_time": "2026-09-20T00:00:00.000Z",
+                "meta_data": {},
+                "resource_template_uuid": "40000000-0000-4000-8000-000000000011",
+                "class": "community.gn_lab.gn_prcxi",
+                "type": "device",
+                "barcode": "UNILAB-GRAPH-PRCXI",
+                "name": "PRCXI",
+                "config": {},
+                "data": {},
+                "revision": 1,
+            }
+        ],
+    )
+
+    assert len(result) == 1
+    assert result[0]["binding"]["local_id"] == "PRCXI"
+    assert result[0]["edge_status"] == "online"
+    assert result[0]["dispatchable"] is True

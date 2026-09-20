@@ -120,7 +120,7 @@ def _fake_host() -> tuple[SimpleNamespace, list[list[tuple[str, str]]], _Logger]
 
         reported_locks.append(pairs)
 
-    # ``host`` 只提供 HostNode.initialize_device 直接访问的字段和协作者。
+    # ``host`` 只提供 HostNode.initialize_device / attach 直接访问的字段。
     host = SimpleNamespace(
         devices_names={},
         device_machine_names={},
@@ -128,8 +128,13 @@ def _fake_host() -> tuple[SimpleNamespace, list[list[tuple[str, str]]], _Logger]
         _action_value_mappings={},
         _action_clients={},
         _online_devices=set(),
+        callback_group=None,
         lab_logger=lambda: logger,
         _report_action_locks_free=report_action_locks_free,
+    )
+    host.attach_initialized_device = MethodType(  # type: ignore[attr-defined]
+        HostNode.attach_initialized_device,
+        host,
     )
     return host, reported_locks, logger
 
@@ -285,8 +290,50 @@ def test_local_device_fails_closed_when_a_required_endpoint_is_unavailable(
         HostNode.initialize_device(host, "scanner-a", SimpleNamespace())
 
     assert host._online_devices == set()
+    assert host.devices_names == {}
+    assert host.devices_instances == {}
     assert reported_locks == []
     assert any("device_action_transport_not_ready" in message for message in logger.messages)
+
+
+def test_workstation_child_json_async_action_is_registered_for_dispatch(
+    monkeypatch,
+) -> None:
+    """工站子设备（如 PRCXI）登记后，异步 JSON 动作走通用端点且可派发。"""
+
+    runtime_mappings = build_runtime_action_mappings(
+        {"transfer_liquid": {"type": "UniLabJsonCommandAsync"}}
+    )
+    device = SimpleNamespace(
+        _ros_node=SimpleNamespace(
+            namespace="/devices/PRCXI",
+            _action_value_mappings=runtime_mappings,
+        )
+    )
+    probed_endpoints: list[tuple[str, ...]] = []
+
+    def probe(
+        _clients: dict[str, Any],
+        endpoint_ids: tuple[str, ...],
+        *,
+        wait_timeout: float,
+    ) -> bool:
+        assert wait_timeout > 0
+        probed_endpoints.append(endpoint_ids)
+        return True
+
+    monkeypatch.setattr(host_node_module, "ActionClient", _ActionClient)
+    monkeypatch.setattr(host_node_module, "wait_for_action_endpoints", probe, raising=False)
+    host, reported_locks, _logger = _fake_host()
+
+    HostNode.attach_initialized_device(host, "PRCXI", device)
+
+    assert probed_endpoints == [("/devices/PRCXI/_execute_driver_command_async",)]
+    assert "/devices/PRCXI/_execute_driver_command_async" in host._action_clients
+    assert host.devices_names["PRCXI"] == "/devices/PRCXI"
+    assert host.devices_instances["PRCXI"] is device
+    assert "/devices/PRCXI/PRCXI" in host._online_devices
+    assert any(("PRCXI", "transfer_liquid") in report for report in reported_locks)
 
 
 def test_managed_dry_run_registers_catalog_device_without_constructing_driver(
@@ -356,6 +403,90 @@ def test_managed_dry_run_registers_catalog_device_without_constructing_driver(
     assert host._online_devices == {"/devices/plc-a/plc-a"}
     assert host._simulated_device_keys == {"/devices/plc-a/plc-a"}
     assert reported_locks == [[("plc-a", "submit_pick")]]
+
+
+def test_managed_dry_run_registers_workstation_child_devices(monkeypatch) -> None:
+    """dry-run 不构造工站，必须把图里的子设备一并登记进可调度目录。"""
+
+    catalog_actions = {
+        "submit_pick": {
+            "type": "UniLabJsonCommand",
+            "result": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+        }
+    }
+    child_device = SimpleNamespace(
+        res_content=SimpleNamespace(
+            id="PRCXI",
+            type="device",
+            klass="community.gn_lab.gn_prcxi",
+        ),
+        children=[],
+    )
+    deck = SimpleNamespace(
+        res_content=SimpleNamespace(
+            id="PRCXI_Deck",
+            type="deck",
+            klass="community.gn_lab.prcxi_deck",
+        ),
+        children=[],
+    )
+    workstation = SimpleNamespace(
+        res_content=SimpleNamespace(
+            id="gn_workstation",
+            type="device",
+            klass="community.gn_lab.gn_workstation",
+            config={},
+        ),
+        children=[child_device, deck],
+    )
+    monkeypatch.setattr(host_node_module.BasicConfig, "process_role", "edge_runtime")
+    monkeypatch.setattr(host_node_module.BasicConfig, "action_mode", "simulate")
+    monkeypatch.setattr(
+        host_node_module.lab_registry,
+        "resolve_definition",
+        lambda kind, identity: (
+            {"class": {"action_value_mappings": catalog_actions}}
+            if kind == "device"
+            else None
+        ),
+    )
+    initialized: list[str] = []
+    reported_locks: list[list[tuple[str, str]]] = []
+    host = SimpleNamespace(
+        devices_names={},
+        device_machine_names={},
+        devices_instances={},
+        device_status={},
+        device_status_timestamps={},
+        _action_value_mappings={},
+        _online_devices=set(),
+        _simulated_device_keys=set(),
+        initialize_device=lambda device_id, _config: initialized.append(device_id),
+        _report_action_locks_free=lambda pairs: reported_locks.append(pairs),
+        lab_logger=lambda: _Logger(),
+    )
+    host._register_simulated_device = MethodType(
+        HostNode._register_simulated_device,
+        host,
+    )
+    host._initialize_configured_device = MethodType(
+        HostNode._initialize_configured_device,
+        host,
+    )
+
+    HostNode._initialize_configured_device(host, "gn_workstation", workstation)
+
+    assert initialized == []
+    assert host.devices_names == {
+        "gn_workstation": "/devices/gn_workstation",
+        "PRCXI": "/devices/PRCXI",
+    }
+    assert "PRCXI_Deck" not in host.devices_names
+    assert host._online_devices == {
+        "/devices/gn_workstation/gn_workstation",
+        "/devices/PRCXI/PRCXI",
+    }
+    assert host._simulated_device_keys == host._online_devices
 
 
 def test_normal_edge_still_constructs_the_selected_device_driver(monkeypatch) -> None:

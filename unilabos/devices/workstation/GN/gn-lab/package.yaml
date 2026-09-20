@@ -1,0 +1,14 @@
+package:
+  name: gn_lab
+
+workflows:
+  - workflow_uuid: 900f9f79-7dfb-42f2-89ce-f70e86d6b68c
+    source: gn_lab/workflows/quick_change_debug.py
+  - workflow_uuid: 5d2b64d1-2666-4459-a587-708aadf0a5b3
+    source: gn_lab/workflows/gold_tetrahedron_after_first_centrifuge.py
+  - workflow_uuid: 4b868761-9468-46ec-86c5-7ab64b6b8854
+    source: gn_lab/workflows/gold_tetrahedron_aa_mix.py
+  - workflow_uuid: a138bc18-9c16-4552-8696-e4f43903b9ad
+    source: gn_lab/workflows/gold_tetrahedron_ctac_ctab.py
+  - workflow_uuid: 8a15d439-59ab-43a3-928a-1aa8350d260f
+    source: gn_lab/workflows/prcxi_9320_transfer.py

@@ -202,6 +202,15 @@ class HostNode(BaseROS2DeviceNode):
         return None
 
     @classmethod
+    def peek_instance(cls) -> Optional["HostNode"]:
+        """返回正在构造或已就绪的单例，不等待 ``_ready_event``。
+
+        工站在 ``HostNode.__init__`` 里初始化子设备时必须走这里：
+        ``get_instance()`` 会等到全部设备初始化完才返回，会自死锁。
+        """
+        return cls._instance
+
+    @classmethod
     def shutdown_background_threads(cls, timeout: float = 5.0) -> None:
         """
         Gracefully shutdown all background threads for clean exit or restart.
@@ -974,69 +983,109 @@ class HostNode(BaseROS2DeviceNode):
             d = None
         if d is None:
             return
-        # noinspection PyProtectedMember
-        self.devices_names[device_id] = d._ros_node.namespace  # 这里不涉及二级device_id
-        self.device_machine_names[device_id] = "本地"
-        self.devices_instances[device_id] = d
-        # noinspection PyProtectedMember
-        self._action_value_mappings[device_id] = d._ros_node._action_value_mappings
-        new_action_pairs: List[Tuple[str, str]] = []
-        # 仅为建独立 ROS ActionServer 的动作创建 ActionClient：
-        # auto-/UniLabJsonCommand 动作无 ROS action server，无法也无需建 ActionClient。
-        # noinspection PyProtectedMember
-        for action_name, action_value_mapping in d._ros_node._action_value_mappings.items():
-            if action_name.startswith("auto-") or str(action_value_mapping.get("type", "")).startswith(
-                "UniLabJsonCommand"
-            ):
-                continue
-            action_id = f"/devices/{device_id}/{action_name}"
-            if action_id not in self._action_clients:
-                action_type = action_value_mapping["type"]
-                try:
-                    self._action_clients[action_id] = ActionClient(self, action_type, action_id)
-                except Exception as e:
-                    self.lab_logger().error(
-                        f"创建ActionClient失败，Device: {device_id}, Action Name: {action_name}, Action Type: {action_type}, Error: {e}")
+        self.attach_initialized_device(device_id, d)
+
+    def attach_initialized_device(self, device_id: str, device_wrapper: ROS2DeviceNode) -> None:
+        """把已构造的本地设备（含工站子设备）登记为可调度实例。
+
+        控制台单点调试和 Edge 派发只认 Host 的 ``devices_names`` /
+        ``devices_instances`` / ``_online_devices``。工站子设备由 Workstation
+        自己构造，必须走这里；否则 Edge 只注册工站，设备页全是离线。
+
+        端点未就绪时回滚本次登记，禁止半登记后再次 attach 被当成成功。
+        """
+
+        device_key = f"{device_wrapper._ros_node.namespace}/{device_id}"
+        if device_id in self.devices_instances and device_key in self._online_devices:
+            return
+        ros_node = device_wrapper._ros_node
+        namespace = ros_node.namespace
+        action_mappings = ros_node._action_value_mappings
+        created_clients: List[str] = []
+        try:
+            new_action_pairs: List[Tuple[str, str]] = []
+            needs_json_sync = False
+            needs_json_async = False
+            for action_name, action_value_mapping in action_mappings.items():
+                mapping_type = str(action_value_mapping.get("type", ""))
+                if action_name.startswith("auto-") or mapping_type.startswith(
+                    "UniLabJsonCommand"
+                ):
+                    if mapping_type.startswith("UniLabJsonCommandAsync"):
+                        needs_json_async = True
+                    else:
+                        needs_json_sync = True
                     continue
-                self.lab_logger().trace(
+                action_id = f"/devices/{device_id}/{action_name}"
+                if action_id not in self._action_clients:
+                    action_type = action_value_mapping["type"]
+                    try:
+                        self._action_clients[action_id] = ActionClient(
+                            self, action_type, action_id
+                        )
+                    except Exception as e:
+                        self.lab_logger().error(
+                            f"创建ActionClient失败，Device: {device_id}, Action Name: {action_name}, Action Type: {action_type}, Error: {e}"
+                        )
+                        continue
+                    created_clients.append(action_id)
+                    self.lab_logger().trace(
+                        f"[Host Node] Created ActionClient (Local): {action_id}"
+                    )
+                    new_action_pairs.append((device_id, action_name))
+                else:
+                    self.lab_logger().warning(
+                        f"[Host Node] ActionClient {action_id} already exists."
+                    )
+            generic_actions: List[str] = []
+            if needs_json_sync:
+                generic_actions.append("_execute_driver_command")
+            if needs_json_async:
+                generic_actions.append("_execute_driver_command_async")
+            callback_group = getattr(self, "callback_group", None)
+            for generic_action in generic_actions:
+                action_id = f"/devices/{device_id}/{generic_action}"
+                if action_id in self._action_clients:
+                    continue
+                self._action_clients[action_id] = ActionClient(
+                    self,
+                    StrSingleInput,
+                    action_id,
+                    callback_group=callback_group,
+                )
+                created_clients.append(action_id)
+                self.lab_logger().info(
                     f"[Host Node] Created ActionClient (Local): {action_id}"
-                )  # 子设备再创建用的是Discover发现的
+                )
+            already = {action_name for _, action_name in new_action_pairs}
+            for action_name in action_mappings.keys():
+                if action_name in already:
+                    continue
                 new_action_pairs.append((device_id, action_name))
-            else:
-                self.lab_logger().warning(f"[Host Node] ActionClient {action_id} already exists.")
-        # 锁上报需全量：auto-/UniLabJsonCommand 动作虽不建 ActionClient，但仍是可经
-        # _execute_driver_command 调用的能力(如 workbench 的 prepare_materials 等)，必须一并
-        # 上报 free 锁，与 report_all_action_locks 的全量快照保持一致。_execute_driver_command
-        # [_async] 由 _report_action_locks_free 统一过滤。
-        # noinspection PyProtectedMember
-        already = {action_name for _, action_name in new_action_pairs}
-        for action_name in d._ros_node._action_value_mappings.keys():
-            if action_name in already:
-                continue
-            new_action_pairs.append((device_id, action_name))
-        # ``required_endpoint_ids`` 是该设备全部业务动作真正依赖的原生或通用 ROS 端点。
-        required_endpoint_ids = required_action_endpoint_ids(
-            device_id,
-            d._ros_node._action_value_mappings,
-        )
-        # 本地服务端与客户端在同一启动阶段创建；给 DDS 发现一个有界共享预算，
-        # 仍未就绪就按关闭式失败处理，绝不提前宣告设备可调度。
-        if not wait_for_action_endpoints(
-            self._action_clients,
-            required_endpoint_ids,
-            wait_timeout=2.0,
-        ):
-            transport_error = (
-                "device_action_transport_not_ready: "
-                f"device={device_id}, required_endpoints={required_endpoint_ids}"
+            required_endpoint_ids = required_action_endpoint_ids(
+                device_id, action_mappings
             )
-            self.lab_logger().error(transport_error)
-            raise RuntimeError(transport_error)
-        device_key = f"{self.devices_names[device_id]}/{device_id}"  # 这里不涉及二级device_id
-        # 添加到在线设备列表
-        self._online_devices.add(device_key)
-        # 新注册本地设备 action 后主动上报其 free 锁状态
-        self._report_action_locks_free(new_action_pairs)
+            if not wait_for_action_endpoints(
+                self._action_clients,
+                required_endpoint_ids,
+                wait_timeout=2.0,
+            ):
+                transport_error = (
+                    "device_action_transport_not_ready: "
+                    f"device={device_id}, required_endpoints={required_endpoint_ids}"
+                )
+                self.lab_logger().error(transport_error)
+                raise RuntimeError(transport_error)
+            self.devices_names[device_id] = namespace
+            self.device_machine_names[device_id] = "本地"
+            self.devices_instances[device_id] = device_wrapper
+            self._action_value_mappings[device_id] = action_mappings
+            self._online_devices.add(f"{namespace}/{device_id}")
+            self._report_action_locks_free(new_action_pairs)
+        except Exception:
+            for action_id in created_clients:
+                self._action_clients.pop(action_id, None)
+            raise
 
     def update_device_status_subscriptions(self) -> None:
         """
@@ -1107,6 +1156,19 @@ class HostNode(BaseROS2DeviceNode):
             and BasicConfig.action_mode == "simulate"
         ):
             self._register_simulated_device(device_id, device_config)
+            # Host 只遍历物理图根节点。dry-run 不构造工站驱动，子设备
+            # 不会再走 attach_initialized_device，必须在这里把子设备目录
+            # 一并投影出去，否则控制台 /devices 只有工站根。
+            for child in getattr(device_config, "children", None) or []:
+                child_content = getattr(child, "res_content", None)
+                if child_content is None:
+                    continue
+                if getattr(child_content, "type", None) != "device":
+                    continue
+                child_id = getattr(child_content, "id", "")
+                if not child_id or child_id in self.devices_names:
+                    continue
+                self._initialize_configured_device(child_id, child)
             return
         self.initialize_device(device_id, device_config)
 

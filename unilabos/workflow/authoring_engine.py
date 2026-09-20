@@ -174,11 +174,16 @@ class WorkflowAuthoringEngine:
                 code=error.code,
                 message=error.message,
             )
-        except CandidateBundleError:
+        except CandidateBundleError as error:
+            detail = str(error).strip()
             return _error_result(
                 fingerprint=self.template_catalog_fingerprint,
                 code="candidate_invalid",
-                message="生成的候选结果不能通过公共工作流校验",
+                message=(
+                    f"生成的候选结果不能通过公共工作流校验：{detail}"
+                    if detail
+                    else "生成的候选结果不能通过公共工作流校验"
+                ),
             )
         except (KeyError, TypeError, UnicodeError, ValueError):
             return _error_result(
@@ -283,11 +288,16 @@ class WorkflowAuthoringEngine:
                 code=error.code,
                 message=error.message,
             )
-        except CandidateBundleError:
+        except CandidateBundleError as error:
+            detail = str(error).strip()
             return _error_result(
                 fingerprint=self.template_catalog_fingerprint,
                 code="candidate_invalid",
-                message="候选图不能通过公共工作流校验",
+                message=(
+                    f"候选图不能通过公共工作流校验：{detail}"
+                    if detail
+                    else "候选图不能通过公共工作流校验"
+                ),
             )
         except (KeyError, TypeError, UnicodeError, ValueError):
             return _error_result(

@@ -1,0 +1,666 @@
+{
+  "metadata": {
+    "purpose": "simulation",
+    "owner": "gn-lab",
+    "version": "0.1.0",
+    "notes": "dry-run：不连现场 OPC/PRCXI；workspace --runtime-mode dry-run 会把 action_mode 设为 simulate。",
+    "legacy_source": "GN_station.json"
+  },
+  "nodes": [
+    {
+      "id": "gn_workstation",
+      "name": "GN 有机合成工作站",
+      "children": [
+        "gn_robotic_arm",
+        "gn_locking_mechanism",
+        "gn_centrifuge_tube_liquid_handling",
+        "gn_quick_carrier_exchange",
+        "gn_solid_weighing",
+        "gn_rotary_stack",
+        "gn_centrifuge",
+        "gn_standard_oven",
+        "gn_vacuum_oven",
+        "PRCXI"
+      ],
+      "parent": null,
+      "type": "device",
+      "class": "community.gn_lab.gn_workstation",
+      "icon": "gn_full_station_icon.webp",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 400,
+          "depth": 2500
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "protocol_type": [],
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_robotic_arm",
+      "name": "机械手",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_robotic_arm",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_locking_mechanism",
+      "name": "锁紧模块",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_locking_mechanism",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_centrifuge_tube_liquid_handling",
+      "name": "离心管液体处理",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_centrifuge_tube_liquid_handling",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "xlsx_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_quick_carrier_exchange",
+      "name": "快速载具交换",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_quick_carrier_exchange",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_solid_weighing",
+      "name": "固体加样",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_solid_weighing",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "xlsx_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_rotary_stack",
+      "name": "旋转堆栈",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_rotary_stack",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_centrifuge",
+      "name": "离心机",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_centrifuge",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_standard_oven",
+      "name": "常规烘箱",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_standard_oven",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "csv_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "gn_vacuum_oven",
+      "name": "真空烘箱",
+      "children": [],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_vacuum_oven",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 2110,
+          "height": 90,
+          "depth": 400
+        }
+      },
+      "config": {
+        "url": "opc.tcp://192.168.6.6:4840",
+        "xlsx_path": "opcua_gn1.3.9.csv",
+        "use_subscription": false,
+        "auto_connect": false
+      },
+      "data": {}
+    },
+    {
+      "id": "PRCXI",
+      "name": "PRCXI",
+      "children": [
+        "PRCXI_Deck"
+      ],
+      "parent": "gn_workstation",
+      "type": "device",
+      "class": "community.gn_lab.gn_prcxi",
+      "position": {
+        "x": 700,
+        "y": 240,
+        "z": 0
+      },
+      "pose": {
+        "size": {
+          "width": 1,
+          "height": 400,
+          "depth": 0
+        }
+      },
+      "config": {
+        "axis": "Left",
+        "deck": {
+          "_resource_type": "unilabos.devices.workstation.GN.liquid_handling.prcxi.prcxi:PRCXI9300Deck",
+          "_resource_child_name": "PRCXI_Deck"
+        },
+        "host": "127.0.0.1",
+        "port": 9999,
+        "debug": true,
+        "setup": false,
+        "is_9320": true,
+        "timeout": 10,
+        "matrix_id": "32f6e587-c5cf-4efa-b82f-85b61ac8b6d8",
+        "simulator": true,
+        "channel_num": 96,
+        "protocol_version": "v04",
+        "start_rail": 0,
+        "row_nums": 4,
+        "column_nums": 4,
+        "prc_sites_config": [],
+        "pip_setting": {
+          "left": {
+            "vol": 1250,
+            "channels": 96
+          }
+        },
+        "step_mode": false,
+        "touch_tip_mode": "native",
+        "touch_tip_wall": "follow_axis"
+      },
+      "data": {
+        "reset_ok": true
+      },
+      "schema": {},
+      "description": "",
+      "model": null
+    },
+    {
+      "id": "PRCXI_Deck",
+      "name": "PRCXI_Deck",
+      "children": [],
+      "parent": "PRCXI",
+      "type": "deck",
+      "class": "community.gn_lab.prcxi_deck",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "config": {
+        "type": "PRCXI9300Deck",
+        "size_x": 825,
+        "size_y": 400,
+        "size_z": 17,
+        "rotation": {
+          "x": 0,
+          "y": 0,
+          "z": 0,
+          "type": "Rotation"
+        },
+        "category": "deck",
+        "barcode": null,
+        "preferred_pickup_location": null,
+        "sites": [
+          {
+            "index": "T1",
+            "label": "T1",
+            "position": {
+              "x": 5.0,
+              "y": 301.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trash"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T2",
+            "label": "T2",
+            "position": {
+              "x": 142.5,
+              "y": 301.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T3",
+            "label": "T3",
+            "position": {
+              "x": 280.0,
+              "y": 301.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T4",
+            "label": "T4",
+            "position": {
+              "x": 417.5,
+              "y": 301.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "96_well_plate"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T5",
+            "label": "T5",
+            "position": {
+              "x": 5.0,
+              "y": 205.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [],
+            "visible": true
+          },
+          {
+            "index": "T6",
+            "label": "T6",
+            "position": {
+              "x": 142.5,
+              "y": 205.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T7",
+            "label": "T7",
+            "position": {
+              "x": 280.0,
+              "y": 205.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T8",
+            "label": "T8",
+            "position": {
+              "x": 417.5,
+              "y": 205.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T9",
+            "label": "T9",
+            "position": {
+              "x": 5.0,
+              "y": 109.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [],
+            "visible": true
+          },
+          {
+            "index": "T10",
+            "label": "T10",
+            "position": {
+              "x": 142.5,
+              "y": 109.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T11",
+            "label": "T11",
+            "position": {
+              "x": 280.0,
+              "y": 109.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "tip_rack"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T12",
+            "label": "T12",
+            "position": {
+              "x": 417.5,
+              "y": 109.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "tip_rack"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T13",
+            "label": "T13",
+            "position": {
+              "x": 5.0,
+              "y": 13.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [],
+            "visible": true
+          },
+          {
+            "index": "T14",
+            "label": "T14",
+            "position": {
+              "x": 142.5,
+              "y": 13.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T15",
+            "label": "T15",
+            "position": {
+              "x": 280.0,
+              "y": 13.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "tip_rack"
+            ],
+            "visible": true
+          },
+          {
+            "index": "T16",
+            "label": "T16",
+            "position": {
+              "x": 417.5,
+              "y": 13.0,
+              "z": 0.0
+            },
+            "size": {
+              "width": 128.0,
+              "height": 86.0,
+              "depth": 0.0
+            },
+            "content_type": [
+              "trough"
+            ],
+            "visible": true
+          }
+        ]
+      },
+      "data": {}
+    }
+  ],
+  "links": []
+}

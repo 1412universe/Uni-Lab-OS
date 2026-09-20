@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gn-lab"
+version = "0.1.0"
+description = "GN 有机合成工作站设备包：真机 OPC UA 驱动，适配 kernel-v2 工作区挂载。"
+requires-python = ">=3.11"
+dependencies = ["unilabos"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["gn_lab*"]
+
+[tool.unilabos.startup]
+graph = "deployment/graphs/gn-station.json"
+config = "deployment/local_config.py"
+ensure_dependencies = true
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

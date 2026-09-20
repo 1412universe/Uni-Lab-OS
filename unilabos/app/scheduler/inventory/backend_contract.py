@@ -506,7 +506,8 @@ class BackendResourceService:
         同一个 ``resource_template_uuid`` 外部字段。
         """
 
-        material_uuid = str(uuid4())
+        requested_uuid = _optional_uuid(values.get("uuid"))
+        material_uuid = requested_uuid or str(uuid4())
         template_uuid = str(values.get("resource_template_uuid") or "")
         parent_uuid = _optional(values.get("parent_uuid"))
         barcode = str(values.get("barcode") or "")

@@ -1313,14 +1313,14 @@ def get_devices() -> JSONResponse:
     ):
         return JSONResponse(content={"code": 0, "data": []})
     registration = edge_backend.store.latest_registration()
-    # ``type`` 与 ``revision`` 只在本设备读模型中从现有权威表连接；本接口
-    # 不改变 `/materials` 合同或库存 Schema。设备 Material 的实例类型等于
-    # 所属设备模板类型，修订沿用 material_inventory 聚合版本。
+    # 设备物料的模板在 device catalog，不必存在于 resource_template。
+    # INNER JOIN 会把 PRCXI 等设备行全部丢掉，控制台 /devices 变空、全员离线。
     materials = inventory_service.store.query_all(
-        "SELECT material.*,resource_template.resource_type AS type,"
+        "SELECT material.*,"
+        "COALESCE(resource_template.resource_type, material.type) AS type,"
         "COALESCE(material_inventory.aggregate_version,1) AS revision "
         "FROM material "
-        "JOIN resource_template ON resource_template.uuid="
+        "LEFT JOIN resource_template ON resource_template.uuid="
         "material.resource_template_uuid "
         "LEFT JOIN material_inventory ON material_inventory.material_uuid="
         "material.uuid "
