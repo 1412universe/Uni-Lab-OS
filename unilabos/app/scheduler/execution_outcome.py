@@ -33,12 +33,20 @@ def normalize_executor_outcome(
         if isinstance(return_info, Mapping) and "return_value" in return_info
         else return_info
     )
-    if (
-        outcome == "succeeded"
-        and isinstance(action_result, Mapping)
-        and action_result.get("success") is False
-    ):
-        outcome = "failed"
+    if outcome == "succeeded" and isinstance(action_result, Mapping):
+        # 设备动作有两类常见的失败回执：旧驱动使用
+        # ``success=false``，PLC/机器人动作则经常返回
+        # ``state/status=REJECTED``。两者都表示动作已经明确结束，不能
+        # 被当作传输成功继续推进；只有显式的 unknown_command_ids 才会
+        # 在更上层进入物理对账，不在这里伪造停止或释放未知占用。
+        state = action_result.get("state", action_result.get("status"))
+        normalized_state = str(state or "").strip().casefold()
+        if action_result.get("success") is False or normalized_state in {
+            "rejected",
+            "failed",
+            "error",
+        }:
+            outcome = "failed"
     if cancel_requested and outcome == "failed":
         return "canceled"
     return outcome

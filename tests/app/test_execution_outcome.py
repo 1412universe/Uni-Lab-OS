@@ -21,6 +21,35 @@ def test_nested_business_failure_overrides_success_transport_status() -> None:
     )
 
 
+def test_explicit_rejected_state_overrides_success_transport_status() -> None:
+    """PLC/机器人以 ``state=REJECTED`` 返回时必须结束为明确失败。"""
+
+    assert (
+        normalize_executor_outcome(
+            "success",
+            {
+                "return_value": {
+                    "state": "REJECTED",
+                    "message": "放料目标库位已占用",
+                }
+            },
+        )
+        == "failed"
+    )
+
+
+def test_explicit_rejected_status_is_case_insensitive() -> None:
+    """不同设备使用 ``status=failed/error`` 时同样按明确失败处理。"""
+
+    assert (
+        normalize_executor_outcome(
+            "success",
+            {"return_value": {"status": "Failed"}},
+        )
+        == "failed"
+    )
+
+
 def test_cancel_requested_maps_failed_transport_to_canceled() -> None:
     """已请求取消的作业收到失败终态时按执行协议收敛为取消。
 

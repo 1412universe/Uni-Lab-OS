@@ -812,7 +812,17 @@ class TaskSchedulerBridge:
             admission is not None and admission.get("status") == "blocked"
         )
         if scheduler_snapshot is None and not admission_pending:
-            raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
+            # 已持久取消的 Task 可以在进程重启后幂等重放同一取消命令；此时
+            # 内存 DAG 已不存在，但仍须继续走投影与库存释放，最终让工站控制
+            # 命令从 PENDING 收口为 APPLIED。其他状态仍保持原有关闭失败语义。
+            try:
+                persisted_status = str(
+                    self._store.get_task(normalized_uuid).get("status") or ""
+                )
+            except StoreNotFound:
+                persisted_status = ""
+            if persisted_status != "canceled":
+                raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
         self._projection.project_cancel_requested(
             normalized_uuid,
             command_uuid=normalized_command_uuid,

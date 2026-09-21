@@ -21,6 +21,7 @@ from unilabos.app.edge_control.local_authority import (
 )
 from unilabos.app.edge_control.client import EdgeControlClient, EdgeControlSettings
 from unilabos.app.scheduler.dispatch import DispatchPayload
+from unilabos.app.scheduler.dispatch import CancelDispatchState
 
 
 def _payload(*, device_id: str = "robot-01") -> DispatchPayload:
@@ -268,6 +269,37 @@ def test_dispatch_is_idempotent_and_rejects_changed_identity(tmp_path: Path) -> 
         changed["device_id"] = "robot-02"
         with pytest.raises(ValueError, match="identity changed"):
             authority.dispatch(changed)
+    finally:
+        authority.stop()
+
+
+def test_cancel_persists_job_cancel_and_reports_async_acceptance(tmp_path: Path) -> None:
+    """本地控制面应受理取消命令，但不伪造设备已停止。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    accepted: list[bool] = []
+    try:
+        authority.dispatch(payload)
+
+        state = authority.cancel(payload["job_id"], accepted.append)
+
+        assert state is CancelDispatchState.REQUESTED
+        assert accepted == [True]
+        command = next(
+            item
+            for item in authority.store.pending_commands()
+            if item["type"] == "job.cancel"
+        )
+        assert command["payload"] == {"job_uuid": payload["job_id"]}
+        # 取消请求的本地受理不能改变设备动作的在途事实。
+        assert authority.store.job(payload["job_id"])["status"] == "pending"
+
+        # 重复点击取消复用同一未投递命令，不产生第二个物理请求。
+        assert authority.cancel(payload["job_id"], accepted.append) is CancelDispatchState.REQUESTED
+        assert len(
+            [item for item in authority.store.pending_commands() if item["type"] == "job.cancel"]
+        ) == 1
     finally:
         authority.stop()
 
