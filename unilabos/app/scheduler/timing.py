@@ -169,7 +169,7 @@ class _Samples:
 class TimingModel:
     """线程安全的分组预测器；默认策略参数可配置，不代表已通过工艺校验。"""
 
-    def __init__(self, *, quantile: float = 0.9, min_samples: int = 5,
+    def __init__(self, *, quantile: float = 0.9, min_samples: int = 1,
                  sample_limit: int = 512) -> None:
         if isinstance(quantile, bool) or not math.isfinite(quantile) or not 0.5 <= quantile < 1:
             raise ValueError("计划分位必须在 [0.5, 1) 内")

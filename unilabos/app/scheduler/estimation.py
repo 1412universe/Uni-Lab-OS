@@ -76,7 +76,8 @@ class DurationEstimator:
     static_defaults: Dict[str, float] = field(default_factory=dict)
     timing_specs: Dict[str, ActionTimingSpec] = field(default_factory=dict)
     plan_quantile: float = 0.9
-    minimum_samples: int = 5
+    # 一个完整的同类成功样本即可用于首轮排程；后续样本仍会继续校准。
+    minimum_samples: int = 1
     sample_limit: int = 512
 
     def __post_init__(self) -> None:

@@ -210,6 +210,18 @@ export function buildTaskGantt(
     for (const [nodeUuid, nodeReasons] of taskReasons || []) if (!knownNodeIds.has(nodeUuid)) {
       pending.push({ nodeUuid, name: nodeUuid || '任务', reason: [...new Set(nodeReasons)].join('；') })
     }
-    return { task, bars, pending, laneCount: assignLanes(bars) }
+    const laneCount = assignLanes(bars)
+    // 时间轴以预计/实际开始时间为主排序；同一时刻保持节点原始顺序，
+    // 这样后续待运行节点会按排程顺序显示，而不是被 DAG 插入顺序打散。
+    bars.sort((left, right) => left.startMs - right.startMs
+      || left.endMs - right.endMs || left.lane - right.lane || left.nodeUuid.localeCompare(right.nodeUuid))
+    pending.sort((left, right) => {
+      const leftPlan = taskPlans?.get(left.nodeUuid)
+      const rightPlan = taskPlans?.get(right.nodeUuid)
+      const leftStart = leftPlan?.start_ms ?? Number.POSITIVE_INFINITY
+      const rightStart = rightPlan?.start_ms ?? Number.POSITIVE_INFINITY
+      return leftStart - rightStart || left.nodeUuid.localeCompare(right.nodeUuid)
+    })
+    return { task, bars, pending, laneCount }
   })
 }
