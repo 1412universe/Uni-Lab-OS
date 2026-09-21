@@ -1126,6 +1126,45 @@ def test_fail_restarted_jobs_clears_unknown_busy_key(tmp_path: Path) -> None:
         authority.stop()
 
 
+def test_fail_restarted_jobs_retires_pending_error_decision(tmp_path: Path) -> None:
+    """强制收口作业时，人工决定命令也必须退役。
+
+    ``tmp_path`` 提供隔离 Authority SQLite 路径；返回为空。``job.error_decision``
+    的载荷用 ``job_id`` 承载作业身份，而其他下行命令用 ``job_uuid``；只按后者
+    清扫会让这条命令永远留在 pending，Edge 每次重连都要再收一遍一条已经没有
+    物理意义的命令。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    try:
+        authority.dispatch(payload)
+        start_command = authority.store.pending_commands()[0]
+        authority.store.acknowledge_command(start_command["message_uuid"])
+
+        decision_id = str(uuid.uuid4())
+        assert authority.publish_job_error_decision_required(
+            {
+                "decision_id": decision_id,
+                "task_id": payload["task_id"],
+                "job_id": payload["job_id"],
+                "device_id": payload["device_id"],
+                "action_name": payload["action"],
+                "options": [{"id": "retry", "action": "retry", "label": "重试"}],
+            }
+        )
+        assert authority.resolve_error_decision(decision_id, {"action": "retry"}) is True
+        assert [item["type"] for item in authority.store.pending_commands()] == [
+            "job.error_decision"
+        ]
+
+        authority.fail_restarted_jobs((payload["job_id"],))
+
+        assert authority.store.pending_commands() == []
+    finally:
+        authority.stop()
+
+
 def test_individual_ack_does_not_ack_paused_earlier_command(tmp_path: Path) -> None:
     """手动命令越过普通等待命令后，重连不能用最大序号吞掉未送达命令。"""
     authority = _authority(tmp_path / "authority.db")

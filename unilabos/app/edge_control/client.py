@@ -106,6 +106,31 @@ def _unknown_command_ids_for_job(
     ]
 
 
+_SETTLED_JOB_STATUSES = frozenset(
+    {
+        "outcome_pending",
+        "outcome_committed",
+        "outcome_committed_unknown",
+        "outcome_retired",
+        "completed",
+    }
+)
+
+
+def _job_is_settled(status: str) -> bool:
+    """判断一个作业镜像是否已经在设备执行账本上收口。
+
+    参数：``status`` 是 ``edge_job_runtime`` 中的作业状态。
+    返回：作业已提交结果、已物理结算或已退役时返回 ``True``。
+    语义：与 ``EdgeControlStore.save_pending_outcome`` 拒绝迟到回调的判据
+    保持一致；已收口的作业不再接受任何改变执行走向的下行命令。
+    """
+
+    return status in _SETTLED_JOB_STATUSES or status.startswith(
+        "outcome_resolution_pending_final:"
+    )
+
+
 def _registration_action_mappings(
     host_node: Any,
     device_id: str,
@@ -931,6 +956,21 @@ class EdgeControlClient(BaseCommunicationClient):
         device_id = str(payload.get("device_id") or "")
         if not decision_id or not job_id or not device_id:
             raise ValueError("job.error_decision identity is required")
+        # 人工决定只能改变仍然在设备边界内等待的动作走向。作业镜像已经
+        # 收口或根本不在本 Authority 的账本里时，这条命令永远不可能被设备
+        # 接受；继续抛错会让它永远得不到 ACK，而 Backend 每次重连都重投同
+        # 一条命令，生产控制面因此永久无法就绪，也无法再派发任何新作业。
+        # 这种命令必须就地退役，并且不改变任何物理状态。
+        job = self.store.get_job(job_id)
+        if job is None or _job_is_settled(job.status):
+            logger.warning(
+                f"[EdgeControl] 忽略已收口作业 {job_id[:8]} 的人工决定 "
+                f"{decision_id[:8]}：作业状态="
+                f"{job.status if job is not None else 'absent'}"
+            )
+            self._enqueue_event("command.ack", {"command_uuid": command_uuid})
+            self.store.mark_command_completed(command_uuid)
+            return
         host = self._host_node_provider()
         wrapper = getattr(host, "devices_instances", {}).get(device_id) if host else None
         node = getattr(wrapper, "_ros_node", None)

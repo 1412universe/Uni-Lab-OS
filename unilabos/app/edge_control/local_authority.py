@@ -1370,9 +1370,17 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             try:
                 for job_uuid in normalized:
+                    # 下行命令的作业身份键并不统一：job.start / job.cancel /
+                    # job.resolve_unknown 用 ``job_uuid``，而 job.error_decision
+                    # 用 ``job_id``。只匹配前者会把人工决定命令永久留在
+                    # pending，Edge 每次重连都要重新收到一条已经没有物理意义
+                    # 的命令。作业既然被强制收口，两种键都必须退役。
                     self._connection.execute(
                         "UPDATE local_edge_command SET status='retired' "
-                        "WHERE json_extract(payload_json,'$.job_uuid')=? AND status='pending'",
+                        "WHERE status='pending' AND ? IN ("
+                        "  json_extract(payload_json,'$.job_uuid'),"
+                        "  json_extract(payload_json,'$.job_id')"
+                        ")",
                         (job_uuid,),
                     )
                     row = self._connection.execute(
