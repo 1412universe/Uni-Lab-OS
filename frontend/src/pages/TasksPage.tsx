@@ -39,6 +39,7 @@ import {
   loadWorkflowGraph,
   loadWorkflowInterventions,
   loadWorkflowTaskDetail,
+  loadWorkflowTaskDeleteEligibility,
   loadWorkflowTaskExecutionLocks,
   loadWorkflowTaskStepState,
   settleFailedMaterialTransfer,
@@ -522,6 +523,9 @@ function TaskNodeInspector({ task, node, connected, onNotify, onClose }: { task:
   )
 }
 
+/** 任务删除资格中由摘要状态即可判断的终态闭集，与 Edge 的终态门禁保持一致。 */
+const taskDeleteTerminalStatuses = new Set(['succeeded', 'failed', 'canceled', 'timeout'])
+
 function TaskDeleteAction({
   task,
   connected,
@@ -537,6 +541,17 @@ function TaskDeleteAction({
 }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  // 任务列表只返回摘要，没有 can_delete；终态判断可以从摘要得出，因此用它决定
+  // 按钮能否点开，真正的资格在对话框打开后按任务查询。
+  const terminal = taskDeleteTerminalStatuses.has(task.executionStatus || task.status)
+  const eligibilityQuery = useQuery({
+    queryKey: ['workflow-task-delete-eligibility', task.uuid],
+    queryFn: ({ signal }) => loadWorkflowTaskDeleteEligibility(task.uuid, signal),
+    enabled: open && connected,
+    staleTime: 0,
+    gcTime: 0,
+  })
+  const eligibility = eligibilityQuery.data
   const mutation = useMutation({
     mutationFn: () => deleteWorkflowTask(task.uuid),
     onSuccess: (result) => {
@@ -550,48 +565,84 @@ function TaskDeleteAction({
     },
     onError: (error) => {
       onNotify(`删除任务失败：${error instanceof Error ? error.message : '未知错误'}`)
+      // 删除被服务端门禁拒绝时立刻重取资格，把最新阻塞原因展示在对话框里。
+      void eligibilityQuery.refetch()
       void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: ['workflow-task-detail', task.uuid] }, { cancelRefetch: false })
     },
   })
-  const blockers = task.deleteBlockers?.length
-    ? task.deleteBlockers
-    : task.canDelete === undefined
-      ? ['正在读取服务端删除资格']
-      : ['服务端尚未确认所有资源已释放']
+  const summaryBlockers = task.deleteBlockers?.length ? task.deleteBlockers : []
+  const dialogBlockers = eligibility?.blockers?.length
+    ? eligibility.blockers
+    : summaryBlockers
+  const buttonTitle = terminal
+    ? '删除任务'
+    : `任务状态为 ${task.executionStatus || task.status}，尚未进入终态，无法删除`
+  const confirmable = Boolean(
+    connected
+    && eligibility
+    && (eligibility.canDelete || eligibility.alreadyDeleted)
+    && !mutation.isPending,
+  )
+  // 矩阵行里的删除按钮位于 position: sticky 的任务单元内，该单元自成层叠上下文，
+  // 对话框留在原地会被行内其他层遮住，也会把点击冒泡成“选中任务”。
+  const dialog = open ? (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
+      <section className="task-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="task-delete-title">
+        <header>
+          <div><span>OPERATOR ACTION</span><h2 id="task-delete-title">删除任务</h2><p>{task.workflowName} · {task.uuid}</p></div>
+          <button type="button" aria-label="关闭删除任务对话框" onClick={() => setOpen(false)}><X size={18} /></button>
+        </header>
+        <div className="task-delete-dialog-content">
+          {eligibilityQuery.isPending ? (
+            <div className="task-delete-warning"><LoaderCircle className="spin" size={16} /><span>正在核验服务端删除资格…</span></div>
+          ) : eligibilityQuery.isError ? (
+            <div className="task-delete-warning"><AlertCircle size={16} /><span>无法读取删除资格：{eligibilityQuery.error instanceof Error ? eligibilityQuery.error.message : '未知错误'}</span></div>
+          ) : dialogBlockers.length ? (
+            <div className="task-delete-warning"><AlertCircle size={16} /><span>该任务暂时不能删除：{dialogBlockers.join('；')}</span></div>
+          ) : (
+            <div className="task-delete-warning"><AlertCircle size={16} /><span>该任务已进入终态且资源已释放。删除只隐藏 Edge 任务记录，运行事件、Job、库存和工作流定义会保留。</span></div>
+          )}
+          <dl className="task-delete-facts">
+            <div><dt>任务状态</dt><dd>{eligibility?.status || task.executionStatus || task.status}</dd></div>
+            <div><dt>清理状态</dt><dd>{eligibility?.cleanupStatus || task.cleanupStatus || 'none'}</dd></div>
+            <div><dt>资源检查</dt><dd>{eligibilityQuery.isPending ? '核验中' : dialogBlockers.length ? `${dialogBlockers.length} 项资源事实未收敛` : '无活动锁、Claim、托管或待处理命令'}</dd></div>
+          </dl>
+        </div>
+        <footer>
+          <Button type="button" onClick={() => setOpen(false)}>取消</Button>
+          {dialogBlockers.length && !eligibilityQuery.isPending ? (
+            <Button type="button" icon={<RefreshCw size={14} />} disabled={eligibilityQuery.isFetching} onClick={() => { void eligibilityQuery.refetch() }}>重新核验</Button>
+          ) : null}
+          <Button
+            type="button"
+            tone="danger"
+            icon={mutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
+            disabled={!confirmable}
+            title={confirmable ? '确认删除' : dialogBlockers.join('；') || '正在核验服务端删除资格'}
+            onClick={() => mutation.mutate()}
+          >
+            确认删除
+          </Button>
+        </footer>
+      </section>
+    </div>
+  ) : null
   return (
     <div className={`task-delete-action${compact ? ' task-delete-action-compact' : ''}`}>
       <div className="task-delete-action-row">
         <Button
           tone="danger"
           icon={mutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
-          disabled={!connected || !task.canDelete || mutation.isPending}
-          title={!task.canDelete ? blockers.join('；') : '删除任务'}
-          onClick={() => { mutation.reset(); setOpen(true) }}
+          disabled={!connected || !terminal || mutation.isPending}
+          title={buttonTitle}
+          onClick={(event) => { event.stopPropagation(); mutation.reset(); setOpen(true) }}
         >
           删除任务
         </Button>
-        {!task.canDelete ? <small className="task-delete-blocked">{blockers.join('；')}</small> : null}
+        {!terminal ? <small className="task-delete-blocked">{buttonTitle}</small> : null}
       </div>
-      {open ? (
-        <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
-          <section className="task-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="task-delete-title">
-            <header>
-              <div><span>OPERATOR ACTION</span><h2 id="task-delete-title">删除任务</h2><p>{task.workflowName} · {task.uuid}</p></div>
-              <button type="button" aria-label="关闭删除任务对话框" onClick={() => setOpen(false)}><X size={18} /></button>
-            </header>
-            <div className="task-delete-dialog-content">
-              <div className="task-delete-warning"><AlertCircle size={16} /><span>该任务已进入终态且资源已释放。删除只隐藏 Edge 任务记录，运行事件、Job、库存和工作流定义会保留。</span></div>
-              <dl className="task-delete-facts">
-                <div><dt>任务状态</dt><dd>{task.executionStatus || task.status}</dd></div>
-                <div><dt>清理状态</dt><dd>{task.cleanupStatus || 'none'}</dd></div>
-                <div><dt>资源检查</dt><dd>无活动锁、Claim、托管或待处理命令</dd></div>
-              </dl>
-            </div>
-            <footer><Button type="button" onClick={() => setOpen(false)}>取消</Button><Button type="button" tone="danger" icon={mutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} disabled={!connected || mutation.isPending} onClick={() => mutation.mutate()}>确认删除</Button></footer>
-          </section>
-        </div>
-      ) : null}
+      {dialog ? (typeof document !== 'undefined' ? createPortal(dialog, document.body) : dialog) : null}
     </div>
   )
 }

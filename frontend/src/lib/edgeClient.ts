@@ -106,6 +106,16 @@ export interface WorkflowTaskDeletionResult {
   deletedAt?: string
 }
 
+/** Edge 逐任务按需核验的软删除资格；列表接口只返回任务摘要。 */
+export interface WorkflowTaskDeleteEligibility {
+  workflowTaskUuid: string
+  canDelete: boolean
+  alreadyDeleted: boolean
+  blockers: string[]
+  status: string
+  cleanupStatus: string
+}
+
 const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
 const taskStatuses = new Set<TaskPresentationStatus>([
   'running',
@@ -3186,6 +3196,30 @@ export async function updateWorkflowTaskJobParam(
     `/workflow-tasks/${encodeURIComponent(taskUuid)}/jobs/${encodeURIComponent(jobUuid)}/param`,
     { param },
   )
+}
+
+/**
+ * 读取单个任务的软删除资格。
+ * 任务列表只返回摘要，没有 can_delete 字段；删除确认框打开时按任务查询这里的
+ * 权威资格，最终的删除仍由 Edge 在删除事务内重新核验。
+ */
+export async function loadWorkflowTaskDeleteEligibility(
+  taskUuid: string,
+  signal?: AbortSignal,
+): Promise<WorkflowTaskDeleteEligibility> {
+  const raw = await requestData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/delete-eligibility`,
+    signal,
+  )
+  const blockers = adaptTaskDeleteBlockers(raw)
+  return {
+    workflowTaskUuid: raw.workflow_task_uuid ? String(raw.workflow_task_uuid) : taskUuid,
+    canDelete: raw.can_delete === true,
+    alreadyDeleted: raw.already_deleted === true,
+    blockers,
+    status: String(raw.status || ''),
+    cleanupStatus: String(raw.cleanup_status || 'none'),
+  }
 }
 
 /**

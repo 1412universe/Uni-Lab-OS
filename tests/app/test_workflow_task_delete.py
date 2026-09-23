@@ -104,6 +104,54 @@ def test_cleanup_residue_blocks_delete_even_when_task_is_terminal(tmp_path):
     store.close()
 
 
+def test_delete_eligibility_endpoint_reports_terminal_task_as_deletable(tmp_path):
+    client, store = _client(tmp_path)
+    task_uuid = _task(client, store)
+
+    blocked = client.get(f"/api/v1/workflow-tasks/{task_uuid}/delete-eligibility")
+    assert blocked.status_code == 200
+    blocked_data = blocked.json()["data"]
+    assert blocked_data["workflow_task_uuid"] == task_uuid
+    assert blocked_data["can_delete"] is False
+    assert blocked_data["already_deleted"] is False
+    assert any("尚未进入终态" in value for value in blocked_data["delete_blockers"])
+
+    _mark_terminal(store, task_uuid, status="canceled", cleanup="settled")
+    ready = client.get(f"/api/v1/workflow-tasks/{task_uuid}/delete-eligibility").json()["data"]
+    assert ready["can_delete"] is True
+    assert ready["delete_blockers"] == []
+    assert ready["status"] == "canceled"
+    assert ready["cleanup_status"] == "settled"
+
+    # 列表读契约保持紧凑：资格只在按任务的资格接口上提供。
+    listed = client.get("/api/v1/workflow-tasks").json()["data"]["items"][0]
+    assert "can_delete" not in listed
+    store.close()
+
+
+def test_delete_eligibility_endpoint_is_readable_after_soft_delete(tmp_path):
+    client, store = _client(tmp_path)
+    task_uuid = _task(client, store)
+    _mark_terminal(store, task_uuid)
+    assert client.delete(f"/api/v1/workflow-tasks/{task_uuid}").json()["data"]["status"] == "deleted"
+
+    eligibility = client.get(f"/api/v1/workflow-tasks/{task_uuid}/delete-eligibility").json()["data"]
+    assert eligibility["already_deleted"] is True
+    assert eligibility["can_delete"] is False
+    assert eligibility["delete_blockers"] == []
+    assert eligibility["deleted_at"]
+    store.close()
+
+
+def test_delete_eligibility_endpoint_rejects_unknown_task(tmp_path):
+    client, store = _client(tmp_path)
+    missing = client.get(f"/api/v1/workflow-tasks/{uuid4()}/delete-eligibility")
+    assert missing.json()["code"] == 3002
+    invalid = client.get("/api/v1/workflow-tasks/not-a-uuid/delete-eligibility")
+    assert invalid.json()["code"] != 0
+    store.close()
+
+
 def test_open_intervention_is_reported_as_delete_blocker(tmp_path):
     client, store = _client(tmp_path)
     task_uuid = _task(client, store)

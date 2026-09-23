@@ -1890,6 +1890,20 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def get_workflow_task(task_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_task(task_uuid))
 
+    @router.get(
+        "/workflow-tasks/{task_uuid}/delete-eligibility",
+        summary="查询工作流任务删除资格",
+        description="按需核验单个任务是否可以软删除，并返回阻塞原因；任务列表接口只返回摘要，不承载资格字段。",
+    )
+    def get_workflow_task_delete_eligibility(task_uuid: str) -> JSONResponse:
+        """返回单个任务的软删除资格与阻塞原因。
+
+        控制台在打开删除确认框时调用；真正的删除仍由 DELETE 接口在同一事务内
+        重新核验，本接口只用于交互提示，不是安全门禁。
+        """
+
+        return _success(service.get_workflow_task_delete_eligibility(task_uuid))
+
     @router.delete(
         "/workflow-tasks/{task_uuid}",
         summary="删除工作流任务",

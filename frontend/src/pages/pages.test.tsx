@@ -1059,6 +1059,123 @@ describe('TasksPage', () => {
     expect(container.querySelector('.task-delete-action-compact')).toContainElement(deleteButton)
   })
 
+  it('keeps the matrix delete action usable for list-projected tasks and gates it on fetched eligibility', async () => {
+    // 任务列表接口只返回摘要，没有 can_delete；终态任务的删除按钮必须仍然可点，
+    // 权威资格在对话框打开后按任务查询。
+    const listProjectedTask = {
+      ...demoTasks[0],
+      uuid: 'list-projected-task',
+      status: 'canceled' as const,
+      executionStatus: 'canceled' as const,
+      cleanupStatus: 'settled',
+      canDelete: undefined,
+      deleteBlockers: undefined,
+    }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith(`/workflow-tasks/${listProjectedTask.uuid}/delete-eligibility`)) {
+        return response({
+          code: 0,
+          data: {
+            workflow_task_uuid: listProjectedTask.uuid,
+            can_delete: false,
+            already_deleted: false,
+            delete_blockers: ['仍有 1 个人工干预未关闭'],
+            status: 'canceled',
+            cleanup_status: 'settled',
+          },
+        })
+      }
+      return response({ code: 0, data: { items: [], total: 0 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <TasksPage
+        tasks={[listProjectedTask]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const deleteButton = screen.getByRole('button', { name: '删除任务' })
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+
+    const dialog = await screen.findByRole('dialog', { name: '删除任务' })
+    expect(await within(dialog).findByText(/仍有 1 个人工干预未关闭/)).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '确认删除' })).toBeDisabled()
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/workflow-tasks/${listProjectedTask.uuid}/delete-eligibility`,
+      expect.objectContaining({ headers: { Accept: 'application/json' } }),
+    )
+  })
+
+  it('confirms deletion once fetched eligibility clears the task', async () => {
+    const deletableTask = {
+      ...demoTasks[0],
+      uuid: 'deletable-task',
+      status: 'succeeded' as const,
+      executionStatus: 'succeeded' as const,
+      cleanupStatus: 'none',
+      canDelete: undefined,
+      deleteBlockers: undefined,
+    }
+    const notify = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith(`/workflow-tasks/${deletableTask.uuid}/delete-eligibility`)) {
+        return response({
+          code: 0,
+          data: {
+            workflow_task_uuid: deletableTask.uuid,
+            can_delete: true,
+            already_deleted: false,
+            delete_blockers: [],
+            status: 'succeeded',
+            cleanup_status: 'none',
+          },
+        })
+      }
+      if (init?.method === 'DELETE') {
+        return response({
+          code: 0,
+          data: { status: 'deleted', workflow_task_uuid: deletableTask.uuid },
+        })
+      }
+      return response({ code: 0, data: { items: [], total: 0 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <TasksPage
+        tasks={[deletableTask]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        onRefresh={vi.fn()}
+        onNotify={notify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '删除任务' }))
+    const dialog = await screen.findByRole('dialog', { name: '删除任务' })
+    const confirm = within(dialog).getByRole('button', { name: '确认删除' })
+    await waitFor(() => expect(confirm).toBeEnabled())
+    fireEvent.click(confirm)
+
+    await waitFor(() => expect(notify).toHaveBeenCalledWith('任务已删除。'))
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/workflow-tasks/${deletableTask.uuid}`,
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
   it('shows the authoritative task priority in each matrix identity card', () => {
     const tasks = [
       { ...demoTasks[0], priority: 'high' as const },

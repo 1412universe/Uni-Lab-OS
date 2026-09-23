@@ -4908,6 +4908,34 @@ class WorkflowService:
         except StoreNotFound:
             raise WorkflowError("not_found") from None
 
+    def get_workflow_task_delete_eligibility(self, task_uuid: str) -> dict[str, Any]:
+        """按任务按需读取软删除资格，供控制台在删除前核验。
+
+        参数：``task_uuid`` 是任务稳定 UUID。返回：``can_delete``、
+        ``delete_blockers`` 与状态事实的紧凑投影；任务列表保持摘要读契约，
+        资格只在这里逐任务计算，避免列表接口放大成 N 次资源扫描。异常：非法
+        身份映射为 ``invalid_input``；任务不存在映射为 ``not_found``。状态
+        不变量：只读，且不能替代删除事务内的权威门禁。
+        """
+
+        try:
+            identity = validate_uuid(task_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        try:
+            eligibility = self._store.task_delete_eligibility(identity)
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        return {
+            "workflow_task_uuid": identity,
+            "can_delete": bool(eligibility["can_delete"]),
+            "already_deleted": bool(eligibility["already_deleted"]),
+            "delete_blockers": list(eligibility["delete_blockers"]),
+            "status": str(eligibility["status"] or ""),
+            "cleanup_status": str(eligibility["cleanup_status"] or "none"),
+            "deleted_at": eligibility["deleted_at"],
+        }
+
     def delete_workflow_task(self, task_uuid: str) -> dict[str, Any]:
         """软删除一个已终态且全部资源已释放的 Edge WorkflowTask。
 
