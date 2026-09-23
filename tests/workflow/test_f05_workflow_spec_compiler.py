@@ -296,6 +296,44 @@ def test_fixed_existing_source_compiles_only_physical_consumers() -> None:
     assert spec.material_requirements_by_node() == {}
 
 
+def test_compiler_maps_template_passthrough_handles_to_runtime_handles() -> None:
+    """发布合同中的模板句柄必须映射到执行计划物化的运行时句柄。
+
+    复合动作的 ``material_passthrough_handles`` 保存在工作流模板元数据中，
+    而执行计划会为每个节点生成新的 Handle UUID。若编译边界直接透传模板 UUID，
+    运行态 DAG 无法找到对应端口，后继作业会被错误地标成参数待定。
+    """
+
+    compiler_type, _error_type = _compiler_contract()
+    task_snapshot, jobs = _task_snapshot()
+    node = next(
+        item
+        for item in task_snapshot["execution_plan"]["nodes"]
+        if item["uuid"] == FIRST_NODE_UUID
+    )
+    node["meta_data"] = {
+        "unilab": {
+            "material_passthrough_handles": {
+                "73000000-0000-4000-8000-000000000003":
+                "73000000-0000-4000-8000-000000000002"
+            }
+        }
+    }
+    runtime_handles = {
+        item["template_handle_uuid"]: item["uuid"]
+        for item in task_snapshot["execution_plan"]["handles"]
+        if item["node_uuid"] == FIRST_NODE_UUID
+    }
+
+    spec = compiler_type().compile(task_snapshot, jobs)
+    compiled = next(item for item in spec.nodes if item.id == FIRST_NODE_UUID)
+
+    assert compiled.material_passthrough_handles == {
+        runtime_handles["73000000-0000-4000-8000-000000000003"]:
+        runtime_handles["73000000-0000-4000-8000-000000000002"]
+    }
+
+
 def test_material_resource_role_binds_fixed_resource_slot_to_material_mutex() -> None:
     """物料角色参数应直接冻结为该 Material UUID 的动作互斥资源。
 

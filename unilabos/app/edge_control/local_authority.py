@@ -393,7 +393,10 @@ class LocalEdgeAuthorityStore:
             rows = connection.execute(
                 """
                 SELECT job_uuid FROM local_edge_job
-                WHERE (status IN ('dispatched', 'running', 'unknown')
+                WHERE (
+                    status IN (
+                        'dispatched', 'running', 'cancel_requested', 'unknown'
+                    )
                     OR (? AND status='pending'))
                   AND outcome_json IS NULL
                 ORDER BY created_at, job_uuid
@@ -423,12 +426,22 @@ class LocalEdgeAuthorityStore:
                 changed = connection.execute(
                     """
                     UPDATE local_edge_job
-                    SET status = 'running', unknown_command_ids_json = '[]',
+                    SET status = CASE
+                            WHEN status = 'cancel_requested'
+                                OR ? = 'cancel_requested'
+                                THEN 'cancel_requested'
+                            ELSE 'running'
+                        END, unknown_command_ids_json = '[]',
                         updated_at = ?
                     WHERE job_uuid = ? AND command_uuid = ?
                       AND outcome_json IS NULL
                     """,
-                    (time.time(), job_uuid, command_uuid),
+                    (
+                        str(reported.get("state") or "running"),
+                        time.time(),
+                        job_uuid,
+                        command_uuid,
+                    ),
                 ).rowcount
                 if changed != 1:
                     raise ValueError("running Edge job identity is unknown")
@@ -468,14 +481,16 @@ class LocalEdgeAuthorityStore:
         """在调用方持有的写事务中固化物理动作结果不明事实。
 
         参数：``connection`` 是已进入 ``BEGIN IMMEDIATE`` 的 Authority 连接。
-        返回：从 ``dispatched`` 或 ``running`` 转为 ``unknown`` 的 Job UUID。
+        返回：从 ``dispatched``、``running`` 或 ``cancel_requested`` 转为
+        ``unknown`` 的 Job UUID。
         异常：SQLite 错误原样传播；本函数不提交也不回滚事务。
         """
 
         rows = connection.execute(
             """
             SELECT job_uuid FROM local_edge_job
-            WHERE status IN ('dispatched', 'running') AND outcome_json IS NULL
+            WHERE status IN ('dispatched', 'running', 'cancel_requested')
+              AND outcome_json IS NULL
             """
         ).fetchall()
         job_uuids = [str(row["job_uuid"]) for row in rows]
@@ -1394,6 +1409,7 @@ class LocalEdgeAuthorityStore:
                         "pending",
                         "dispatched",
                         "running",
+                        "cancel_requested",
                         "unknown",
                         "outcome_pending",
                     }:
@@ -1431,6 +1447,7 @@ class LocalEdgeAuthorityStore:
                         WHERE job_uuid = ?
                           AND status IN (
                               'pending', 'dispatched', 'running',
+                              'cancel_requested',
                               'unknown', 'outcome_pending'
                           )
                         """,
@@ -1449,7 +1466,9 @@ class LocalEdgeAuthorityStore:
             rows = self._connection.execute(
                 """
                 SELECT device_action_key FROM local_edge_job
-                WHERE status IN ('pending', 'dispatched', 'running', 'unknown')
+                WHERE status IN (
+                    'pending', 'dispatched', 'running', 'cancel_requested', 'unknown'
+                )
                 """
             ).fetchall()
         return {str(row["device_action_key"]) for row in rows}

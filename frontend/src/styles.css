@@ -846,6 +846,23 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .task-step-inline-actions { display: flex; flex-wrap: wrap; gap: 5px; }
 .task-step-inline-actions .button { min-height: 27px; padding: 0 8px; gap: 4px; border-radius: 6px; box-shadow: none; font-size: 8px; }
 .task-step-inline-actions .button:disabled { cursor: not-allowed; opacity: .45; transform: none; }
+.task-delete-action { display: grid; gap: 5px; margin: 12px 0 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.task-delete-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.task-delete-action .button { min-height: 29px; }
+.task-delete-blocked { color: #98a2b3; font-size: 8px; line-height: 1.35; }
+.task-delete-dialog { width: min(510px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #e4e7ec; border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,.28); }
+.task-delete-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; padding: 17px 18px; border-bottom: 1px solid var(--line); }
+.task-delete-dialog > header span { color: #b42318; font-size: 8px; font-weight: 800; letter-spacing: .12em; }
+.task-delete-dialog > header h2 { margin-top: 5px; font-size: 17px; }
+.task-delete-dialog > header p { margin-top: 5px; overflow: hidden; color: var(--muted); font: 8px 'JetBrains Mono', monospace; text-overflow: ellipsis; white-space: nowrap; }
+.task-delete-dialog > header button { display: grid; place-items: center; width: 30px; height: 30px; color: #475467; background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; }
+.task-delete-dialog-content { display: grid; gap: 13px; padding: 17px 18px; }
+.task-delete-warning { display: flex; align-items: flex-start; gap: 7px; padding: 9px 10px; color: #912f40; background: #fff5f6; border: 1px solid #fecdd3; border-radius: 8px; font-size: 9px; line-height: 1.5; }
+.task-delete-facts { display: grid; gap: 8px; margin: 0; }
+.task-delete-facts > div { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 7px; border-bottom: 1px solid #f2f4f7; font-size: 9px; }
+.task-delete-facts dt { color: var(--muted); }
+.task-delete-facts dd { margin: 0; color: var(--text); font-weight: 700; text-align: right; }
+.task-delete-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; background: #f9fafb; border-top: 1px solid var(--line); }
 .task-state-dot { width: 8px; height: 8px; background: #98a2b3; border-radius: 50%; }
 .task-state-running, .task-state-canceling { background: var(--blue); box-shadow: 0 0 0 3px #dfe7ff; }
 .task-state-admission_blocked, .task-state-pending, .task-state-paused { background: var(--amber); }
@@ -929,6 +946,14 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .historical-review-evidence > small { display: block; margin: 10px 0; }
 .historical-review-evidence pre { max-height: 200px; overflow: auto; margin: 6px 0 14px; padding: 10px; background: #f6f8fc; white-space: pre-wrap; overflow-wrap: anywhere; }
 .task-node-inspector > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; background: linear-gradient(100deg, #f6f8ff, #fff); border-bottom: 1px solid var(--line); }
+.node-evidence-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.node-evidence-heading > span { display: grid; gap: 2px; }
+.node-evidence-heading .button { min-height: 24px; padding: 0 8px; font-size: 9px; }
+.node-param-editor { display: grid; gap: 7px; }
+.node-param-editor textarea { min-height: 130px; width: 100%; padding: 9px; color: var(--ink); background: #fff; border: 1px solid #9bb0f8; border-radius: 8px; outline: 0; font: 10px/1.5 'JetBrains Mono', monospace; resize: vertical; }
+.node-param-editor > div { display: flex; justify-content: flex-end; gap: 6px; }
+.node-param-editor > div .button { min-height: 26px; padding: 0 10px; font-size: 9px; }
+.node-param-editor > small { color: var(--subtle); font-size: 8px; }
 .task-node-inspector > header span { color: #5f72a5; font: 8px 'JetBrains Mono', monospace; letter-spacing: .1em; }
 .task-node-inspector > header h2 { margin-top: 4px; color: #25324a; font-size: 13px; }
 .task-node-inspector > header p { margin-top: 4px; color: var(--subtle); font: 8px 'JetBrains Mono', monospace; }

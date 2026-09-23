@@ -86,6 +86,9 @@ class Handle:
     data_key: str = ""  # gjson 取值路径；target 侧可含 "@@@" 分隔的嵌套键
     node_id: str = ""  # 该 handle 挂在哪个 workflow_node 上（key 寻址时必需）
     io_type: str = ""  # source / target（对齐 workflow_handle_template.io_type）
+    # 执行计划中冻结的值类型。时间规划只对明确的 ResourceSlot 透传做静态
+    # 解析；缺省值保持旧工作流兼容，并按动态执行结果处理。
+    value_type: str = ""
 
 
 @dataclass
@@ -133,6 +136,10 @@ class WorkflowNode:
     resource_plan_id: str = ""
     resource_interval_ids: List[str] = field(default_factory=list)
     resource_acquire_set_id: str = ""
+    # 已由工作流合同证明的同节点 ResourceSlot 输入/输出透传：
+    # output_handle_uuid -> input_handle_uuid。它只用于时间规划快照，真实派发
+    # 仍以设备返回值和执行前校验为准。
+    material_passthrough_handles: Dict[str, str] = field(default_factory=dict)
 
     @property
     def device_action_key(self) -> str:
@@ -325,6 +332,21 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
     raw_resource_contract = data.get("action_resource_contract") or {}
     if not isinstance(raw_resource_contract, Mapping):
         raise TypeError("action_resource_contract 必须是对象")
+    # 新执行计划通常将合同元数据放在 meta_data.unilab；保留顶层字段兼容
+    # 直接调度输入和旧快照。两种位置同时存在时顶层字段优先，避免旧嵌套值
+    # 意外覆盖调用方明确提供的运行快照。
+    raw_passthrough = data.get("material_passthrough_handles")
+    if raw_passthrough is None:
+        raw_metadata = data.get("meta_data") or {}
+        raw_unilab = (
+            raw_metadata.get("unilab")
+            if isinstance(raw_metadata, Mapping)
+            and isinstance(raw_metadata.get("unilab"), Mapping)
+            else {}
+        )
+        raw_passthrough = raw_unilab.get("material_passthrough_handles", {})
+    if not isinstance(raw_passthrough, Mapping):
+        raise TypeError("material_passthrough_handles 必须是对象")
     raw_interval_ids = data.get("resource_interval_ids") or []
     if not isinstance(raw_interval_ids, list) or any(
         not isinstance(value, str) or not value.strip() for value in raw_interval_ids
@@ -363,6 +385,11 @@ def node_from_dict(data: Dict[str, Any]) -> WorkflowNode:
         resource_plan_id=str(data.get("resource_plan_id") or ""),
         resource_interval_ids=[str(value) for value in raw_interval_ids],
         resource_acquire_set_id=str(data.get("resource_acquire_set_id") or ""),
+        material_passthrough_handles={
+            str(output_uuid): str(input_uuid)
+            for output_uuid, input_uuid in raw_passthrough.items()
+            if str(output_uuid).strip() and str(input_uuid).strip()
+        },
     )
 
 
@@ -389,6 +416,7 @@ def handle_from_dict(data: Dict[str, Any]) -> Handle:
         data_key=data.get("data_key", "") or "",
         node_id=str(data.get("node_id", "") or ""),
         io_type=data.get("io_type", "") or "",
+        value_type=str(data.get("value_type", data.get("type", "")) or ""),
     )
 
 

@@ -185,6 +185,7 @@ def test_device_tenancy_blocks_other_task_until_successful_unload(
         execution_locks=_device_lock(DEVICE_A_UUID),
     )
     assert store.get_job(TASK_B_JOB)["status"] == "pending"
+    assert store.get_task(TASK_B_UUID)["status"] == "pending"
     active = projection.list_device_tenancies(task_uuid=TASK_A_UUID)
     assert [item["device_lock_key"] for item in active] == [f"/devices/{DEVICE_A_UUID}"]
 

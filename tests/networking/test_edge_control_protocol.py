@@ -2136,6 +2136,8 @@ def test_controlled_goal_acceptance_is_not_physical_start(tmp_path: Path) -> Non
         "received",
         "fetch_retry",
         "dispatching",
+        "running",
+        "cancel_requested",
         "outcome_pending",
         "outcome_committed_unknown",
     ],
@@ -2181,6 +2183,79 @@ def test_restarted_station_runtime_retires_old_mirrors_without_reconciliation(
         )
         # 默认 Host 未装配；旧 ACK 不得请求设备结算或 UNKNOWN 处置。
         client._retire_settled_device_command(store.event_for_ack(event_uuid))
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "execution_start_state", "expected_status"),
+    [
+        ("running", "START_COMMITTED", "running"),
+        ("running", "NOT_STARTED", "received"),
+        ("cancel_requested", "START_COMMITTED", "cancel_requested"),
+        ("cancel_requested", "NOT_STARTED", "cancel_requested"),
+    ],
+)
+def test_reconcile_restart_preserves_cancel_state_and_start_boundary(
+    tmp_path: Path,
+    status: str,
+    execution_start_state: str,
+    expected_status: str,
+) -> None:
+    """核实模式只重开有持久未启动证据的作业，并保留取消事实。"""
+
+    class ReconcileDataPlane(FakeDataPlane):
+        def fetch_job(self, job: StoredJob) -> dict[str, Any]:
+            return {
+                **super().fetch_job(job),
+                "station_controlled": True,
+                "recovery_policy": "reconcile",
+                "execution_start_state": execution_start_state,
+            }
+
+    path = tmp_path / "reconcile-runtime.db"
+    store = EdgeControlStore(str(path))
+    job_uuid = str(uuid.uuid4())
+    try:
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "reconcile-token",
+                **_claim_fields(),
+            },
+            str(uuid.uuid4()),
+        )
+        store.set_job_status(job_uuid, status)
+        client = EdgeControlClient(
+            _settings(path),
+            store=store,
+            data_plane=ReconcileDataPlane(),  # type: ignore[arg-type]
+            host_node_provider=FakeHostNode,
+        )
+
+        asyncio.run(client._resume_received_jobs())
+
+        restarted = store.get_job(job_uuid)
+        assert restarted is not None
+        assert restarted.status == expected_status
+        if status == "cancel_requested":
+            hello_jobs = client._hello_envelope()["payload"]["running_jobs"]
+            assert hello_jobs == [
+                {
+                    "job_uuid": job_uuid,
+                    "command_uuid": restarted.command_uuid,
+                    "state": "cancel_requested",
+                }
+            ]
+            # 后续传输失败结果仍必须按已受理取消归一为 canceled。
+            assert client._persist_terminal_status(
+                job_uuid, "failed", {}, {"message": "late failure"}
+            )
+            pending = store.get_pending_outcome(job_uuid)
+            assert pending is not None
+            assert pending.outcome == "canceled"
     finally:
         store.close()
 

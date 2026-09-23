@@ -945,10 +945,13 @@ class EdgeControlStore:
         """保留原回执；仅有持久未启动证明时重新开放同一命令的取参。"""
         with self._lock, self._immediate_transaction():
             self._connection.execute(
-                "UPDATE edge_job_runtime SET status=?,updated_at=? WHERE job_uuid=? "
+                "UPDATE edge_job_runtime SET status=CASE "
+                "WHEN status='cancel_requested' THEN 'cancel_requested' "
+                "WHEN ? THEN 'received' ELSE 'running' END,updated_at=? "
+                "WHERE job_uuid=? "
                 "AND status IN ('received','fetch_retry','dispatching','running','cancel_requested') "
                 "AND NOT EXISTS(SELECT 1 FROM edge_job_outcome_pending WHERE job_uuid=?)",
-                ("received" if not_started else "running", time.time(), job_uuid, job_uuid),
+                (bool(not_started), time.time(), job_uuid, job_uuid),
             )
             self._connection.execute(
                 "INSERT INTO edge_control_meta(key,value) VALUES(?,?) "

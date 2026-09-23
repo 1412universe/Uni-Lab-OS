@@ -208,6 +208,7 @@ class WorkflowSpecCompiler:
         compiled_nodes = self._compile_nodes(
             ordered_node_uuids=ordered_node_uuids,
             nodes=nodes,
+            handles=handles,
             jobs_by_node=jobs_by_node,
             task_input=(
                 task.get("input")
@@ -320,6 +321,7 @@ class WorkflowSpecCompiler:
         *,
         ordered_node_uuids: Sequence[str],
         nodes: Mapping[str, Mapping[str, Any]],
+        handles: Mapping[str, Mapping[str, Any]],
         jobs_by_node: Mapping[str, Mapping[str, Any]],
         task_input: Mapping[str, Any],
         control_enabled: bool,
@@ -606,6 +608,41 @@ class WorkflowSpecCompiler:
                 if dispatches_device_action
                 else None
             )
+            raw_node_metadata = node.get("meta_data")
+            raw_unilab_metadata = (
+                raw_node_metadata.get("unilab")
+                if isinstance(raw_node_metadata, Mapping)
+                and isinstance(raw_node_metadata.get("unilab"), Mapping)
+                else {}
+            )
+            raw_passthrough_handles = raw_unilab_metadata.get(
+                "material_passthrough_handles", {}
+            )
+            # 发布合同记录的是模板 Handle UUID，而执行计划为每个节点物化
+            # 新的运行 Handle UUID。必须在编译边界完成映射，否则运行态 DAG
+            # 找不到透传端口，后继节点会被错误地标成参数待定。
+            runtime_handle_by_template = {
+                str(raw_handle.get("template_handle_uuid")): str(raw_handle.get("uuid"))
+                for raw_handle in handles.values()
+                if str(raw_handle.get("node_uuid") or raw_handle.get("node_id") or "")
+                == node_uuid
+                and str(raw_handle.get("template_handle_uuid") or "").strip()
+                and str(raw_handle.get("uuid") or "").strip()
+            }
+
+            def runtime_handle_uuid(value: Any) -> str:
+                key = str(value or "").strip()
+                return runtime_handle_by_template.get(key, key)
+
+            passthrough_handles = (
+                {
+                    runtime_handle_uuid(output_uuid): runtime_handle_uuid(input_uuid)
+                    for output_uuid, input_uuid in raw_passthrough_handles.items()
+                    if str(output_uuid).strip() and str(input_uuid).strip()
+                }
+                if isinstance(raw_passthrough_handles, Mapping)
+                else {}
+            )
             compiled.append(
                 WorkflowNode(
                     id=node_uuid,
@@ -641,6 +678,7 @@ class WorkflowSpecCompiler:
                     resource_acquire_set_id=str(
                         node.get("resource_acquire_set_id") or ""
                     ),
+                    material_passthrough_handles=passthrough_handles,
                 )
             )
         return compiled
@@ -931,6 +969,9 @@ class WorkflowSpecCompiler:
                     data_key=str(raw_handle.get("data_key") or "").strip(),
                     node_id=owner_uuid,
                     io_type=str(raw_handle.get("io_type") or "").strip(),
+                    value_type=str(
+                        raw_handle.get("type", raw_handle.get("value_type", "")) or ""
+                    ).strip(),
                 )
             )
         return compiled

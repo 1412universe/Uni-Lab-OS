@@ -52,11 +52,17 @@ class TimeSchedulingAdapter:
         self._last_error = ""
         self._prefix_wait: dict[tuple[str, str], tuple[float, float, bool]] = {}
 
+    def invalidate(self) -> None:
+        """撤销整个时间计划；任务控制改变后下一轮按最新快照重排。"""
+        self.planner.invalidate()
+        self._targets.clear()
+        self._last_input = {}
+        self._last_error = ""
+
     def _priority(self, scheduler: EdgeScheduler, workflow_id: str, ready: list[ReadyTask], now: float) -> float:
         run = scheduler._workflows[workflow_id]
         eligible = (run.dispatch_gate == "active" and run.state.value == "running"
                     and any(task.workflow_id == workflow_id and not task.node.is_manual_confirm() for task in ready)
-                    and not any(job.workflow_id == workflow_id for job in scheduler._inflight.values())
                     and (scheduler._station_control is None or scheduler._station_control.allows_task(workflow_id)))
         accumulated, previous, was_eligible = self._wait.get(workflow_id, (0.0, now, False))
         if was_eligible:
@@ -137,7 +143,31 @@ class TimeSchedulingAdapter:
                 result.append(task)
                 continue
             entry = entries.get(key)
-            if entry is None or entry.fixed:
+            # 单步调试已经由执行内核确认了这个节点 ready，并通过
+            # ``_step_targets`` 临时打开了派发闸门。CP-SAT 是异步的，首轮
+            # 可能还没有 plan，或给该节点算出的开始时间在当前时刻之后；
+            # 这些预测只能约束自动排序，不能阻塞操作者明确放行的单步命令。
+            # 真实参数、资源和设备身份仍会在下方执行前检查中重新解析。
+            if scheduler._step_targets.get(task.workflow_id) == task.node.id:
+                # 单步只绕过预测的时间门禁，不能把固定事实或 tentative
+                # 参数当作新的执行许可。
+                if entry is not None and (entry.fixed or not entry.parameters_final):
+                    continue
+                if entry is None:
+                    result.append(task)
+                    continue
+                target = targets.get((task.workflow_id, task.node.id, entry.device_id))
+                if target is None:
+                    result.append(task)
+                    continue
+                result.append(replace(task, node=replace(
+                    task.node,
+                    device_id=target.local_device_id,
+                    device_material_uuid=target.material_uuid,
+                )))
+                continue
+            # 预测节点可以进入甘特图，但参数未越过真实执行边界时不能下发。
+            if entry is None or entry.fixed or not entry.parameters_final:
                 continue
             start_at = plan.time_origin + entry.start_ms / 1000
             if now + 0.001 < start_at:
@@ -241,6 +271,7 @@ class TimeSchedulingAdapter:
             blocked.extend((workflow_id, node_id, ";".join(reasons)) for node_id, reasons in view.blocked.items())
             if scheduler._station_control is not None and not scheduler._station_control.allows_task(workflow_id):
                 blocked.extend((workflow_id, node.id, "task_control_blocked") for node in view.nodes)
+                partial.add(workflow_id)
                 continue
             for node in view.nodes:
                 key = (workflow_id, node.id)
@@ -303,6 +334,69 @@ class TimeSchedulingAdapter:
                         tuple((workflow_id, parent) for parent in view.dependencies[node.id]), priorities[workflow_id])
                     facts.append((key, params, asdict(nodes[key])))
                 except (ValueError, TypeError, KeyError, ParamResolveError) as error:
+                    # 上游尚未返回但拓扑和动作身份已知时，保留一个仅展示的
+                    # tentative 节点。它会使用冻结参数/默认耗时估计，并在 order
+                    # 阶段被 parameters_final 门禁拦截；不得把它当作派发许可。
+                    if isinstance(error, ParamResolveError):
+                        try:
+                            params = node.param
+                            alternatives = []
+                            for target in self._devices(scheduler, node):
+                                action_key = f"/devices/{target.local_device_id}/{node.action_name}"
+                                timing = scheduler._estimator.estimate_timing(
+                                    action_key,
+                                    params,
+                                    device_id=target.material_uuid or target.local_device_id,
+                                    parameters_final=False,
+                                )
+                                if timing.planned_s is None:
+                                    continue
+                                # 未解析的业务参数不能计算真实动态锁；只保留冻结
+                                # 资源区间和设备身份用于展示排序，派发仍会重新解析。
+                                static_resources = {
+                                    interval_resources[interval_id]
+                                    for interval_id in node.resource_interval_ids
+                                    if interval_id in interval_resources
+                                }
+                                if not node.always_free or node.is_manual_confirm():
+                                    static_resources.add(
+                                        device_lock_key(
+                                            target.material_uuid or target.local_device_id
+                                        )
+                                    )
+                                alternatives.append(
+                                    PlanningAlternative(
+                                        target.local_device_id,
+                                        ticks(timing.planned_s),
+                                        tuple(sorted(static_resources)),
+                                    )
+                                )
+                                targets[(*key, target.local_device_id)] = target
+                            if alternatives:
+                                partial.add(workflow_id)
+                                blocked.append(
+                                    (*key, "parameters_tentative:" + str(error))
+                                )
+                                nodes[key] = PlanningNode(
+                                    key,
+                                    tuple(alternatives),
+                                    tuple(
+                                        (workflow_id, parent)
+                                        for parent in view.dependencies[node.id]
+                                    ),
+                                    priorities[workflow_id],
+                                    False,
+                                    None,
+                                    False,
+                                )
+                                # 候选包含未由真实回执确认的预测节点，不能把
+                                # 该候选的末端报告成整个任务已知完成时间。
+                                partial.add(workflow_id)
+                                facts.append((key, "tentative_parameters", str(error), asdict(nodes[key])))
+                                continue
+                        except (ValueError, TypeError, KeyError, ParamResolveError):
+                            # 设备/耗时也无法安全预测时，维持原有 blocked 语义。
+                            pass
                     blocked.append((*key, str(error)))
                     partial.add(workflow_id)
                     if isinstance(error, ParamResolveError):
@@ -400,7 +494,11 @@ class TimeSchedulingAdapter:
             # 竞争该区间的候选，直到不再产生新阻塞。实际持有始终保留。
         completion_targets = []
         current_prefixes: set[tuple[str, str]] = set()
-        for workflow_id in sorted({key[0] for key in nodes}):
+        # 目标按当前视图而非可见节点集合生成。资源冲突、站点控制、规模预算或
+        # 未知边界都可能把一个 workflow 的所有可见节点过滤掉；此时仍须返回
+        # information/partial_scope，不能让前端误以为没有该任务或任务已完成。
+        workflow_ids = sorted({view.workflow_id for view in views})
+        for workflow_id in workflow_ids:
             task_keys = tuple(sorted(key for key in nodes if key[0] == workflow_id))
             if workflow_id not in partial:
                 completion_targets.append(PlanningCompletionTarget(workflow_id, task_keys))

@@ -41,6 +41,55 @@ def activate_workflow_task(
     自然释放容量；重启后仍可从持久状态重建。
     """
 
+    decision = check_workflow_task_capacity(
+        connection,
+        task_uuid=task_uuid,
+        max_active_tasks=max_active_tasks,
+        max_tasks_per_workflow=max_tasks_per_workflow,
+    )
+    if not decision.available:
+        return decision
+
+    task = connection.execute(
+        "SELECT status FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
+        (task_uuid,),
+    ).fetchone()
+    if task is None:
+        raise StoreNotFound(f"工作流任务不存在：{task_uuid}")
+    if str(task["status"]) in _ACTIVE_TASK_STATUSES:
+        return CapacityDecision(available=True)
+    if task["status"] != "pending":
+        raise StoreConflict(f"工作流任务不能领取运行容量：{task_uuid}")
+
+    activated_at = utc_now()
+    changed = connection.execute(
+        """
+        UPDATE workflow_task
+        SET status = 'running', started_at = COALESCE(started_at, ?),
+            wait_reason = '{}', update_time = ?
+        WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
+        """,
+        (activated_at, activated_at, task_uuid),
+    ).rowcount
+    if changed != 1:
+        raise StoreConflict(f"工作流任务容量领取发生并发变化：{task_uuid}")
+    return CapacityDecision(available=True, activated=True)
+
+
+def check_workflow_task_capacity(
+    connection: sqlite3.Connection,
+    *,
+    task_uuid: str,
+    max_active_tasks: int,
+    max_tasks_per_workflow: int,
+) -> CapacityDecision:
+    """只检查任务容量，不改变任务的运行状态。
+
+    派发流程需要先完成设备托管和执行锁准入，再把父 Task 从 ``pending``
+    激活为 ``running``。这个只读（除记录等待原因外）门禁让调用方可以在
+    资源尝试前拒绝容量不足，同时避免资源已拿到后才发现父任务无法激活。
+    """
+
     _require_positive(max_active_tasks, field="max_active_tasks")
     _require_positive(max_tasks_per_workflow, field="max_tasks_per_workflow")
     task = connection.execute(
@@ -90,20 +139,7 @@ def activate_workflow_task(
             message="同一工作流的运行任务容量已满，任务继续排队",
         )
         return CapacityDecision(False, "workflow_task_capacity")
-
-    activated_at = utc_now()
-    changed = connection.execute(
-        """
-        UPDATE workflow_task
-        SET status = 'running', started_at = COALESCE(started_at, ?),
-            wait_reason = '{}', update_time = ?
-        WHERE uuid = ? AND status = 'pending' AND deleted_at IS NULL
-        """,
-        (activated_at, activated_at, task_uuid),
-    ).rowcount
-    if changed != 1:
-        raise StoreConflict(f"工作流任务容量领取发生并发变化：{task_uuid}")
-    return CapacityDecision(available=True, activated=True)
+    return CapacityDecision(available=True)
 
 
 def admit_job_dispatch(
@@ -215,4 +251,5 @@ __all__ = [
     "CapacityDecision",
     "activate_workflow_task",
     "admit_job_dispatch",
+    "check_workflow_task_capacity",
 ]

@@ -783,6 +783,17 @@ class WorkflowTaskCommandRequest(_StrictModel):
         return normalize_json_object(value)
 
 
+class WorkflowTaskJobParamUpdateRequest(_StrictModel):
+    """修改暂停任务中尚未派发 Job 的参数补丁。"""
+
+    param: Dict[str, Any]
+
+    @field_validator("param", mode="before")
+    @classmethod
+    def _json_object(cls, value: Any) -> Dict[str, Any]:
+        return normalize_json_object(value)
+
+
 class DeviceActionRunCreateRequest(_StrictModel):
     """Backend 规范的设备单动作运行（DeviceActionRun）创建 DTO。"""
 
@@ -1879,6 +1890,20 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     def get_workflow_task(task_uuid: str) -> JSONResponse:
         return _success(service.get_workflow_task(task_uuid))
 
+    @router.delete(
+        "/workflow-tasks/{task_uuid}",
+        summary="删除工作流任务",
+        description="仅允许删除已进入终态且所有执行资源均已释放的 Edge 任务；删除采用软删除并保留运行历史。",
+    )
+    def delete_workflow_task(task_uuid: str) -> JSONResponse:
+        """软删除已终态且全部执行资源已释放的 Edge 任务。
+
+        删除资格由服务端在同一事务中重新核验；重复请求保持幂等，返回
+        ``already_deleted``，不会删除工作流定义、Job、运行事件或库存历史。
+        """
+
+        return _success(service.delete_workflow_task(task_uuid))
+
     @router.get("/workflow-tasks/{task_uuid}/step-state")
     def get_workflow_task_step_state(task_uuid: str) -> JSONResponse:
         """返回 Task 详情页使用的权威 Step 候选。"""
@@ -1910,6 +1935,30 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
     @router.get("/workflow-tasks/{task_uuid}/jobs")
     def list_workflow_node_jobs(task_uuid: str) -> JSONResponse:
         return _success(service.list_workflow_node_jobs(task_uuid))
+
+    @router.patch(
+        "/workflow-tasks/{task_uuid}/jobs/{job_uuid}/param",
+        summary="修改暂停任务的未下发参数",
+    )
+    def patch_workflow_node_job_param(
+        task_uuid: str,
+        job_uuid: str,
+        body: WorkflowTaskJobParamUpdateRequest,
+    ) -> JSONResponse:
+        """修改已暂停任务中尚未派发 Job 的参数。
+
+        参数：``body.param`` 是递归参数补丁；仅允许当前任务的 pending Job。返回：
+        更新后的 Task/Job 投影。异常：任务未暂停、作业已离开 pending 或身份不一致
+        时返回冲突错误；不会修改工作流拓扑或已下发参数。
+        """
+
+        return _success(
+            service.update_workflow_task_job_param(
+                task_uuid,
+                job_uuid,
+                param=body.param,
+            )
+        )
 
     @router.get("/workflow-tasks/{task_uuid}/execution-locks")
     def list_workflow_task_execution_locks(task_uuid: str) -> JSONResponse:

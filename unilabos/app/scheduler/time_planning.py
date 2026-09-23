@@ -13,13 +13,17 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field, replace
-from typing import Callable
+from dataclasses import asdict, dataclass, replace
+from typing import Callable, Literal
 
 from unilabos.app.scheduler.resource_lock import conflicting_resource_lock_keys
 
 
 NodeKey = tuple[str, str]
+CandidatePlanStatus = Literal[
+    "OPTIMAL", "FEASIBLE", "UNKNOWN", "ERROR", "INFEASIBLE", "MODEL_INVALID",
+]
+CompletionTargetKind = Literal["task_completion", "information", "partial_scope"]
 
 
 def ticks(seconds: float) -> int:
@@ -70,7 +74,7 @@ class PlanningCompletionTarget:
 
     task_id: str
     node_keys: tuple[NodeKey, ...]
-    kind: str = "task_completion"
+    kind: CompletionTargetKind = "task_completion"
     prefix_id: str = ""
 
 
@@ -96,13 +100,15 @@ class PlannedNode:
     end_ms: int
     resources: tuple[str, ...]
     fixed: bool = False
+    # 参数尚未由真实上游回执完全确认时，只能作为展示用预测，不能下发。
+    parameters_final: bool = True
 
 
 @dataclass(frozen=True)
 class CandidatePlan:
     revision: str
     time_origin: float
-    status: str
+    status: CandidatePlanStatus
     nodes: tuple[PlannedNode, ...] = ()
     proven_priority_tiers: tuple[float, ...] = ()
     objective_value: float | None = None
@@ -126,11 +132,21 @@ class TimePlanningConfig:
     max_holds: int = 512
     aging_seconds: float = 30.0
     refresh_seconds: float = 1.0
+    retry_initial_seconds: float = 1.0
+    retry_max_seconds: float = 30.0
 
     def __post_init__(self) -> None:
-        for value in (self.solve_seconds, self.aging_seconds, self.refresh_seconds):
+        for value in (
+            self.solve_seconds,
+            self.aging_seconds,
+            self.refresh_seconds,
+            self.retry_initial_seconds,
+            self.retry_max_seconds,
+        ):
             if not math.isfinite(value) or value <= 0:
                 raise ValueError("排程时间预算必须是正有限秒数")
+        if self.retry_max_seconds < self.retry_initial_seconds:
+            raise ValueError("排程重试上限不能小于初始退避时间")
         for value in (self.max_nodes, self.max_alternatives, self.max_holds):
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError("排程规模限额必须是正整数")
@@ -282,6 +298,89 @@ def validate_candidate(snapshot: PlanningSnapshot, plan: CandidatePlan) -> tuple
     return tuple(dict.fromkeys(errors))
 
 
+def _greedy_feasible_plan(
+    snapshot: PlanningSnapshot,
+    horizon: int,
+) -> tuple[PlannedNode, ...] | None:
+    """Build a conservative incumbent when CP-SAT found no one.
+
+    The CP-SAT model uses a guarded disjunction for every pair of alternative
+    intervals. With dozens of nodes and eight dynamic device alternatives it
+    is possible for a short budget to return ``UNKNOWN`` before finding an
+    incumbent, even though a feasible schedule exists. This fallback uses
+    deterministic list scheduling: independent resources still run in
+    parallel, while every conflicting interval is delayed and the result is
+    accepted only after :func:`validate_candidate` performs the full checks.
+    """
+
+    by_key = {node.key: node for node in snapshot.nodes}
+    remaining = set(by_key)
+    scheduled: dict[NodeKey, PlannedNode] = {}
+    result: list[PlannedNode] = []
+    held: list[tuple[tuple[str, ...], int, int, set[NodeKey]]] = [
+        (hold.resources, 0, horizon, set(hold.members))
+        for hold in snapshot.holds
+        if hold.already_held and not hold.release_known
+    ]
+
+    def earliest_start(key: NodeKey, option: PlanningAlternative) -> int:
+        start = max([0, *(scheduled[parent].end_ms for parent in by_key[key].predecessors)])
+        while True:
+            end = start + option.duration_ms
+            conflicts = [
+                other_end
+                for resources, other_start, other_end, members in held
+                if key not in members and _conflicts(option.resources, resources)
+                and start < other_end and other_start < end
+            ]
+            conflicts.extend(
+                other.end_ms
+                for other in result
+                if _conflicts(option.resources, other.resources)
+                and start < other.end_ms and other.start_ms < end
+            )
+            if not conflicts:
+                return start
+            start = max(conflicts)
+
+    # Topological order is deterministic and honours workflow dependencies.
+    while remaining:
+        ready = [key for key in remaining
+                 if all(parent in scheduled for parent in by_key[key].predecessors)]
+        if not ready:
+            return None
+        key = min(ready, key=lambda item: (-by_key[item].priority, item))
+        node = by_key[key]
+        if node.fixed:
+            option = node.alternatives[0]
+            start = 0
+        else:
+            choices = [
+                (earliest_start(key, option), option)
+                for option in node.alternatives
+            ]
+            start, option = min(
+                choices,
+                key=lambda item: (
+                    item[0] + item[1].duration_ms,
+                    item[0],
+                    item[1].device_id,
+                    item[1].resources,
+                ),
+            )
+        entry = PlannedNode(key, option.device_id, start, start + option.duration_ms,
+                            option.resources, node.fixed, node.parameters_final)
+        scheduled[key] = entry
+        result.append(entry)
+        remaining.remove(key)
+
+    candidate = CandidatePlan(snapshot.revision, snapshot.time_origin, "FEASIBLE",
+                              tuple(result), partial_tasks=snapshot.partial_tasks)
+    if validate_candidate(snapshot, candidate):
+        return None
+    return tuple(result)
+
+
 def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> CandidatePlan:
     """按有效优先级逐级优化任务完工时间，各阶段共用总预算。"""
     from ortools.sat.python import cp_model
@@ -353,12 +452,16 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
     explicit_targets = {target.task_id: target for target in snapshot.completion_targets}
     task_completion = {}
     reported_targets = []
-    for ordinal, (task, values) in enumerate(sorted(task_ends.items())):
+    # 显式目标可能来自当前范围之外的任务，或者其可见节点已经全部被过滤。
+    # 不能只遍历 task_ends，否则 solve_snapshot 会把 information/partial_scope
+    # 目标静默丢掉。
+    target_tasks = sorted(set(task_ends) | set(explicit_targets))
+    for ordinal, task in enumerate(target_tasks):
         target = explicit_targets.get(task)
         if target is None:
             target = PlanningCompletionTarget(task, tuple(node.key for node in snapshot.nodes if node.key[0] == task))
         reported_targets.append(target)
-        values = [ends[key] for key in target.node_keys]
+        values = [ends[key] for key in target.node_keys if key in ends]
         if not values:
             continue
         completion = model.new_int_var(0, horizon, f"task{ordinal}")
@@ -412,6 +515,52 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
     status_name, objective, bound = "UNKNOWN", None, None
     objective_stage = ""
     completed_stages = 0
+
+    def plan_from_solver(solver: object) -> tuple[PlannedNode, ...]:
+        """Copy one solver assignment without making it an execution permit.
+
+        A first-feasible CP-SAT pass below is deliberately separate from the
+        lexicographic optimisation passes.  Large SZLab plans can spend the
+        whole 500 ms budget proving the first objective before CP-SAT has
+        returned any incumbent.  In that case the UI used to receive an empty
+        plan even though the model was feasible.  Keeping the extraction in one
+        helper ensures both passes produce the same validated representation.
+        """
+
+        return tuple(
+            PlannedNode(
+                node.key,
+                option.device_id,
+                solver.value(starts[node.key]),
+                solver.value(ends[node.key]),
+                option.resources,
+                node.fixed,
+                node.parameters_final,
+            )
+            for node in snapshot.nodes
+            for option, choice in zip(node.alternatives, choices[node.key])
+            if solver.boolean_value(choice)
+        )
+
+    # Always try to obtain a feasible incumbent before spending the bounded
+    # budget on lexicographic optimisation.  ``stop_after_first_solution`` is
+    # much faster for disjunctive models with many device alternatives (the
+    # real two-task SZLab plan has 50 nodes); without it a 0.5 s budget often
+    # returned UNKNOWN and no nodes at all.  The pass is capped so normal
+    # plans still retain most of their budget for optimisation.
+    feasibility_remaining = config.solve_seconds - (time.monotonic() - started)
+    feasibility_budget = min(0.2, feasibility_remaining * 0.4)
+    if feasibility_budget > 0.001 and snapshot.nodes:
+        feasibility_solver = cp_model.CpSolver()
+        feasibility_solver.parameters.max_time_in_seconds = feasibility_budget
+        feasibility_solver.parameters.num_search_workers = 1
+        feasibility_solver.parameters.random_seed = 0
+        feasibility_solver.parameters.stop_after_first_solution = True
+        feasibility_status = feasibility_solver.solve(model)
+        if feasibility_status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            best = plan_from_solver(feasibility_solver)
+            status_name = "FEASIBLE"
+
     for stage_name, tier, objective_expr in stages:
         remaining = config.solve_seconds - (time.monotonic() - started)
         if remaining <= 0:
@@ -434,11 +583,10 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
                 status_name = "FEASIBLE"
             break
         status_name = solver.status_name(status)
-        best = tuple(PlannedNode(node.key, option.device_id, solver.value(starts[node.key]),
-                                 solver.value(ends[node.key]), option.resources, node.fixed)
-                     for node in snapshot.nodes
-                     for option, choice in zip(node.alternatives, choices[node.key])
-                     if solver.boolean_value(choice))
+        # CpSolver.value()/boolean_value() are undefined when UNKNOWN has no
+        # incumbent. Keep the feasibility-pass candidate and let the
+        # deterministic fallback handle the genuinely empty case.
+        best = plan_from_solver(solver)
         objective, bound = solver.objective_value, solver.best_objective_bound
         objective_stage = stage_name
         if status != cp_model.OPTIMAL:
@@ -447,6 +595,15 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
         if tier is not None:
             proven.append(tier)
         model.add(objective_expr == round(objective))
+    if not best and status_name in {"UNKNOWN", "ERROR"} and snapshot.nodes:
+        # A bounded optimisation run may time out before CP-SAT publishes an
+        # incumbent. Keep the UI useful with a conservative list-scheduled
+        # candidate; validate it below before exposing it to the adapter.
+        fallback = _greedy_feasible_plan(snapshot, horizon)
+        if fallback is not None:
+            best = fallback
+            status_name = "FEASIBLE"
+            objective_stage = "fallback-feasible"
     plan = CandidatePlan(snapshot.revision, snapshot.time_origin, status_name, best,
                          tuple(proven), objective, bound, time.monotonic() - started,
                          snapshot.partial_tasks)
@@ -478,6 +635,12 @@ class RollingTimePlanner:
         self._timer: threading.Timer | None = None
         self._timer_deadline: float | None = None
         self._timer_generation = 0
+        self._retry_timer: threading.Timer | None = None
+        self._retry_deadline: float | None = None
+        self._retry_generation = 0
+        self._retry_revision = ""
+        self._retry_snapshot: PlanningSnapshot | None = None
+        self._retry_attempt = 0
         self._submitted = 0
         self._discarded = 0
 
@@ -506,14 +669,110 @@ class RollingTimePlanner:
                 return None
             if snapshot.revision != self._requested_revision:
                 self._requested_revision = snapshot.revision
+                self._cancel_retry_locked()
                 # 旧候选仅作为软提示和稳定性参照；版本变化仍须完整重算与验证。
                 self._pending = replace(snapshot, previous_plan=self._latest) if snapshot.previous_plan is None else snapshot
                 self._submitted += 1
+            elif (
+                self._latest is not None
+                and self._latest.revision == snapshot.revision
+                and self._retryable_status(self._latest.status)
+                and self._pending is None
+                and self._retry_timer is None
+                and not self._active
+                and (
+                    self._retry_revision != snapshot.revision
+                    or self._retry_snapshot is None
+                )
+            ):
+                # 专用重试计时器通常已经存在；这里兜底处理计时器被取消或
+                # 系统时钟异常的情况，避免同一 revision 永久停在错误状态。
+                self._arm_retry_locked(snapshot)
             if not self._active and self._pending is not None:
                 self._active = True
                 self._executor.submit(self._run)
             current = self._latest
             return current if current and current.revision == snapshot.revision and current.validated else None
+
+    def invalidate(self) -> None:
+        """同步撤销当前候选；暂停等控制变更不能继续消费旧快照。
+
+        求解线程无法被可靠地中断，因此只撤销它提交前后的可见状态。正在运行的
+        旧求解完成后会发现 ``_requested_revision`` 已被清空并丢弃结果；下一次
+        ``request`` 会用新的业务事实重新提交快照。
+        """
+        with self._lock:
+            if self._closed:
+                return
+            self._requested_revision = ""
+            self._pending = None
+            self._latest = None
+            self._cancel_retry_locked()
+
+    @staticmethod
+    def _retryable_status(status: str) -> bool:
+        """仅对瞬态求解失败重试，确定性的不可行模型仍交给上层处理。"""
+
+        return status in {"ERROR", "UNKNOWN"}
+
+    def _cancel_retry_locked(self) -> None:
+        """取消旧版本的重试计时器；调用方必须持有 ``_lock``。"""
+
+        if self._retry_timer is not None:
+            self._retry_timer.cancel()
+        self._retry_timer = None
+        self._retry_deadline = None
+        self._retry_generation += 1
+        self._retry_revision = ""
+        self._retry_snapshot = None
+        self._retry_attempt = 0
+
+    def _arm_retry_locked(self, snapshot: PlanningSnapshot) -> None:
+        """为同一 revision 安排有上限的指数退避再次求解。"""
+
+        if self._retry_timer is not None:
+            self._retry_timer.cancel()
+        self._retry_timer = None
+        self._retry_deadline = None
+        self._retry_generation += 1
+        previous_attempt = self._retry_attempt if self._retry_revision == snapshot.revision else 0
+        self._retry_revision = snapshot.revision
+        self._retry_snapshot = snapshot
+        self._retry_attempt = previous_attempt + 1
+        delay = min(
+            self.config.retry_max_seconds,
+            self.config.retry_initial_seconds * (2 ** min(self._retry_attempt - 1, 20)),
+        )
+        self._retry_deadline = time.monotonic() + delay
+        generation = self._retry_generation
+
+        def retry() -> None:
+            with self._lock:
+                if (
+                    self._closed
+                    or generation != self._retry_generation
+                    or self._retry_revision != snapshot.revision
+                    or self._retry_snapshot is None
+                    or self._requested_revision != snapshot.revision
+                ):
+                    return
+                self._retry_timer = None
+                self._retry_deadline = None
+                # 计时器只负责把快照重新放入合并队列；若旧求解仍在收尾，
+                # 该线程会在下一轮消费 pending，不会并发运行第二个 CP-SAT。
+                self._pending = self._retry_snapshot
+                self._retry_snapshot = None
+                if not self._active:
+                    self._active = True
+                    # 与 request() 保持相同的锁顺序：提交发生在状态锁内，
+                    # close() 不能在此处先关闭 executor 再让计时器迟到提交。
+                    self._executor.submit(self._run)
+                self._submitted += 1
+            self._notify_wakeup()
+
+        self._retry_timer = threading.Timer(delay, retry)
+        self._retry_timer.daemon = True
+        self._retry_timer.start()
 
     def _run(self) -> None:
         while True:
@@ -529,6 +788,10 @@ class RollingTimePlanner:
             with self._lock:
                 if snapshot.revision == self._requested_revision and not self._closed:
                     self._latest = result
+                    if self._retryable_status(result.status):
+                        self._arm_retry_locked(snapshot)
+                    else:
+                        self._cancel_retry_locked()
                 else:
                     self._discarded += 1
             # 回调仅请求一轮重排；不把 Future 完成线程变成第二个调度写入口。
@@ -566,6 +829,9 @@ class RollingTimePlanner:
             return {"enabled": True, "algorithm": "CP-SAT", "active_solves": int(self._active),
                     "pending_snapshots": int(self._pending is not None), "submitted": self._submitted,
                     "discarded": self._discarded, "config": asdict(self.config),
+                    "retry": {"revision": self._retry_revision,
+                              "attempt": self._retry_attempt,
+                              "deadline": self._retry_deadline},
                     "latest": asdict(self._latest) if self._latest else None}
 
     def close(self) -> None:
@@ -578,4 +844,5 @@ class RollingTimePlanner:
                 self._timer = None
                 self._timer_deadline = None
                 self._timer_generation += 1
+                self._cancel_retry_locked()
         self._executor.shutdown(wait=True, cancel_futures=True)

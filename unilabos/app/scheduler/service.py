@@ -129,6 +129,29 @@ from unilabos.workflow.resource_lock_plan import (
 from unilabos.workflow.resource_lock_key import device_lock_key
 
 logger = logging.getLogger(__name__)
+# ``launch`` installs ``LaunchLogger`` as the process-wide logger class and
+# defaults each new logger to ``propagate=False``.  This module does not attach
+# a private handler, so policy failures would otherwise fall through to
+# ``logging.lastResort`` and bypass the application's root handler (and pytest's
+# ``caplog``).  Scheduler diagnostics belong to the normal application log
+# stream, so explicitly restore propagation here.
+logger.propagate = True
+
+
+def _merge_param_patch(
+    current: Mapping[str, Any],
+    patch: Mapping[str, Any],
+) -> dict[str, Any]:
+    """递归合并暂停任务的参数修改，数组和标量按修改值替换。"""
+
+    merged = deepcopy(dict(current))
+    for key, value in patch.items():
+        previous = merged.get(key)
+        if isinstance(previous, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_param_patch(previous, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 _RECONCILE_EXECUTOR = ThreadPoolExecutor(
     max_workers=1,
@@ -1592,6 +1615,10 @@ class EdgeScheduler:
             if run.state in self._TERMINAL_STATES:
                 raise ValueError(f"workflow {workflow_id} is terminal")
             run.dispatch_gate = "paused"
+            if self._time_scheduling is not None:
+                # 先撤销所有基于暂停前快照的候选；已在途 Job 仍由内核保留，
+                # 恢复时会以新的 gate/资源事实重新求解。
+                self._time_scheduling.invalidate()
             return {
                 "workflow_id": workflow_id,
                 "state": run.state.value,
@@ -1602,6 +1629,46 @@ class EdgeScheduler:
                 ),
                 "dispatched": [],
             }
+
+    def update_pending_job_param(
+        self,
+        workflow_id: str,
+        node_id: str,
+        job_id: str,
+        param: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """更新暂停任务中尚未派发节点的参数，并使内存运行态立即生效。
+
+        参数：``workflow_id``、``node_id`` 和 ``job_id`` 是同一冻结任务中的稳定
+        身份；``param`` 是已经合并好的最终参数对象。返回旧参数与新参数的副本，
+        供桥接层在持久化失败时回滚。异常：任务不存在、任务未暂停、节点已经进入
+        在途/终态或身份不一致时抛 ``ValueError``。此入口只修改动作参数，不改变
+        DAG 节点、边、资源计划或作业身份。
+        """
+
+        if not isinstance(param, Mapping):
+            raise ValueError("作业参数必须是对象")
+        with self._lock:
+            run = self._workflows.get(workflow_id)
+            if run is None:
+                raise ValueError(f"workflow {workflow_id} not found")
+            if run.dispatch_gate != "paused" or run.execution_mode != "normal":
+                raise ValueError("任务必须先暂停才能修改参数")
+            if job_id in self._inflight:
+                raise ValueError("作业已经下发，不能修改参数")
+            node = run.node(node_id)
+            if node is None:
+                raise ValueError(f"workflow node {node_id} not found")
+            if node.job_id and node.job_id != job_id:
+                raise ValueError("作业与工作流节点身份不一致")
+            state = run.node_state(node_id)
+            if state not in {NodeState.PENDING, NodeState.READY}:
+                raise ValueError("作业已经离开待运行状态，不能修改参数")
+            previous = deepcopy(node.param)
+            node.param = _merge_param_patch(node.param, param)
+            if self._time_scheduling is not None:
+                self._time_scheduling.invalidate()
+            return {"previous": previous, "param": deepcopy(node.param)}
 
     def resume_workflow(self, workflow_id: str) -> dict[str, Any]:
         """恢复普通任务的后续派发，继续复用同一 WorkflowRun。"""
@@ -3290,8 +3357,17 @@ class EdgeScheduler:
                     device_id=selected_device_material_uuid or selected_device_id,
                 )
                 if timing.planned_s is None:
-                    continue
-                estimated_s, estimate_source = timing.planned_s, timing.source
+                    # 自动调度没有可信时长时必须继续等待，避免把未知动作
+                    # 当成零时长放行。单步调试是操作者已经明确选择的目标，
+                    # 这里仍需提交真实派发意图；估时只用于日志和监控，不是
+                    # 设备准入条件，因此使用旧入口的安全默认值作为记录值。
+                    if self._step_targets.get(task.workflow_id) != task.node.id:
+                        continue
+                    estimated_s, estimate_source = self._estimator.estimate(
+                        action_key, resolved_args
+                    )
+                else:
+                    estimated_s, estimate_source = timing.planned_s, timing.source
             else:
                 estimated_s, estimate_source = self._estimator.estimate(action_key, resolved_args)
             workflow_trace = self._workflow_spans.get(task.workflow_id)

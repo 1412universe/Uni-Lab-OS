@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 import threading
 import time
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -32,15 +33,15 @@ from unilabos.workflow.resource_lock_plan import (
 
 
 class Clock:
-    def __init__(self):
+    def __init__(self) -> None:
         self.value = 1000.0
 
-    def __call__(self):
+    def __call__(self) -> float:
         return self.value
 
 
 @contextmanager
-def environment(*, busy=None):
+def environment(*, busy: set[str] | None = None) -> Iterator[tuple[EdgeScheduler, RecordingDispatcher, Clock]]:
     clock, dispatcher = Clock(), RecordingDispatcher()
     planner = RollingTimePlanner(TimePlanningConfig(solve_seconds=0.5, refresh_seconds=0.05))
     scheduler = EdgeScheduler(dispatcher=dispatcher, clock=clock, time_planner=planner, external_busy_keys=busy)
@@ -50,7 +51,8 @@ def environment(*, busy=None):
         scheduler.close()
 
 
-def wait_for(scheduler, predicate, message, timeout=8.0):
+def wait_for(scheduler: EdgeScheduler, predicate: Callable[[], bool], message: str,
+             timeout: float = 8.0) -> None:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         scheduler.reschedule()
@@ -60,15 +62,18 @@ def wait_for(scheduler, predicate, message, timeout=8.0):
     raise AssertionError(message + "\n" + json.dumps(scheduler.time_schedule_snapshot(), default=str, ensure_ascii=False))
 
 
-def node_ids(dispatcher):
+def node_ids(dispatcher: RecordingDispatcher) -> list[str]:
     return [row["node_id"] for row in dispatcher.dispatched]
 
 
-def job_id(dispatcher, node):
+def job_id(dispatcher: RecordingDispatcher, node: str) -> str:
     return next(row["job_id"] for row in dispatcher.dispatched if row["node_id"] == node)
 
 
-def workflow(identity, devices, edges=(), *, priority=1, scope=True, duration=1):
+def workflow(identity: str, devices: Mapping[str, str | None],
+             edges: Iterable[tuple[str, str]] = (), *, priority: int = 1,
+             scope: bool = True, duration: float = 1) -> WorkflowSpec:
+    edges = tuple(edges)
     graph = {
         "workflow_uuid": identity,
         "nodes": [{"uuid": node, "resource_defaults": [device] if device else []} for node, device in devices.items()],
@@ -91,7 +96,7 @@ def workflow(identity, devices, edges=(), *, priority=1, scope=True, duration=1)
         resource_plan=plan, submitted_at=1000, priority=priority)
 
 
-def explicit_hold_containment():
+def explicit_hold_containment() -> None:
     """只有显式身份关系可以豁免内外层重复占用；跨身份冲突仍保留。"""
     action = PlanningNode(("other", "free"), (PlanningAlternative("free", 100, ("/devices/free",)),))
     parent = PlanningHold("parent", "owner", ("/devices/A",))
@@ -115,7 +120,7 @@ def explicit_hold_containment():
         raise AssertionError("未覆盖的内层资源被误当作父区间共享")
 
 
-def information_target_not_independent_tail():
+def information_target_not_independent_tail() -> None:
     """长独立动作不应把尽早得到条件结果的 F_j 错换成整个可见子图 C_j。"""
     measure = PlanningNode(("partial", "measure"), (PlanningAlternative("shared", 10, ("/devices/shared",)),))
     independent = PlanningNode(("partial", "long-independent"), (PlanningAlternative("other", 100, ("/devices/other",)),))
@@ -133,7 +138,7 @@ def information_target_not_independent_tail():
     assert next(node for node in legacy.nodes if node.key == peer.key).start_ms == 0
 
 
-def condition_view_exposes_information_prefix_only():
+def condition_view_exposes_information_prefix_only() -> None:
     measure = WorkflowNode(id="measure", device_id="sensor", action_name="read", param={"duration_s": 1})
     condition = WorkflowNode(id="if", executor_kind="condition", param={
         "bindings": {"answer": {"kind": "node_result", "node_uuid": "measure"}},
@@ -156,7 +161,7 @@ def condition_view_exposes_information_prefix_only():
     assert view.information_prefixes[0].member_node_ids == ("measure",)
 
 
-def prior_plan_is_soft_and_respects_absolute_time():
+def prior_plan_is_soft_and_respects_absolute_time() -> None:
     a = PlanningNode(("a", "a"), (PlanningAlternative("shared", 1000, ("/devices/shared",)),))
     b = PlanningNode(("b", "b"), (PlanningAlternative("shared", 1000, ("/devices/shared",)),))
     c = PlanningNode(("c", "choice"), (
@@ -181,9 +186,9 @@ def prior_plan_is_soft_and_respects_absolute_time():
     assert next(node for node in urgent.nodes if node.key == a.key).start_ms == 0, urgent
 
 
-def competing_new_open_scopes_are_deferred():
+def competing_new_open_scopes_are_deferred() -> None:
     """多个未开始且释放未知的区间竞争时，选择一组而非让整轮无解。"""
-    def conditional(identity, priority):
+    def conditional(identity: str, priority: int) -> WorkflowSpec:
         measure, control, yes, no = [identity + suffix for suffix in ("-measure", "-if", "-yes", "-no")]
         spec = workflow(identity, {measure: "shared", control: None, yes: "shared", no: "shared"},
                         [(measure, control), (control, yes), (control, no)], priority=priority)
@@ -219,12 +224,12 @@ def competing_new_open_scopes_are_deferred():
         wait_for(scheduler, lambda: "ordinary-measure" in node_ids(dispatcher), "原连续区间释放后未重选等待前缀")
 
 
-def close_suppresses_late_solver_and_timer_wakeup():
+def close_suppresses_late_solver_and_timer_wakeup() -> None:
     """关闭等待有限求解退出，完成回调和已登记定时器都不能再次唤醒调度。"""
     entered, release = threading.Event(), threading.Event()
     wakes = []
     snapshot = PlanningSnapshot("closing", 1000, ())
-    def pending_solve(snapshot, config):
+    def pending_solve(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> CandidatePlan:
         entered.set()
         assert release.wait(3)
         return CandidatePlan(snapshot.revision, snapshot.time_origin, "OPTIMAL", validated=True)
@@ -248,7 +253,7 @@ def close_suppresses_late_solver_and_timer_wakeup():
         assert not wakes, wakes
 
 
-def two_tasks_hold_until_actual_release():
+def two_tasks_hold_until_actual_release() -> None:
     """较高优先级的新任务不能插进已经取得的连续区间。"""
     with environment() as (scheduler, dispatcher, clock):
         scheduler.submit_workflow(workflow("owner", {"a1": "shared", "a2": "shared"}, [("a1", "a2")]))
@@ -267,7 +272,7 @@ def two_tasks_hold_until_actual_release():
         wait_for(scheduler, lambda: "b1" in node_ids(dispatcher), "实际释放后急单未恢复")
 
 
-def same_scope_independent_actions_parallel():
+def same_scope_independent_actions_parallel() -> None:
     """固定的在途动作只占自己的直接设备，不独占整个作用域保管集合。"""
     with environment() as (scheduler, dispatcher, clock):
         scheduler.submit_workflow(workflow("parallel-scope",
@@ -288,7 +293,7 @@ def same_scope_independent_actions_parallel():
         assert all(node_ids(dispatcher).count(node) == 1 for node in ["entry", "left", "right"])
 
 
-def overdue_continuous_holds_preserve_independent_progress():
+def overdue_continuous_holds_preserve_independent_progress() -> None:
     """超时动作的真实占用包含于原区间，阻塞共享资源但不阻塞独立任务。"""
     with environment() as (scheduler, dispatcher, clock):
         scheduler.submit_workflow(workflow("owner", {"slow": "A", "tail": "B"}, [("slow", "tail")]))
@@ -311,8 +316,8 @@ def overdue_continuous_holds_preserve_independent_progress():
         wait_for(scheduler, lambda: "competitor" in node_ids(dispatcher), "区间实际退出后竞争任务未恢复")
 
 
-def main():
-    report = []
+def main() -> None:
+    report: list[dict[str, str | float]] = []
     for case in (explicit_hold_containment, two_tasks_hold_until_actual_release,
                  same_scope_independent_actions_parallel, overdue_continuous_holds_preserve_independent_progress,
                  information_target_not_independent_tail, condition_view_exposes_information_prefix_only,

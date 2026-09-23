@@ -81,6 +81,22 @@ _SUBMISSION_PHASE_PRE_DISPATCH = "pre_dispatch"
 _SUBMISSION_PHASE_LOCAL_CONTROL = "local_control"
 
 
+def _merge_param_patch(
+    current: Mapping[str, Any],
+    patch: Mapping[str, Any],
+) -> dict[str, Any]:
+    """递归合并用户对暂停 Job 的参数修改，数组和标量按新值替换。"""
+
+    merged = deepcopy(dict(current))
+    for key, value in patch.items():
+        previous = merged.get(key)
+        if isinstance(previous, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_param_patch(previous, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
 def _retained_interval_ids_for_result(
     task: Mapping[str, Any],
     job: Mapping[str, Any],
@@ -882,6 +898,72 @@ class TaskSchedulerBridge:
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
 
+    def update_pending_job_param(
+        self,
+        task_uuid: str,
+        job_uuid: str,
+        param: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """修改暂停任务中尚未派发 Job 的参数并同步内存调度运行态。
+
+        参数：``task_uuid`` 与 ``job_uuid`` 是稳定任务/作业身份；``param`` 是
+        顶层 JSON 对象补丁，未传字段保留原值。返回更新后的 Task/Job 投影。异常：
+        任务未暂停、作业已离开 pending、身份不属于同一任务或参数不合法时抛
+        ``TaskSchedulerBridgeError``；在途作业绝不会被改写。
+        """
+
+        if not isinstance(param, Mapping):
+            raise TaskSchedulerBridgeError("作业参数必须是对象")
+        if self._closed:
+            raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        normalized_task_uuid = self._required_text(task_uuid, field="task_uuid")
+        normalized_job_uuid = self._required_text(job_uuid, field="job_uuid")
+        with self._scheduler.execution_control_lock:
+            try:
+                task = self._store.get_task(normalized_task_uuid)
+                job = self._store.get_job(normalized_job_uuid)
+                if str(job.get("workflow_task_uuid")) != normalized_task_uuid:
+                    raise StoreConflict("作业不属于目标任务")
+                if (
+                    str(task.get("dispatch_gate") or "active") != "paused"
+                    or str(task.get("execution_mode") or task.get("run_mode") or "normal") != "normal"
+                    or str(task.get("control_status") or "active") != "paused"
+                ):
+                    raise StoreConflict("任务必须先暂停才能修改参数")
+                if not bool(job.get("current_attempt", True)):
+                    raise StoreConflict("历史作业 attempt 不能修改参数")
+                if str(job.get("status")) != "pending":
+                    raise StoreConflict("作业已经离开待运行状态，不能修改参数")
+                merged_param = _merge_param_patch(job.get("param") or {}, param)
+                updated_job = self._store.update_pending_job_param(
+                    normalized_task_uuid,
+                    normalized_job_uuid,
+                    merged_param,
+                )
+                if self._scheduler.workflow_snapshot(normalized_task_uuid) is not None:
+                    try:
+                        self._scheduler.update_pending_job_param(
+                            normalized_task_uuid,
+                            str(job.get("workflow_node_uuid") or ""),
+                            normalized_job_uuid,
+                            merged_param,
+                        )
+                    except Exception:
+                        # 数据库和内存运行态必须保持一致；暂停门禁仍阻止任何新
+                        # 派发，因此可以安全地把持久参数恢复为旧值。
+                        self._store.update_pending_job_param(
+                            normalized_task_uuid,
+                            normalized_job_uuid,
+                            job.get("param") or {},
+                        )
+                        raise
+                return {
+                    "task": self._store.get_task(normalized_task_uuid),
+                    "job": updated_job,
+                }
+            except (StoreConflict, StoreNotFound, ValueError) as error:
+                raise TaskSchedulerBridgeError(str(error)) from error
+
     def resume(self, task_uuid: str) -> dict[str, Any]:
         """恢复普通 Task，或把稳定暂停的 step Task 切换为自动调度。"""
 
@@ -1670,13 +1752,28 @@ class TaskSchedulerBridge:
         self.error_control.recovering = True
         self._recover_quantity_consumptions()
         self._register_active_recovery_routes()
-        affected_tasks = {
-            str(self._store.get_job(job_uuid)["workflow_task_uuid"])
-            for job_uuid in job_uuids
-        }
+        # Edge Authority 与 WorkflowStore 是独立的 SQLite 权威。进程崩溃或
+        # 清理竞态期间，前者可能带来一个已经从后者删除的 Job UUID；这个
+        # 脏引用不能阻止其余活动任务恢复，也不能把“没有匹配任务”误当成
+        # 一个新的恢复范围。只忽略明确不存在的身份，其它存储错误继续上抛，
+        # 让恢复屏障保持打开并可幂等重入。
+        # 空的 Job 列表表示执行进程整体重启，必须扫描全部候选；一旦调用方
+        # 明确给出身份列表，恢复范围就必须严格限定在其中。即使列表里的
+        # 身份全部已从 WorkflowStore 删除，也不能把“没有匹配项”误当成空列表。
+        scoped_recovery = bool(job_uuids)
+        affected_tasks: set[str] = set()
+        for job_uuid in job_uuids:
+            try:
+                job = self._store.get_job(job_uuid)
+            except StoreNotFound:
+                logger.warning(
+                    "执行进程重启恢复忽略不存在的 Workflow Job：%s", job_uuid
+                )
+                continue
+            affected_tasks.add(str(job["workflow_task_uuid"]))
         for task in self._store.list_execution_restart_candidates():
             task_uuid = str(task["uuid"])
-            if affected_tasks and task_uuid not in affected_tasks:
+            if scoped_recovery and task_uuid not in affected_tasks:
                 continue
             aggregate = self._projection.project_execution_restart_attention(task_uuid)
             self._mark_inventory_claims_uncertain(aggregate)
@@ -1689,7 +1786,16 @@ class TaskSchedulerBridge:
             finished_listener=self._replay_persisted_job_finished,
         )
         for job_uuid in tuple(self._task_by_job):
-            job = self._store.get_job(job_uuid)
+            try:
+                job = self._store.get_job(job_uuid)
+            except StoreNotFound:
+                # 路由表可能比 WorkflowStore 多保留一个已清理的 Job；它不应
+                # 阻止其余作业完成重启恢复，也不应在下一次恢复中反复出现。
+                logger.warning(
+                    "执行进程重启恢复清理不存在的 Workflow Job 路由：%s", job_uuid
+                )
+                self._task_by_job.pop(job_uuid, None)
+                continue
             if job["status"] == "cancel_requested":
                 self._schedule_cancel_timeout(job)
         # 只恢复持久 NOT_STARTED 的相同命令；实际调用仍要重新通过开始闸门。

@@ -8,6 +8,8 @@ export interface GanttBar {
   taskUuid: string
   nodeUuid: string
   name: string
+  /** 稳定动作身份，可能与用于展示的名称不同。 */
+  actionKey?: string
   deviceId: string
   status: NodePresentationStatus
   kind: 'actual' | 'running' | 'planned' | 'remaining'
@@ -163,10 +165,14 @@ export function buildTaskGantt(
       const taskTerminal = terminalTaskStatuses.has(task.executionStatus || task.status)
       const beforeCount = bars.length
       const specificReasons = [...(taskReasons?.get(node.uuid) || [])]
+      const requiresReview = node.status === 'attention' || Boolean(node.job?.uncertaintyReason)
+        || node.job?.manualConfirmation?.status === 'pending'
+      const deviceAction = node.kind === 'device_action' || Boolean(node.device) || Boolean(plan?.device_id)
       const addBar = (kind: GanttBar['kind'], startMs: number, endMs: number, endIsOpen = false): void => {
         bars.push({
           id: `${task.uuid}:${node.uuid}:${node.job?.uuid || 'plan'}:${kind}`,
           taskUuid: task.uuid, nodeUuid: node.uuid, name: node.name,
+          ...(deviceAction ? { actionKey: node.actionName || node.name } : {}),
           deviceId: kind === 'planned' ? plan?.device_id || node.device || '' : node.device || plan?.device_id || '', status: node.status,
           kind, startMs, endMs, lane: 0, ...(endIsOpen ? { endIsOpen: true } : {}),
         })
@@ -175,7 +181,10 @@ export function buildTaskGantt(
       if (start !== null && end !== null && end >= start) {
         // 有真实完成回报时优先显示事实，即使候选接口尚未刷新。
         addBar('actual', start, end)
-        specificReasons.length = 0
+        // 不确定结果即使有完整时间戳也必须保留待核对提示，避免实际条掩盖
+        // 尚未确认的物理结果或人工确认请求。
+        if (requiresReview) specificReasons.push(defaultPendingReason(node, task))
+        else specificReasons.length = 0
       } else if (nodeTerminal || taskTerminal) {
         if (start !== null || end !== null) specificReasons.push('已结束，但实际起止时间不完整或顺序异常')
       } else {
@@ -184,8 +193,6 @@ export function buildTaskGantt(
         } else if (node.job?.startedAt || node.job?.finishedAt) {
           specificReasons.push('实际起止时间缺失或异常，等待核对')
         }
-        const requiresReview = node.status === 'attention' || Boolean(node.job?.uncertaintyReason)
-          || node.job?.manualConfirmation?.status === 'pending'
         // 待核对和人工等待不能用旧预测伪装成确定的结束时间。
         if (!requiresReview && interval && plan) {
           if (plan.fixed || start !== null || node.status === 'running' || node.status === 'canceling') {

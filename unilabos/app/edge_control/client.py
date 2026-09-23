@@ -698,7 +698,13 @@ class EdgeControlClient(BaseCommunicationClient):
                 running_job: dict[str, Any] = {
                     "job_uuid": job.job_uuid,
                     "command_uuid": job.command_uuid,
-                    "state": "running",
+                    # ``cancel_requested`` 是持久取消事实；跨 hello 对账继续传递，
+                    # 避免本地权威把等待中的取消请求恢复成普通运行作业。
+                    "state": (
+                        "cancel_requested"
+                        if job.status == "cancel_requested"
+                        else "running"
+                    ),
                 }
                 running_jobs.append(running_job)
         return _envelope(
@@ -1154,7 +1160,7 @@ class EdgeControlClient(BaseCommunicationClient):
                 self.store.preserve_restarted_job(
                     job_uuid, not_started=payload.get("execution_start_state") == "NOT_STARTED"
                 )
-            elif payload.get("station_controlled") and job_uuid in self._restart_pending_jobs:
+            elif payload.get("station_controlled") and job_uuid in previous_jobs:
                 self.store.abort_restarted_job(job_uuid)
             self._restart_pending_jobs.discard(job_uuid)
         for job in self.store.list_jobs({"received", "fetch_retry"}):

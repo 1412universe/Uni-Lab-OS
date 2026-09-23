@@ -1029,6 +1029,68 @@ def test_transient_disconnect_marks_unknown_and_same_process_can_reconcile(
         authority.stop()
 
 
+def test_hello_preserves_cancel_requested_runtime_state(
+    tmp_path: Path,
+) -> None:
+    """Edge hello 对账不得把已受理取消的作业降级成普通 running。"""
+
+    authority = _authority(tmp_path / "authority-cancel.db")
+    registration = authority.store.register_session(
+        {
+            "edge_key": "workspace-edge",
+            "instance_uuid": str(uuid.uuid4()),
+            "devices": [],
+        }
+    )
+    session_identity = {
+        "edge_uuid": registration["edge_uuid"],
+        "session_uuid": registration["session_uuid"],
+    }
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    authority.store.acknowledge_command(command["message_uuid"])
+    process_uuid = str(uuid.uuid4())
+    try:
+        assert authority.store.reconcile_hello(
+            {
+                **session_identity,
+                "process_uuid": process_uuid,
+                "last_ack_command_sequence": command["sequence"],
+                "running_jobs": [],
+            }
+        ) == (False, ())
+
+        restarted, affected = authority.store.reconcile_hello(
+            {
+                **session_identity,
+                "process_uuid": process_uuid,
+                "last_ack_command_sequence": command["sequence"],
+                "running_jobs": [
+                    {
+                        "job_uuid": payload["job_id"],
+                        "command_uuid": command["message_uuid"],
+                        "state": "cancel_requested",
+                    }
+                ],
+            }
+        )
+        assert (restarted, affected) == (False, ())
+        assert authority.store.job(payload["job_id"])["status"] == (
+            "cancel_requested"
+        )
+        assert authority.store.busy_device_action_keys() == {
+            f"/devices/{payload['device_id']}/{payload['action']}"
+        }
+
+        assert authority.store.mark_disconnected_jobs_unknown() == [
+            payload["job_id"]
+        ]
+        assert authority.store.job(payload["job_id"])["status"] == "unknown"
+    finally:
+        authority.stop()
+
+
 def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
     tmp_path: Path,
 ) -> None:
@@ -1122,6 +1184,33 @@ def test_fail_restarted_jobs_clears_unknown_busy_key(tmp_path: Path) -> None:
         assert authority.store.job(payload["job_id"])["status"] == "failed"
         assert authority.busy_device_action_keys() == set()
         assert authority.fail_restarted_jobs((payload["job_id"],)) == []
+    finally:
+        authority.stop()
+
+
+def test_fail_restarted_jobs_also_closes_cancel_requested_job(
+    tmp_path: Path,
+) -> None:
+    """重启失败收口不能遗漏已受理取消但仍未结算的作业。"""
+
+    authority = _authority(tmp_path / "authority-cancel-restart.db")
+    payload = _payload()
+    try:
+        authority.dispatch(payload)
+        with authority.store._lock, authority.store._connection:
+            authority.store._connection.execute(
+                "UPDATE local_edge_job SET status='cancel_requested' WHERE job_uuid=?",
+                (payload["job_id"],),
+            )
+        assert authority.store.busy_device_action_keys() == {
+            f"/devices/{payload['device_id']}/{payload['action']}"
+        }
+
+        assert authority.fail_restarted_jobs((payload["job_id"],)) == [
+            payload["job_id"]
+        ]
+        assert authority.store.job(payload["job_id"])["status"] == "failed"
+        assert authority.store.busy_device_action_keys() == set()
     finally:
         authority.stop()
 

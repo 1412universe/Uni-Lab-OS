@@ -68,6 +68,7 @@ from unilabos.workflow.physical_settlement_policy import (
 from unilabos.workflow.scheduler_capacity import (
     activate_workflow_task,
     admit_job_dispatch,
+    check_workflow_task_capacity,
 )
 from unilabos.workflow.station_event_outbox import append_station_event
 from unilabos.workflow.station_status_projection import (
@@ -2070,36 +2071,19 @@ class TaskRuntimeProjection:
                 )
                 return self._aggregate(connection, task_uuid)
             if task_row["status"] == "pending":
-                activation = activate_workflow_task(
+                capacity = check_workflow_task_capacity(
                     connection,
                     task_uuid=task_uuid,
                     max_active_tasks=max_active_tasks,
                     max_tasks_per_workflow=max_tasks_per_workflow,
                 )
-                if not activation.available:
+                if not capacity.available:
                     self._append_invalidation(
                         connection,
                         task_uuid=task_uuid,
                         now=utc_now(),
                     )
                     return self._aggregate(connection, task_uuid)
-                task_row = self._task_row(connection, task_uuid)
-                append_runtime_event(
-                    connection,
-                    task_uuid=task_uuid,
-                    kind="task_transition",
-                    from_status="pending",
-                    to_status="running",
-                    now=utc_now(),
-                )
-                append_task_state_event(
-                    connection,
-                    task_uuid=task_uuid,
-                    status="running",
-                    details={
-                        "started_at": str(task_row["started_at"] or utc_now()),
-                    },
-                )
             tenancy_decision = check_device_tenancy(
                 connection,
                 task_uuid=task_uuid,
@@ -2163,6 +2147,47 @@ class TaskRuntimeProjection:
                     now=utc_now(),
                 )
                 return self._aggregate(connection, task_uuid)
+            # 只有设备托管和完整执行锁都已准入，才领取父 Task 的运行容量。
+            # 前面的容量门禁在同一个写事务内完成，因此这里不会在拿到锁后
+            # 意外发现容量已满；这样锁等待/设备等待都不会把父任务提前激活。
+            if task_row["status"] == "pending":
+                activation = activate_workflow_task(
+                    connection,
+                    task_uuid=task_uuid,
+                    max_active_tasks=max_active_tasks,
+                    max_tasks_per_workflow=max_tasks_per_workflow,
+                )
+                if not activation.available:
+                    # SQLite 写事务在本地串行化；这是防御性分支，正常不会触发。
+                    # 若未来容量策略发生变化，不能留下属于 pending Job 的活动锁。
+                    release_execution_locks(
+                        connection,
+                        job_uuid=job_uuid,
+                        now=utc_now(),
+                    )
+                    self._append_invalidation(
+                        connection,
+                        task_uuid=task_uuid,
+                        now=utc_now(),
+                    )
+                    return self._aggregate(connection, task_uuid)
+                task_row = self._task_row(connection, task_uuid)
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    kind="task_transition",
+                    from_status="pending",
+                    to_status="running",
+                    now=utc_now(),
+                )
+                append_task_state_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    status="running",
+                    details={
+                        "started_at": str(task_row["started_at"] or utc_now()),
+                    },
+                )
             prepare_device_tenancy(
                 connection,
                 task_uuid=task_uuid,

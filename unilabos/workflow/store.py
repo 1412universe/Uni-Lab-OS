@@ -78,6 +78,15 @@ _STORE_INITIALIZATION_SQLITE_BUSY_TIMEOUT_MS = 100
 _STORE_INITIALIZATION_RETRY_INTERVAL_SECONDS = 0.01
 _STORE_SQLITE_BUSY_TIMEOUT_MS = 5000
 
+# 任务删除是对已完成运行事实的展示清理，资格必须在同一个 SQLite
+# 事务内根据这些持久状态重新核验。不要把前端投影中的状态当作安全门禁。
+_TASK_DELETE_TERMINAL_STATUSES = frozenset(
+    {"succeeded", "failed", "canceled", "timeout"}
+)
+_JOB_DELETE_TERMINAL_STATUSES = frozenset(
+    {"succeeded", "failed", "skipped", "canceled", "timeout"}
+)
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -2536,6 +2545,246 @@ class WorkflowStore:
             raise StoreNotFound(f"workflow task {task_uuid} not found")
         return self._task_row(row)
 
+    @staticmethod
+    def _task_delete_eligibility(
+        connection: sqlite3.Connection,
+        task_row: sqlite3.Row,
+    ) -> Dict[str, Any]:
+        """在调用方事务内计算任务软删除资格。
+
+        参数：``connection`` 是已经持有 ``BEGIN IMMEDIATE`` 的工作流库连接，
+        ``task_row`` 是包含已删除记录在内的任务行。返回：面向控制台的稳定资格
+        投影；所有阻塞原因都来自同一事务中的持久事实。异常：查询错误原样传播。
+        状态不变量：本函数只读，不改变任何任务、Job 或资源记录。
+        """
+
+        task_uuid = str(task_row["uuid"])
+        deleted_at = task_row["deleted_at"]
+        status = str(task_row["status"] or "")
+        cleanup_status = str(task_row["cleanup_status"] or "none")
+        blockers: list[str] = []
+        if deleted_at is not None:
+            return {
+                "can_delete": False,
+                "already_deleted": True,
+                "delete_blockers": [],
+                "status": status,
+                "cleanup_status": cleanup_status,
+                "deleted_at": deleted_at,
+            }
+        if status not in _TASK_DELETE_TERMINAL_STATUSES:
+            blockers.append(f"任务状态为 {status or 'unknown'}，尚未进入终态")
+        if cleanup_status not in {"none", "settled"}:
+            blockers.append(f"任务清理状态为 {cleanup_status}，资源尚未完全收敛")
+
+        jobs = connection.execute(
+            """
+            SELECT status, uncertainty_reason
+            FROM workflow_node_job
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+            """,
+            (task_uuid,),
+        ).fetchall()
+        non_terminal_jobs = sum(
+            str(row["status"] or "") not in _JOB_DELETE_TERMINAL_STATUSES
+            for row in jobs
+        )
+        uncertain_jobs = sum(bool(str(row["uncertainty_reason"] or "").strip()) for row in jobs)
+        if non_terminal_jobs:
+            blockers.append(f"仍有 {non_terminal_jobs} 个 Job 未进入终态")
+        if uncertain_jobs:
+            blockers.append(f"仍有 {uncertain_jobs} 个 Job 存在结果不确定原因")
+
+        def count(sql: str, values: tuple[Any, ...] = ()):  # local transaction helper
+            try:
+                return int(connection.execute(sql, values).fetchone()[0])
+            except sqlite3.OperationalError as error:
+                # 干预/人工确认表按需迁移；旧历史库尚未使用这些能力时，
+                # 缺表等价于没有该类残留，不能让任务详情接口整体 500。
+                if "no such table" in str(error).lower():
+                    return 0
+                raise
+
+        active_claims = count(
+            """
+            SELECT COUNT(*) FROM execution_claim
+            WHERE workflow_task_uuid = ? AND state != 'released'
+            """,
+            (task_uuid,),
+        )
+        if active_claims:
+            blockers.append(f"仍有 {active_claims} 个执行 Claim 未释放")
+        active_leases = count(
+            """
+            SELECT COUNT(*) FROM execution_lock_lease
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND state != 'released'
+            """,
+            (task_uuid,),
+        )
+        if active_leases:
+            blockers.append(f"仍有 {active_leases} 个执行锁租约未释放")
+        waiting_locks = count(
+            """
+            SELECT COUNT(*) FROM execution_lock_waiter
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND state = 'waiting'
+            """,
+            (task_uuid,),
+        )
+        if waiting_locks:
+            blockers.append(f"仍有 {waiting_locks} 个资源锁请求在等待")
+        active_tenancies = count(
+            """
+            SELECT COUNT(*) FROM task_device_tenancy
+            WHERE workflow_task_uuid = ? AND state = 'active'
+            """,
+            (task_uuid,),
+        )
+        if active_tenancies:
+            blockers.append(f"仍有 {active_tenancies} 个设备托管未释放")
+        active_material_claims = count(
+            """
+            SELECT COUNT(*) FROM workflow_task_material_claim
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND status = 'active'
+            """,
+            (task_uuid,),
+        )
+        if active_material_claims:
+            blockers.append(f"仍有 {active_material_claims} 个物料 Claim 未释放")
+        pending_commands = count(
+            """
+            SELECT COUNT(*) FROM workflow_task_command
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND status = 'pending'
+            """,
+            (task_uuid,),
+        )
+        if pending_commands:
+            blockers.append(f"仍有 {pending_commands} 个任务控制命令待处理")
+        open_interventions = count(
+            """
+            SELECT COUNT(*) FROM workflow_intervention
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+              AND status IN ('open', 'selected')
+            """,
+            (task_uuid,),
+        )
+        if open_interventions:
+            blockers.append(f"仍有 {open_interventions} 个人工干预未关闭")
+        pending_confirmations = count(
+            """
+            SELECT COUNT(*) FROM workflow_manual_confirmation
+            WHERE workflow_task_uuid = ? AND status IN ('pending', 'approved')
+            """,
+            (task_uuid,),
+        )
+        if pending_confirmations:
+            blockers.append(f"仍有 {pending_confirmations} 个人工确认未完成")
+        reserved_inventory = count(
+            """
+            SELECT COUNT(*) FROM workflow_inventory_allocation
+            WHERE workflow_task_uuid = ? AND status = 'reserved'
+            """,
+            (task_uuid,),
+        )
+        if reserved_inventory:
+            blockers.append(f"仍有 {reserved_inventory} 个数量库存分配未释放")
+        pending_inventory_saga = count(
+            """
+            SELECT COUNT(*) FROM workflow_inventory_saga
+            WHERE workflow_task_uuid = ? AND status != 'settled'
+            """,
+            (task_uuid,),
+        )
+        if pending_inventory_saga:
+            blockers.append("数量库存 Saga 尚未结算")
+        return {
+            "can_delete": not blockers,
+            "already_deleted": False,
+            "delete_blockers": blockers,
+            "status": status,
+            "cleanup_status": cleanup_status,
+            "deleted_at": None,
+        }
+
+    def task_delete_eligibility(self, task_uuid: str) -> Dict[str, Any]:
+        """读取任务软删除资格；普通详情只读使用，不返回已删除任务。"""
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?",
+                (task_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            return self._task_delete_eligibility(self._conn, row)
+
+    def delete_task(self, task_uuid: str) -> Dict[str, Any]:
+        """事务内软删除一个已终态且全部资源已释放的任务。
+
+        参数：``task_uuid`` 是稳定任务 UUID。返回：删除结果，重复请求返回
+        ``already_deleted``。异常：不存在抛 ``StoreNotFound``；任务未满足安全
+        门禁抛带阻塞原因的 ``StoreConflict``。状态不变量：只更新根任务的
+        ``deleted_at``，保留 Job、运行事件、库存和设备历史，避免破坏审计外键。
+        """
+
+        now = utc_now()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?",
+                (task_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            eligibility = self._task_delete_eligibility(connection, row)
+            if eligibility["already_deleted"]:
+                return {
+                    "status": "already_deleted",
+                    "workflow_task_uuid": task_uuid,
+                    "deleted_at": eligibility["deleted_at"],
+                }
+            if not eligibility["can_delete"]:
+                raise StoreConflict(
+                    "任务当前不能删除：" + "；".join(eligibility["delete_blockers"]),
+                )
+            self._append_runtime_event(
+                connection,
+                task_uuid=task_uuid,
+                # 运行日志的 kind 是持久化闭集；具体删除动作放在事件数据中，
+                # 保持旧版本读取器可重放，同时保留不可变删除审计。
+                kind="task_transition",
+                now=now,
+                from_status=eligibility["status"],
+                to_status=eligibility["status"],
+                data={
+                    "event": "task_deleted",
+                    "status": eligibility["status"],
+                    "cleanup_status": eligibility["cleanup_status"],
+                    "delete_blockers": [],
+                },
+            )
+            updated = connection.execute(
+                """
+                UPDATE workflow_task
+                SET deleted_at = ?, update_time = ?
+                WHERE uuid = ? AND deleted_at IS NULL
+                """,
+                (now, now, task_uuid),
+            ).rowcount
+            if updated != 1:
+                # BEGIN IMMEDIATE 已经串行化本地调度器；这里仍保留 CAS 保护，
+                # 避免未来迁移到共享连接后误报告已删除。
+                raise StoreConflict("任务状态已变化，请刷新后重试")
+            self._append_event(
+                connection,
+                event="workflow.runtime.changed",
+                data={"workflow_task_uuid": task_uuid, "event": "task_deleted"},
+                now=now,
+            )
+            return {
+                "status": "deleted",
+                "workflow_task_uuid": task_uuid,
+                "deleted_at": now,
+            }
+
     def get_station_task_by_invocation(
         self,
         *,
@@ -3054,6 +3303,98 @@ class WorkflowStore:
         if row is None:
             raise StoreNotFound(f"workflow node job {job_uuid} not found")
         return self._job_row(row)
+
+    def update_pending_job_param(
+        self,
+        task_uuid: str,
+        job_uuid: str,
+        param: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """原子保存暂停任务中尚未派发 Job 的参数。
+
+        参数：``task_uuid`` 和 ``job_uuid`` 必须指向同一个任务；``param`` 是已经
+        合并好的 JSON 对象。返回更新后的 Job 投影。异常：任务未暂停、任务已经
+        终态、作业不属于任务、作业不是当前 attempt 或已经离开 pending 状态时抛
+        ``StoreConflict``；不存在的身份抛 ``StoreNotFound``。该方法不修改冻结
+        图结构、连线、资源计划或作业身份。
+        """
+
+        if not isinstance(param, Mapping):
+            raise StoreConflict("作业参数必须是对象")
+        normalized_param = deepcopy(dict(param))
+        now = utc_now()
+        with self.transaction() as conn:
+            task = conn.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ? AND deleted_at IS NULL",
+                (task_uuid,),
+            ).fetchone()
+            if task is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            if task["status"] in {"succeeded", "success", "failed", "canceled", "timeout"}:
+                raise StoreConflict("终态任务不能修改参数")
+            if (
+                str(task["dispatch_gate"] or "active") != "paused"
+                or str(task["execution_mode"] or task["run_mode"] or "normal") != "normal"
+                or str(task["control_status"] or "active") != "paused"
+            ):
+                raise StoreConflict("任务必须先暂停才能修改参数")
+            job = conn.execute(
+                """
+                SELECT * FROM workflow_node_job
+                WHERE uuid = ? AND workflow_task_uuid = ? AND deleted_at IS NULL
+                """,
+                (job_uuid, task_uuid),
+            ).fetchone()
+            if job is None:
+                raise StoreNotFound(f"workflow node job {job_uuid} not found")
+            if not bool(job["current_attempt"]):
+                raise StoreConflict("历史作业 attempt 不能修改参数")
+            if str(job["status"]) != "pending":
+                raise StoreConflict("作业已经离开待运行状态，不能修改参数")
+            updated = conn.execute(
+                """
+                UPDATE workflow_node_job
+                SET param = ?, update_time = ?
+                WHERE uuid = ? AND workflow_task_uuid = ?
+                  AND deleted_at IS NULL AND current_attempt = 1
+                  AND status = 'pending'
+                """,
+                (_json(normalized_param), now, job_uuid, task_uuid),
+            ).rowcount
+            if updated != 1:
+                raise StoreConflict("作业状态已变化，请刷新后重试")
+            updated_job = conn.execute(
+                "SELECT * FROM workflow_node_job WHERE uuid = ?",
+                (job_uuid,),
+            ).fetchone()
+            assert updated_job is not None
+            from unilabos.workflow.station_status_projection import append_job_state_event
+
+            self._append_runtime_event(
+                conn,
+                task_uuid=task_uuid,
+                job_uuid=job_uuid,
+                # 运行日志的 kind 是持久化闭集；参数编辑沿用 Job 状态事件
+                # 通道，通过 data.event 标记具体动作，避免为一次可重放的
+                # pending→pending 修改扩大 SQLite schema 的兼容面。
+                kind="job_transition",
+                now=now,
+                data={"event": "param_updated", "param": normalized_param},
+            )
+            append_job_state_event(
+                conn,
+                job_row=updated_job,
+                status="pending",
+                event_name="param_updated",
+                details={"param": normalized_param},
+            )
+            self._append_event(
+                conn,
+                event="workflow.runtime.changed",
+                data={"workflow_task_uuid": task_uuid, "workflow_node_job_uuid": job_uuid},
+                now=now,
+            )
+            return self._job_row(updated_job)
 
     def create_task_command(
         self,

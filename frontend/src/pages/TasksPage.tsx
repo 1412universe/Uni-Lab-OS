@@ -25,11 +25,13 @@ import {
   ShieldAlert,
   Square,
   StepForward,
+  Trash2,
   X,
 } from 'lucide-react'
 import {
   commandWorkflowTask,
   createWorkflowTask,
+  deleteWorkflowTask,
   decideManualConfirmation,
   decideWorkflowIntervention,
   forceReleaseWorkflowTaskExecutionLock,
@@ -40,6 +42,7 @@ import {
   loadWorkflowTaskExecutionLocks,
   loadWorkflowTaskStepState,
   settleFailedMaterialTransfer,
+  updateWorkflowTaskJobParam,
 } from '../lib/edgeClient'
 import type {
   ContractField,
@@ -445,6 +448,26 @@ function ErrorPolicyDialog({ intervention, connected, onNotify }: {
 }
 
 function TaskNodeInspector({ task, node, connected, onNotify, onClose }: { task: WorkflowTask; node: TaskNode; connected: boolean; onNotify: (message: string) => void; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const editable = task.dispatchGate === 'paused' && Boolean(node.job?.uuid) && ['pending', 'waiting'].includes(node.status)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(() => JSON.stringify(node.job?.param || {}, null, 2))
+  const mutation = useMutation({
+    mutationFn: () => {
+      let parsed: unknown
+      try { parsed = JSON.parse(draft) } catch { throw new Error('参数必须是有效 JSON') }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('参数必须是 JSON 对象')
+      return updateWorkflowTaskJobParam(task.uuid, node.job!.uuid, parsed as Record<string, unknown>)
+    },
+    onSuccess: () => {
+      onNotify('Job 参数已保存；继续任务后会按新参数派发')
+      setEditing(false)
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-detail', task.uuid] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['time-schedule-plan'] }, { cancelRefetch: false })
+    },
+    onError: (error) => onNotify(`参数保存失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
   return (
     <section className="panel task-node-inspector" role="region" aria-label="节点运行详情">
       <header>
@@ -461,8 +484,14 @@ function TaskNodeInspector({ task, node, connected, onNotify, onClose }: { task:
       </header>
       <div className="node-evidence-grid">
         <article>
-          <div><strong>实际运行参数</strong><small>WorkflowNodeJob.param</small></div>
-          <pre>{jsonEvidence(node.job?.param, '节点尚未进入调度，暂无实际参数')}</pre>
+          <div className="node-evidence-heading"><span><strong>实际运行参数</strong><small>WorkflowNodeJob.param</small></span>{editable && !editing ? <Button onClick={() => { setDraft(JSON.stringify(node.job?.param || {}, null, 2)); setEditing(true) }}>修改参数</Button> : null}</div>
+          {editing ? (
+            <div className="node-param-editor">
+              <textarea aria-label="Job 参数 JSON" value={draft} onChange={(event) => setDraft(event.target.value)} />
+              <div><Button type="button" onClick={() => setEditing(false)}>取消</Button><Button type="button" tone="primary" disabled={!connected || mutation.isPending} onClick={() => mutation.mutate()}>保存</Button></div>
+              <small>仅暂停任务且 Job 尚未下发时可编辑；拓扑和已下发 Job 不会改变。</small>
+            </div>
+          ) : <pre>{jsonEvidence(node.job?.param, '节点尚未进入调度，暂无实际参数')}</pre>}
         </article>
         <article>
           <div><strong>运行结果</strong><small>WorkflowNodeJob.return_info</small></div>
@@ -481,6 +510,77 @@ function TaskNodeInspector({ task, node, connected, onNotify, onClose }: { task:
         <HistoricalManualActionReview key={job.uuid} job={job} taskUuid={task.uuid} taskNeedsAttention={['execution_unknown', 'intervention_required', 'unknown'].includes(task.status)} connected={connected} onNotify={onNotify} />
       ))}
     </section>
+  )
+}
+
+function TaskDeleteAction({
+  task,
+  connected,
+  onNotify,
+  onDeleted,
+}: {
+  task: WorkflowTask
+  connected: boolean
+  onNotify: (message: string) => void
+  onDeleted: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const mutation = useMutation({
+    mutationFn: () => deleteWorkflowTask(task.uuid),
+    onSuccess: (result) => {
+      setOpen(false)
+      onNotify(result.status === 'already_deleted' ? '任务已经删除，页面已同步。' : '任务已删除。')
+      onDeleted()
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-detail', task.uuid] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['time-schedule-plan'] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] }, { cancelRefetch: false })
+    },
+    onError: (error) => {
+      onNotify(`删除任务失败：${error instanceof Error ? error.message : '未知错误'}`)
+      void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
+      void queryClient.invalidateQueries({ queryKey: ['workflow-task-detail', task.uuid] }, { cancelRefetch: false })
+    },
+  })
+  const blockers = task.deleteBlockers?.length
+    ? task.deleteBlockers
+    : task.canDelete === undefined
+      ? ['正在读取服务端删除资格']
+      : ['服务端尚未确认所有资源已释放']
+  return (
+    <div className="task-delete-action">
+      <div className="task-delete-action-row">
+        <Button
+          tone="danger"
+          icon={mutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
+          disabled={!connected || !task.canDelete || mutation.isPending}
+          onClick={() => { mutation.reset(); setOpen(true) }}
+        >
+          删除任务
+        </Button>
+        {!task.canDelete ? <small className="task-delete-blocked">{blockers.join('；')}</small> : null}
+      </div>
+      {open ? (
+        <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false) }}>
+          <section className="task-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="task-delete-title">
+            <header>
+              <div><span>OPERATOR ACTION</span><h2 id="task-delete-title">删除任务</h2><p>{task.workflowName} · {task.uuid}</p></div>
+              <button type="button" aria-label="关闭删除任务对话框" onClick={() => setOpen(false)}><X size={18} /></button>
+            </header>
+            <div className="task-delete-dialog-content">
+              <div className="task-delete-warning"><AlertCircle size={16} /><span>该任务已进入终态且资源已释放。删除只隐藏 Edge 任务记录，运行事件、Job、库存和工作流定义会保留。</span></div>
+              <dl className="task-delete-facts">
+                <div><dt>任务状态</dt><dd>{task.executionStatus || task.status}</dd></div>
+                <div><dt>清理状态</dt><dd>{task.cleanupStatus || 'none'}</dd></div>
+                <div><dt>资源检查</dt><dd>无活动锁、Claim、托管或待处理命令</dd></div>
+              </dl>
+            </div>
+            <footer><Button type="button" onClick={() => setOpen(false)}>取消</Button><Button type="button" tone="danger" icon={mutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} disabled={!connected || mutation.isPending} onClick={() => mutation.mutate()}>确认删除</Button></footer>
+          </section>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
@@ -1151,7 +1251,7 @@ export function TasksPage({
   }, [targetTaskUuid, targetTaskAvailable])
 
   useEffect(() => {
-    if (!tasks.some((task) => task.uuid === selectedId)) setSelectedId(tasks[0]?.uuid || '')
+    if (selectedId && !tasks.some((task) => task.uuid === selectedId)) setSelectedId(tasks[0]?.uuid || '')
   }, [tasks, selectedId])
 
   useEffect(() => {
@@ -1163,11 +1263,13 @@ export function TasksPage({
   }, [tasks, selectedNodeRef])
 
   const filtered = useMemo(() => tasks.filter((task) => matchesFilter(task, filter)), [tasks, filter])
-  const selectedSummary = filtered.find((task) => task.uuid === selectedId) || filtered[0]
+  const selectedSummary = selectedId
+    ? filtered.find((task) => task.uuid === selectedId) || filtered[0]
+    : undefined
   const selectedDetailQuery = useQuery({
     queryKey: ['workflow-task-detail', selectedSummary?.uuid],
     queryFn: ({ signal }) => loadWorkflowTaskDetail(selectedSummary!.uuid, materials, signal),
-    enabled: connected && Boolean(selectedSummary) && selectedNodeRef?.taskUuid === selectedSummary?.uuid,
+    enabled: connected && Boolean(selectedSummary),
     staleTime: 10_000,
   })
   const selected = selectedDetailQuery.data && selectedDetailQuery.data.uuid === selectedSummary?.uuid
@@ -1293,6 +1395,7 @@ export function TasksPage({
         ) : null}
         <Button tone="danger" icon={<Square size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
       </div>
+      {ordinaryTaskPaused ? <small className="task-step-inline-note">点击一个待运行节点，在节点详情的“实际运行参数”区域修改参数。</small> : null}
     </div>
   ) : undefined
 
@@ -1394,6 +1497,16 @@ export function TasksPage({
                   <code>{selected.trace.traceId || selected.uuid}</code>
                 </a>
               ) : null}
+              <TaskDeleteAction
+                task={selected}
+                connected={connected}
+                onNotify={onNotify}
+                onDeleted={() => {
+                  setSelectedId('')
+                  setSelectedNodeRef(undefined)
+                  setSelectedStepNodeUuid('')
+                }}
+              />
               <TaskExecutionLocks
                 key={selected.uuid}
                 taskUuid={selected.uuid}

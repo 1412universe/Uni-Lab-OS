@@ -100,6 +100,12 @@ export class TaskCommandRequestError extends Error {
   }
 }
 
+export interface WorkflowTaskDeletionResult {
+  status: 'deleted' | 'already_deleted' | string
+  workflowTaskUuid?: string
+  deletedAt?: string
+}
+
 const terminalTaskStatusValues = ['succeeded', 'failed', 'canceled', 'timeout'] as const
 const taskStatuses = new Set<TaskPresentationStatus>([
   'running',
@@ -871,6 +877,7 @@ export function adaptTask(
     ? 'paused'
     : 'active'
   const cleanupStatus = String(raw.cleanup_status || 'none')
+  const deletionBlockers = adaptTaskDeleteBlockers(raw)
   const normalisedStatus = normaliseTaskStatus(raw.status)
   // 只有后端核实没有其他待处理执行或资源占用，才收起任务级残留核对提示。
   const manualAttentionResolved = raw.manual_review_attention_resolved === true
@@ -897,6 +904,7 @@ export function adaptTask(
     return {
       uuid,
       name: nodeName(node),
+      ...(node.action_name ? { actionName: String(node.action_name) } : {}),
       kind: String(node.kind || node.action_type || 'device_action'),
       index: Number(node.topological_index ?? index),
       status: jobNodeStatus(job, status, node),
@@ -1014,12 +1022,34 @@ export function adaptTask(
     executionMode,
     dispatchGate,
     controlStatus,
+    input: raw.input && typeof raw.input === 'object' && !Array.isArray(raw.input)
+      ? raw.input as Record<string, unknown>
+      : undefined,
+    inputContract: inputContract.length ? inputContract : undefined,
     cleanupStatus,
+    canDelete: raw.can_delete === true,
+    deleteBlockers: deletionBlockers.length ? deletionBlockers : undefined,
     attentionReason: attentionMessage ? String(attentionMessage) : undefined,
     manualReviewAttentionResolved: manualAttentionResolved,
     matrixGroupKey: matrixGroupKey(raw),
     trace: taskTraceReference(raw, traceUiUrl),
   }
+}
+
+function adaptTaskDeleteBlockers(raw: RawRecord): string[] {
+  const candidates = raw.delete_blockers
+    ?? raw.deletion_blockers
+    ?? (raw.deletion_eligibility && typeof raw.deletion_eligibility === 'object'
+      ? raw.deletion_eligibility.blockers
+      : undefined)
+  if (!Array.isArray(candidates)) return []
+  return candidates.flatMap((candidate: unknown) => {
+    if (typeof candidate === 'string' && candidate.trim()) return [candidate]
+    if (!candidate || typeof candidate !== 'object') return []
+    const item = candidate as RawRecord
+    const message = item.message ?? item.msg ?? item.reason ?? item.title ?? item.code
+    return typeof message === 'string' && message.trim() ? [message] : []
+  })
 }
 
 function taskPriority(value: unknown): WorkflowTask['priority'] {
@@ -3144,6 +3174,51 @@ export async function createWorkflowTask({
     description,
     meta_data: { source: 'unilabos-frontend' },
   })
+}
+
+export async function updateWorkflowTaskJobParam(
+  taskUuid: string,
+  jobUuid: string,
+  param: Record<string, unknown>,
+): Promise<RawRecord> {
+  return writeData<RawRecord>(
+    'PATCH',
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/jobs/${encodeURIComponent(jobUuid)}/param`,
+    { param },
+  )
+}
+
+/**
+ * 软删除一个已经完成且资源事实已收敛的 Edge 任务。
+ * Edge 会在事务内再次检查删除资格；页面上的 can_delete 只用于交互提示。
+ */
+export async function deleteWorkflowTask(taskUuid: string): Promise<WorkflowTaskDeletionResult> {
+  const path = `/workflow-tasks/${encodeURIComponent(taskUuid)}`
+  const response = await fetch(`${EDGE_API_BASE}${path}`, {
+    method: 'DELETE',
+    headers: { Accept: 'application/json' },
+  })
+  const body = await response.json().catch(() => null) as EdgeEnvelope<RawRecord> | null
+  const errorCode = body?.error?.code
+  if (!response.ok) {
+    // 删除接口按约定对重复删除幂等；兼容旧 Edge 将 already_deleted 作为 404 业务响应返回。
+    if (errorCode === 'already_deleted' || errorCode === 'task_already_deleted') {
+      return { status: 'already_deleted', workflowTaskUuid: taskUuid }
+    }
+    throw new EdgeApiError(
+      formatApiError(body, response.status),
+      { code: errorCode, details: body?.error?.details },
+    )
+  }
+  if (!body || typeof body !== 'object') {
+    throw new EdgeApiError('Edge 删除任务响应无法解析')
+  }
+  const result = unwrapEnvelope(body)
+  return {
+    status: String(result.status || 'deleted') as WorkflowTaskDeletionResult['status'],
+    workflowTaskUuid: result.workflow_task_uuid ? String(result.workflow_task_uuid) : taskUuid,
+    deletedAt: result.deleted_at ? String(result.deleted_at) : undefined,
+  }
 }
 
 export async function loadWorkflowTaskStepState(

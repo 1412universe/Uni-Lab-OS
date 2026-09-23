@@ -440,6 +440,16 @@ class WorkflowTaskSchedulerBridge(Protocol):
 
         ...
 
+    def update_pending_job_param(
+        self,
+        task_uuid: str,
+        job_uuid: str,
+        param: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """修改已暂停任务中尚未派发作业的参数。"""
+
+        ...
+
     def close(self) -> None:
         """幂等释放调度生命周期监听器；参数无，返回无。"""
 
@@ -4183,6 +4193,38 @@ class WorkflowService:
                     raise WorkflowError("internal_error") from None
             raise
 
+    def update_workflow_task_job_param(
+        self,
+        task_uuid: str,
+        job_uuid: str,
+        *,
+        param: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """修改暂停任务中尚未派发 Job 的参数。
+
+        参数：``task_uuid``、``job_uuid`` 定位稳定运行事实；``param`` 是参数补丁。
+        返回更新后的 Task/Job 投影。异常：任务未暂停、作业已下发或身份不一致时
+        返回稳定的冲突错误；不触碰工作流拓扑和已下发参数。
+        """
+
+        if not isinstance(param, Mapping):
+            raise WorkflowError("invalid_input")
+        if self._task_scheduler_bridge is None:
+            raise WorkflowConflict(
+                "conflict",
+                message="任务调度器未就绪，暂时不能修改任务参数",
+            )
+        try:
+            return self._task_scheduler_bridge.update_pending_job_param(
+                task_uuid,
+                job_uuid,
+                param,
+            )
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except (StoreConflict, TaskSchedulerBridgeError, ValueError) as error:
+            raise WorkflowConflict("conflict", message=str(error)) from None
+
     def command_workflow_task(
         self,
         task_uuid: str,
@@ -4694,6 +4736,18 @@ class WorkflowService:
                     "job": scheduled_jobs[0],
                     "created": True,
                 }
+            # DeviceActionRun 的创建响应与标准任务详情保持同一删除资格投影，
+            # 让调用方在首次创建后即可稳定渲染终态/资源门禁字段。
+            task_projection = aggregate.get("task")
+            if isinstance(task_projection, dict) and task_projection.get("uuid"):
+                eligibility = self._store.task_delete_eligibility(
+                    str(task_projection["uuid"])
+                )
+                aggregate["task"] = {
+                    **task_projection,
+                    "can_delete": bool(eligibility["can_delete"]),
+                    "delete_blockers": list(eligibility["delete_blockers"]),
+                }
             return aggregate
         except DeviceActionRunInputError:
             raise WorkflowError("invalid_input") from None
@@ -4844,9 +4898,35 @@ class WorkflowService:
             raise WorkflowError("invalid_input") from None
         try:
             task = self._store.get_task(identity)
-            return self._project_manual_review_attention([task])[0]
+            task = self._project_manual_review_attention([task])[0]
+            eligibility = self._store.task_delete_eligibility(identity)
+            return {
+                **task,
+                "can_delete": bool(eligibility["can_delete"]),
+                "delete_blockers": list(eligibility["delete_blockers"]),
+            }
         except StoreNotFound:
             raise WorkflowError("not_found") from None
+
+    def delete_workflow_task(self, task_uuid: str) -> dict[str, Any]:
+        """软删除一个已终态且全部资源已释放的 Edge WorkflowTask。
+
+        参数：``task_uuid`` 是任务稳定 UUID。返回：``deleted`` 或幂等的
+        ``already_deleted`` 结果。异常：不存在映射为 ``not_found``；终态、清理或
+        资源门禁不满足映射为带阻塞原因的 ``conflict``。软删除只隐藏根任务，保留
+        Job、运行事件、库存和设备历史。
+        """
+
+        try:
+            identity = validate_uuid(task_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        try:
+            return self._store.delete_task(identity)
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreConflict as error:
+            raise WorkflowConflict("conflict", message=str(error)) from None
 
     def _project_manual_review_attention(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """展示资格独立于持久控制状态，不清除任何未结算事实。"""
