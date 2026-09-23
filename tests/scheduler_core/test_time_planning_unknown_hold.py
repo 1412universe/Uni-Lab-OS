@@ -162,9 +162,6 @@ def test_overdue_unknown_hold_keeps_a_conflicting_running_action_schedulable() -
     unknown = [hold for hold in snapshot.holds if hold.hold_id.startswith("unknown:job-overdue")]
     assert unknown, "超时在途作业应退化成未知释放占用"
     assert all(not hold.release_known for hold in unknown)
-    assert any(("wf-running", "pick") in set(hold.members) for hold in unknown), (
-        "同资源的在跑事实应并入该占用，而不是与它互相排斥"
-    )
     assert plan.status in {"OPTIMAL", "FEASIBLE"}
     assert plan.validated
     assert ("wf-running", "pick") in {node.key for node in plan.nodes}
@@ -192,29 +189,54 @@ def test_pending_competitor_is_still_excluded_from_the_round() -> None:
     assert plan.validated
 
 
-def test_over_constrained_snapshot_is_reported_infeasible_and_never_validated() -> None:
-    """模型层的不可行语义保持不变：诚实报 INFEASIBLE，绝不冒充成空计划。
+def test_facts_never_make_the_model_infeasible_between_themselves() -> None:
+    """既成事实之间不互相排斥：两条活动占用、或占用与在跑动作，都不该让整盘不可行。
 
-    适配层保证事实与事实不会被送进同一条互斥约束，但真正无解的快照仍必须走
-    诚实路径——不 validated、不落 greedy 回退（回退只对 UNKNOWN/ERROR 生效），
-    这样派发侧的 `request()` 会拒绝返回，而不是把空计划当成"没有可排的事"。
+    运行期若真出现两份层级冲突的活动占用，那是执行内核的异常。规划器不能靠让
+    整盘计划不可行来"报告"它——那会连完全无关的任务一起冻结在不派发状态。
     """
 
+    pending = PlanningNode(("other", "weigh"),
+                           (PlanningAlternative("balance-1", 1000, ("/devices/balance-1",)),))
+    running = PlanningNode(
+        ("wf", "running"), (PlanningAlternative("arm-1", 5000, (SITE_KEY, ARM_KEY)),), (), 1.0, True, 0.0,
+    )
     snapshot = PlanningSnapshot(
-        revision="over-constrained",
-        time_origin=0.0,
-        nodes=(
-            PlanningNode(
-                ("wf", "running"),
-                (PlanningAlternative("arm-1", 5000, (SITE_KEY, ARM_KEY)),),
-                (),
-                1.0,
-                True,
-                0.0,
-            ),
+        revision="conflicting-facts", time_origin=0.0, nodes=(running, pending),
+        holds=(
+            # 整物料活动占用，与在跑动作持有的子库位层级冲突。
+            PlanningHold("external", "", (MATERIAL_KEY,)),
+            # 另一条未知释放占用，与在跑动作的设备键完全相同。
+            PlanningHold("unknown:job-elsewhere", "other-wf", (ARM_KEY,)),
         ),
-        # 与在跑事实层级互斥、且没有释放边界的占用；适配层不会构造这种组合，
-        # 这里直接喂给模型以固定不可行分支的行为。
+    )
+
+    plan = solve_snapshot(snapshot, TimePlanningConfig(solve_seconds=2.0))
+
+    assert plan.status in {"OPTIMAL", "FEASIBLE"}
+    assert plan.validated
+    assert plan.nodes, "无关任务必须照常获得计划"
+    assert {node.key for node in plan.nodes} == {("wf", "running"), ("other", "weigh")}
+    assert next(node for node in plan.nodes if node.key[1] == "running").start_ms == 0
+
+
+def test_over_constrained_snapshot_is_reported_infeasible_and_never_validated() -> None:
+    """待执行动作确实无解时，模型必须诚实报 INFEASIBLE，绝不冒充成空计划。
+
+    不 validated、不落 greedy 回退（回退只对 UNKNOWN/ERROR 生效），派发侧的
+    ``request()`` 因此会拒绝返回，而不是把空计划当成"没有可排的事"。适配层会把
+    这类竞争未知占用的待执行节点提前移出本轮模型，所以这条路径在实际运行中
+    不该出现——但模型自身的语义必须保持诚实。
+    """
+
+    pending = PlanningNode(
+        ("wf", "pending"),
+        (PlanningAlternative("arm-1", 5000, (SITE_KEY, ARM_KEY)),),
+    )
+    snapshot = PlanningSnapshot(
+        revision="over-constrained", time_origin=0.0, nodes=(pending,),
+        # 没有释放边界的整物料占用，与待执行动作层级互斥：它占满整个规划范围，
+        # 而待执行动作必须被真实安放，因此无解。
         holds=(PlanningHold("external", "", (MATERIAL_KEY,)),),
     )
 

@@ -125,11 +125,11 @@ def test_projection_reports_an_infeasible_plan_honestly_and_withholds_it() -> No
     调度器自己拒绝执行的安排画到时间轴上。
     """
 
-    running = PlanningNode(
-        ("wf", "running"), (PlanningAlternative("arm-1", 5000, (D1,)),), (), 1.0, True, 0.0,
-    )
+    # 待执行动作与没有释放边界的占用在同一设备上互斥：动作必须被真实安放，
+    # 因此无解。（既成事实之间不会互相排斥，所以这里必须用待执行动作。）
+    pending = PlanningNode(("wf", "pending"), (PlanningAlternative("arm-1", 5000, (D1,)),))
     snapshot = PlanningSnapshot(
-        revision="infeasible", time_origin=0.0, nodes=(running,),
+        revision="infeasible", time_origin=0.0, nodes=(pending,),
         holds=(PlanningHold("external", "", (D1,)),),
     )
     planner = RollingTimePlanner(TimePlanningConfig(solve_seconds=1.0))

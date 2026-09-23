@@ -162,6 +162,26 @@ def _conflicts(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
     return bool(set(left) & set(right) or conflicting_resource_lock_keys(set(left), set(right)))
 
 
+def _both_pinned_facts(snapshot: PlanningSnapshot, left: tuple, right: tuple) -> bool:
+    """两个区间是否都是"已经发生且无法重排"的事实。
+
+    已经开始的动作与已经取得的持续占用，开始时间都被钉在时间原点，规划器不能
+    移动它们。给两个这样的区间加互斥析取只能得到"不可满足"——它表达的不是任何
+    可选择的顺序，而是要求事实去证伪事实。真实运行期若出现两份层级冲突的活动
+    占用，那是执行内核的异常，不能靠让整盘计划不可行来"报告"：那会连完全无关
+    的任务一起冻结在不派发状态。参数：``left``/``right`` 是区间元组，第二项为
+    ``None`` 表示持续占用，否则是动作身份。返回：两者是否都为既成事实。
+    """
+
+    fixed_keys = {node.key for node in snapshot.nodes if node.fixed}
+    held_ids = {hold.hold_id for hold in snapshot.holds if hold.already_held}
+
+    def pinned(span: tuple) -> bool:
+        return span[0] in held_ids if span[1] is None else span[1] in fixed_keys
+
+    return pinned(left) and pinned(right)
+
+
 def _hold_relations(snapshot: PlanningSnapshot) -> dict[str, PlanningHold]:
     """验证显式内外层持有身份，不能把同任务的不同持有自动视为共享。"""
     holds = {hold.hold_id: hold for hold in snapshot.holds}
@@ -300,6 +320,10 @@ def validate_candidate(snapshot: PlanningSnapshot, plan: CandidatePlan) -> tuple
                     if parent[4] > child[4] or parent[5] < child[5]:
                         errors.append("父资源区间未完整包含内层实际占用时间")
                     continue
+            # 与建模一致：包含关系之外，两个既成事实之间不做互斥重算，否则候选会
+            # 因为运行期已经存在、本就无法重排的占用被判为非法。
+            if _both_pinned_facts(snapshot, left, right):
+                continue
             if max(left[4], right[4]) < min(left[5], right[5]):
                 errors.append("候选包含冲突的资源占用区间")
     return tuple(dict.fromkeys(errors))
@@ -452,6 +476,10 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
                     model.add(parent[4] <= child[4])
                     model.add(parent[5] >= child[5])
                     continue
+            # 包含关系之外，两个既成事实之间不再互相排斥：它们的开始时间都被钉在
+            # 时间原点、无法重排，析取只能得到不可满足。
+            if _both_pinned_facts(snapshot, left, right):
+                continue
             before = model.new_bool_var(f"order{index}_{j}")
             guards = [item for item in (left[6], right[6]) if item is not None]
             model.add(left[5] <= right[4]).only_enforce_if(guards + [before])
