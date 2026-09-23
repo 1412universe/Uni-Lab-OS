@@ -450,9 +450,39 @@ class TimeSchedulingAdapter:
         represented = {resource for node in nodes.values() if node.fixed for alt in node.alternatives for resource in alt.resources}
         represented.update(resource for hold in holds if hold.already_held for resource in hold.resources)
         external = scheduler._busy_keys() - represented
-        external = {key for key in external if not any(key.startswith(resource + "/") for resource in represented)}
+        # 一个库位只能放一个物料，整物料键与其任一子库位键因此互为层级互斥，但
+        # 字面前缀比较看不出这层关系（material/M/exclusive 与
+        # material/M/site/S/exclusive 谁都不是谁的前缀）。同一份占用如果已经由
+        # 在途事实表示，就不能再虚构成一条未知释放的外部占用：那会把同一份占用
+        # 计两次，并让不可重排的在跑动作无处安放，整盘退化成 INFEASIBLE。
+        external = {
+            key for key in external
+            if not any(key.startswith(resource + "/") for resource in represented)
+            and not conflicting_resource_lock_keys({key}, represented)
+        }
         if external:
             holds.append(PlanningHold("external", "", tuple(sorted(external))))
+        # 已经在跑的动作是既成事实，start 被钉在时间原点且不可重排。它与某条
+        # 未知释放占用在层级上冲突时，若仍要求模型证明两者不重叠，整盘只会
+        # INFEASIBLE，把完全无关的任务一起冻结在不派发状态。把这些实际动作并入
+        # 该占用：占用区间不变（release_known 仍为假，仍延伸到范围末尾），对待
+        # 执行候选的排除力也不变，只是不再拿事实去证伪事实。
+        fixed_resources: dict[tuple[str, str], set[str]] = {
+            key: {resource for alt in node.alternatives for resource in alt.resources}
+            for key, node in nodes.items() if node.fixed
+        }
+        if fixed_resources:
+            holds = [
+                replace(hold, members=tuple(dict.fromkeys(hold.members + tuple(
+                    key for key, resources in sorted(fixed_resources.items())
+                    if key not in hold.members and (
+                        resources & set(hold.resources)
+                        or conflicting_resource_lock_keys(resources, set(hold.resources))
+                    )
+                ))))
+                if hold.already_held and not hold.release_known else hold
+                for hold in holds
+            ]
         # 未知占用对应的竞争节点及其依赖后继不进入本轮有限模型，其他任务照常推进。
         while True:
             deferred = set()
