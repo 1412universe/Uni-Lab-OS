@@ -211,6 +211,11 @@ def _check_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> N
         for option in node.alternatives:
             if isinstance(option.duration_ms, bool) or not isinstance(option.duration_ms, int) or not 0 < option.duration_ms < 10**12:
                 raise ValueError("排程时长必须在允许范围内")
+            # 资源键只按集合相交和层级关系判断互斥；空串会让两个毫不相关的动作
+            # 被强行串行，而且无法从计划上看出原因。宁可拒绝快照，也不让一个无
+            # 意义的键静默改变排程结果。
+            if any(not isinstance(resource, str) or not resource.strip() for resource in option.resources):
+                raise ValueError("排程资源键不能为空")
         if any(parent not in by_key or parent == node.key for parent in node.predecessors):
             raise ValueError("排程依赖不完整")
     remaining = set(by_key)
@@ -232,6 +237,8 @@ def _check_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> N
     for hold in snapshot.holds:
         if any(member not in by_key for member in hold.members):
             raise ValueError("连续占用的节点范围不完整")
+        if any(not isinstance(resource, str) or not resource.strip() for resource in hold.resources):
+            raise ValueError("排程资源键不能为空")
         if not hold.already_held and not hold.members:
             raise ValueError("尚未开始的连续占用没有取得节点")
 
@@ -479,14 +486,20 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
         old_start = old.start_ms + round((previous.time_origin - snapshot.time_origin) * 1000)
         if abs(old_start) > 10**12:
             continue
-        shift = model.new_int_var(0, horizon + abs(old_start), f"shift{ordinal}")
-        delta = model.new_int_var(-abs(old_start), horizon + abs(old_start), f"delta{ordinal}")
-        model.add(delta == starts[node.key] - old_start)
+        # 时间原点前进后，旧计划里已经流逝的开始时间会落到 starts 的定义域之外。
+        # 未钳位时 ``starts == old_start`` 这一支恒不可行，changed 被强制为真，
+        # 稳定性目标对所有"预定时间已经过去"的节点静默失效，计划因此更容易抖动。
+        # 把目标钳进定义域后，稳定性继续按"尽量不改动"起作用：已经过期的预定
+        # 时间等价于"能多早就多早"。
+        target_start = max(0, min(horizon, old_start))
+        shift = model.new_int_var(0, horizon, f"shift{ordinal}")
+        delta = model.new_int_var(-horizon, horizon, f"delta{ordinal}")
+        model.add(delta == starts[node.key] - target_start)
         # 独立差值变量避免所用 OR-Tools 版本对带常量表达式取反时改变偏移。
         model.add_abs_equality(shift, delta)
         changed = model.new_bool_var(f"start_changed{ordinal}")
-        model.add(starts[node.key] == old_start).only_enforce_if(changed.Not())
-        model.add(starts[node.key] != old_start).only_enforce_if(changed)
+        model.add(starts[node.key] == target_start).only_enforce_if(changed.Not())
+        model.add(starts[node.key] != target_start).only_enforce_if(changed)
         changes.append(changed)
         shifts.append(shift)
         same_device = [choice for alternative, choice in zip(node.alternatives, choices[node.key])
@@ -494,8 +507,7 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
         if same_device:
             changes.append(1 - sum(same_device))
         # 提示可以不满足新约束，CP-SAT 会重新验证；不会形成执行许可。
-        hint_start = max(0, min(horizon, old_start))
-        model.add_hint(starts[node.key], hint_start)
+        model.add_hint(starts[node.key], target_start)
         for alternative, choice in zip(node.alternatives, choices[node.key]):
             model.add_hint(choice, int(alternative.device_id == old.device_id))
     if ends:
@@ -690,7 +702,14 @@ class RollingTimePlanner:
                 self._arm_retry_locked(snapshot)
             if not self._active and self._pending is not None:
                 self._active = True
-                self._executor.submit(self._run)
+                try:
+                    self._executor.submit(self._run)
+                except BaseException:
+                    # 提交本身失败（线程池已关闭或拒绝）时必须复位单飞标志，
+                    # 否则 _run 永远不会清除它，此后所有 request() 都不再提交
+                    # 求解，计划永久停在上一轮候选上。
+                    self._active = False
+                    raise
             current = self._latest
             return current if current and current.revision == snapshot.revision and current.validated else None
 
@@ -766,7 +785,13 @@ class RollingTimePlanner:
                     self._active = True
                     # 与 request() 保持相同的锁顺序：提交发生在状态锁内，
                     # close() 不能在此处先关闭 executor 再让计时器迟到提交。
-                    self._executor.submit(self._run)
+                    try:
+                        self._executor.submit(self._run)
+                    except BaseException:
+                        # 同 request()：提交失败必须复位单飞标志，否则重试计时器
+                        # 会把求解永久卡死在"已在运行"的假象里。
+                        self._active = False
+                        raise
                 self._submitted += 1
             self._notify_wakeup()
 

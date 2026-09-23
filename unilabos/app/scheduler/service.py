@@ -5224,6 +5224,12 @@ class EdgeScheduler:
                     job_id,
                     "local_cancel_acceptance_unavailable",
                 )
+            if self._time_scheduling is not None:
+                # 取消改变了任务的可派发事实，与暂停同理：先撤销所有基于取消前
+                # 快照的候选，否则已取消任务的后续节点会继续留在 latest 里被读出，
+                # 直到下一次 reconcile 换掉 revision 才消失。已在途 Job 仍由内核
+                # 保留，等设备明确返回终态后再结算。
+                self._time_scheduling.invalidate()
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
         return True
