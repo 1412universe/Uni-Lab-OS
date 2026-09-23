@@ -98,6 +98,16 @@ class TestAutoMode:
         with pytest.raises(ValueError):
             DurationEstimator(mode="bogus")
 
+    def test_one_same_action_sample_is_enough_for_time_planning(self):
+        est = DurationEstimator(mode="auto")
+        est.observe(KEY, 11.0, {}, device_id="dev1")
+
+        estimate = est.estimate_timing(KEY, {}, device_id="dev1")
+
+        assert estimate.source == "historical_group"
+        assert estimate.samples == 1
+        assert estimate.planned_s == pytest.approx(11.0)
+
 
 def _spec(workflow_id: str = "wf1", param=None) -> WorkflowSpec:
     return WorkflowSpec(

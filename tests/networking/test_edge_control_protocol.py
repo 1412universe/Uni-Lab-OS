@@ -2136,6 +2136,8 @@ def test_controlled_goal_acceptance_is_not_physical_start(tmp_path: Path) -> Non
         "received",
         "fetch_retry",
         "dispatching",
+        "running",
+        "cancel_requested",
         "outcome_pending",
         "outcome_committed_unknown",
     ],
@@ -2183,3 +2185,284 @@ def test_restarted_station_runtime_retires_old_mirrors_without_reconciliation(
         client._retire_settled_device_command(store.event_for_ack(event_uuid))
     finally:
         store.close()
+
+
+@pytest.mark.parametrize(
+    ("status", "execution_start_state", "expected_status"),
+    [
+        ("running", "START_COMMITTED", "running"),
+        ("running", "NOT_STARTED", "received"),
+        ("cancel_requested", "START_COMMITTED", "cancel_requested"),
+        ("cancel_requested", "NOT_STARTED", "cancel_requested"),
+    ],
+)
+def test_reconcile_restart_preserves_cancel_state_and_start_boundary(
+    tmp_path: Path,
+    status: str,
+    execution_start_state: str,
+    expected_status: str,
+) -> None:
+    """核实模式只重开有持久未启动证据的作业，并保留取消事实。"""
+
+    class ReconcileDataPlane(FakeDataPlane):
+        def fetch_job(self, job: StoredJob) -> dict[str, Any]:
+            return {
+                **super().fetch_job(job),
+                "station_controlled": True,
+                "recovery_policy": "reconcile",
+                "execution_start_state": execution_start_state,
+            }
+
+    path = tmp_path / "reconcile-runtime.db"
+    store = EdgeControlStore(str(path))
+    job_uuid = str(uuid.uuid4())
+    try:
+        store.save_job_start(
+            {
+                "job_uuid": job_uuid,
+                "task_uuid": str(uuid.uuid4()),
+                "node_uuid": str(uuid.uuid4()),
+                "job_access_token": "reconcile-token",
+                **_claim_fields(),
+            },
+            str(uuid.uuid4()),
+        )
+        store.set_job_status(job_uuid, status)
+        client = EdgeControlClient(
+            _settings(path),
+            store=store,
+            data_plane=ReconcileDataPlane(),  # type: ignore[arg-type]
+            host_node_provider=FakeHostNode,
+        )
+
+        asyncio.run(client._resume_received_jobs())
+
+        restarted = store.get_job(job_uuid)
+        assert restarted is not None
+        assert restarted.status == expected_status
+        if status == "cancel_requested":
+            hello_jobs = client._hello_envelope()["payload"]["running_jobs"]
+            assert hello_jobs == [
+                {
+                    "job_uuid": job_uuid,
+                    "command_uuid": restarted.command_uuid,
+                    "state": "cancel_requested",
+                }
+            ]
+            # 后续传输失败结果仍必须按已受理取消归一为 canceled。
+            assert client._persist_terminal_status(
+                job_uuid, "failed", {}, {"message": "late failure"}
+            )
+            pending = store.get_pending_outcome(job_uuid)
+            assert pending is not None
+            assert pending.outcome == "canceled"
+    finally:
+        store.close()
+
+
+class _DecisionRecordingHostNode(FakeHostNode):
+    """记录设备是否真的收到过人工异常决定的 HostNode 替身。"""
+
+    def __init__(self, *, accepts: bool) -> None:
+        """``accepts`` 决定设备侧是否仍持有可接收的挂起决定；返回为空。"""
+
+        super().__init__()
+        self._accepts = bool(accepts)
+        self.decisions: list[dict[str, Any]] = []
+
+        class _Node:
+            def __init__(self, owner: "_DecisionRecordingHostNode") -> None:
+                self._owner = owner
+
+            def handle_action_error_decision(
+                self,
+                decision_id: str,
+                job_id: str,
+                decision: dict[str, Any],
+            ) -> bool:
+                self._owner.decisions.append(
+                    {
+                        "decision_id": decision_id,
+                        "job_id": job_id,
+                        "decision": dict(decision),
+                    }
+                )
+                return self._owner._accepts
+
+        class _Wrapper:
+            def __init__(self, node: Any) -> None:
+                self._ros_node = node
+
+        self.devices_instances = {"robot-01": _Wrapper(_Node(self))}
+
+
+def _error_decision_envelope(
+    *, command_uuid: str, job_uuid: str, decision_id: str
+) -> dict[str, Any]:
+    """构造一条 ``job.error_decision`` 下行控制信封。"""
+
+    return {
+        "protocol_version": 1,
+        "message_uuid": command_uuid,
+        "sequence": 11,
+        "type": "job.error_decision",
+        "sent_at": "2026-09-21T00:00:00.000000Z",
+        "payload": {
+            "decision_id": decision_id,
+            "job_id": job_uuid,
+            "device_id": "robot-01",
+            "action": "abort",
+            "reason": "任务已取消",
+        },
+    }
+
+
+def _start_job(store: EdgeControlStore, job_uuid: str) -> None:
+    """在 Edge 镜像中登记一个已下发的工作流节点作业。"""
+
+    store.save_job_start(
+        {
+            "job_uuid": job_uuid,
+            "task_uuid": str(uuid.uuid4()),
+            "node_uuid": str(uuid.uuid4()),
+            "job_access_token": "temporary-secret",
+            **_claim_fields(),
+        },
+        str(uuid.uuid4()),
+    )
+
+
+def test_error_decision_for_settled_job_retires_without_touching_device(
+    tmp_path: Path,
+) -> None:
+    """已收口作业的人工决定必须就地 ACK，不得反复拖垮生产控制面。
+
+    ``tmp_path`` 提供隔离 Edge SQLite 路径；返回为空。作业已经提交结果后，
+    设备侧不可能再持有挂起决定。此时若继续抛错，命令永远拿不到 ACK，
+    Backend 每次重连都重投同一条命令，Edge 因此永久无法就绪。
+    """
+
+    async def scenario() -> None:
+        path = tmp_path / "settled-decision.db"
+        store = EdgeControlStore(str(path))
+        host_node = _DecisionRecordingHostNode(accepts=False)
+        client = EdgeControlClient(
+            _settings(path), store=store, host_node_provider=lambda: host_node
+        )
+        job_uuid = str(uuid.uuid4())
+        command_uuid = str(uuid.uuid4())
+        _start_job(store, job_uuid)
+        assert store.save_pending_outcome(job_uuid, "canceled", {}, [])
+
+        await client._handle_envelope(
+            _error_decision_envelope(
+                command_uuid=command_uuid,
+                job_uuid=job_uuid,
+                decision_id=str(uuid.uuid4()),
+            )
+        )
+
+        # 已收口作业不得再被人工决定触碰，命令必须终结而不是无限重投。
+        assert host_node.decisions == []
+        assert store.command_status(command_uuid) == "completed"
+        assert [event.event_type for event in store.pending_events(float("inf"))] == [
+            "command.ack"
+        ]
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_error_decision_for_absent_job_retires_without_touching_device(
+    tmp_path: Path,
+) -> None:
+    """本 Authority 账本里没有的作业，其人工决定同样必须就地退役。"""
+
+    async def scenario() -> None:
+        path = tmp_path / "absent-decision.db"
+        store = EdgeControlStore(str(path))
+        host_node = _DecisionRecordingHostNode(accepts=False)
+        client = EdgeControlClient(
+            _settings(path), store=store, host_node_provider=lambda: host_node
+        )
+        command_uuid = str(uuid.uuid4())
+
+        await client._handle_envelope(
+            _error_decision_envelope(
+                command_uuid=command_uuid,
+                job_uuid=str(uuid.uuid4()),
+                decision_id=str(uuid.uuid4()),
+            )
+        )
+
+        assert host_node.decisions == []
+        assert store.command_status(command_uuid) == "completed"
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_error_decision_for_live_job_still_reaches_the_device(
+    tmp_path: Path,
+) -> None:
+    """仍在设备边界内等待的作业必须真实收到人工决定。"""
+
+    async def scenario() -> None:
+        path = tmp_path / "live-decision.db"
+        store = EdgeControlStore(str(path))
+        host_node = _DecisionRecordingHostNode(accepts=True)
+        client = EdgeControlClient(
+            _settings(path), store=store, host_node_provider=lambda: host_node
+        )
+        job_uuid = str(uuid.uuid4())
+        command_uuid = str(uuid.uuid4())
+        decision_id = str(uuid.uuid4())
+        _start_job(store, job_uuid)
+        store.set_job_status(job_uuid, "running")
+
+        await client._handle_envelope(
+            _error_decision_envelope(
+                command_uuid=command_uuid,
+                job_uuid=job_uuid,
+                decision_id=decision_id,
+            )
+        )
+
+        assert [item["job_id"] for item in host_node.decisions] == [job_uuid]
+        assert host_node.decisions[0]["decision"]["action"] == "abort"
+        assert store.command_status(command_uuid) == "completed"
+        store.close()
+
+    asyncio.run(scenario())
+
+
+def test_error_decision_for_live_job_without_pending_device_state_retries(
+    tmp_path: Path,
+) -> None:
+    """作业仍然活跃但设备暂时无法接收时保持失败关闭，由重连重投。"""
+
+    async def scenario() -> None:
+        path = tmp_path / "retry-decision.db"
+        store = EdgeControlStore(str(path))
+        host_node = _DecisionRecordingHostNode(accepts=False)
+        client = EdgeControlClient(
+            _settings(path), store=store, host_node_provider=lambda: host_node
+        )
+        job_uuid = str(uuid.uuid4())
+        command_uuid = str(uuid.uuid4())
+        _start_job(store, job_uuid)
+        store.set_job_status(job_uuid, "running")
+
+        with pytest.raises(RuntimeError):
+            await client._handle_envelope(
+                _error_decision_envelope(
+                    command_uuid=command_uuid,
+                    job_uuid=job_uuid,
+                    decision_id=str(uuid.uuid4()),
+                )
+            )
+
+        assert store.command_status(command_uuid) != "completed"
+        store.close()
+
+    asyncio.run(scenario())

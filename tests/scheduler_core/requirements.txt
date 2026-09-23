@@ -1,6 +1,9 @@
 jsonschema>=4.18
 msgcenterpy>=0.1.8,<0.2
 networkx>=3
+# CP-SAT 预排程属于调度决策内核；solve_snapshot 在调用点惰性导入 ortools，
+# 缺少它只会在实际求解时失败，所以本套件必须显式声明同一版本。
+ortools==9.12.4544
 pint>=0.24
 pydantic>=2
 pylabrobot==0.2.1

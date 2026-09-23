@@ -10,6 +10,7 @@ import {
   createReagent,
   createReagentInfo,
   deleteReagentInfo,
+  deleteWorkflowTask,
   EdgeApiError,
   DeviceActionRunRequestError,
   TaskCommandRequestError,
@@ -49,6 +50,24 @@ describe('unwrapEnvelope', () => {
 
   it('rejects an Edge business error even if HTTP succeeded', () => {
     expect(() => unwrapEnvelope({ code: 1000, error: { msg: 'invalid cursor' } })).toThrow('invalid cursor')
+  })
+})
+
+describe('deleteWorkflowTask', () => {
+  it('deletes through the Edge task endpoint and accepts an idempotent result', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({
+      code: 0,
+      data: { status: 'already_deleted', workflow_task_uuid: 'task-1', deleted_at: '2026-09-22T12:00:00Z' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(deleteWorkflowTask('task-1')).resolves.toMatchObject({ status: 'already_deleted', workflowTaskUuid: 'task-1' })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/workflow-tasks/task-1')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('DELETE')
+  })
+
+  it('does not treat an HTTP 200 conflict as a successful deletion', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ code: 3003, error: { msg: '仍有 1 个执行锁租约未释放' } })))
+    await expect(deleteWorkflowTask('task-1')).rejects.toThrow('仍有 1 个执行锁租约未释放')
   })
 })
 

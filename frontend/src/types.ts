@@ -203,6 +203,8 @@ export interface TaskNodeJobEvidence {
 export interface TaskNode {
   uuid: string
   name: string
+  /** 稳定的设备动作身份；展示名称可能被本地化，配色应使用此字段。 */
+  actionName?: string
   kind: string
   index: number
   status: NodePresentationStatus
@@ -225,6 +227,10 @@ export interface WorkflowTask {
   executionStatus?: string
   /** 后端持久化的任务清理状态，用于展示终态任务的残留处置入口。 */
   cleanupStatus?: string
+  /** Edge 依据终态、清理状态和全部资源事实计算出的删除资格。 */
+  canDelete?: boolean
+  /** 删除资格检查未通过时由 Edge 返回的阻塞原因。 */
+  deleteBlockers?: string[]
   /** 后端记录的任务级注意原因。 */
   attentionReason?: string
   /** 已完成人工结果核对的任务不再显示同一类清理入口。 */
@@ -242,6 +248,9 @@ export interface WorkflowTask {
   executionMode: 'normal' | 'switching_to_step' | 'step'
   dispatchGate: 'active' | 'paused'
   controlStatus: string
+  /** 创建任务时冻结的公开输入；暂停任务编辑仅作用于尚未下发的后缀。 */
+  input?: Record<string, unknown>
+  inputContract?: ContractField[]
   matrixGroupKey: string
   trace?: {
     traceId?: string

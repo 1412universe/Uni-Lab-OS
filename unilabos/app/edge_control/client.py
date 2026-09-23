@@ -106,6 +106,31 @@ def _unknown_command_ids_for_job(
     ]
 
 
+_SETTLED_JOB_STATUSES = frozenset(
+    {
+        "outcome_pending",
+        "outcome_committed",
+        "outcome_committed_unknown",
+        "outcome_retired",
+        "completed",
+    }
+)
+
+
+def _job_is_settled(status: str) -> bool:
+    """判断一个作业镜像是否已经在设备执行账本上收口。
+
+    参数：``status`` 是 ``edge_job_runtime`` 中的作业状态。
+    返回：作业已提交结果、已物理结算或已退役时返回 ``True``。
+    语义：与 ``EdgeControlStore.save_pending_outcome`` 拒绝迟到回调的判据
+    保持一致；已收口的作业不再接受任何改变执行走向的下行命令。
+    """
+
+    return status in _SETTLED_JOB_STATUSES or status.startswith(
+        "outcome_resolution_pending_final:"
+    )
+
+
 def _registration_action_mappings(
     host_node: Any,
     device_id: str,
@@ -673,7 +698,13 @@ class EdgeControlClient(BaseCommunicationClient):
                 running_job: dict[str, Any] = {
                     "job_uuid": job.job_uuid,
                     "command_uuid": job.command_uuid,
-                    "state": "running",
+                    # ``cancel_requested`` 是持久取消事实；跨 hello 对账继续传递，
+                    # 避免本地权威把等待中的取消请求恢复成普通运行作业。
+                    "state": (
+                        "cancel_requested"
+                        if job.status == "cancel_requested"
+                        else "running"
+                    ),
                 }
                 running_jobs.append(running_job)
         return _envelope(
@@ -931,6 +962,21 @@ class EdgeControlClient(BaseCommunicationClient):
         device_id = str(payload.get("device_id") or "")
         if not decision_id or not job_id or not device_id:
             raise ValueError("job.error_decision identity is required")
+        # 人工决定只能改变仍然在设备边界内等待的动作走向。作业镜像已经
+        # 收口或根本不在本 Authority 的账本里时，这条命令永远不可能被设备
+        # 接受；继续抛错会让它永远得不到 ACK，而 Backend 每次重连都重投同
+        # 一条命令，生产控制面因此永久无法就绪，也无法再派发任何新作业。
+        # 这种命令必须就地退役，并且不改变任何物理状态。
+        job = self.store.get_job(job_id)
+        if job is None or _job_is_settled(job.status):
+            logger.warning(
+                f"[EdgeControl] 忽略已收口作业 {job_id[:8]} 的人工决定 "
+                f"{decision_id[:8]}：作业状态="
+                f"{job.status if job is not None else 'absent'}"
+            )
+            self._enqueue_event("command.ack", {"command_uuid": command_uuid})
+            self.store.mark_command_completed(command_uuid)
+            return
         host = self._host_node_provider()
         wrapper = getattr(host, "devices_instances", {}).get(device_id) if host else None
         node = getattr(wrapper, "_ros_node", None)
@@ -1064,6 +1110,10 @@ class EdgeControlClient(BaseCommunicationClient):
             raise RuntimeError(
                 f"device rejected UNKNOWN resolution: {result!r}"
             )
+        if (self.store.get_meta(f"recovery_policy:{job_uuid}") == "reconcile"
+                and result.get("durable_journal") is False):
+            # 通用驱动的“当前未报告 UNKNOWN”不证明掉电前的物理动作已停止。
+            raise RuntimeError("重启核实需要驱动命令账或明确物理证据，不能按空状态解除占用")
         # 结构化 UNKNOWN 集合是物理结算事实；设备可能同时保留
         # 其他作业的 UNKNOWN，因此必须先按当前作业稳定身份过滤。
         _, remaining_unknown_command_ids = _device_dispatch_state(
@@ -1093,15 +1143,24 @@ class EdgeControlClient(BaseCommunicationClient):
         await self._commit_device_status(local_device_id, {})
 
     async def _resume_received_jobs(self) -> None:
-        # 工站控制的旧进程任务由 EdgeScheduler 统一失败；本地镜像只退役，
-        # 不请求开始许可、不恢复未开始动作、不生成 UNKNOWN 对账回执。
-        for job_uuid in tuple(self._restart_pending_jobs):
+        # 新路径由中心显式声明核实策略，保留原回执与可能启动的命令。
+        # 未声明该策略的旧工站仍按兼容协议退役镜像。
+        previous_jobs = set(self._restart_pending_jobs)
+        previous_jobs.update(
+            job.job_uuid for job in self.store.list_jobs({"running", "cancel_requested"})
+            if job.job_uuid not in self._active_jobs
+        )
+        for job_uuid in tuple(previous_jobs):
             job = self.store.get_job(job_uuid)
             if job is None:
                 self._restart_pending_jobs.discard(job_uuid)
                 continue
             payload = await asyncio.to_thread(self.data_plane.fetch_job, job)
-            if payload.get("station_controlled"):
+            if payload.get("station_controlled") and payload.get("recovery_policy") == "reconcile":
+                self.store.preserve_restarted_job(
+                    job_uuid, not_started=payload.get("execution_start_state") == "NOT_STARTED"
+                )
+            elif payload.get("station_controlled") and job_uuid in previous_jobs:
                 self.store.abort_restarted_job(job_uuid)
             self._restart_pending_jobs.discard(job_uuid)
         for job in self.store.list_jobs({"received", "fetch_retry"}):
@@ -1169,6 +1228,8 @@ class EdgeControlClient(BaseCommunicationClient):
                 else:
                     return
                 _validate_job_payload(job, payload)
+                if payload.get("recovery_policy") == "reconcile":
+                    self.store.set_meta(f"recovery_policy:{job_uuid}", "reconcile")
                 # 拉取参数期间可能收到取消；只有仍处于可下发状态才进入设备边界。
                 latest_job = self.store.get_job(job_uuid)
                 if latest_job is None or latest_job.status not in {

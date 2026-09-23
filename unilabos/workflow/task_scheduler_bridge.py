@@ -81,6 +81,22 @@ _SUBMISSION_PHASE_PRE_DISPATCH = "pre_dispatch"
 _SUBMISSION_PHASE_LOCAL_CONTROL = "local_control"
 
 
+def _merge_param_patch(
+    current: Mapping[str, Any],
+    patch: Mapping[str, Any],
+) -> dict[str, Any]:
+    """递归合并用户对暂停 Job 的参数修改，数组和标量按新值替换。"""
+
+    merged = deepcopy(dict(current))
+    for key, value in patch.items():
+        previous = merged.get(key)
+        if isinstance(previous, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_param_patch(previous, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
 def _retained_interval_ids_for_result(
     task: Mapping[str, Any],
     job: Mapping[str, Any],
@@ -141,6 +157,7 @@ class TaskSchedulerBridge:
         ),
         clock: Callable[[], datetime] | None = None,
         timer_factory: Callable[..., Any] = threading.Timer,
+        time_scheduling_enabled: bool | None = None,
     ) -> None:
         """装配唯一工作流任务调度桥（TaskSchedulerBridge）。
 
@@ -158,10 +175,23 @@ class TaskSchedulerBridge:
         self._store = store
         # ``_scheduler`` 同时持有唯一允许复用的本地库存权威（Inventory Authority）。
         self._scheduler = scheduler
+        # 由生产装配显式开启，直接构造仍使用既有兼容语义；不读取测试环境。
+        self._time_scheduling_enabled = (
+            bool(getattr(scheduler, "time_scheduling_enabled", False))
+            if time_scheduling_enabled is None else time_scheduling_enabled
+        )
         self.error_control = StationExecutionControl(store, lock=scheduler.execution_control_lock)
+        self.error_control.time_scheduling_enabled = self._time_scheduling_enabled
         scheduler.bind_station_control(self.error_control)
         self._compiler = compiler or WorkflowSpecCompiler()
         self._projection = projection or TaskRuntimeProjection(store)
+        if self._time_scheduling_enabled:
+            from unilabos.app.scheduler.timing_store import TimingObservationStore
+            with store.transaction() as connection:
+                TimingObservationStore(connection).ensure_schema()
+            with store.read() as connection:
+                TimingObservationStore(connection).replay_into(scheduler._estimator)
+            scheduler._durable_timing_learning = True
         self._max_in_flight_jobs = int(getattr(scheduler, "max_in_flight_jobs", 100))
         self._max_active_tasks = int(getattr(scheduler, "max_active_tasks", 500))
         self._max_tasks_per_workflow = int(
@@ -798,7 +828,17 @@ class TaskSchedulerBridge:
             admission is not None and admission.get("status") == "blocked"
         )
         if scheduler_snapshot is None and not admission_pending:
-            raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
+            # 已持久取消的 Task 可以在进程重启后幂等重放同一取消命令；此时
+            # 内存 DAG 已不存在，但仍须继续走投影与库存释放，最终让工站控制
+            # 命令从 PENDING 收口为 APPLIED。其他状态仍保持原有关闭失败语义。
+            try:
+                persisted_status = str(
+                    self._store.get_task(normalized_uuid).get("status") or ""
+                )
+            except StoreNotFound:
+                persisted_status = ""
+            if persisted_status != "canceled":
+                raise TaskSchedulerBridgeError("工作流任务尚未提交到本地调度器")
         self._projection.project_cancel_requested(
             normalized_uuid,
             command_uuid=normalized_command_uuid,
@@ -857,6 +897,72 @@ class TaskSchedulerBridge:
             return {"task": task, "scheduler": result}
         except (StoreConflict, ValueError) as error:
             raise TaskSchedulerBridgeError(str(error)) from error
+
+    def update_pending_job_param(
+        self,
+        task_uuid: str,
+        job_uuid: str,
+        param: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """修改暂停任务中尚未派发 Job 的参数并同步内存调度运行态。
+
+        参数：``task_uuid`` 与 ``job_uuid`` 是稳定任务/作业身份；``param`` 是
+        顶层 JSON 对象补丁，未传字段保留原值。返回更新后的 Task/Job 投影。异常：
+        任务未暂停、作业已离开 pending、身份不属于同一任务或参数不合法时抛
+        ``TaskSchedulerBridgeError``；在途作业绝不会被改写。
+        """
+
+        if not isinstance(param, Mapping):
+            raise TaskSchedulerBridgeError("作业参数必须是对象")
+        if self._closed:
+            raise TaskSchedulerBridgeError("工作流任务调度桥已经关闭")
+        normalized_task_uuid = self._required_text(task_uuid, field="task_uuid")
+        normalized_job_uuid = self._required_text(job_uuid, field="job_uuid")
+        with self._scheduler.execution_control_lock:
+            try:
+                task = self._store.get_task(normalized_task_uuid)
+                job = self._store.get_job(normalized_job_uuid)
+                if str(job.get("workflow_task_uuid")) != normalized_task_uuid:
+                    raise StoreConflict("作业不属于目标任务")
+                if (
+                    str(task.get("dispatch_gate") or "active") != "paused"
+                    or str(task.get("execution_mode") or task.get("run_mode") or "normal") != "normal"
+                    or str(task.get("control_status") or "active") != "paused"
+                ):
+                    raise StoreConflict("任务必须先暂停才能修改参数")
+                if not bool(job.get("current_attempt", True)):
+                    raise StoreConflict("历史作业 attempt 不能修改参数")
+                if str(job.get("status")) != "pending":
+                    raise StoreConflict("作业已经离开待运行状态，不能修改参数")
+                merged_param = _merge_param_patch(job.get("param") or {}, param)
+                updated_job = self._store.update_pending_job_param(
+                    normalized_task_uuid,
+                    normalized_job_uuid,
+                    merged_param,
+                )
+                if self._scheduler.workflow_snapshot(normalized_task_uuid) is not None:
+                    try:
+                        self._scheduler.update_pending_job_param(
+                            normalized_task_uuid,
+                            str(job.get("workflow_node_uuid") or ""),
+                            normalized_job_uuid,
+                            merged_param,
+                        )
+                    except Exception:
+                        # 数据库和内存运行态必须保持一致；暂停门禁仍阻止任何新
+                        # 派发，因此可以安全地把持久参数恢复为旧值。
+                        self._store.update_pending_job_param(
+                            normalized_task_uuid,
+                            normalized_job_uuid,
+                            job.get("param") or {},
+                        )
+                        raise
+                return {
+                    "task": self._store.get_task(normalized_task_uuid),
+                    "job": updated_job,
+                }
+            except (StoreConflict, StoreNotFound, ValueError) as error:
+                raise TaskSchedulerBridgeError(str(error)) from error
 
     def resume(self, task_uuid: str) -> dict[str, Any]:
         """恢复普通 Task，或把稳定暂停的 step Task 切换为自动调度。"""
@@ -1264,7 +1370,7 @@ class TaskSchedulerBridge:
             self.error_control.recovering = True
             try:
                 inventory = self._scheduler.station_resource_inventory
-                if inventory is not None:
+                if inventory is not None and not self._time_scheduling_enabled:
                     inventory.release_unprojected_dispatch_permits(
                         known_claim_uuids=self._projection.list_active_execution_claim_uuids()
                     )
@@ -1591,6 +1697,9 @@ class TaskSchedulerBridge:
 
     def _on_execution_process_restarted(self, job_uuids: tuple[str, ...]) -> None:
         """确认执行进程更换后终结全部活动任务，清理失败可幂等重入。"""
+        if self._time_scheduling_enabled:
+            self._recover_execution_process_without_release(job_uuids)
+            return
         self.error_control.recovering = True
         self._recover_quantity_consumptions()
         # 事件中的 Job 列表仅是执行端观测，不得遗漏暂停、排队或节点间隙的任务。
@@ -1634,6 +1743,63 @@ class TaskSchedulerBridge:
             )
             self._runtime_restart_cleanup_pending_tasks.discard(task_uuid)
         self.error_control.finish_runtime_restart()
+        self.error_control.recovering = False
+
+    def _recover_execution_process_without_release(
+        self, job_uuids: tuple[str, ...]
+    ) -> None:
+        """恢复原结果路由和待核实占用，禁止按重启生成结果或释放资源。"""
+        self.error_control.recovering = True
+        self._recover_quantity_consumptions()
+        self._register_active_recovery_routes()
+        # Edge Authority 与 WorkflowStore 是独立的 SQLite 权威。进程崩溃或
+        # 清理竞态期间，前者可能带来一个已经从后者删除的 Job UUID；这个
+        # 脏引用不能阻止其余活动任务恢复，也不能把“没有匹配任务”误当成
+        # 一个新的恢复范围。只忽略明确不存在的身份，其它存储错误继续上抛，
+        # 让恢复屏障保持打开并可幂等重入。
+        # 空的 Job 列表表示执行进程整体重启，必须扫描全部候选；一旦调用方
+        # 明确给出身份列表，恢复范围就必须严格限定在其中。即使列表里的
+        # 身份全部已从 WorkflowStore 删除，也不能把“没有匹配项”误当成空列表。
+        scoped_recovery = bool(job_uuids)
+        affected_tasks: set[str] = set()
+        for job_uuid in job_uuids:
+            try:
+                job = self._store.get_job(job_uuid)
+            except StoreNotFound:
+                logger.warning(
+                    "执行进程重启恢复忽略不存在的 Workflow Job：%s", job_uuid
+                )
+                continue
+            affected_tasks.add(str(job["workflow_task_uuid"]))
+        for task in self._store.list_execution_restart_candidates():
+            task_uuid = str(task["uuid"])
+            if scoped_recovery and task_uuid not in affected_tasks:
+                continue
+            aggregate = self._projection.project_execution_restart_attention(task_uuid)
+            self._mark_inventory_claims_uncertain(aggregate)
+            if task_uuid not in self._submitted_tasks:
+                self._recover_running_task(aggregate["task"])
+        # 已持久的设备结果比重启推断更强；只重放原尝试，不创建重试。
+        self._scheduler.replay_persisted_edge_projections(
+            feedback_listener=self._on_job_feedback,
+            outcome_listener=self._replay_persisted_job_outcome,
+            finished_listener=self._replay_persisted_job_finished,
+        )
+        for job_uuid in tuple(self._task_by_job):
+            try:
+                job = self._store.get_job(job_uuid)
+            except StoreNotFound:
+                # 路由表可能比 WorkflowStore 多保留一个已清理的 Job；它不应
+                # 阻止其余作业完成重启恢复，也不应在下一次恢复中反复出现。
+                logger.warning(
+                    "执行进程重启恢复清理不存在的 Workflow Job 路由：%s", job_uuid
+                )
+                self._task_by_job.pop(job_uuid, None)
+                continue
+            if job["status"] == "cancel_requested":
+                self._schedule_cancel_timeout(job)
+        # 只恢复持久 NOT_STARTED 的相同命令；实际调用仍要重新通过开始闸门。
+        self._scheduler.restore_not_started_dispatches()
         self.error_control.recovering = False
 
     def _on_execution_connection_lost(
@@ -1820,43 +1986,48 @@ class TaskSchedulerBridge:
 
         if self._closed:
             return
-        self._closed = True
-        self._scheduler.remove_admission_retry_listener(self._retry_pending_admissions)
-        self._scheduler.unbind_dispatch_admission_authority(self._on_job_pre_dispatch)
-        self._scheduler.unbind_manual_continuation_authority(
-            self._on_manual_continuation_dispatching
-        )
-        self._scheduler.remove_job_execution_wait_listener(self._on_job_execution_wait)
-        self._scheduler.remove_job_dispatch_accepted_listener(
-            self._on_job_dispatch_accepted
-        )
-        self._scheduler.remove_job_dispatch_uncertain_listener(
-            self._on_job_dispatch_uncertain
-        )
-        self._scheduler.remove_job_cancel_accepted_listener(
-            self._on_job_cancel_accepted
-        )
-        self._scheduler.remove_job_cancel_uncertain_listener(
-            self._on_job_cancel_uncertain
-        )
-        self._scheduler.remove_job_cancel_no_send_listener(self._on_job_cancel_no_send)
-        self._scheduler.remove_job_feedback_listener(self._on_job_feedback)
-        self._scheduler.remove_job_outcome_listener(self._on_job_outcome)
-        self._scheduler.remove_job_finished_listener(self._on_job_finished)
-        self._scheduler.remove_job_settled_listener(self._on_job_settled)
-        self._scheduler.remove_local_control_listener(self._on_local_control_evaluated)
-        self._scheduler.remove_execution_process_restarted_listener(
-            self._on_execution_process_restarted
-        )
-        self._scheduler.remove_execution_connection_lost_listener(
-            self._on_execution_connection_lost
-        )
-        self._scheduler.set_drain_blocker_provider(None)
-        self._scheduler.set_workflow_inventory_release_guard(None)
-        self._task_by_job.clear()
-        self._submitted_tasks.clear()
-        self._admission_pending_tasks.clear()
-        self._runtime_restart_cleanup_pending_tasks.clear()
+        # 规划和库存唤醒可能持有本桥回调；先在锁外等调度循环静默，再关闭运行库。
+        self._scheduler.close()
+        with self._scheduler.execution_control_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._scheduler.remove_admission_retry_listener(self._retry_pending_admissions)
+            self._scheduler.unbind_dispatch_admission_authority(self._on_job_pre_dispatch)
+            self._scheduler.unbind_manual_continuation_authority(
+                self._on_manual_continuation_dispatching
+            )
+            self._scheduler.remove_job_execution_wait_listener(self._on_job_execution_wait)
+            self._scheduler.remove_job_dispatch_accepted_listener(
+                self._on_job_dispatch_accepted
+            )
+            self._scheduler.remove_job_dispatch_uncertain_listener(
+                self._on_job_dispatch_uncertain
+            )
+            self._scheduler.remove_job_cancel_accepted_listener(
+                self._on_job_cancel_accepted
+            )
+            self._scheduler.remove_job_cancel_uncertain_listener(
+                self._on_job_cancel_uncertain
+            )
+            self._scheduler.remove_job_cancel_no_send_listener(self._on_job_cancel_no_send)
+            self._scheduler.remove_job_feedback_listener(self._on_job_feedback)
+            self._scheduler.remove_job_outcome_listener(self._on_job_outcome)
+            self._scheduler.remove_job_finished_listener(self._on_job_finished)
+            self._scheduler.remove_job_settled_listener(self._on_job_settled)
+            self._scheduler.remove_local_control_listener(self._on_local_control_evaluated)
+            self._scheduler.remove_execution_process_restarted_listener(
+                self._on_execution_process_restarted
+            )
+            self._scheduler.remove_execution_connection_lost_listener(
+                self._on_execution_connection_lost
+            )
+            self._scheduler.set_drain_blocker_provider(None)
+            self._scheduler.set_workflow_inventory_release_guard(None)
+            self._task_by_job.clear()
+            self._submitted_tasks.clear()
+            self._admission_pending_tasks.clear()
+            self._runtime_restart_cleanup_pending_tasks.clear()
         with self._cancel_timer_lock:
             timers = tuple(self._cancel_timers.values())
             self._cancel_timers.clear()
@@ -2770,6 +2941,8 @@ class TaskSchedulerBridge:
             return
         try:
             with self._scheduler.execution_control_lock:
+                if self._closed:
+                    return
                 job = self._store.get_job(job_uuid)
                 if job.get("status") != "cancel_requested":
                     return
@@ -3096,6 +3269,7 @@ class TaskSchedulerBridge:
             ),
             return_info=return_info,
             error_info=error_info,
+            timing_sample_allowed=success and suc_type == "normal",
             manual_confirmation_status=(
                 "timed_out" if suc_type == "manual_confirmation_timeout" else None
             ),
@@ -3136,13 +3310,14 @@ class TaskSchedulerBridge:
             return
         if outcome.unknown_command_ids:
             self._transition_inventory_claim(job_uuid, target_state="uncertain")
-            self._projection.project_execution_attention(
-                job_uuid,
-                reason=(
-                    "edge_reported_unknown_commands:"
-                    + ",".join(outcome.unknown_command_ids)
-                ),
-            )
+            if not (self._time_scheduling_enabled and persisted_job.get("uncertainty_reason")):
+                self._projection.project_execution_attention(
+                    job_uuid,
+                    reason=(
+                        "edge_reported_unknown_commands:"
+                        + ",".join(outcome.unknown_command_ids)
+                    ),
+                )
             self.error_control.report_error(job_uuid, phase="execution", message="执行结果未知：" + ",".join(outcome.unknown_command_ids))
             return
         if (
@@ -3308,6 +3483,7 @@ class TaskSchedulerBridge:
         error_info: list[Any],
         manual_confirmation_status: str | None,
         inventory_reconciliation: Mapping[str, Any] | None = None,
+        timing_sample_allowed: bool = True,
     ) -> None:
         """提交一次标准作业结果并完成桥接层终态收尾。
 
@@ -3319,6 +3495,11 @@ class TaskSchedulerBridge:
         claim = self._projection.get_execution_claim(job_uuid)
         if scheduler_state in {"failed", "timeout"}:
             self.error_control.report_error(job_uuid, phase="execution", message=str(error_info or return_info))
+        timing_sample = None
+        if (self._time_scheduling_enabled and timing_sample_allowed
+                and scheduler_state == "success" and not error_info
+                and not inventory_reconciliation and manual_confirmation_status is None):
+            timing_sample = self._scheduler.capture_timing_observation(job_uuid)
         aggregate = self._projection.project_job_finished(
             job_uuid=job_uuid,
             scheduler_state=scheduler_state,
@@ -3326,7 +3507,21 @@ class TaskSchedulerBridge:
             error_info=error_info,
             manual_confirmation_status=manual_confirmation_status,
             **({"inventory_reconciliation": inventory_reconciliation} if inventory_reconciliation else {}),
+            **({"timing_sample": timing_sample} if timing_sample is not None else {}),
         )
+        if self._time_scheduling_enabled:
+            from unilabos.app.scheduler.timing_store import TimingObservationStore
+            with self._store.read() as connection:
+                saved_sample = TimingObservationStore(connection).get(job_uuid)
+            spec = (self._scheduler._estimator._spec_for(saved_sample.device_action_key)
+                    if saved_sample is not None else None)
+            if (saved_sample is not None and saved_sample.spec_version == spec.version
+                    and saved_sample.timing_boundary == spec.timing_boundary):
+                # 只能学习已与执行事实一起提交的原始样本；消息重投不会重新计时。
+                self._scheduler._estimator.observe(saved_sample.device_action_key,
+                    saved_sample.actual_s, saved_sample.params, device_id=saved_sample.device_id,
+                    action_version=saved_sample.action_version, outcome=saved_sample.outcome,
+                    observation_id=saved_sample.observation_id, calibration=saved_sample.calibration)
         settled_job = next(item for item in aggregate["jobs"] if item["uuid"] == job_uuid)
         continuing_interval_ids = _retained_interval_ids_for_result(
             aggregate["task"],

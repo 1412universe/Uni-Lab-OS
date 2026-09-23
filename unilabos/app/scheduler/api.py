@@ -255,6 +255,11 @@ def create_scheduler_router(
         """泳道图数据：执行中 + 窗口内已完结 job 的起止/预估 + 预估器统计。"""
         return _sched().timeline(window_s=window_s)
 
+    @router.get("/scheduler/time-plan", summary="读取时间排程计划")
+    def time_plan() -> Dict[str, Any]:
+        """读取时间候选计划与覆盖边界，候选时间不是启动授权。"""
+        return _sched().time_schedule_snapshot()
+
     # ── 实时监控（SSE 四通道：material / device / action / scheduler） ──
 
     @router.get("/monitor/events")
@@ -332,6 +337,25 @@ def create_scheduler_router(
         if backend is None:
             raise HTTPException(
                 status_code=503, detail="edge execution backend not enabled"
+            )
+        return backend
+
+    def _error_decision_backend(capability: str) -> Any:
+        """取出支持本地异常决策的后端；能力缺失时报 503 而不是 500。
+
+        参数 ``capability`` 是所需方法名。本路由同时服务 JobExecutionBackend 与
+        LocalEdgeControlAuthority 两种后端，缺失能力属于部署形态差异而非请求
+        错误，因此统一按「未启用」语义返回 503。
+        """
+
+        backend = _backend()
+        if not callable(getattr(backend, capability, None)):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "local error decision channel not supported by "
+                    f"{type(backend).__name__}"
+                ),
             )
         return backend
 
@@ -462,7 +486,8 @@ def create_scheduler_router(
     @router.get("/error-decisions")
     def list_error_decisions() -> Dict[str, Any]:
         """等待人工决策的 action 异常（本地审批通道）。"""
-        return {"decisions": _backend().list_error_decisions()}
+        backend = _error_decision_backend("list_error_decisions")
+        return {"decisions": backend.list_error_decisions()}
 
     @router.post("/error-decisions/{decision_id}")
     def resolve_error_decision(
@@ -475,7 +500,8 @@ def create_scheduler_router(
             payload["action"] = body.action
         if body.result is not None:
             payload["result"] = body.result
-        if not _backend().resolve_error_decision(decision_id, payload):
+        backend = _error_decision_backend("resolve_error_decision")
+        if not backend.resolve_error_decision(decision_id, payload):
             raise HTTPException(
                 status_code=404,
                 detail=f"decision {decision_id} not pending (resolved / timed out / device gone)",

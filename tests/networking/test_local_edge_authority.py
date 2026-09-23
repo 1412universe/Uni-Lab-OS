@@ -21,6 +21,7 @@ from unilabos.app.edge_control.local_authority import (
 )
 from unilabos.app.edge_control.client import EdgeControlClient, EdgeControlSettings
 from unilabos.app.scheduler.dispatch import DispatchPayload
+from unilabos.app.scheduler.dispatch import CancelDispatchState
 
 
 def _payload(*, device_id: str = "robot-01") -> DispatchPayload:
@@ -268,6 +269,37 @@ def test_dispatch_is_idempotent_and_rejects_changed_identity(tmp_path: Path) -> 
         changed["device_id"] = "robot-02"
         with pytest.raises(ValueError, match="identity changed"):
             authority.dispatch(changed)
+    finally:
+        authority.stop()
+
+
+def test_cancel_persists_job_cancel_and_reports_async_acceptance(tmp_path: Path) -> None:
+    """本地控制面应受理取消命令，但不伪造设备已停止。"""
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    accepted: list[bool] = []
+    try:
+        authority.dispatch(payload)
+
+        state = authority.cancel(payload["job_id"], accepted.append)
+
+        assert state is CancelDispatchState.REQUESTED
+        assert accepted == [True]
+        command = next(
+            item
+            for item in authority.store.pending_commands()
+            if item["type"] == "job.cancel"
+        )
+        assert command["payload"] == {"job_uuid": payload["job_id"]}
+        # 取消请求的本地受理不能改变设备动作的在途事实。
+        assert authority.store.job(payload["job_id"])["status"] == "pending"
+
+        # 重复点击取消复用同一未投递命令，不产生第二个物理请求。
+        assert authority.cancel(payload["job_id"], accepted.append) is CancelDispatchState.REQUESTED
+        assert len(
+            [item for item in authority.store.pending_commands() if item["type"] == "job.cancel"]
+        ) == 1
     finally:
         authority.stop()
 
@@ -997,6 +1029,68 @@ def test_transient_disconnect_marks_unknown_and_same_process_can_reconcile(
         authority.stop()
 
 
+def test_hello_preserves_cancel_requested_runtime_state(
+    tmp_path: Path,
+) -> None:
+    """Edge hello 对账不得把已受理取消的作业降级成普通 running。"""
+
+    authority = _authority(tmp_path / "authority-cancel.db")
+    registration = authority.store.register_session(
+        {
+            "edge_key": "workspace-edge",
+            "instance_uuid": str(uuid.uuid4()),
+            "devices": [],
+        }
+    )
+    session_identity = {
+        "edge_uuid": registration["edge_uuid"],
+        "session_uuid": registration["session_uuid"],
+    }
+    payload = _payload()
+    authority.dispatch(payload)
+    command = authority.store.pending_commands()[0]
+    authority.store.acknowledge_command(command["message_uuid"])
+    process_uuid = str(uuid.uuid4())
+    try:
+        assert authority.store.reconcile_hello(
+            {
+                **session_identity,
+                "process_uuid": process_uuid,
+                "last_ack_command_sequence": command["sequence"],
+                "running_jobs": [],
+            }
+        ) == (False, ())
+
+        restarted, affected = authority.store.reconcile_hello(
+            {
+                **session_identity,
+                "process_uuid": process_uuid,
+                "last_ack_command_sequence": command["sequence"],
+                "running_jobs": [
+                    {
+                        "job_uuid": payload["job_id"],
+                        "command_uuid": command["message_uuid"],
+                        "state": "cancel_requested",
+                    }
+                ],
+            }
+        )
+        assert (restarted, affected) == (False, ())
+        assert authority.store.job(payload["job_id"])["status"] == (
+            "cancel_requested"
+        )
+        assert authority.store.busy_device_action_keys() == {
+            f"/devices/{payload['device_id']}/{payload['action']}"
+        }
+
+        assert authority.store.mark_disconnected_jobs_unknown() == [
+            payload["job_id"]
+        ]
+        assert authority.store.job(payload["job_id"])["status"] == "unknown"
+    finally:
+        authority.stop()
+
+
 def test_changed_process_identity_reports_restart_and_keeps_job_unknown(
     tmp_path: Path,
 ) -> None:
@@ -1090,6 +1184,72 @@ def test_fail_restarted_jobs_clears_unknown_busy_key(tmp_path: Path) -> None:
         assert authority.store.job(payload["job_id"])["status"] == "failed"
         assert authority.busy_device_action_keys() == set()
         assert authority.fail_restarted_jobs((payload["job_id"],)) == []
+    finally:
+        authority.stop()
+
+
+def test_fail_restarted_jobs_also_closes_cancel_requested_job(
+    tmp_path: Path,
+) -> None:
+    """重启失败收口不能遗漏已受理取消但仍未结算的作业。"""
+
+    authority = _authority(tmp_path / "authority-cancel-restart.db")
+    payload = _payload()
+    try:
+        authority.dispatch(payload)
+        with authority.store._lock, authority.store._connection:
+            authority.store._connection.execute(
+                "UPDATE local_edge_job SET status='cancel_requested' WHERE job_uuid=?",
+                (payload["job_id"],),
+            )
+        assert authority.store.busy_device_action_keys() == {
+            f"/devices/{payload['device_id']}/{payload['action']}"
+        }
+
+        assert authority.fail_restarted_jobs((payload["job_id"],)) == [
+            payload["job_id"]
+        ]
+        assert authority.store.job(payload["job_id"])["status"] == "failed"
+        assert authority.store.busy_device_action_keys() == set()
+    finally:
+        authority.stop()
+
+
+def test_fail_restarted_jobs_retires_pending_error_decision(tmp_path: Path) -> None:
+    """强制收口作业时，人工决定命令也必须退役。
+
+    ``tmp_path`` 提供隔离 Authority SQLite 路径；返回为空。``job.error_decision``
+    的载荷用 ``job_id`` 承载作业身份，而其他下行命令用 ``job_uuid``；只按后者
+    清扫会让这条命令永远留在 pending，Edge 每次重连都要再收一遍一条已经没有
+    物理意义的命令。
+    """
+
+    authority = _authority(tmp_path / "authority.db")
+    payload = _payload()
+    try:
+        authority.dispatch(payload)
+        start_command = authority.store.pending_commands()[0]
+        authority.store.acknowledge_command(start_command["message_uuid"])
+
+        decision_id = str(uuid.uuid4())
+        assert authority.publish_job_error_decision_required(
+            {
+                "decision_id": decision_id,
+                "task_id": payload["task_id"],
+                "job_id": payload["job_id"],
+                "device_id": payload["device_id"],
+                "action_name": payload["action"],
+                "options": [{"id": "retry", "action": "retry", "label": "重试"}],
+            }
+        )
+        assert authority.resolve_error_decision(decision_id, {"action": "retry"}) is True
+        assert [item["type"] for item in authority.store.pending_commands()] == [
+            "job.error_decision"
+        ]
+
+        authority.fail_restarted_jobs((payload["job_id"],))
+
+        assert authority.store.pending_commands() == []
     finally:
         authority.stop()
 

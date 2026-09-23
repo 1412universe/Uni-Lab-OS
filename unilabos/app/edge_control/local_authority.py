@@ -34,7 +34,11 @@ from unilabos.app.edge_control.local_edge_session import (
     LocalEdgeSessionStore,
     project_local_edge_readiness,
 )
-from unilabos.app.scheduler.dispatch import CommittedJobOutcome, DispatchPayload
+from unilabos.app.scheduler.dispatch import (
+    CancelDispatchState,
+    CommittedJobOutcome,
+    DispatchPayload,
+)
 from unilabos.utils.tracing import inject_trace_context, normalize_trace_context
 
 logger = logging.getLogger(__name__)
@@ -193,6 +197,7 @@ class LocalEdgeAuthorityStore:
                 ("claim_uuid", "TEXT"),
                 ("attempt", "INTEGER"),
                 ("fences_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("resolution_outcome_json", "TEXT"),
             ):
                 if name not in job_columns:
                     self._connection.execute(
@@ -388,10 +393,15 @@ class LocalEdgeAuthorityStore:
             rows = connection.execute(
                 """
                 SELECT job_uuid FROM local_edge_job
-                WHERE status IN ('dispatched', 'running', 'unknown')
+                WHERE (
+                    status IN (
+                        'dispatched', 'running', 'cancel_requested', 'unknown'
+                    )
+                    OR (? AND status='pending'))
                   AND outcome_json IS NULL
                 ORDER BY created_at, job_uuid
-                """
+                """,
+                (bool(getattr(self, "time_scheduling_enabled", False)),),
             ).fetchall()
             affected = tuple(str(row["job_uuid"]) for row in rows)
             for job_uuid in affected:
@@ -416,12 +426,22 @@ class LocalEdgeAuthorityStore:
                 changed = connection.execute(
                     """
                     UPDATE local_edge_job
-                    SET status = 'running', unknown_command_ids_json = '[]',
+                    SET status = CASE
+                            WHEN status = 'cancel_requested'
+                                OR ? = 'cancel_requested'
+                                THEN 'cancel_requested'
+                            ELSE 'running'
+                        END, unknown_command_ids_json = '[]',
                         updated_at = ?
                     WHERE job_uuid = ? AND command_uuid = ?
                       AND outcome_json IS NULL
                     """,
-                    (time.time(), job_uuid, command_uuid),
+                    (
+                        str(reported.get("state") or "running"),
+                        time.time(),
+                        job_uuid,
+                        command_uuid,
+                    ),
                 ).rowcount
                 if changed != 1:
                     raise ValueError("running Edge job identity is unknown")
@@ -461,14 +481,16 @@ class LocalEdgeAuthorityStore:
         """在调用方持有的写事务中固化物理动作结果不明事实。
 
         参数：``connection`` 是已进入 ``BEGIN IMMEDIATE`` 的 Authority 连接。
-        返回：从 ``dispatched`` 或 ``running`` 转为 ``unknown`` 的 Job UUID。
+        返回：从 ``dispatched``、``running`` 或 ``cancel_requested`` 转为
+        ``unknown`` 的 Job UUID。
         异常：SQLite 错误原样传播；本函数不提交也不回滚事务。
         """
 
         rows = connection.execute(
             """
             SELECT job_uuid FROM local_edge_job
-            WHERE status IN ('dispatched', 'running') AND outcome_json IS NULL
+            WHERE status IN ('dispatched', 'running', 'cancel_requested')
+              AND outcome_json IS NULL
             """
         ).fetchall()
         job_uuids = [str(row["job_uuid"]) for row in rows]
@@ -721,6 +743,80 @@ class LocalEdgeAuthorityStore:
             )
             self._connection.commit()
         return True
+
+    def enqueue_cancel(self, job_uuid: str) -> dict[str, Any] | None:
+        """持久化一个幂等的 ``job.cancel`` 下行命令。
+
+        这里只确认取消请求已写入本地控制面，不声称设备已经停止；设备收到
+        命令后的取消回执仍由 Edge Runtime 通过结果接口提交。
+        """
+
+        normalized_job = str(uuid.UUID(job_uuid))
+        with self._lock:
+            self._connection.execute("BEGIN IMMEDIATE")
+            row = self._connection.execute(
+                "SELECT status FROM local_edge_job WHERE job_uuid = ?",
+                (normalized_job,),
+            ).fetchone()
+            if row is None:
+                self._connection.rollback()
+                return None
+            if str(row["status"]) not in {
+                "pending",
+                "dispatched",
+                "running",
+                "unknown",
+                "cancel_requested",
+            }:
+                self._connection.rollback()
+                return None
+            pending = self._connection.execute(
+                """
+                SELECT command_uuid, sequence, payload_json
+                FROM local_edge_command
+                WHERE type = 'job.cancel' AND status NOT IN ('acked', 'retired')
+                ORDER BY sequence ASC
+                """
+            ).fetchall()
+            for command in pending:
+                payload = json.loads(str(command["payload_json"]))
+                if payload.get("job_uuid") == normalized_job:
+                    self._connection.rollback()
+                    return {
+                        "command_uuid": str(command["command_uuid"]),
+                        "sequence": int(command["sequence"]),
+                        "created": False,
+                    }
+            sequence = self._next_sequence_locked()
+            command_uuid = str(uuid.uuid4())
+            trace_context = _current_trace_context()
+            payload = {"job_uuid": normalized_job}
+            now = time.time()
+            self._connection.execute(
+                """
+                INSERT INTO local_edge_command(
+                    command_uuid, sequence, type, payload_json,
+                    traceparent, tracestate, status, created_at
+                ) VALUES (?, ?, 'job.cancel', ?, ?, ?, 'pending', ?)
+                """,
+                (
+                    command_uuid,
+                    sequence,
+                    json.dumps(payload, separators=(",", ":")),
+                    trace_context.get("traceparent", ""),
+                    trace_context.get("tracestate", ""),
+                    now,
+                ),
+            )
+            self._connection.execute(
+                """
+                INSERT INTO local_edge_meta(key, value) VALUES ('sequence', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (str(sequence),),
+            )
+            self._connection.commit()
+        return {"command_uuid": command_uuid, "sequence": sequence, "created": True}
 
     def mark_command_sent(self, command_uuid: str) -> None:
         with self._lock:
@@ -1146,9 +1242,9 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT job_uuid, outcome_json
+                SELECT job_uuid, COALESCE(resolution_outcome_json,outcome_json) AS outcome_json
                 FROM local_edge_job
-                WHERE outcome_json IS NOT NULL
+                WHERE (resolution_outcome_json IS NOT NULL OR outcome_json IS NOT NULL)
                   AND projected_at IS NULL
                 ORDER BY updated_at, job_uuid
                 LIMIT ?
@@ -1248,21 +1344,29 @@ class LocalEdgeAuthorityStore:
 
     def resolve_unknown_committed(self, job_uuid: str) -> bool:
         normalized = str(uuid.UUID(job_uuid))
-        with self._lock:
+        with self._lock, self._connection:
             row = self._connection.execute(
-                "SELECT status FROM local_edge_job WHERE job_uuid = ?", (normalized,)
+                "SELECT status,resolution_outcome_json FROM local_edge_job WHERE job_uuid = ?", (normalized,)
             ).fetchone()
+            if row is not None and row["resolution_outcome_json"] is not None:
+                # 前次已保存物理核实结果、投影中断：重投同一证据继续完成投影。
+                return True
             if row is None or row["status"] != "unknown":
                 return False
+            resolution = json.dumps({
+                "outcome": "canceled", "return_info": {}, "error_info": [],
+                "unknown_command_ids": [], "inventory_consumptions": [],
+                "material_aliquot_receipts": [],
+            }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             self._connection.execute(
                 """
                 UPDATE local_edge_job SET status = 'outcome_pending',
-                    unknown_command_ids_json = '[]', projected_at = NULL, updated_at = ?
+                    unknown_command_ids_json = '[]', resolution_outcome_json=?,
+                    projected_at = NULL, updated_at = ?
                 WHERE job_uuid = ?
                 """,
-                (time.time(), normalized),
+                (resolution, time.time(), normalized),
             )
-            self._connection.commit()
         return True
 
     def fail_restarted_jobs(self, job_uuids: Sequence[str]) -> list[str]:
@@ -1281,9 +1385,17 @@ class LocalEdgeAuthorityStore:
         with self._lock:
             try:
                 for job_uuid in normalized:
+                    # 下行命令的作业身份键并不统一：job.start / job.cancel /
+                    # job.resolve_unknown 用 ``job_uuid``，而 job.error_decision
+                    # 用 ``job_id``。只匹配前者会把人工决定命令永久留在
+                    # pending，Edge 每次重连都要重新收到一条已经没有物理意义
+                    # 的命令。作业既然被强制收口，两种键都必须退役。
                     self._connection.execute(
                         "UPDATE local_edge_command SET status='retired' "
-                        "WHERE json_extract(payload_json,'$.job_uuid')=? AND status='pending'",
+                        "WHERE status='pending' AND ? IN ("
+                        "  json_extract(payload_json,'$.job_uuid'),"
+                        "  json_extract(payload_json,'$.job_id')"
+                        ")",
                         (job_uuid,),
                     )
                     row = self._connection.execute(
@@ -1297,6 +1409,7 @@ class LocalEdgeAuthorityStore:
                         "pending",
                         "dispatched",
                         "running",
+                        "cancel_requested",
                         "unknown",
                         "outcome_pending",
                     }:
@@ -1334,6 +1447,7 @@ class LocalEdgeAuthorityStore:
                         WHERE job_uuid = ?
                           AND status IN (
                               'pending', 'dispatched', 'running',
+                              'cancel_requested',
                               'unknown', 'outcome_pending'
                           )
                         """,
@@ -1352,7 +1466,9 @@ class LocalEdgeAuthorityStore:
             rows = self._connection.execute(
                 """
                 SELECT device_action_key FROM local_edge_job
-                WHERE status IN ('pending', 'dispatched', 'running', 'unknown')
+                WHERE status IN (
+                    'pending', 'dispatched', 'running', 'cancel_requested', 'unknown'
+                )
                 """
             ).fetchall()
         return {str(row["device_action_key"]) for row in rows}
@@ -1501,12 +1617,17 @@ class LocalEdgeControlAuthority:
             Callable[[dict[str, Any]], None]
         ] = []
         self._error_decision_reports: dict[str, dict[str, Any]] = {}
+        self._resolved_error_decisions: set[str] = set()
+        self._error_decision_lock = threading.Lock()
         self.execution_control: Any = None
         self._execution_started: Callable[[str], None] | None = None
         self.deferred_start = True
 
     def bind_execution_control(self, control: Any, on_started: Callable[[str], None]) -> None:
         self.execution_control = control
+        self.store.time_scheduling_enabled = bool(
+            getattr(control, "time_scheduling_enabled", False)
+        )
         self._execution_started = on_started
 
     def start(self) -> None:
@@ -1521,6 +1642,33 @@ class LocalEdgeControlAuthority:
         ):
             raise ValueError("手动执行来源未被工站控制器授权")
         self.store.dispatch(payload)
+
+    def cancel(
+        self,
+        job_id: str,
+        on_accepted: Callable[[bool], None],
+    ) -> CancelDispatchState:
+        """把取消请求写入 Edge 控制面并等待设备侧终态。
+
+        ``REQUESTED`` 仅表示本地权威已持久化 ``job.cancel``；不会删除 Job、
+        释放 Claim，也不会假设物理动作已经停止。后续由 Edge Runtime 提交
+        ``canceled`` 或 ``failed`` 结果，调度器再做终态清理。
+        """
+
+        try:
+            command = self.store.enqueue_cancel(job_id)
+        except (TypeError, ValueError, KeyError):
+            return CancelDispatchState.UNAVAILABLE
+        if command is None:
+            return CancelDispatchState.UNAVAILABLE
+        # 命令已落盘并可由 WebSocket 重试投递；这是本地异步取消的受理事实，
+        # 不是设备停止确认。
+        try:
+            on_accepted(True)
+        except Exception:
+            logger.exception("取消受理回调失败：%s", job_id)
+            return CancelDispatchState.UNAVAILABLE
+        return CancelDispatchState.REQUESTED
 
     def restore_dispatch(self, payload: DispatchPayload) -> None:
         """工站开始权威证明未启动后，恢复同一出站命令，绝不新建尝试。"""
@@ -1565,25 +1713,59 @@ class LocalEdgeControlAuthority:
         except Exception:
             logger.exception("[LocalEdgeControl] failed to persist error decision %s", decision_id)
             return False
-        self._error_decision_reports[decision_id] = dict(report)
+        with self._error_decision_lock:
+            self._error_decision_reports[decision_id] = dict(report)
+            # 同一 decision_id 重新上报视为新的待决事件，清掉旧的已决标记。
+            self._resolved_error_decisions.discard(decision_id)
         return True
+
+    def list_error_decisions(self) -> list[dict[str, Any]]:
+        """当前等待人工决策的动作异常（供 REST / 前端展示）。
+
+        与 ``JobExecutionBackend.list_error_decisions`` 保持同一语义：只返回尚未
+        被 ``resolve_error_decision`` 成功投递的报告，并隐藏下划线开头的内部字段。
+        返回列表；没有待决异常时为空列表，不抛异常。
+        """
+
+        with self._error_decision_lock:
+            pending = [
+                report
+                for decision_id, report in self._error_decision_reports.items()
+                if decision_id not in self._resolved_error_decisions
+            ]
+        return [
+            {
+                key: value
+                for key, value in report.items()
+                if not str(key).startswith("_")
+            }
+            for report in pending
+        ]
 
     def resolve_error_decision(self, decision_id: str, decision: dict[str, Any]) -> bool:
         """把已持久选择的方案作为 Edge 命令投递给原始动作。"""
 
-        report = self._error_decision_reports.get(str(decision_id))
+        identity = str(decision_id)
+        with self._error_decision_lock:
+            report = self._error_decision_reports.get(identity)
         job_id = str(
             (report or {}).get("job_id") or decision.get("job_id") or ""
         )
         device_id = str(
             (report or {}).get("device_id") or decision.get("device_id") or ""
         )
-        return self.store.enqueue_error_decision(
-            str(decision_id),
+        delivered = self.store.enqueue_error_decision(
+            identity,
             job_id=job_id,
             device_id=device_id,
             decision=decision,
         )
+        if delivered:
+            # 只标记不删除：enqueue 是幂等的，保留报告才能让重复投递继续命中
+            # 原始 job_id/device_id，而不是退化成空串触发 UUID 解析失败。
+            with self._error_decision_lock:
+                self._resolved_error_decisions.add(identity)
+        return delivered
 
     def add_job_finished_listener(
         self, listener: Callable[[str, bool, Any, str], None]
@@ -1969,6 +2151,11 @@ def create_local_edge_control_router(
         result["station_controlled"] = authority.execution_control is not None
         if authority.execution_control is not None:
             result["execution_start_state"] = authority.execution_control.execution_start_state(job_uuid)
+            result["recovery_policy"] = (
+                "reconcile"
+                if getattr(authority.execution_control, "time_scheduling_enabled", False)
+                else "legacy_abort"
+            )
         return _envelope(result)
 
     @router.post("/jobs/{job_uuid}/begin", summary="确认设备动作开始执行")

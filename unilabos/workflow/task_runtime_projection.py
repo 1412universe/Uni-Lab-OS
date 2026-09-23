@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from unilabos.app.scheduler.timing_store import TimingObservation
 from uuid import UUID, uuid4
 
 from unilabos.workflow.resource_lock_key import (
@@ -40,6 +43,7 @@ from unilabos.workflow.execution_lock_lease import (
 from unilabos.workflow.execution_wait_graph import build_execution_wait_graph
 from unilabos.workflow.execution_restart_recovery import (
     fail_task_after_execution_process_restart,
+    preserve_task_after_execution_process_restart,
 )
 from unilabos.workflow.intervention import (
     WorkflowInterventionStore,
@@ -64,6 +68,7 @@ from unilabos.workflow.physical_settlement_policy import (
 from unilabos.workflow.scheduler_capacity import (
     activate_workflow_task,
     admit_job_dispatch,
+    check_workflow_task_capacity,
 )
 from unilabos.workflow.station_event_outbox import append_station_event
 from unilabos.workflow.station_status_projection import (
@@ -2066,36 +2071,19 @@ class TaskRuntimeProjection:
                 )
                 return self._aggregate(connection, task_uuid)
             if task_row["status"] == "pending":
-                activation = activate_workflow_task(
+                capacity = check_workflow_task_capacity(
                     connection,
                     task_uuid=task_uuid,
                     max_active_tasks=max_active_tasks,
                     max_tasks_per_workflow=max_tasks_per_workflow,
                 )
-                if not activation.available:
+                if not capacity.available:
                     self._append_invalidation(
                         connection,
                         task_uuid=task_uuid,
                         now=utc_now(),
                     )
                     return self._aggregate(connection, task_uuid)
-                task_row = self._task_row(connection, task_uuid)
-                append_runtime_event(
-                    connection,
-                    task_uuid=task_uuid,
-                    kind="task_transition",
-                    from_status="pending",
-                    to_status="running",
-                    now=utc_now(),
-                )
-                append_task_state_event(
-                    connection,
-                    task_uuid=task_uuid,
-                    status="running",
-                    details={
-                        "started_at": str(task_row["started_at"] or utc_now()),
-                    },
-                )
             tenancy_decision = check_device_tenancy(
                 connection,
                 task_uuid=task_uuid,
@@ -2159,6 +2147,47 @@ class TaskRuntimeProjection:
                     now=utc_now(),
                 )
                 return self._aggregate(connection, task_uuid)
+            # 只有设备托管和完整执行锁都已准入，才领取父 Task 的运行容量。
+            # 前面的容量门禁在同一个写事务内完成，因此这里不会在拿到锁后
+            # 意外发现容量已满；这样锁等待/设备等待都不会把父任务提前激活。
+            if task_row["status"] == "pending":
+                activation = activate_workflow_task(
+                    connection,
+                    task_uuid=task_uuid,
+                    max_active_tasks=max_active_tasks,
+                    max_tasks_per_workflow=max_tasks_per_workflow,
+                )
+                if not activation.available:
+                    # SQLite 写事务在本地串行化；这是防御性分支，正常不会触发。
+                    # 若未来容量策略发生变化，不能留下属于 pending Job 的活动锁。
+                    release_execution_locks(
+                        connection,
+                        job_uuid=job_uuid,
+                        now=utc_now(),
+                    )
+                    self._append_invalidation(
+                        connection,
+                        task_uuid=task_uuid,
+                        now=utc_now(),
+                    )
+                    return self._aggregate(connection, task_uuid)
+                task_row = self._task_row(connection, task_uuid)
+                append_runtime_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    kind="task_transition",
+                    from_status="pending",
+                    to_status="running",
+                    now=utc_now(),
+                )
+                append_task_state_event(
+                    connection,
+                    task_uuid=task_uuid,
+                    status="running",
+                    details={
+                        "started_at": str(task_row["started_at"] or utc_now()),
+                    },
+                )
             prepare_device_tenancy(
                 connection,
                 task_uuid=task_uuid,
@@ -2700,6 +2729,12 @@ class TaskRuntimeProjection:
             )
             return dict(evidence["committed_outcome"])
 
+    def project_execution_restart_attention(self, task_uuid: str) -> dict[str, Any]:
+        """重启只冻结待核实尝试，实际结果和占用按原身份继续结算。"""
+        with self._store.transaction() as connection:
+            preserve_task_after_execution_process_restart(connection, task_uuid=task_uuid)
+            return self._aggregate(connection, task_uuid)
+
     def project_execution_process_restarted(
         self,
         task_uuid: str,
@@ -2741,7 +2776,7 @@ class TaskRuntimeProjection:
             job = self._job_row(connection, job_uuid)
             task_uuid = str(job["workflow_task_uuid"])
             if (
-                job["status"] not in {"running", "failed"}
+                job["status"] not in {"running", "failed", "cancel_requested", "dispatched"}
                 or not job["uncertainty_reason"]
             ):
                 raise StoreConflict("只有等待物理对账的运行中或失败作业可以人工处置")
@@ -3960,6 +3995,7 @@ class TaskRuntimeProjection:
         error_info: Sequence[Any] | None = None,
         manual_confirmation_status: str | None = None,
         inventory_reconciliation: Mapping[str, Any] | None = None,
+        timing_sample: TimingObservation | None = None,
     ) -> dict[str, Any]:
         """投影工作流节点作业（WorkflowNodeJob）的明确业务结果。
 
@@ -4095,6 +4131,20 @@ class TaskRuntimeProjection:
                 raise StoreConflict(f"作业尚未派发，不能完成：{job_uuid}")
             if task_row["status"] not in {"running", "failed", "canceling", "canceled", "timeout"}:
                 raise StoreConflict(f"父任务状态不接受作业结果：{task_uuid}")
+
+            # 完整耗时样本与首次成功结果同事务保存；重复终态在上方返回，
+            # 不会按重投消息的收包时间重新计时。取消、人工核实和对账不入正常样本。
+            if timing_sample is not None:
+                from unilabos.app.scheduler.timing_store import TimingObservation, TimingObservationStore
+                if not isinstance(timing_sample, TimingObservation) or timing_sample.observation_id != job_uuid:
+                    raise StoreConflict("耗时样本身份与当前作业不一致")
+                if (target_job_status == "succeeded" and timing_sample.outcome == "success"
+                        and not normalized_error_info and not requires_inventory_reconciliation
+                        and current_job_status in {"dispatched", "running"}
+                        and manual_confirmation_status is None):
+                    samples = TimingObservationStore(connection)
+                    samples.ensure_schema()
+                    samples.append(timing_sample)
 
             # ``finished_at`` 是明确作业结果落盘的统一完成时间。
             finished_at = utc_now()

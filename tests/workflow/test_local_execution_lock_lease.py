@@ -759,6 +759,7 @@ def test_material_parent_lock_blocks_child_site_until_explicit_result(
     )
     blocked_job = blocked["jobs"][0]
     assert blocked_job["status"] == "pending"
+    assert blocked["task"]["status"] == "pending"
     assert blocked_job["wait_reason"]["code"] == "operation_lease"
     assert blocked_job["wait_reason"]["blocking_job_uuid"] == JOB_UUID
     assert blocked_job["wait_reason"]["resources"] == [

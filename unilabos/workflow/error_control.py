@@ -108,6 +108,7 @@ class StationExecutionControl:
     ) -> None:
         self.store = store
         self.recovering = False
+        self.time_scheduling_enabled: bool = False
         self.station_id = station_id
         self.lock = lock if lock is not None else threading.RLock()
         with store.transaction() as conn:
@@ -143,6 +144,11 @@ class StationExecutionControl:
                 and station[0] == "RUNNING"
                 and pending is None
                 and (task is None or task[0] != "error_waiting")
+                and (
+                    not getattr(self, "time_scheduling_enabled", False)
+                    or task is None
+                    or task[0] != "waiting_reconciliation"
+                )
                 and (
                     task is None
                     or task[1] != "paused"
@@ -1297,6 +1303,14 @@ class StationExecutionControl:
             "SELECT * FROM workflow_node_job WHERE uuid=?",
             (decision["workflow_node_job_uuid"],),
         ).fetchone()
+        if self.time_scheduling_enabled and (
+            old["status"] not in {"failed", "timeout", "canceled"}
+            or old["uncertainty_reason"]
+            or not old["finished_at"]
+        ):
+            # 重试意图不是停止证明，不能借旧重试分支释放仍待核实的 Claim。
+            # 明确结束并完成核实的失败尝试仍可按原控制命令创建下一尝试。
+            raise StoreConflict("重试前必须取得原尝试的明确结束结果并完成物理核实")
         task = conn.execute(
             "SELECT status FROM workflow_task WHERE uuid=?",
             (old["workflow_task_uuid"],),

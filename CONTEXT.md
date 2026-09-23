@@ -101,6 +101,82 @@ execution plan, jobs, results, reservations, and recovery facts survive Local
 Workflow Catalog replacement or process restart.
 _Avoid_: Workflow definition, Run alias
 
+**Node Dispatch Boundary（节点派发边界）**:
+A Workflow Task node crosses this boundary when its action is handed to the
+Edge/device execution chain. Before the boundary, the task's public entry
+values may be revised for the undispatched suffix; after it, the node's
+execution contract and consumed values are immutable.
+_Avoid_: Hardware start time, task completion, page refresh
+
+**Undispatched Plan Revision（未下发计划修订）**:
+An audited revision of a task's workflow entry values that revalidates and
+replans only nodes before the Node Dispatch Boundary while retaining dispatched
+predecessors and their results.
+_Avoid_: Workflow definition revision, rerun, silent remap
+
+**Task Plan Shape（任务计划形状）**:
+The stable set and topology of node identities, control structure, and declared
+inventory requirement identities for one Workflow Task. A task input edit may
+change values in existing undispatched Jobs, but it cannot change this shape.
+_Avoid_: Current parameter values, scheduler time plan, rendered graph layout
+
+**Task Execution Input Edit（任务执行输入编辑）**:
+An audited change to the public Workflow Entry Parameters of one task within an
+Paused Edit Window. It preserves workflow topology and never rewrites a node
+action, material contract, site binding, or device contract.
+_Avoid_: Workflow authoring, node override, runtime remapping
+
+**Paused Edit Window（暂停编辑窗口）**:
+The interval in which a running task has first closed its dispatch gate and task
+input editing is permitted. Already dispatched Jobs may finish, while only
+undispatched nodes and unconsumed Workflow Entry Parameters remain eligible for
+revision; editing does not require those in-flight Jobs to finish first, and
+their original payloads remain unchanged. Claims and execution locks already
+held by dispatched Jobs remain until normal settlement; the undispatched suffix
+does not acquire new execution resources while the window is open.
+_Avoid_: Device stop, station-wide pause, live mutation of dispatched work
+
+**Workflow Entry Parameters（工作流入口参数）**:
+The public values supplied against a published Workflow input contract for one
+Workflow Task. They are the only execution values editable at task level; node
+Action parameters remain part of the published workflow revision.
+_Avoid_: Node Action parameters, intermediate values, device settings
+
+**Consumed Entry Parameter（已消费入口参数）**:
+A Workflow Entry Parameter captured by a node whose action has crossed the Node
+Dispatch Boundary. Its value is immutable for that task even while later nodes
+remain undispatched.
+_Avoid_: Displayed parameter, completed output, mutable global setting
+
+**Workflow-bound Device（工作流绑定设备）**:
+The device identity or declared equivalent-device group carried by a workflow
+node's execution contract. Task input editing cannot replace that contract;
+device selection may vary only within the contract's declared equivalence.
+_Avoid_: Task-level device override, arbitrary device swap
+
+**Edge-local Task Pause（Edge 本地任务暂停）**:
+A control decision applied to one Workflow Task that closes its dispatch gate,
+leaves already dispatched Jobs and their held resources under the same task, and
+does not stop a device action already handed to the execution chain. Pausing
+multiple tasks requires separate task decisions.
+_Avoid_: Station-wide pause, device stop, batch transaction
+
+**CP-SAT Candidate Plan（CP-SAT 候选计划）**:
+The validated ordering and timing candidate produced for one immutable planning
+snapshot. It is usable only while its snapshot revision, time origin, node set,
+and resource facts still match the current task state; it is not a dispatch
+queue and does not itself create a device command or execution Claim.
+_Avoid_: Durable dispatch order, device command, reserved future execution
+
+**Paused Candidate Invalidation（暂停候选失效）**:
+When a task closes its dispatch gate, every CP-SAT candidate node that has not
+crossed the Node Dispatch Boundary becomes ineligible immediately. In-flight
+nodes remain fixed facts with their held resources; resume creates a new
+planning revision and re-solves the undispatched suffix. A previous candidate
+may be used only as a soft stability hint after validation, never as execution
+authority.
+_Avoid_: Canceling an in-flight action, resuming an old queue, releasing claims
+
 **Edge-only Inventory Interface**:
 The operational lot, reservation, ledger, and diagnostic contract used inside
 the local debug control plane; it is not started by the production Backend

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from unilabos.app.scheduler.models import (
+    DATA_KEY_SPLIT,
     Handle,
     HandlePair,
     NodeState,
@@ -29,7 +30,12 @@ from unilabos.app.scheduler.models import (
     WorkflowSpec,
     WorkflowState,
 )
-from unilabos.app.scheduler.param_resolver import resolve_parent_params
+from unilabos.app.scheduler.param_resolver import (
+    ParamResolveError,
+    json_get_exists,
+    json_set,
+    resolve_parent_params,
+)
 from unilabos.workflow.control_expression import (
     ConditionEvaluationError,
     evaluate_condition_expression,
@@ -93,6 +99,9 @@ class WorkflowRun:
         self._parent_pairs: Dict[str, List[HandlePair]] = {}
         # node_id -> 执行返回值（Go nodeMap[..].ReturnInfo.ReturnValue 等价）
         self._ret_values: Dict[str, Any] = {}
+        # 仅保存执行合同明确为 ResourceSlot 同节点透传的预测值。它们不参与
+        # 条件求值，也不冒充设备返回值；真实回执写入 _ret_values 后优先覆盖。
+        self._static_resource_values: Dict[str, Any] = {}
         # 取消意图与业务终态分离；在途节点返回成功/失败也不能抹掉用户取消事实。
         self._cancel_requested = False
         self._failed_nodes: Set[str] = set()
@@ -185,6 +194,93 @@ class WorkflowRun:
             )
 
         self._detect_cycle(children)
+        self._build_static_resource_passthrough()
+
+    @staticmethod
+    def _is_resource_slot(handle: Handle) -> bool:
+        """只有执行计划显式标注的 ResourceSlot 才允许静态透传。"""
+
+        return str(handle.value_type or "").strip().lower() == "resourceslot"
+
+    @staticmethod
+    def _is_concrete_resource_value(value: Any) -> bool:
+        """ResourceSlot 必须带稳定实例身份，空占位符不能进入预测。"""
+
+        return isinstance(value, Mapping) and bool(
+            str(value.get("uuid") or value.get("material_uuid") or "").strip()
+        )
+
+    def _build_static_resource_passthrough(self) -> None:
+        """固定点传播已证明的 ResourceSlot 输入/输出透传值。
+
+        透传元数据来自发布时的合同校验，且只读取节点当前冻结参数；没有明确
+        输入值或类型不为 ResourceSlot 时保持未知，绝不根据动作名称猜测结果。
+        """
+
+        handles = {handle.uuid: handle for handle in self.spec.handles if handle.uuid}
+        params = {node_id: deepcopy(node.param) for node_id, node in self._nodes.items()}
+        outputs: Dict[str, Any] = {}
+        for _ in range(len(self._nodes) + 1):
+            changed = False
+            # 先沿显式 ResourceSlot 边传播，再根据同节点透传声明生成输出。
+            for target_id, pairs in self._parent_pairs.items():
+                target_param = params[target_id]
+                for pair in pairs:
+                    if not (
+                        self._is_resource_slot(pair.source_handle)
+                        and self._is_resource_slot(pair.target_handle)
+                    ):
+                        continue
+                    source_output = outputs.get(pair.source_node_id)
+                    exists, value = json_get_exists(
+                        source_output, pair.source_handle.data_key
+                    )
+                    if not exists or not self._is_concrete_resource_value(value):
+                        continue
+                    target_key = pair.target_handle.data_key.split(DATA_KEY_SPLIT)[-1]
+                    try:
+                        current_exists, current = json_get_exists(target_param, target_key)
+                        if current_exists and current != value:
+                            # 冻结参数与透传事实冲突时不猜测，以运行时校验为准。
+                            continue
+                        updated = json_set(target_param, target_key, deepcopy(value))
+                    except ParamResolveError:
+                        continue
+                    if updated != target_param:
+                        params[target_id] = updated
+                        target_param = updated
+                        changed = True
+            for node_id, node in self._nodes.items():
+                passthrough = node.material_passthrough_handles
+                if not passthrough:
+                    continue
+                output = outputs.get(node_id, {})
+                if not isinstance(output, Mapping):
+                    output = {}
+                output = deepcopy(dict(output))
+                for output_uuid, input_uuid in passthrough.items():
+                    source = handles.get(output_uuid)
+                    target = handles.get(input_uuid)
+                    if source is None or target is None or not (
+                        self._is_resource_slot(source) and self._is_resource_slot(target)
+                    ):
+                        continue
+                    exists, value = json_get_exists(params[node_id], target.data_key)
+                    if not exists or not self._is_concrete_resource_value(value):
+                        continue
+                    try:
+                        updated = json_set(output, source.data_key, deepcopy(value))
+                    except ParamResolveError:
+                        continue
+                    if updated != output:
+                        output = updated
+                        changed = True
+                if output and output != outputs.get(node_id):
+                    outputs[node_id] = output
+                    changed = True
+            if not changed:
+                break
+        self._static_resource_values = outputs
 
     def _detect_cycle(self, children: Dict[str, List[str]]) -> None:
         visited: Set[str] = set()
@@ -366,7 +462,15 @@ class WorkflowRun:
                 if node.executor_kind == "repeat_until" and status not in {"succeeded", "skipped", "failed", "timeout", "canceled"}:
                     continue
                 if status == "succeeded":
-                    self.mark_finished(node_id, job.get("return_info") or {})
+                    return_info = job.get("return_info") or {}
+                    # 与正常完成回调一致，只解包一层执行回执；本地输入和
+                    # 物料来源的平铺结果保持原样，不能把回执元数据当作节点输出。
+                    ret_value = (
+                        return_info.get("return_value", return_info)
+                        if isinstance(return_info, Mapping)
+                        else return_info
+                    )
+                    self.mark_finished(node_id, ret_value)
                 elif status == "skipped":
                     self.mark_skipped(node_id, reason="persisted_branch_decision")
                 elif status in {"failed", "timeout"}:
@@ -1328,7 +1432,11 @@ class WorkflowRun:
         pairs = self._parent_pairs.get(node_id, [])
         if not pairs:
             return node.param
-        return resolve_parent_params(node.param, pairs, self._ret_values)
+        # 一旦真实回执到达，同一来源的静态预测必须整体失效；不能用预测字段
+        # 掩盖回执缺少必需 ResourceSlot 的事实。
+        parent_values = dict(self._static_resource_values)
+        parent_values.update(self._ret_values)
+        return resolve_parent_params(node.param, pairs, parent_values)
 
     # ── 查询 ──────────────────────────────────────────────────
 

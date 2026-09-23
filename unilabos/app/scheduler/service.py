@@ -45,7 +45,10 @@ from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from unilabos.app.scheduler.timing_store import TimingObservation
 
 from unilabos.app.scheduler.dag_state import WorkflowRun
 from unilabos.app.scheduler.device_target import (
@@ -126,6 +129,29 @@ from unilabos.workflow.resource_lock_plan import (
 from unilabos.workflow.resource_lock_key import device_lock_key
 
 logger = logging.getLogger(__name__)
+# ``launch`` installs ``LaunchLogger`` as the process-wide logger class and
+# defaults each new logger to ``propagate=False``.  This module does not attach
+# a private handler, so policy failures would otherwise fall through to
+# ``logging.lastResort`` and bypass the application's root handler (and pytest's
+# ``caplog``).  Scheduler diagnostics belong to the normal application log
+# stream, so explicitly restore propagation here.
+logger.propagate = True
+
+
+def _merge_param_patch(
+    current: Mapping[str, Any],
+    patch: Mapping[str, Any],
+) -> dict[str, Any]:
+    """递归合并暂停任务的参数修改，数组和标量按修改值替换。"""
+
+    merged = deepcopy(dict(current))
+    for key, value in patch.items():
+        previous = merged.get(key)
+        if isinstance(previous, Mapping) and isinstance(value, Mapping):
+            merged[key] = _merge_param_patch(previous, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 _RECONCILE_EXECUTOR = ThreadPoolExecutor(
     max_workers=1,
@@ -259,6 +285,7 @@ class EdgeScheduler:
         max_active_tasks: int = _DEFAULT_MAX_ACTIVE_TASKS,
         max_tasks_per_workflow: int = _DEFAULT_MAX_TASKS_PER_WORKFLOW,
         clock: Callable[[], float] = time.time,
+        time_planner: Any = None,
     ):
         """装配本地执行态调度器（Scheduler）。
 
@@ -293,6 +320,12 @@ class EdgeScheduler:
             raise ValueError("max_tasks_per_workflow 不能大于 max_active_tasks")
 
         self._clock = clock
+        self._time_scheduling = None
+        self._durable_timing_learning = False
+        if time_planner is not None:
+            from unilabos.app.scheduler.time_scheduling import TimeSchedulingAdapter
+            self._time_scheduling = TimeSchedulingAdapter(time_planner)
+            time_planner.bind_wakeup(lambda: self._wake_reconcile(wait=False))
         self._orderer = orderer or StableLocalOrderer(clock=clock)
         self._dispatcher = dispatcher or RecordingDispatcher()
         self._lock = threading.RLock()
@@ -347,6 +380,10 @@ class EdgeScheduler:
         # 物料监听与 submit/finish 必须共用同一轮重排 Future，否则预留/结算
         # 事件会先抢走派发，调用方等到的下一轮返回空 dispatched。
         self._reconcile_wakeup_lock = threading.Lock()
+        self._reconcile_condition = threading.Condition(self._reconcile_wakeup_lock)
+        self._active_reschedule_threads: dict[int, int] = {}
+        self._close_lock = threading.RLock()
+        self._closed = False
         self._pending_reconcile: Future[Any] | None = None
         self._reconcile_generation = 0
         add_listener = getattr(monitor, "add_listener", None)
@@ -406,6 +443,57 @@ class EdgeScheduler:
         """
 
         return self._inventory
+
+    @property
+    def time_scheduling_enabled(self) -> bool:
+        """当前执行内核是否由时间规划器提供经过验证的候选。"""
+        return self._time_scheduling is not None
+
+    def capture_timing_observation(self, job_id: str) -> TimingObservation | None:
+        """在结果首次提交前捕获同一计时边界的完整样本；推断和人工等待不采样。"""
+        from unilabos.app.scheduler.timing import DEFAULT_BOUNDARY, finite_seconds
+        from unilabos.app.scheduler.timing_store import TimingObservation
+
+        with self._lock:
+            job = self._inflight.get(job_id)
+            if job is None or not job.timing_origin_observed:
+                return None
+            run = self._workflows.get(job.workflow_id)
+            node = run.node(job.node_id) if run is not None else None
+            if (run is None or node is None or node.is_manual_confirm()
+                    or run.state.value != "running" or run.dispatch_gate != "active"):
+                return None
+            if self._station_control is not None and (
+                not self._station_control.is_current(job_id)
+                or self._station_control.awaits_decision(job_id)
+                or self._station_control.is_manual(job_id)
+            ):
+                return None
+            spec = self._estimator._spec_for(job.device_action_key)
+            if spec.timing_boundary != DEFAULT_BOUNDARY:
+                # 当前只有派发与可观察结果时间，没有真实物理起止证据。
+                return None
+            actual_s = finite_seconds(self._clock() - job.dispatched_at)
+            if actual_s is None:
+                return None
+            return TimingObservation(
+                observation_id=job_id, device_action_key=job.device_action_key,
+                actual_s=actual_s, params=deepcopy(job.resolved_args),
+                device_id=job.device_material_uuid or job.device_id,
+                spec_version=spec.version, timing_boundary=spec.timing_boundary,
+            )
+
+    def time_schedule_snapshot(self) -> dict[str, Any]:
+        """公开候选计划、覆盖范围及求解状态；不将其表示为设备授权。"""
+        with self._lock:
+            if self._time_scheduling is None:
+                return {"enabled": False, "algorithm": "stable-ready-order"}
+            return self._time_scheduling.snapshot()
+
+    def close_time_planner(self) -> None:
+        """等待有限后台求解退出，不持有执行内核锁。"""
+        if self._time_scheduling is not None:
+            self._time_scheduling.planner.close()
 
     @property
     def execution_control_lock(self) -> Any:
@@ -506,13 +594,37 @@ class EdgeScheduler:
             logger.exception("[EdgeScheduler] material change reconcile failed")
 
     def close(self) -> None:
-        """解除实时库存监听，供 Edge 生命周期关闭使用。"""
+        """停止新重排并等待已进入的回调，完成后调用方才能关闭数据库。
 
-        remove_listener = getattr(self._monitor, "remove_listener", None)
-        listener_id = self._material_monitor_listener_id
-        if callable(remove_listener) and listener_id is not None:
-            remove_listener(listener_id)
-        self._material_monitor_listener_id = None
+        等待 Future 或规划线程时不持调度锁。调度回调内部不能同步等待自身，
+        此时先关闭新准入并明确报错，由外部生命周期所有者重试关闭。
+        """
+        with self._reconcile_wakeup_lock:
+            inside_reschedule = threading.get_ident() in self._active_reschedule_threads
+            if inside_reschedule or self._owns_scheduler_lock() or bool(getattr(_RECONCILE_THREAD, "active", False)):
+                self._closed = True
+                raise RuntimeError("必须在调度回调与调度锁之外等待调度器关闭")
+        with self._close_lock:
+            with self._reconcile_wakeup_lock:
+                self._closed = True
+                pending = self._pending_reconcile
+            remove_listener = getattr(self._monitor, "remove_listener", None)
+            listener_id = self._material_monitor_listener_id
+            if callable(remove_listener) and listener_id is not None:
+                remove_listener(listener_id)
+            self._material_monitor_listener_id = None
+            self.close_time_planner()
+            if pending is not None:
+                try:
+                    pending.result()
+                except Exception:
+                    # Future 已结束即已越过关闭栅栏；记录原异常，不重复执行回调。
+                    logger.exception("关闭时最后一轮调度未成功完成")
+            # 公开 reschedule 也可来自 API 线程；准入重试在调度锁外，须单独等待。
+            with self._reconcile_condition:
+                self._reconcile_condition.wait_for(lambda: not self._active_reschedule_threads)
+            with self._lock:
+                pass
 
     def _safe_history(self, method: str, *args: Any, **kwargs: Any) -> None:
         """写执行历史；持久化故障不影响调度。"""
@@ -820,8 +932,14 @@ class EdgeScheduler:
 
         affected = tuple(dict.fromkeys(str(job_uuid) for job_uuid in job_uuids))
         with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，执行重启事实须保留待恢复")
             for listener in tuple(self._execution_process_restarted_listeners):
                 listener(affected)
+            if self.time_scheduling_enabled:
+                # 重启只说明结果需要核实，不是物理结束或资源归还证据。
+                # 持久桥已登记核实门禁；保留在途身份和跨节点占用供回报结算。
+                return
             affected_workflow_ids = {
                 workflow_id
                 for workflow_id, run in self._workflows.items()
@@ -891,6 +1009,8 @@ class EdgeScheduler:
     def on_execution_connection_lost(self, job_uuids: tuple[str, ...]) -> None:
         """断线只打开待确认状态，不冒充运行进程重启。"""
         with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，连接中断事实须保留待恢复")
             for listener in tuple(self._execution_connection_lost_listeners):
                 listener(job_uuids)
 
@@ -1025,8 +1145,11 @@ class EdgeScheduler:
     def _notify_job_dispatch_accepted(self, job_id: str) -> None:
         """在执行适配器返回接受后同步推进持久作业与租约。"""
 
-        for listener in tuple(self._job_dispatch_accepted_listeners):
-            listener(job_id)
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，开始回执须保留待恢复")
+            for listener in tuple(self._job_dispatch_accepted_listeners):
+                listener(job_id)
 
     def _notify_job_dispatch_uncertain(self, job_id: str, reason: str) -> None:
         """在派发意图已提交但适配器未明确返回时记录物理不确定事实。"""
@@ -1037,14 +1160,20 @@ class EdgeScheduler:
     def _notify_job_cancel_accepted(self, job_id: str) -> None:
         """记录执行器已接受取消；该事实不释放在途作业或资源锁。"""
 
-        for listener in tuple(self._job_cancel_accepted_listeners):
-            listener(job_id)
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，取消回执须保留待恢复")
+            for listener in tuple(self._job_cancel_accepted_listeners):
+                listener(job_id)
 
     def _notify_job_cancel_uncertain(self, job_id: str, reason: str) -> None:
         """把取消拒绝、能力缺失或边界异常通知为物理不确定事实。"""
 
-        for listener in tuple(self._job_cancel_uncertain_listeners):
-            listener(job_id, reason)
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，取消不确定事实须保留待恢复")
+            for listener in tuple(self._job_cancel_uncertain_listeners):
+                listener(job_id, reason)
 
     def _notify_job_cancel_no_send(self, job_id: str) -> None:
         """通知持久层该作业可证明从未越过物理执行边界。"""
@@ -1086,8 +1215,11 @@ class EdgeScheduler:
     def on_job_feedback(self, job_id: str, sample: dict[str, Any]) -> None:
         """把 Edge 已提交反馈同步投递给工作流持久投影。"""
 
-        for listener in tuple(self._job_feedback_listeners):
-            listener(job_id, dict(sample))
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，反馈须保留待恢复")
+            for listener in tuple(self._job_feedback_listeners):
+                listener(job_id, dict(sample))
 
     def _notify_job_settled(
         self,
@@ -1121,6 +1253,8 @@ class EdgeScheduler:
         dispatch_gate: str | None = None,
     ) -> dict[str, Any]:
         with self._lock:
+            if self._closed:
+                raise RuntimeError("调度器已关闭，不能接收新工作流")
             if (
                 spec.workflow_id in self._workflows
                 or spec.workflow_id in self._workflow_spans
@@ -1481,6 +1615,10 @@ class EdgeScheduler:
             if run.state in self._TERMINAL_STATES:
                 raise ValueError(f"workflow {workflow_id} is terminal")
             run.dispatch_gate = "paused"
+            if self._time_scheduling is not None:
+                # 先撤销所有基于暂停前快照的候选；已在途 Job 仍由内核保留，
+                # 恢复时会以新的 gate/资源事实重新求解。
+                self._time_scheduling.invalidate()
             return {
                 "workflow_id": workflow_id,
                 "state": run.state.value,
@@ -1491,6 +1629,46 @@ class EdgeScheduler:
                 ),
                 "dispatched": [],
             }
+
+    def update_pending_job_param(
+        self,
+        workflow_id: str,
+        node_id: str,
+        job_id: str,
+        param: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """更新暂停任务中尚未派发节点的参数，并使内存运行态立即生效。
+
+        参数：``workflow_id``、``node_id`` 和 ``job_id`` 是同一冻结任务中的稳定
+        身份；``param`` 是已经合并好的最终参数对象。返回旧参数与新参数的副本，
+        供桥接层在持久化失败时回滚。异常：任务不存在、任务未暂停、节点已经进入
+        在途/终态或身份不一致时抛 ``ValueError``。此入口只修改动作参数，不改变
+        DAG 节点、边、资源计划或作业身份。
+        """
+
+        if not isinstance(param, Mapping):
+            raise ValueError("作业参数必须是对象")
+        with self._lock:
+            run = self._workflows.get(workflow_id)
+            if run is None:
+                raise ValueError(f"workflow {workflow_id} not found")
+            if run.dispatch_gate != "paused" or run.execution_mode != "normal":
+                raise ValueError("任务必须先暂停才能修改参数")
+            if job_id in self._inflight:
+                raise ValueError("作业已经下发，不能修改参数")
+            node = run.node(node_id)
+            if node is None:
+                raise ValueError(f"workflow node {node_id} not found")
+            if node.job_id and node.job_id != job_id:
+                raise ValueError("作业与工作流节点身份不一致")
+            state = run.node_state(node_id)
+            if state not in {NodeState.PENDING, NodeState.READY}:
+                raise ValueError("作业已经离开待运行状态，不能修改参数")
+            previous = deepcopy(node.param)
+            node.param = _merge_param_patch(node.param, param)
+            if self._time_scheduling is not None:
+                self._time_scheduling.invalidate()
+            return {"previous": previous, "param": deepcopy(node.param)}
 
     def resume_workflow(self, workflow_id: str) -> dict[str, Any]:
         """恢复普通任务的后续派发，继续复用同一 WorkflowRun。"""
@@ -1902,6 +2080,8 @@ class EdgeScheduler:
             # 结果不明不是失败终态。作业继续保持 running，同时保留 Scheduler
             # 的在途身份和动作资源占用，等待设备或人工完成物理对账。
             with self._lock:
+                if self._closed:
+                    raise RuntimeError("调度器已关闭，不确定结果须保留待恢复")
                 if job_id not in self._inflight:
                     logger.warning("[EdgeScheduler] unknown Job outcome: %s", job_id)
                     return {"dispatched": []}
@@ -2004,6 +2184,9 @@ class EdgeScheduler:
         跳过——节点按成功推进，但不把本节点预留结算为库存消耗。
         """
         with self._lock:
+            if self._closed:
+                # 执行端已保存的回执不能被空监听器列表误确认；重开后按原身份投影。
+                raise RuntimeError("调度器已关闭，完成结果须保留待恢复")
             job = self._inflight.get(job_id)
             if job is None:
                 logger.warning("[EdgeScheduler] unknown job finished: %s", job_id)
@@ -2303,6 +2486,8 @@ class EdgeScheduler:
         try:
             while True:
                 with self._reconcile_wakeup_lock:
+                    if self._closed:
+                        return dispatched
                     seen_generation = self._reconcile_generation
                 dispatched.extend(self.reschedule())
                 with self._reconcile_wakeup_lock:
@@ -2324,6 +2509,8 @@ class EdgeScheduler:
         """
 
         with self._reconcile_wakeup_lock:
+            if self._closed:
+                return []
             pending = self._pending_reconcile
             if pending is None or pending.done():
                 self._reconcile_generation += 1
@@ -2352,14 +2539,32 @@ class EdgeScheduler:
         失败原样传播；监听器在调度锁外运行，可把受阻任务安全注册到本调度器。
         """
 
-        with self._lock:
-            admission_retry_listeners = tuple(self._admission_retry_listeners)
-        for listener in admission_retry_listeners:
-            listener()
-        with self._lock:
-            return self._reschedule_locked()
+        thread_id = threading.get_ident()
+        with self._reconcile_condition:
+            if self._closed:
+                return []
+            self._active_reschedule_threads[thread_id] = self._active_reschedule_threads.get(thread_id, 0) + 1
+        try:
+            with self._lock:
+                admission_retry_listeners = tuple(self._admission_retry_listeners)
+            for listener in admission_retry_listeners:
+                if self._closed:
+                    return []
+                listener()
+            with self._lock:
+                return self._reschedule_locked()
+        finally:
+            with self._reconcile_condition:
+                remaining = self._active_reschedule_threads[thread_id] - 1
+                if remaining:
+                    self._active_reschedule_threads[thread_id] = remaining
+                else:
+                    del self._active_reschedule_threads[thread_id]
+                self._reconcile_condition.notify_all()
 
     def _reschedule_locked(self) -> list[dict[str, Any]]:
+        if self._closed:
+            return []
         with span(
             "workflow.task.reconcile",
             attributes={"scheduler.round": self._reschedule_count + 1},
@@ -2529,11 +2734,17 @@ class EdgeScheduler:
                 )
 
         if not ready:
+            if self._time_scheduling is not None:
+                self._time_scheduling.order(self, ready)
             return continued
 
         busy = self._busy_keys()
         held_resource_locks = self._held_resource_locks()
-        ordered = self._orderer.order(ready, OrderingContext(set(busy)))
+        ordered = (
+            self._time_scheduling.order(self, ready)
+            if self._time_scheduling is not None
+            else self._orderer.order(ready, OrderingContext(set(busy)))
+        )
         ordered.sort(
             key=lambda item: (
                 0 if self._continuation_resource_keys(item.workflow_id, item.node) else 1
@@ -3140,7 +3351,25 @@ class EdgeScheduler:
             )
             # 预估基于 sjson 覆写后的 resolved 参数：父节点经 gjson/sjson 传下来的
             # 实际值（如 time）直接决定声明式预估结果
-            estimated_s, estimate_source = self._estimator.estimate(action_key, resolved_args)
+            if self.time_scheduling_enabled:
+                timing = self._estimator.estimate_timing(
+                    action_key, resolved_args,
+                    device_id=selected_device_material_uuid or selected_device_id,
+                )
+                if timing.planned_s is None:
+                    # 自动调度没有可信时长时必须继续等待，避免把未知动作
+                    # 当成零时长放行。单步调试是操作者已经明确选择的目标，
+                    # 这里仍需提交真实派发意图；估时只用于日志和监控，不是
+                    # 设备准入条件，因此使用旧入口的安全默认值作为记录值。
+                    if self._step_targets.get(task.workflow_id) != task.node.id:
+                        continue
+                    estimated_s, estimate_source = self._estimator.estimate(
+                        action_key, resolved_args
+                    )
+                else:
+                    estimated_s, estimate_source = timing.planned_s, timing.source
+            else:
+                estimated_s, estimate_source = self._estimator.estimate(action_key, resolved_args)
             workflow_trace = self._workflow_spans.get(task.workflow_id)
             action_trace = start_detached_span(
                 "action.run",
@@ -3326,6 +3555,7 @@ class EdgeScheduler:
                         resource_acquire_set_id=task.node.resource_acquire_set_id,
                         estimated_s=estimated_s,
                         estimate_source=estimate_source,
+                        timing_origin_observed=True,
                     )
                     self._open_resource_intervals_for_job(
                         run,
@@ -4555,7 +4785,15 @@ class EdgeScheduler:
             state = "success" if success else "failed"
         # 只有正常成功的样本才进入历史统计（skip/失败/取消的时长不代表真实执行）
         if success and suc_type == "normal":
-            self._estimator.observe(job.device_action_key, actual_s)
+            if (self.time_scheduling_enabled and not self._durable_timing_learning
+                    and job.timing_origin_observed and not job.manual_action_dispatched):
+                self._estimator.observe(
+                    job.device_action_key, actual_s, params=job.resolved_args,
+                    device_id=job.device_material_uuid or job.device_id,
+                    observation_id=job.job_id,
+                )
+            elif not self.time_scheduling_enabled:
+                self._estimator.observe(job.device_action_key, actual_s)
         entry = {
             "job_id": job.job_id,
             "workflow_id": job.workflow_id,
@@ -4631,6 +4869,7 @@ class EdgeScheduler:
                 "window_s": window_s,
                 "running": running,
                 "completed": completed,
+                "time_schedule": self.time_schedule_snapshot(),
                 "estimator": {
                     "mode": self._estimator.mode,
                     "default_s": self._estimator.default_s,
@@ -4985,6 +5224,12 @@ class EdgeScheduler:
                     job_id,
                     "local_cancel_acceptance_unavailable",
                 )
+            if self._time_scheduling is not None:
+                # 取消改变了任务的可派发事实，与暂停同理：先撤销所有基于取消前
+                # 快照的候选，否则已取消任务的后续节点会继续留在 latest 里被读出，
+                # 直到下一次 reconcile 换掉 revision 才消失。已在途 Job 仍由内核
+                # 保留，等设备明确返回终态后再结算。
+                self._time_scheduling.invalidate()
             notifications = self._collect_terminal_notifications()
         self._fire_notifications(notifications)
         return True

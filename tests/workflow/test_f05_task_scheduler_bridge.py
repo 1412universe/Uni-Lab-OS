@@ -24,6 +24,7 @@ from unilabos.app.scheduler.inventory.station_resource import (
     TransferResourceFacts,
 )
 from unilabos.app.scheduler.service import EdgeScheduler
+from unilabos.app.scheduler.time_planning import RollingTimePlanner, TimePlanningConfig
 from unilabos.app.startup_mode import reset_startup_mode, set_startup_mode
 from unilabos.app.workflow_api import create_workflow_app
 from unilabos.workflow.service import WorkflowService
@@ -844,6 +845,59 @@ def test_pause_resume_command_api_updates_standard_task_control_status(
     finally:
         bridge.close()
         reset_startup_mode()
+
+
+def test_paused_task_can_update_only_pending_job_param(
+    store: WorkflowStore,
+) -> None:
+    """暂停后只允许修改尚未下发 Job，恢复时内存调度态同步新参数。"""
+
+    task = _seed_task(store, with_material=False, with_successor=True)
+    scheduler = EdgeScheduler(dispatcher=RecordingDispatcher())
+    bridge = _bridge(store, scheduler)
+    service = WorkflowService(store, task_scheduler_bridge=bridge)
+    client = TestClient(create_workflow_app(service))
+    try:
+        bridge.submit(task)
+        paused = client.post(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/commands",
+            json={"type": "pause", "idempotency_key": "pause-param"},
+        )
+        assert paused.status_code == 201, paused.text
+        updated = client.patch(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/jobs/{SECOND_JOB_UUID}/param",
+            json={"param": {"goal": {"volume": 12}}},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["data"]["job"]["param"] == {"goal": {"volume": 12}}
+        assert store.get_job(SECOND_JOB_UUID)["param"] == {"goal": {"volume": 12}}
+        # The same patch is applied to the in-memory WorkflowRun while the
+        # dispatch gate is closed; resuming must use this value rather than the
+        # stale execution-plan snapshot.
+        assert scheduler._workflows[TASK_UUID].node(SECOND_NODE_UUID).param == {
+            "goal": {"volume": 12}
+        }
+        merged = client.patch(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/jobs/{SECOND_JOB_UUID}/param",
+            json={"param": {"goal": {"temperature": 4}}},
+        )
+        assert merged.status_code == 200, merged.text
+        assert store.get_job(SECOND_JOB_UUID)["param"] == {
+            "goal": {"volume": 12, "temperature": 4}
+        }
+        assert scheduler._workflows[TASK_UUID].node(SECOND_NODE_UUID).param == {
+            "goal": {"volume": 12, "temperature": 4}
+        }
+
+        dispatched = client.patch(
+            f"/api/v1/workflow-tasks/{TASK_UUID}/jobs/{JOB_UUID}/param",
+            json={"param": {"goal": {"volume": 99}}},
+        )
+        assert dispatched.status_code == 200, dispatched.text
+        assert dispatched.json()["code"] == 3003
+        assert store.get_job(JOB_UUID)["param"] == {}
+    finally:
+        bridge.close()
 
 
 def _seed_two_node_debug_task(store: WorkflowStore) -> dict[str, Any]:
@@ -2746,6 +2800,34 @@ def test_execution_process_restart_skips_stale_task_and_converges_active_task(
     assert not jobs[JOB_UUID].get("uncertainty_reason")
     assert jobs[SECOND_JOB_UUID]["status"] == "canceled"
     assert store.get_task(TASK_UUID)["status"] == "failed"
+
+
+def test_time_scheduled_restart_ignores_orphan_edge_job(
+    store: WorkflowStore,
+) -> None:
+    """Edge Authority 的脏 Job 身份不能阻断时间排程恢复屏障。"""
+
+    _seed_task(store, with_material=False)
+    planner = RollingTimePlanner(
+        TimePlanningConfig(solve_seconds=0.1, refresh_seconds=0.05)
+    )
+    scheduler = EdgeScheduler(
+        dispatcher=RecordingDispatcher(),
+        time_planner=planner,
+    )
+    bridge = _bridge(store, scheduler)
+    orphan_job_uuid = "41000000-0000-4000-8000-000000000099"
+    try:
+        # 同时覆盖桥内遗留路由表；恢复完成后的取消超时扫描也必须能丢弃孤儿。
+        bridge._task_by_job[orphan_job_uuid] = TASK_UUID
+        scheduler.on_execution_process_restarted((orphan_job_uuid,))
+        assert bridge.error_control.recovering is False
+        # 非空的 Edge 身份列表限定恢复范围；列表全是孤儿时也不能扩大为
+        # WorkflowStore 中的全部重启候选。
+        assert store.get_task(TASK_UUID)["status"] == "pending"
+        assert not store.get_job(JOB_UUID).get("uncertainty_reason")
+    finally:
+        bridge.close()
 
 
 def test_restart_missing_predecessor_output_opens_error_without_physical_replay(
