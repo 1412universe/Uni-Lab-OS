@@ -304,8 +304,6 @@ def validate_candidate(snapshot: PlanningSnapshot, plan: CandidatePlan) -> tuple
             if not _conflicts(left[3], right[3]):
                 continue
             # 保管区间包含自身动作；自身并行动作之间仍检查真正的互斥。
-            if left[1] is None and right[1] in left[2]:
-                continue
             if right[1] is None and left[1] in right[2]:
                 continue
             # 同一 Task 内不同持续占用也可能互斥；只有区间自身的成员动作
@@ -348,11 +346,15 @@ def _greedy_feasible_plan(
     remaining = set(by_key)
     scheduled: dict[NodeKey, PlannedNode] = {}
     result: list[PlannedNode] = []
-    held: list[tuple[tuple[str, ...], int, int, set[NodeKey]]] = [
-        (hold.resources, 0, horizon, set(hold.members))
-        for hold in snapshot.holds
-        if hold.already_held and not hold.release_known
-    ]
+    # A hold is an interval in its own right.  The old fallback only copied
+    # ``already_held and not release_known`` holds here, so it could put an
+    # unrelated action into the gap between two members of a known interval.
+    # Keep the holds as data and derive their current interval from the nodes
+    # already placed below.  Until all members of a started, release-known hold
+    # are placed, conservatively keep it open to the horizon; the ready-node
+    # ordering below gives those members priority and closes the interval as
+    # soon as their end times are known.
+    holds = tuple(snapshot.holds)
 
     def earliest_start(key: NodeKey, option: PlanningAlternative) -> int:
         start = max([0, *(scheduled[parent].end_ms for parent in by_key[key].predecessors)])
@@ -360,9 +362,13 @@ def _greedy_feasible_plan(
             end = start + option.duration_ms
             conflicts = [
                 other_end
-                for resources, other_start, other_end, members in held
-                if key not in members and _conflicts(option.resources, resources)
-                and start < other_end and other_start < end
+                for hold in holds
+                if key not in hold.members
+                and _conflicts(option.resources, hold.resources)
+                for interval in (_hold_interval(hold),)
+                if interval is not None
+                for other_start, other_end in (interval,)
+                if start < other_end and other_start < end
             ]
             conflicts.extend(
                 other.end_ms
@@ -374,13 +380,45 @@ def _greedy_feasible_plan(
                 return start
             start = max(conflicts)
 
+    def _hold_interval(hold: PlanningHold) -> tuple[int, int] | None:
+        """Return the conservative interval known to the fallback so far."""
+
+        member_entries = [scheduled[key] for key in hold.members if key in scheduled]
+        if hold.already_held:
+            start = 0
+        elif not member_entries:
+            # A future scope has not started yet; an action can safely run
+            # before its first member.
+            return None
+        else:
+            start = min(item.start_ms for item in member_entries)
+        if hold.release_known and member_entries and len(member_entries) == len(hold.members):
+            end = max(item.end_ms for item in member_entries)
+        else:
+            end = horizon
+        return start, end
+
+    def _hold_member_priority(key: NodeKey) -> int:
+        """Finish an active hold before scheduling a foreign rival."""
+
+        for hold in holds:
+            members = set(hold.members)
+            scheduled_members = members & scheduled.keys()
+            if key in members and scheduled_members and len(scheduled_members) < len(members):
+                return 2
+        return 0
+
     # Topological order is deterministic and honours workflow dependencies.
     while remaining:
         ready = [key for key in remaining
                  if all(parent in scheduled for parent in by_key[key].predecessors)]
         if not ready:
             return None
-        key = min(ready, key=lambda item: (-by_key[item].priority, item))
+        key = min(ready, key=lambda item: (
+            -_hold_member_priority(item),
+            -by_key[item].priority,
+            item,
+        ))
         node = by_key[key]
         if node.fixed:
             option = node.alternatives[0]
@@ -461,8 +499,6 @@ def solve_snapshot(snapshot: PlanningSnapshot, config: TimePlanningConfig) -> Ca
             if not _conflicts(left[3], right[3]):
                 continue
             if left[1] is not None and left[1] == right[1]:
-                continue
-            if left[1] is None and right[1] in left[2]:
                 continue
             if right[1] is None and left[1] in right[2]:
                 continue
