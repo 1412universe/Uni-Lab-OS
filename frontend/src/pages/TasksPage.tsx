@@ -1462,7 +1462,9 @@ export function TasksPage({
             onSelectNode={selectNode}
             onViewResources={onViewResources}
           /> : <TaskMatrix
-            tasks={filtered}
+            // 列表接口只返回任务摘要；选中任务的详情查询会补齐 canDelete 和
+            // deleteBlockers，让矩阵中的删除按钮在资格确认后立即可用。
+            tasks={filtered.map((task) => selected?.uuid === task.uuid ? selected : task)}
             selectedId={selected?.uuid || ''}
             selectedNode={selectedNodeRef}
             onSelect={selectTask}
