@@ -1032,6 +1032,33 @@ describe('TasksPage', () => {
     expect(container.querySelectorAll('.matrix-trace-link, .matrix-trace-disabled')).toHaveLength(demoTasks.length)
   })
 
+  it('places the eligible delete action beside Trace in the matrix identity card', () => {
+    const deletableTask = {
+      ...demoTasks[0],
+      status: 'succeeded' as const,
+      executionStatus: 'succeeded' as const,
+      canDelete: true,
+      deleteBlockers: undefined,
+    }
+    const { container } = renderWithQuery(
+      <TasksPage
+        tasks={[deletableTask]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        onRefresh={vi.fn()}
+        onNotify={vi.fn()}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const deleteButton = screen.getByRole('button', { name: '删除任务' })
+    expect(deleteButton).toBeEnabled()
+    expect(deleteButton.closest('.matrix-task-cell')).toBeTruthy()
+    expect(deleteButton.closest('.selected-task-card')).toBeNull()
+    expect(container.querySelector('.task-delete-action-compact')).toContainElement(deleteButton)
+  })
+
   it('shows the authoritative task priority in each matrix identity card', () => {
     const tasks = [
       { ...demoTasks[0], priority: 'high' as const },

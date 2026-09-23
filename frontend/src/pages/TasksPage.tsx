@@ -265,6 +265,7 @@ function TaskMatrix({
   onOpenWorkflow,
   onNotify,
   writable,
+  onTaskDeleted,
   readyNodeUuids = new Set<string>(),
   selectedTaskControl,
   onViewResources,
@@ -277,6 +278,7 @@ function TaskMatrix({
   onOpenWorkflow: (target: WorkflowTarget) => void
   onNotify: (message: string) => void
   writable: boolean
+  onTaskDeleted: (taskUuid: string) => void
   readyNodeUuids?: ReadonlySet<string>
   selectedTaskControl?: ReactNode
   onViewResources?: (taskUuid: string) => void
@@ -345,6 +347,13 @@ function TaskMatrix({
                 ) : (
                   <button type="button" className="matrix-trace-disabled" disabled title="Trace 服务未配置">Trace</button>
                 )}
+                <TaskDeleteAction
+                  task={task}
+                  connected={writable}
+                  compact
+                  onNotify={onNotify}
+                  onDeleted={() => onTaskDeleted(task.uuid)}
+                />
                 {selectedId === task.uuid && selectedTaskControl ? (
                   <div
                     className="matrix-task-inline-control"
@@ -516,11 +525,13 @@ function TaskNodeInspector({ task, node, connected, onNotify, onClose }: { task:
 function TaskDeleteAction({
   task,
   connected,
+  compact = false,
   onNotify,
   onDeleted,
 }: {
   task: WorkflowTask
   connected: boolean
+  compact?: boolean
   onNotify: (message: string) => void
   onDeleted: () => void
 }) {
@@ -549,12 +560,13 @@ function TaskDeleteAction({
       ? ['正在读取服务端删除资格']
       : ['服务端尚未确认所有资源已释放']
   return (
-    <div className="task-delete-action">
+    <div className={`task-delete-action${compact ? ' task-delete-action-compact' : ''}`}>
       <div className="task-delete-action-row">
         <Button
           tone="danger"
           icon={mutation.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />}
           disabled={!connected || !task.canDelete || mutation.isPending}
+          title={!task.canDelete ? blockers.join('；') : '删除任务'}
           onClick={() => { mutation.reset(); setOpen(true) }}
         >
           删除任务
@@ -1460,6 +1472,13 @@ export function TasksPage({
             writable={connected}
             readyNodeUuids={selected?.uuid ? readyNodeUuids : new Set<string>()}
             selectedTaskControl={selectedTaskControl}
+            onTaskDeleted={(taskUuid) => {
+              if (selected?.uuid === taskUuid) {
+                setSelectedId('')
+                setSelectedNodeRef(undefined)
+                setSelectedStepNodeUuid('')
+              }
+            }}
             onViewResources={onViewResources}
           />
         ) : <EmptyState title="当前筛选没有任务" description="选择其他状态，或创建一个新的工作流任务。" />}
@@ -1497,16 +1516,18 @@ export function TasksPage({
                   <code>{selected.trace.traceId || selected.uuid}</code>
                 </a>
               ) : null}
-              <TaskDeleteAction
-                task={selected}
-                connected={connected}
-                onNotify={onNotify}
-                onDeleted={() => {
-                  setSelectedId('')
-                  setSelectedNodeRef(undefined)
-                  setSelectedStepNodeUuid('')
-                }}
-              />
+              {view === 'gantt' ? (
+                <TaskDeleteAction
+                  task={selected}
+                  connected={connected}
+                  onNotify={onNotify}
+                  onDeleted={() => {
+                    setSelectedId('')
+                    setSelectedNodeRef(undefined)
+                    setSelectedStepNodeUuid('')
+                  }}
+                />
+              ) : null}
               <TaskExecutionLocks
                 key={selected.uuid}
                 taskUuid={selected.uuid}

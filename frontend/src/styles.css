@@ -849,6 +849,10 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .task-delete-action { display: grid; gap: 5px; margin: 12px 0 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .task-delete-action-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .task-delete-action .button { min-height: 29px; }
+.task-delete-action-compact { align-self: start; min-width: 0; margin: 0; padding: 0; border-top: 0; }
+.task-delete-action-compact .task-delete-action-row { gap: 0; }
+.task-delete-action-compact .task-delete-blocked { display: none; }
+.task-delete-action-compact .button { min-height: 27px; padding: 0 8px; gap: 4px; border-radius: 7px; font-size: 8px; }
 .task-delete-blocked { color: #98a2b3; font-size: 8px; line-height: 1.35; }
 .task-delete-dialog { width: min(510px, 100%); max-height: calc(100vh - 48px); overflow: auto; background: #fff; border: 1px solid #e4e7ec; border-radius: 14px; box-shadow: 0 24px 64px rgba(16,24,40,.28); }
 .task-delete-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; padding: 17px 18px; border-bottom: 1px solid var(--line); }
