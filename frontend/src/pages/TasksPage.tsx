@@ -44,6 +44,7 @@ import {
   loadWorkflowTaskStepState,
   settleFailedMaterialTransfer,
   updateWorkflowTaskJobParam,
+  TaskCommandRequestError,
 } from '../lib/edgeClient'
 import type {
   ContractField,
@@ -65,6 +66,41 @@ import { TimeSchedulePanel } from '../components/TimeSchedulePanel'
 import { TaskGantt } from '../components/TaskGantt'
 
 type TaskFilter = 'all' | 'running' | 'waiting' | 'failed' | 'succeeded'
+
+type TaskCancelIntentState = 'pending' | 'accepted' | 'unknown'
+
+interface TaskCancelIntent {
+  taskUuid: string
+  idempotencyKey: string
+  state: TaskCancelIntentState
+}
+
+const taskCancelIntentStorageKey = 'unilab:task-cancel-intents'
+
+function readTaskCancelIntents(): Record<string, TaskCancelIntent> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.sessionStorage.getItem(taskCancelIntentStorageKey)
+    const parsed = raw ? JSON.parse(raw) as Record<string, TaskCancelIntent> : {}
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function storeTaskCancelIntents(intents: Record<string, TaskCancelIntent>) {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(taskCancelIntentStorageKey, JSON.stringify(intents))
+  } catch {
+    // sessionStorage 不可用时仍保留当前页状态。
+  }
+}
+
+function taskCommandUuid(prefix: string) {
+  return globalThis.crypto?.randomUUID?.()
+    || `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
 
 const TASK_IDENTITY_COLUMN_WIDTH = 300
 const TASK_NODE_COLUMN_WIDTH = 160
@@ -388,6 +424,74 @@ function TaskMatrix({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+function TaskCancelDialog({
+  task,
+  existingIntent,
+  connected,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  task: WorkflowTask
+  existingIntent?: TaskCancelIntent
+  connected: boolean
+  pending: boolean
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const activeNodes = task.nodes.filter((node) => node.status === 'running' || node.status === 'canceling')
+  const hasInFlight = activeNodes.length > 0
+  const [physicalAcknowledged, setPhysicalAcknowledged] = useState(!hasInFlight)
+
+  return (
+    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="task-dialog task-cancel-dialog" role="dialog" aria-modal="true" aria-labelledby="task-cancel-title" aria-describedby="task-cancel-description">
+        <form onSubmit={(event) => { event.preventDefault(); if (!hasInFlight || physicalAcknowledged) onConfirm() }}>
+          <header>
+            <div>
+              <span>TASK CANCELLATION</span>
+              <h2 id="task-cancel-title">{hasInFlight ? '停止后续调度并请求取消' : '取消任务'}</h2>
+              <p id="task-cancel-description">Task {task.uuid}</p>
+            </div>
+            <button type="button" aria-label="关闭任务取消确认" onClick={onClose}><X size={18} /></button>
+          </header>
+          <div className="dialog-content task-cancel-content">
+            {hasInFlight ? (
+              <div className="task-cancel-warning" role="alert">
+                <ShieldAlert size={18} />
+                <div>
+                  <strong>当前有 {activeNodes.length} 个设备动作已经开始</strong>
+                  <p>{activeNodes.slice(0, 2).map((node) => node.name).join('、')}。本操作会阻止后续节点，但设备动作是否停止取决于设备驱动；在收到明确终态前，执行锁会继续保留。</p>
+                </div>
+              </div>
+            ) : (
+              <div className="task-cancel-safe-note"><Check size={16} /><span>当前没有已开始的设备动作，未派发节点可以直接取消。</span></div>
+            )}
+            {existingIntent ? (
+              <div className="task-cancel-intent-note">
+                <Clock3 size={15} />
+                <span>{existingIntent.state === 'unknown' ? '上一次取消请求结果未知。确认后会复用同一个请求编号，不会重复创建物理动作。' : '取消请求已经提交，确认后会复用同一个请求编号查询/重放。'}</span>
+              </div>
+            ) : null}
+            {hasInFlight ? (
+              <label className="task-cancel-confirmation">
+                <input type="checkbox" checked={physicalAcknowledged} onChange={(event) => setPhysicalAcknowledged(event.target.checked)} />
+                <span>我知道当前设备动作可能继续运行，会按现场安全流程确认设备状态。</span>
+              </label>
+            ) : null}
+          </div>
+          <footer>
+            <Button type="button" onClick={onClose} disabled={pending}>返回</Button>
+            <Button type="submit" tone="danger" icon={pending ? <LoaderCircle className="spin" size={14} /> : <Square size={14} />} disabled={!connected || pending || (hasInFlight && !physicalAcknowledged)}>
+              {pending ? '正在提交' : existingIntent?.state === 'unknown' ? '确认原取消请求' : hasInFlight ? '停止后续调度并提交取消' : '确认取消任务'}
+            </Button>
+          </footer>
+        </form>
+      </section>
     </div>
   )
 }
@@ -1287,6 +1391,8 @@ export function TasksPage({
   const [selectedId, setSelectedId] = useState(targetTaskUuid || tasks[0]?.uuid || '')
   const [selectedNodeRef, setSelectedNodeRef] = useState<{ taskUuid: string; nodeUuid: string }>()
   const [selectedStepNodeUuid, setSelectedStepNodeUuid] = useState('')
+  const [cancelIntents, setCancelIntents] = useState<Record<string, TaskCancelIntent>>(() => readTaskCancelIntents())
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false)
   const interventionsQuery = useQuery({
     queryKey: ['workflow-interventions'],
     queryFn: ({ signal }) => loadWorkflowInterventions(signal),
@@ -1347,6 +1453,7 @@ export function TasksPage({
   const runningTasks = tasks.filter((task) => task.nodes.some((node) => node.status === 'running' || node.status === 'canceling'))
   const showStepControls = startupMode === 'develop'
   const selectedIsTerminal = Boolean(selected && ['succeeded', 'failed', 'canceled', 'timeout'].includes(selected.executionStatus || selected.status))
+  const selectedCancelIntent = selected ? cancelIntents[selected.uuid] : undefined
   const stepStateQuery = useQuery({
     queryKey: ['workflow-task-step-state', selected?.uuid],
     queryFn: ({ signal }) => loadWorkflowTaskStepState(selected!.uuid, signal),
@@ -1369,25 +1476,78 @@ export function TasksPage({
       setSelectedStepNodeUuid('')
     }
   }, [stepState, selectedStepNodeUuid])
+  const updateCancelIntent = useCallback((taskUuid: string, intent?: TaskCancelIntent) => {
+    setCancelIntents((previous) => {
+      const next = { ...previous }
+      if (intent) next[taskUuid] = intent
+      else delete next[taskUuid]
+      storeTaskCancelIntents(next)
+      return next
+    })
+  }, [])
+
   const controlMutation = useMutation({
-    mutationFn: ({ type, targetNodeUuid }: { type: 'step' | 'switch_to_step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string }) => {
+    mutationFn: ({ type, targetNodeUuid, idempotencyKey }: { type: 'step' | 'switch_to_step' | 'pause' | 'resume' | 'cancel'; targetNodeUuid?: string; idempotencyKey?: string }) => {
       if (!connected) throw new Error('Edge 未连接，写操作已暂停')
-      return commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid)
+      return commandWorkflowTask(selected?.uuid || '', type, targetNodeUuid, idempotencyKey)
     },
-    onSuccess: (_command, variables) => {
+    onSuccess: (command, variables) => {
       const labels = {
         step: '单步命令已提交',
         switch_to_step: '已进入单步切换',
         pause: '任务暂停命令已提交',
         resume: '任务继续命令已提交',
-        cancel: '取消命令已提交',
+        cancel: '取消请求已提交，正在等待设备终态',
       }
-      onNotify(labels[variables.type])
+      if (variables.type === 'cancel' && selected?.uuid) {
+        updateCancelIntent(selected.uuid, {
+          taskUuid: selected.uuid,
+          idempotencyKey: variables.idempotencyKey || taskCommandUuid('task-cancel'),
+          state: command.status === 'succeeded' ? 'accepted' : 'pending',
+        })
+        setCancelDialogOpen(false)
+        onNotify(command.status === 'succeeded' ? labels.cancel : '取消请求已记录，等待状态确认')
+      } else {
+        onNotify(labels[variables.type])
+      }
       void queryClient.invalidateQueries({ queryKey: ['edge-tasks'] }, { cancelRefetch: false })
       void queryClient.invalidateQueries({ queryKey: ['workflow-task-step-state', selected?.uuid] })
+      if (selected?.uuid) {
+        void queryClient.invalidateQueries({ queryKey: ['workflow-task-detail', selected.uuid] }, { cancelRefetch: false })
+        void queryClient.invalidateQueries({ queryKey: ['workflow-task-execution-locks', selected.uuid] }, { cancelRefetch: false })
+      }
     },
-    onError: (error) => onNotify(`任务控制失败：${error instanceof Error ? error.message : '未知错误'}`),
+    onError: (error, variables) => {
+      if (variables.type === 'cancel' && selected?.uuid) {
+        if (error instanceof TaskCommandRequestError && error.outcomeUnknown) {
+          const existing = cancelIntents[selected.uuid]
+          updateCancelIntent(selected.uuid, {
+            taskUuid: selected.uuid,
+            idempotencyKey: variables.idempotencyKey || existing?.idempotencyKey || taskCommandUuid('task-cancel'),
+            state: 'unknown',
+          })
+          setCancelDialogOpen(false)
+          onNotify('取消请求结果未知，请确认原取消请求；当前设备仍可能运行')
+          return
+        }
+        updateCancelIntent(selected.uuid)
+        setCancelDialogOpen(false)
+      }
+      onNotify(`任务控制失败：${error instanceof Error ? error.message : '未知错误'}`)
+    },
   })
+
+  const submitCancel = useCallback(() => {
+    if (!selected) return
+    const existing = cancelIntents[selected.uuid]
+    const intent = existing || {
+      taskUuid: selected.uuid,
+      idempotencyKey: taskCommandUuid('task-cancel'),
+      state: 'pending' as const,
+    }
+    updateCancelIntent(selected.uuid, { ...intent, state: 'pending' })
+    controlMutation.mutate({ type: 'cancel', idempotencyKey: intent.idempotencyKey })
+  }, [cancelIntents, controlMutation, selected, updateCancelIntent])
 
   const counts: Record<TaskFilter, number> = {
     all: tasks.length,
@@ -1456,7 +1616,14 @@ export function TasksPage({
             <Button icon={<Play size={12} />} disabled={!connected || controlMutation.isPending || Boolean(stepState?.inFlightJobCount)} onClick={() => controlMutation.mutate({ type: 'resume' })}>继续自动运行</Button>
           </>
         ) : null}
-        <Button tone="danger" icon={<Square size={12} />} disabled={!connected || controlMutation.isPending} onClick={() => controlMutation.mutate({ type: 'cancel' })}>取消任务</Button>
+        <Button
+          tone="danger"
+          icon={<Square size={12} />}
+          disabled={!connected || controlMutation.isPending || selectedCancelIntent?.state === 'pending' || selectedCancelIntent?.state === 'accepted'}
+          onClick={() => setCancelDialogOpen(true)}
+        >
+          {selectedCancelIntent?.state === 'unknown' ? '确认原取消请求' : selectedCancelIntent?.state === 'accepted' ? '等待取消终态' : selectedCancelIntent?.state === 'pending' ? '正在提交取消' : '取消任务'}
+        </Button>
       </div>
       {ordinaryTaskPaused ? <small className="task-step-inline-note">点击一个待运行节点，在节点详情的“实际运行参数”区域修改参数。</small> : null}
     </div>
@@ -1617,6 +1784,16 @@ export function TasksPage({
       </section>
 
       {openIntervention ? <ErrorPolicyDialog intervention={openIntervention} connected={connected} onNotify={onNotify} /> : null}
+      {cancelDialogOpen && selected ? (
+        <TaskCancelDialog
+          task={selected}
+          existingIntent={selectedCancelIntent}
+          connected={connected}
+          pending={controlMutation.isPending}
+          onClose={() => setCancelDialogOpen(false)}
+          onConfirm={submitCancel}
+        />
+      ) : null}
 
     </div>
   )
