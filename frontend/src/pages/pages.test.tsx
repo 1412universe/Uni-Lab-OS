@@ -8,7 +8,10 @@ import { OperationsPage } from './OperationsPage'
 import { serialiseTaskInput, TasksPage } from './TasksPage'
 import { WorkflowsPage } from './WorkflowsPage'
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.unstubAllGlobals()
+  window.sessionStorage.clear()
+})
 
 function response(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as Response
@@ -711,6 +714,11 @@ describe('TasksPage', () => {
     expect(cancel).toBeEnabled()
     fireEvent.click(cancel)
 
+    const cancelDialog = screen.getByRole('dialog', { name: '停止后续调度并请求取消' })
+    expect(within(cancelDialog).getByText(/当前有 1 个设备动作已经开始/)).toBeInTheDocument()
+    fireEvent.click(within(cancelDialog).getByRole('checkbox'))
+    fireEvent.click(within(cancelDialog).getByRole('button', { name: '停止后续调度并提交取消' }))
+
     await waitFor(() => expect(cancel).toBeDisabled())
     const commands = fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
     expect(commands).toHaveLength(1)
@@ -721,9 +729,54 @@ describe('TasksPage', () => {
     })
 
     completeCancel(response({ code: 0, data: { status: 'succeeded', result: {} } }))
-    await waitFor(() => expect(onNotify).toHaveBeenCalledWith('取消命令已提交'))
-    expect(cancel).toBeEnabled()
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith('取消请求已提交，正在等待设备终态'))
+    expect(cancel).toHaveTextContent('等待取消终态')
     expect(fetchMock.mock.calls.some(([input]) => String(input).includes('/step-state'))).toBe(false)
+  })
+
+  it('reuses the same idempotency key when the cancellation result is unknown', async () => {
+    const task = { ...demoTasks[0], uuid: 'unknown-cancel-task' }
+    const onNotify = vi.fn()
+    let attempt = 0
+    const bodies: Record<string, unknown>[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith(`/workflow-tasks/${task.uuid}/commands`) && init?.method === 'POST') {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        attempt += 1
+        if (attempt === 1) throw new Error('connection lost')
+        return response({ code: 0, data: { status: 'succeeded', result: {} } })
+      }
+      if (String(input).endsWith('/execution-locks')) return response({ code: 0, data: { locks: [] } })
+      throw new Error(`Unexpected URL: ${String(input)}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    renderWithQuery(
+      <TasksPage
+        tasks={[task]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        startupMode="product"
+        onRefresh={vi.fn()}
+        onNotify={onNotify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '取消任务' }))
+    const firstDialog = screen.getByRole('dialog', { name: '停止后续调度并请求取消' })
+    fireEvent.click(within(firstDialog).getByRole('checkbox'))
+    fireEvent.click(within(firstDialog).getByRole('button', { name: '停止后续调度并提交取消' }))
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith('取消请求结果未知，请确认原取消请求；当前设备仍可能运行'))
+
+    const retryButton = screen.getByRole('button', { name: '确认原取消请求' })
+    fireEvent.click(retryButton)
+    const retryDialog = screen.getByRole('dialog', { name: '停止后续调度并请求取消' })
+    fireEvent.click(within(retryDialog).getByRole('checkbox'))
+    fireEvent.click(within(retryDialog).getByRole('button', { name: '确认原取消请求' }))
+    await waitFor(() => expect(onNotify).toHaveBeenCalledWith('取消请求已提交，正在等待设备终态'))
+    expect(bodies).toHaveLength(2)
+    expect(bodies[0].idempotency_key).toBe(bodies[1].idempotency_key)
   })
 
   it.each([

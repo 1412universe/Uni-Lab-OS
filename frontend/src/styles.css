@@ -1089,6 +1089,21 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 .dialog-warning { display: flex; align-items: center; gap: 7px; padding: 11px; color: #975a0c; background: var(--amber-soft); border-radius: 9px; font-size: 10px; }
 .task-dialog > form > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; background: #f9fafb; border-top: 1px solid var(--line); }
 .task-dialog .button:disabled { cursor: not-allowed; opacity: .48; transform: none; }
+.task-cancel-dialog { width: min(560px, 100%); }
+.task-cancel-dialog > form > header { align-items: center; padding: 18px 20px; }
+.task-cancel-dialog > form > header span { color: #b42318; }
+.task-cancel-dialog > form > header h2 { font-size: 18px; }
+.task-cancel-dialog > form > header p { font: 8px 'JetBrains Mono', monospace; }
+.task-cancel-content { display: grid; gap: 12px; }
+.task-cancel-warning { display: flex; align-items: flex-start; gap: 9px; padding: 11px; color: #912f40; background: #fff5f6; border: 1px solid #fecdd3; border-radius: 9px; font-size: 10px; line-height: 1.55; }
+.task-cancel-warning strong { display: block; color: #7a2e3b; }
+.task-cancel-warning p { margin: 4px 0 0; }
+.task-cancel-safe-note, .task-cancel-intent-note { display: flex; align-items: flex-start; gap: 7px; padding: 10px 11px; border-radius: 9px; font-size: 9px; line-height: 1.5; }
+.task-cancel-safe-note { color: #067647; background: #ecfdf3; border: 1px solid #abefc6; }
+.task-cancel-intent-note { color: #175cd3; background: #eff8ff; border: 1px solid #b2ddff; }
+.task-cancel-confirmation { display: flex; align-items: flex-start; gap: 8px; color: #344054; font-size: 9px; line-height: 1.5; }
+.task-cancel-confirmation input { flex: none; width: 14px; height: 14px; margin-top: 1px; accent-color: #b42318; }
+.task-cancel-dialog > form > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; background: #f9fafb; border-top: 1px solid var(--line); }
 .error-policy-dialog { width: min(560px, 100%); }
 .error-policy-dialog > form > header { align-items: center; padding: 18px 20px; }
 .error-policy-dialog > form > header h2 { font-size: 18px; }
