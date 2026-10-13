@@ -1,8 +1,8 @@
 """
-锁紧模块 设备驱动
+锁紧模块设备驱动。
 
-基于 gn_solid_weighing / gn_standard_oven 同构 OPC 握手；
-单点调试逻辑对齐 locking_mechanism.py；协议 opcua_gn1.3.6.csv「锁紧模块」（前缀 Lock_）。
+协议：opcua_gn1.3.9.csv「锁紧模块」（前缀 Lock_）；握手与 gn_quick_carrier_exchange 一致：
+    清 CompleteFB → 写参 → Lock_CmdType → Lock_CmdTrig=1 → 等 Lock_CompleteFB=1 → 清零。
 
 对外仅暴露 execute_command（Lock_CmdType + 写参）；测试流程预设供本地调试。
 
@@ -28,12 +28,14 @@ from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 # CSV 写 DOUBLE，汇川 OPC 实际多为 FLOAT(REAL)；按 Double 写会 BadTypeMismatch
 _JAW_FLOAT_NODES = ("Lock_JawPosition", "Lock_JawForce")
 
-DEFAULT_XLSX_PATH = os.path.join(
+DEFAULT_CSV_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.6.csv",
+    "opcua_gn1.3.9.csv",
 )
+# 注册表 init 仍引用旧名 xlsx_path，与 csv_path 同义
+DEFAULT_XLSX_PATH = DEFAULT_CSV_PATH
 
-# OPC UA 1.3.6 Lock_CmdType
+# Lock_CmdType（opcua_gn1.3.7+ / 1.3.9 一致）
 LOCK_CMD_LABELS = {
     1: "X向左",
     2: "X向右",
@@ -109,7 +111,7 @@ TEST_FLOW_PRESETS = [
 
 
 _EXECUTE_CMD_DOC = (
-    "按 Lock_CmdType 执行 OPC UA 1.3.6 指令。"
+    "按 Lock_CmdType 执行 opcua_gn1.3.9 指令。"
     "1=X左 2=X右 3=Y左 4=Y右 5=Z1左 6=Z1右 7=Z2左 8=Z2右 "
     "9=夹爪夹取 10=夹爪放置 11=电批拧紧 12=电批拧松 13=夹爪夹紧 14=夹爪松开 16=复位。"
     "轴运动写对应 PosSet/Speed；夹取/放置/电批另写 jaw_position/jaw_force。"
@@ -120,7 +122,7 @@ _EXECUTE_CMD_DOC = (
     id="gn_locking_mechanism",
     display_name="锁紧模块",
     category=["workstation"],
-    description="GN 锁紧模块：OPC UA 1.3.6，按完成反馈边沿执行命令",
+    description="GN 锁紧模块：opcua_gn1.3.9，按完成反馈边沿执行命令",
     icon="",
     version="2.0.0",
 )
@@ -137,18 +139,14 @@ class LockingMechanismDevice(GNStationClient):
         "Lock_Z1PosSet": "Lock_Z1PosFB",
         "Lock_Z2PosSet": "Lock_Z2PosFB",
     }
-    # 仅等 CompleteFB（夹紧/松开/复位）
-    _COMPLETE_FB_ONLY_CMDS = frozenset({
-        int(LockCommand.JAW_CLAMP),
-        int(LockCommand.JAW_RELEASE),
-        int(LockCommand.RESET),
-    })
+    # 运动/夹取/电批类：CompleteFB 超时后可按位置反馈兜底
+    _POSITION_COMMANDS = frozenset(range(1, 13))
 
     def __init__(
         self,
         url: str,
-        xlsx_path: str = DEFAULT_XLSX_PATH,
-        csv_path: str = None,
+        csv_path: str = DEFAULT_CSV_PATH,
+        xlsx_path: str = None,
         username: str = None,
         password: str = None,
         use_subscription: bool = True,
@@ -157,7 +155,7 @@ class LockingMechanismDevice(GNStationClient):
         *args,
         **kwargs,
     ):
-        path = csv_path or xlsx_path
+        path = csv_path or xlsx_path or DEFAULT_CSV_PATH
         super().__init__(
             url=url,
             csv_path=path,
@@ -169,9 +167,7 @@ class LockingMechanismDevice(GNStationClient):
             *args,
             **kwargs,
         )
-        self._connection_check_interval = 5.0
         self._command_lock = threading.Lock()
-        # 夹爪位置/力度按 FLOAT 写入，避免 CSV DOUBLE 与 PLC REAL 类型不匹配
         self._fix_jaw_node_dtypes()
 
     @action(auto_prefix=True, description=_EXECUTE_CMD_DOC)
@@ -190,8 +186,12 @@ class LockingMechanismDevice(GNStationClient):
         jaw_force: Optional[float] = None,
         timeout: float = 180.0,
     ) -> dict:
-        """唯一注册动作：写参 → CmdType → CmdTrig → 等 CompleteFB。"""
+        """唯一注册动作：持锁间隔 → 清 CompleteFB → 写参 → CmdType → CmdTrig → 等 CompleteFB。"""
         cmd = int(cmd_type)
+        if cmd not in LOCK_CMD_LABELS:
+            raise ValueError(
+                f"不支持的 Lock_CmdType={cmd}，有效: {sorted(LOCK_CMD_LABELS.keys())}"
+            )
         if timeout is None or float(timeout) <= 0:
             timeout = 180.0
         setpoints = self._build_setpoints(
@@ -199,8 +199,13 @@ class LockingMechanismDevice(GNStationClient):
             x_speed=x_speed, y_speed=y_speed, z1_speed=z1_speed, z2_speed=z2_speed,
             jaw_position=jaw_position, jaw_force=jaw_force,
         )
-        label = LOCK_CMD_LABELS.get(cmd, f"CmdType={cmd}")
-        return self._run(cmd, label, setpoints, timeout=float(timeout))
+        return self._run(
+            cmd_type=cmd,
+            description=LOCK_CMD_LABELS[cmd],
+            setpoints=setpoints,
+            timeout=float(timeout),
+            allow_position_fallback=cmd in self._POSITION_COMMANDS,
+        )
 
     @not_action
     def _fix_jaw_node_dtypes(self) -> None:
@@ -248,17 +253,25 @@ class LockingMechanismDevice(GNStationClient):
         description: str,
         setpoints: Optional[dict] = None,
         timeout: float = 180.0,
+        allow_position_fallback: bool = False,
     ) -> dict:
         with self._command_lock:
+            # 云端连续 job 时避免上一条未完成就写 Set / 清 CompleteFB
+            time.sleep(5)
+            if not self.set_node_value(self.COMPLETE_NODE, 0):
+                logger.warning(
+                    f"锁紧模块：{self.COMPLETE_NODE} 预清零失败（可能只读或链路异常），继续下发"
+                )
             logger.info(f"锁紧模块：{description} (CmdType={cmd_type})")
             if setpoints:
                 for node, value in setpoints.items():
-                    if not self._opc_write(node, value):
+                    if not self.set_node_value(node, value):
                         raise ValueError(f"写入 {node}={value} 失败")
             return self._trigger_and_wait(
                 cmd_type,
                 description,
-                setpoints=setpoints,
+                setpoints=setpoints or {},
+                allow_position_fallback=allow_position_fallback,
                 timeout=timeout,
             )
 
@@ -267,38 +280,40 @@ class LockingMechanismDevice(GNStationClient):
         self,
         cmd_type: int,
         description: str,
-        setpoints: Optional[dict] = None,
-        timeout: float = 180.0,
+        setpoints: dict,
+        allow_position_fallback: bool,
+        timeout: float,
     ) -> dict:
-        """下发 CmdType → CmdTrig=1，等待 CompleteFB=1 后清理（同固体加样）。"""
+        """下发 CmdType → CmdTrig=1，等待 CompleteFB=1 后清理。"""
         if timeout <= 0:
             raise ValueError("timeout 必须大于 0")
-        if not self._opc_write(self.CMD_TYPE_NODE, int(cmd_type)):
+        self.set_node_value(self.CMD_TRIG_NODE, 0)
+        if not self.set_node_value(self.CMD_TYPE_NODE, int(cmd_type)):
             raise ValueError(f"Lock_CmdType={cmd_type} 写入失败")
-        if not self._opc_write(self.CMD_TRIG_NODE, 1):
+        if not self.set_node_value(self.CMD_TRIG_NODE, 1):
             raise ValueError("Lock_CmdTrig=1 写入失败")
 
         completed = False
         try:
-            if int(cmd_type) in self._COMPLETE_FB_ONLY_CMDS:
-                completed = self._wait_complete_value(
-                    expected=1,
-                    timeout=timeout,
-                    description=f"{description}完成",
-                )
-            else:
-                completed = self._wait_motion_complete(
-                    setpoints=setpoints or {},
-                    timeout=timeout,
-                    description=f"{description}完成",
-                )
+            completed = self._wait_until_true(
+                self.COMPLETE_NODE,
+                timeout=timeout,
+                description=f"{description}完成",
+            )
+            if not completed and allow_position_fallback:
+                targets = self._position_targets(setpoints)
+                if targets and self._positions_reached(targets):
+                    logger.warning(
+                        f"{description}：CompleteFB 未回 1，但位置已到位，作超时兜底"
+                    )
+                    completed = True
             if not completed:
                 raise ValueError(f"{description}失败，Lock_CompleteFB 未变为 1")
         finally:
-            trigger_cleared = self._opc_write(self.CMD_TRIG_NODE, 0)
-            command_cleared = self._opc_write(self.CMD_TYPE_NODE, 0)
-            trigger_value = self._opc_read(self.CMD_TRIG_NODE, force_read=True)
-            command_value = self._opc_read(self.CMD_TYPE_NODE, force_read=True)
+            trigger_cleared = self.set_node_value(self.CMD_TRIG_NODE, 0)
+            command_cleared = self.set_node_value(self.CMD_TYPE_NODE, 0)
+            trigger_value = self.get_node_value(self.CMD_TRIG_NODE, force_read=True)
+            command_value = self.get_node_value(self.CMD_TYPE_NODE, force_read=True)
             logger.info(
                 f"锁紧模块命令清理：CmdTrig={trigger_value!r}，CmdType={command_value!r}"
             )
@@ -313,7 +328,6 @@ class LockingMechanismDevice(GNStationClient):
                     f"Lock_CmdTrig={trigger_value!r}, Lock_CmdType={command_value!r}"
                 )
 
-        logger.info(f"{description}完成")
         self._log_status(f"{description}后")
         return {
             "success": True,
@@ -322,7 +336,28 @@ class LockingMechanismDevice(GNStationClient):
         }
 
     @not_action
-    def _position_targets_from_setpoints(self, setpoints: dict) -> dict:
+    def _wait_until_true(
+        self,
+        node_name: str,
+        timeout: float = 180.0,
+        interval: float = 0.2,
+        description: str = None,
+    ) -> bool:
+        desc = description or node_name
+        logger.info(f"等待 {desc}（节点: {node_name}）...")
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            value = self.get_node_value(node_name, force_read=True)
+            if value:
+                logger.info(f"✓ {desc}（[{node_name}]={value}）")
+                return True
+            time.sleep(interval)
+        value = self.get_node_value(node_name, force_read=True)
+        logger.error(f"✗ 等待 {desc} 超时（{timeout}s，[{node_name}]={value!r}）")
+        return False
+
+    @not_action
+    def _position_targets(self, setpoints: dict) -> dict:
         targets = {}
         for setpoint_node, feedback_node in self.POSITION_NODES.items():
             if setpoint_node not in setpoints:
@@ -346,7 +381,7 @@ class LockingMechanismDevice(GNStationClient):
         last_values = {}
         while time.monotonic() - start < sample_timeout:
             last_values = {
-                node: self._opc_read(node, force_read=True)
+                node: self.get_node_value(node, force_read=True)
                 for node in position_targets
             }
             all_reached = all(
@@ -360,73 +395,6 @@ class LockingMechanismDevice(GNStationClient):
                 return True
             time.sleep(interval)
         logger.warning(f"位置兜底未满足，当前={last_values}，目标={position_targets}")
-        return False
-
-    @not_action
-    def _wait_motion_complete(
-        self,
-        setpoints: dict,
-        timeout: float,
-        description: str = "",
-    ) -> bool:
-        """运动类命令：优先等 CompleteFB=1，超时后再用位置反馈兜底。"""
-        position_targets = self._position_targets_from_setpoints(setpoints)
-        logger.info(
-            f"等待 {description}（{self.COMPLETE_NODE}=1"
-            + (f"，超时后位置兜底 {position_targets}" if position_targets else "")
-            + "）..."
-        )
-        if self._wait_complete_value(
-            expected=1,
-            timeout=timeout,
-            description=description,
-        ):
-            return True
-        if position_targets and self._positions_reached(position_targets):
-            logger.warning(
-                f"{description}：{self.COMPLETE_NODE} 未回 1，但位置已到位，作超时兜底"
-            )
-            return True
-        complete = self._opc_read(self.COMPLETE_NODE, force_read=True)
-        logger.error(
-            f"✗ 等待 {description} 超时（{timeout}s，{self.COMPLETE_NODE}={complete!r}）"
-        )
-        return False
-
-    @not_action
-    def _wait_complete_value(
-        self,
-        expected: int,
-        timeout: float,
-        interval: float = 0.05,
-        description: str = "",
-    ) -> bool:
-        logger.info(
-            f"等待 {description}（{self.COMPLETE_NODE}={expected}）..."
-        )
-        start = time.monotonic()
-        read_fail_streak = 0
-        while time.monotonic() - start < timeout:
-            value = self._opc_read(self.COMPLETE_NODE, force_read=True)
-            if value is None:
-                read_fail_streak += 1
-                if read_fail_streak >= 3:
-                    logger.error(
-                        f"✗ {description}中止：{self.COMPLETE_NODE} 连续读取失败，"
-                        "OPC 连接已断开，请退出并重启脚本"
-                    )
-                    return False
-            else:
-                read_fail_streak = 0
-                if value == expected:
-                    logger.info(f"✓ {description}（{self.COMPLETE_NODE}={value}）")
-                    return True
-            time.sleep(interval)
-        value = self._opc_read(self.COMPLETE_NODE, force_read=True)
-        logger.error(
-            f"✗ 等待 {description} 超时（{timeout}s，"
-            f"{self.COMPLETE_NODE}={value!r}，期望={expected}）"
-        )
         return False
 
     @not_action
@@ -476,7 +444,7 @@ if __name__ == "__main__":
 
     dev = LockingMechanismDevice(
         url=LOCKING_URL,
-        xlsx_path=DEFAULT_XLSX_PATH,
+        csv_path=DEFAULT_CSV_PATH,
         use_subscription=False,
     )
     time.sleep(2)

@@ -24,8 +24,8 @@ DEFAULT_XLSX_PATH = os.path.join(
     "opcua_gn1.3.9.csv",
 )
 
-# 加料(CmdType=11) 重量容差：目标 ±5% 视为完成
-DISPENSE_WEIGHT_TOLERANCE = 0.05
+# 加料(CmdType=11) 重量容差：目标 ±0.5% 视为完成
+DISPENSE_WEIGHT_TOLERANCE = 0.005
 
 # opcua_gn1.3.9 Solid_CmdType
 SOLID_CMD_LABELS = {

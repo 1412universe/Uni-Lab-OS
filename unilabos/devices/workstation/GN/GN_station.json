@@ -7,6 +7,7 @@
                 "gn_robotic_arm",
                 "gn_centrifuge_tube_liquid_handling",
                 "gn_quick_carrier_exchange",
+                "gn_locking_mechanism",
                 "gn_solid_weighing",
                 "gn_rotary_stack",
                 "gn_centrifuge",
@@ -117,6 +118,32 @@
             "data": {}
         },
         {
+            "id": "gn_locking_mechanism",
+            "name": "锁紧模块",
+            "children": [],
+            "parent": "gn_workstation",
+            "type": "device",
+            "class": "gn_locking_mechanism",
+            "position": {
+                "x": 0,
+                "y": 0,
+                "z": 0
+            },
+            "pose": {
+                "size": {
+                    "width": 2110,
+                    "height": 90,
+                    "depth": 400
+                }
+            },
+            "config": {
+                "url": "opc.tcp://192.168.6.6:4840",
+                "csv_path": "opcua_gn1.3.7.csv",
+                "use_subscription": false
+            },
+            "data": {}
+        },
+        {
             "id": "gn_solid_weighing",
             "name": "固体加样",
             "children": [],
@@ -189,7 +216,7 @@
             },
             "config": {
                 "url": "opc.tcp://192.168.6.6:4840",
-                "csv_path": "opcua_gn1.3.7.csv",
+                "csv_path": "opcua_gn1.3.9.csv",
                 "use_subscription": false
             },
             "data": {}

@@ -12,7 +12,7 @@ serialize 链路使用。
 from __future__ import annotations
 
 import re
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 from typing_extensions import TypedDict
 
@@ -200,6 +200,48 @@ def same_liquid_via_liquids_pair(cur_well: Any, next_well: Any) -> bool:
     if not is_known_liquid_name(cur_name) or not is_known_liquid_name(next_name):
         return False
     return cur_name == next_name
+
+
+def compact_liquid_history_display(well: Any) -> None:
+    """把 ``tracker.liquid_history`` 压成当前终态（用于整板 display 同步后上报）。
+
+    PLR ``liquids`` setter / ``set_volume`` 会追加 ``[-旧量, +新量]`` 审计对；
+    滴定多轮或重复 reflect 后 history 可达数千条，资源树 PUT 时 JSON 暴涨。
+    本函数按 ``tracker.liquids``（由 history 汇总）重写为少量正向条目，不改变当前体积。
+    """
+    tracker = getattr(well, "tracker", None)
+    if tracker is None:
+        return
+    try:
+        snapshot = list(getattr(tracker, "liquids", None) or [])
+    except Exception:
+        return
+    compact: List[Tuple[Optional[str], float, str]] = []
+    for item in snapshot:
+        if not item or len(item) < 2:
+            continue
+        raw_name, vol = item[0], item[1]
+        unit = item[2] if len(item) >= 3 else "ul"
+        try:
+            vol_f = float(vol)
+        except (TypeError, ValueError):
+            continue
+        if abs(vol_f) <= 1e-9:
+            continue
+        name: Optional[str]
+        if raw_name is None:
+            name = None
+        elif isinstance(raw_name, str):
+            name = raw_name
+        else:
+            name = getattr(raw_name, "name", None) or str(raw_name)
+        compact.append((name, vol_f, str(unit or "ul")))
+    try:
+        tracker.liquid_history = compact  # type: ignore[attr-defined]
+        if hasattr(tracker, "_checkpoint"):
+            tracker._checkpoint = len(compact)
+    except Exception:
+        pass
 
 
 def capture_tip_liquid_name(source_well: Any) -> "str | None":

@@ -1,14 +1,14 @@
 """
 离心机 设备驱动
 
-协议：opcua_gn1.3.7.csv「离心机」（前缀 Centrifuge_）。
+协议：opcua_gn1.3.9.csv「离心机」（前缀 Centrifuge_）。
 
 对外仅暴露 execute_command（Centrifuge_CmdType + 写参）；测试流程 yaml 预设供本地调试。
 
 指令类型 (Centrifuge_CmdType)：
     1=Y向左 2=Y向右 3=Z向左 4=Z向右
     5=放入物料 6=运行离心机 7=取出物料 8=复位
-    9=夹爪张开 10=夹爪夹紧
+    9=夹爪张开 10=夹爪夹紧 11=配重天平去皮
 
 YAML 字段 → CSV 节点映射：
     YPos   → Centrifuge_YPosSet
@@ -19,7 +19,7 @@ YAML 字段 → CSV 节点映射：
     YSpeed → Centrifuge_YSpeed
     ZSpeed → Centrifuge_ZSpeed
     PlateNo→ Centrifuge_PlateNo
-    Temperature → iTemperature（1.3.7 新增）
+    Temperature → iTemperature
 """
 
 import os
@@ -33,7 +33,7 @@ from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, device, not_action
 from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.7.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.9.csv")
 
 # Centrifuge_CmdType（与 CSV 表头一致）
 CENTRIFUGE_CMD_LABELS = {
@@ -47,6 +47,7 @@ CENTRIFUGE_CMD_LABELS = {
     8: "复位",
     9: "夹爪张开",
     10: "夹爪夹紧",
+    11: "配重天平去皮",
 }
 
 
@@ -63,6 +64,7 @@ class CentrifugeCommand(int, Enum):
     RESET = 8
     JAW_OPEN = 9
     JAW_CLAMP = 10
+    BALANCE_TARE = 11
 
 
 # 离心机模块测试流程 yaml 预设（本地 run_test_flow，非注册动作）
@@ -85,7 +87,7 @@ TEST_FLOW_PRESETS = [
 _EXECUTE_CMD_DOC = (
     "按 Centrifuge_CmdType 执行 OPC 指令。"
     "1=Y左 2=Y右 3=Z左 4=Z右 5=放入物料 6=运行离心机 7=取出物料 "
-    "8=复位 9=夹爪张开 10=夹爪夹紧。"
+    "8=复位 9=夹爪张开 10=夹爪夹紧 11=配重天平去皮。"
     "写 y_pos/z_pos/inner_z_pos/rpm/time_minutes/y_speed/z_speed/plate_no/temperature。"
 )
 
@@ -136,11 +138,13 @@ class CentrifugeDevice(GNStationClient):
         int(CentrifugeCommand.RESET): frozenset(),
         int(CentrifugeCommand.JAW_OPEN): frozenset(),
         int(CentrifugeCommand.JAW_CLAMP): frozenset(),
+        int(CentrifugeCommand.BALANCE_TARE): frozenset(),
     }
     _INTERNAL_CMDS = frozenset({
         int(CentrifugeCommand.RESET),
         int(CentrifugeCommand.JAW_OPEN),
         int(CentrifugeCommand.JAW_CLAMP),
+        int(CentrifugeCommand.BALANCE_TARE),
     })
     _FEEDBACK_STABLE_NODES = ("Centrifuge_YPosFB", "Centrifuge_ZPosFB")
     # RUN：PLC CompleteFB=1 表示离心结束（非受理）；超时 = Centrifuge_Time + 缓冲

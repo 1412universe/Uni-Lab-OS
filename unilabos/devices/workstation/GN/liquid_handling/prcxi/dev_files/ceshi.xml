@@ -1,0 +1,102 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<GlobalActivity Comment="{x:Null}" DisplayName="Workflow" xmlns="clr-namespace:Prcxi.Alilat.Core;assembly=Prcxi.Alilat.Core" xmlns:pap="clr-namespace:Prcxi.Alilat.Pipette;assembly=Prcxi.Alilat.Pipette" xmlns:scg="clr-namespace:System.Collections.Generic;assembly=System.Private.CoreLib" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <GlobalActivity.DeckInfo>
+    <DeckInfo ColumnCount="4" DeviceType="\MainDeck/" DirectionPriority="Horizontal" HorizontalDirection="LeftToRight" Name="9320-366" POSNamePrefix="T" RowCount="4" Version="1.0.0" VerticalDirection="TopToBottom">
+      <DeckInfo.PosInfos>
+        <scg:List x:TypeArguments="PosInfo" Capacity="16">
+          <PosInfo Available="True" Column="0" ColumnSpan="1" Name="T1" No="1" Row="0" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="垃圾盒" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="1" ColumnSpan="1" Name="T2" No="2" Row="0" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="2" ColumnSpan="1" Name="T3" No="3" Row="0" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="12" Name="深孔板" Rows="8" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="3" ColumnSpan="1" Name="T4" No="4" Row="0" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="0" ColumnSpan="1" Name="T5" No="5" Row="1" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="垃圾盒" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="1" ColumnSpan="1" Name="T6" No="6" Row="1" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="2" ColumnSpan="1" Name="T7" No="7" Row="1" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="3" ColumnSpan="1" Name="T8" No="8" Row="1" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="0" ColumnSpan="1" Name="T9" No="9" Row="2" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="12" Name="1250μL Tips" Rows="8" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="1" ColumnSpan="1" Name="T10" No="10" Row="2" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="2" ColumnSpan="1" Name="T11" No="11" Row="2" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="12" Name="1250μL Tips" Rows="8" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="3" ColumnSpan="1" Name="T12" No="12" Row="2" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="12" Name="1250μL Tips" Rows="8" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="0" ColumnSpan="1" Name="T13" No="13" Row="3" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="12" Name="1250μL Tips" Rows="8" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="1" ColumnSpan="1" Name="T14" No="14" Row="3" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="2" ColumnSpan="1" Name="T15" No="15" Row="3" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="12" Name="1250μL Tips" Rows="8" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+          <PosInfo Available="True" Column="3" ColumnSpan="1" Name="T16" No="16" Row="3" RowSpan="1">
+            <PosInfo.ConsumableInfo>
+              <ConsumableInfo Cols="1" Name="储液槽" Rows="1" Shape="Round" />
+            </PosInfo.ConsumableInfo>
+          </PosInfo>
+        </scg:List>
+      </DeckInfo.PosInfos>
+    </DeckInfo>
+  </GlobalActivity.DeckInfo>
+  <GlobalActivity.GlobalVariables>
+    <scg:List x:TypeArguments="VariableDeclare" Capacity="0" />
+  </GlobalActivity.GlobalVariables>
+  <GlobalActivity.Activities>
+    <pap:LoadTips Comment="{x:Null}" InCol="{x:Null}" InPosition="{x:Null}" InRow="{x:Null}" AxisType="Axis1" Col="1" DisplayName="装载" IsEnabled="True" Position="9" PostLoadPosition="None" Row="1" Tips="Tips1" WellType="Well_96" XOffset="0" XSpeed="0" YOffset="0" YSpeed="0" ZCompleteZLiftSpeed="0" ZLoadSpeed="0" ZOffset="0" ZSpeed="0" ZStartPointOffsetHeight="0" />
+    <pap:Aspirate Comment="{x:Null}" InAspirateVolume="{x:Null}" InCol="{x:Null}" InPosition="{x:Null}" InRow="{x:Null}" AspirateVolume="1" AxisType="Axis1" BlowingVolume="0" Col="1" DisplayName="吸液" EmptyingRelativeLiquidLevelHeight="0" Hover="0" HoverBelowLiquidLevel="0" IsEnabled="True" LiquidLevelHeight="" LiquidType="7492ac3a-859b-41cb-a675-6e754ae7d58b" MoisteningNumber="0" OnlyAdp="ADP_1" OnlyAdpMode="False" Position="2" PostAirVolume="0" ReverseImbibing="0" Row="1" SuctionCompleteZPosition="None" SuctionMethod="None" SuctionSpeed="0" SuctionToPostSuctionDuration="0" SuctionToPostSuctionSpeed="0" Tips="Tips1" WellType="Well_96" XOffset="0" XSpeed="0" YOffset="0" YSpeed="0" ZCompleteZLiftSpeed="0" ZLevelFollowSpeed="0" ZOffset="0" ZSpeed="0" ZStartPointOffsetHeight="0" />
+    <pap:Dispense Comment="{x:Null}" InCol="{x:Null}" InDispenseVolume="{x:Null}" InPosition="{x:Null}" InRow="{x:Null}" AirSuckVolume="0" AxisType="Axis1" BlowVolume="0" Col="1" DispenseSpeed="0" DispenseVolume="1" DispensingAirSuckPosition="None" DispensingCompleteZPosition="None" DispensingDirection="X" DispensingMethod="DiveToBottom" DisplayName="放液" HoverBelowLiquidLevel="0" IsEnabled="True" LiquidType="7492ac3a-859b-41cb-a675-6e754ae7d58b" MixingHoverBelowLiquidLevel="0" MixingSpeed="0" MixingTimes="0" Position="2" PostDischargePauseTimeMs="0" ReverseImbibing="0" Row="1" Tips="Tips1" WellType="Well_96" XOffset="0" XSpeed="0" YOffset="0" YSpeed="0" ZCompleteZLiftSpeed="0" ZOffset="0" ZSpeed="0" ZStartPointOffsetHeight="0" />
+    <pap:UnLoadTips Comment="{x:Null}" InCol="{x:Null}" InPosition="{x:Null}" InRow="{x:Null}" AxisType="Axis1" Col="1" DisplayName="卸载" IsEnabled="True" Position="1" PostLoadPosition="None" Row="1" Tips="Tips1" WellType="Well_96" XOffset="0" XSpeed="0" YOffset="0" YSpeed="0" ZCompleteZLiftSpeed="0" ZOffset="0" ZSpeed="0" ZStartPointOffsetHeight="0" />
+    <pap:Mix BottomOffsetOfZ="{x:Null}" Comment="{x:Null}" DelyAfterSubmixLoopCompleted="{x:Null}" DispenseRateAfterSubmixLoop="{x:Null}" InCol="{x:Null}" InPosition="{x:Null}" InRow="{x:Null}" MixLoopAspirateDely="{x:Null}" MixLoopAspirateRate="{x:Null}" MixLoopDispenseDely="{x:Null}" MixLoopDispenseRate="{x:Null}" MixOffsetOfZAfterLoop="{x:Null}" MixOffsetOfZInLoop="{x:Null}" PostAirVolume="{x:Null}" PreAirVolume="{x:Null}" SecondRouteRate="{x:Null}" SubMixLoopCompletedDely="{x:Null}" TipTouchHeight="{x:Null}" TipTouchOffsetOfX="{x:Null}" AxisType="Axis1" BlowSampleVolume="0" Col="1" DispenseSpeed="0" DisplayName="混匀" IfTipTouch="False" IsEnabled="True" LiquidType="7492ac3a-859b-41cb-a675-6e754ae7d58b" MixAfterAspirate="0" MixLoopCounts="1" MixLoopVolume="1" Position="2" PostLoadPosition="None" Row="1" SuctionSpeed="0" Tips="Tips1" WellType="Well_96" XOffset="0" XSpeed="0" YOffset="0" YSpeed="0" ZCompleteZLiftSpeed="0" ZOffset="0" ZSpeed="0" ZStartPointOffsetHeight="0" />
+    <pap:MvKit Comment="{x:Null}" Destination="1" DestinationDirect="None" DisplayName="转版" Force="5" IsEnabled="True" Level="0" PinchItUpPosition="1" PutDownPosition="1" Source="1" SourceDirect="None" />
+  </GlobalActivity.Activities>
+</GlobalActivity>
