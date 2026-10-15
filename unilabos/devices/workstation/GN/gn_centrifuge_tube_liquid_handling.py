@@ -2,7 +2,7 @@
 离心管液体处理 设备驱动
 
 参照 centrifuge.py / locking_mechanism.py 写法，继承 OPC UA 通讯基类，实现具体的设备动作函数。
-节点变量来自 opcua_gn1.3.7.csv（前缀 Tube_）。
+节点变量来自 opcua_gn1.4.0.csv（前缀 Tube_）。
 各动作点位写死在代码中（原测试流程 step0~step19）。
 
 指令类型 (Tube_CmdType)：
@@ -49,13 +49,13 @@ from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
 DEFAULT_CSV_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.7.csv",
+    "opcua_gn1.4.0.csv",
 )
 DEFAULT_XLSX_PATH = DEFAULT_CSV_PATH
 
 
 class TubeCommand(int, Enum):
-    """离心管液体处理指令类型 (Tube_CmdType，opcua_gn1.3.7.csv)"""
+    """离心管液体处理指令类型 (Tube_CmdType，opcua_gn1.4.0.csv)"""
     X_LEFT = 1
     X_RIGHT = 2
     Y_FORWARD = 3
@@ -1025,7 +1025,7 @@ class CentrifugeTubeLiquidHandlingDevice(GNStationClient):
         ch8_reverse_aspirate: int = 0,
         ch1_reverse_aspirate: int = 0,
     ) -> None:
-        """opcua_gn1.3.7 吹样/反向吸液写参（默认 0，与测试流程 yaml 一致）"""
+        """opcua_gn1.4.0 吹样/反向吸液写参（默认 0，与测试流程 yaml 一致）"""
         self._set_node_or_raise("Tube_Ch8Blow", ch8_blow)
         self._set_node_or_raise("Tube_Ch1Blow", ch1_blow)
         self._set_node_or_raise("Tube_Ch8ReverseAspirate", ch8_reverse_aspirate)

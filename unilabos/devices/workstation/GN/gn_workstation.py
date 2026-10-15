@@ -26,7 +26,7 @@ from unilabos.devices.workstation.workstation_base import WorkstationBase
 from unilabos.registry.decorators import action, device, not_action
 from unilabos.utils.log import logger
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.6.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.0.csv")
 
 
 @device(

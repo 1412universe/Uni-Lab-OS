@@ -22,18 +22,43 @@ YAML 字段 → CSV 节点映射：
     Temperature → iTemperature
 """
 
+import json
 import os
 import time
 import logging
 import threading
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Sequence
 
 from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, device, not_action
 from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
+from unilabos.devices.workstation.GN.base_opcua_client import OpcUaNode
+from unilabos.device_comms.opcua_client.node.uniopcua import NodeType, DataType
 
 DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.9.csv")
+
+# 与 PRCXI transfer_liquid 共享：两次 cmd11 去皮后的重量差（水，1g≈1mL≈1000μL）
+BALANCE_DELTA_CACHE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    ".cache",
+    "centrifuge_balance_delta.txt",
+)
+SCALE_WEIGHT_NODE = "scale_weight"
+_SCALE_WEIGHT_OPC = OpcUaNode(
+    name=SCALE_WEIGHT_NODE,
+    node_type=NodeType.VARIABLE,
+    node_id="ns=4;s=|var|Inovance-X86-Linux.Application.OPC_UA.scale_weight",
+    data_type=DataType.FLOAT,
+)
+# 天平 0.01g 精度；稳定判定连续样本波动不超过该值（g）
+_BALANCE_STABLE_TOLERANCE_G = 0.01
+_BALANCE_STABLE_SAMPLES = 5
+_BALANCE_STABLE_INTERVAL_S = 0.2
+_BALANCE_POST_TARE_WAIT_S = 15.0
+# 水：ρ≈1 g/mL
+_WATER_UL_PER_GRAM = 1000.0
 
 # Centrifuge_CmdType（与 CSV 表头一致）
 CENTRIFUGE_CMD_LABELS = {
@@ -175,7 +200,98 @@ class CentrifugeDevice(GNStationClient):
             *args,
             **kwargs,
         )
+        self.register_node_list([_SCALE_WEIGHT_OPC])
         self._command_lock = threading.Lock()
+
+    @staticmethod
+    def _write_balance_delta_cache(delta_g: float) -> None:
+        delta_ul = float(delta_g) * _WATER_UL_PER_GRAM
+        path = Path(BALANCE_DELTA_CACHE_PATH)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "delta_g": round(float(delta_g), 2),
+            "delta_ul": round(delta_ul, 1),
+            "liquid": "water",
+        }
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+        logger.info(
+            f"离心机：天平差值已写入缓存 {path.name} "
+            f"Δg={payload['delta_g']} → ΔV={payload['delta_ul']}μL（水）"
+        )
+
+    @not_action
+    def _read_scale_weight_g(self) -> Optional[float]:
+        raw = self._opc_read(SCALE_WEIGHT_NODE, force_read=True)
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @not_action
+    def _wait_stable_weight_g(
+        self,
+        timeout: float = 60.0,
+        *,
+        description: str = "天平读数稳定",
+    ) -> float:
+        start = time.monotonic()
+        stable_count = 0
+        last: Optional[float] = None
+        while time.monotonic() - start < timeout:
+            cur = self._read_scale_weight_g()
+            if cur is None:
+                stable_count = 0
+                time.sleep(_BALANCE_STABLE_INTERVAL_S)
+                continue
+            if last is not None and abs(cur - last) <= _BALANCE_STABLE_TOLERANCE_G:
+                stable_count += 1
+            else:
+                stable_count = 1
+            if stable_count >= _BALANCE_STABLE_SAMPLES:
+                logger.info(f"✓ {description}：{cur:.2f} g")
+                return round(cur, 2)
+            last = cur
+            time.sleep(_BALANCE_STABLE_INTERVAL_S)
+        raise ValueError(f"{description}超时（{timeout}s，末次读数={last!r} g）")
+
+    @not_action
+    def _tare_and_read_stable_weight_g(self, timeout: float = 120.0) -> float:
+        """cmd11 去皮 → 等待 15s → 读稳定重量（g）。"""
+        cmd = int(CentrifugeCommand.BALANCE_TARE)
+        label = CENTRIFUGE_CMD_LABELS.get(cmd, "配重天平去皮")
+        res = self._run(cmd, label, setpoints={}, timeout=timeout)
+        if not res.get("success"):
+            raise ValueError(f"{label}失败")
+        logger.info(f"离心机：{label}完成，等待 {_BALANCE_POST_TARE_WAIT_S:.0f}s 后读天平…")
+        time.sleep(_BALANCE_POST_TARE_WAIT_S)
+        return self._wait_stable_weight_g(timeout=min(60.0, timeout))
+
+    @action(
+        auto_prefix=True,
+        description=(
+            "连续两次 cmd11 去皮并在各次去皮 15s 后读稳定重量；"
+            "Δ=第一次−第二次（g），按水换算为 μL 写入缓存供 9320 transfer_liquid 使用。"
+        ),
+    )
+    def cache_balance_delta_for_liquid_transfer(self, timeout: float = 180.0) -> dict:
+        w1 = self._tare_and_read_stable_weight_g(timeout=timeout)
+        w2 = self._tare_and_read_stable_weight_g(timeout=timeout)
+        delta_g = round(w1 - w2, 2)
+        self._write_balance_delta_cache(delta_g)
+        delta_ul = round(delta_g * _WATER_UL_PER_GRAM, 1)
+        return {
+            "success": True,
+            "message": "天平差值已缓存",
+            "weight_first_g": w1,
+            "weight_second_g": w2,
+            "delta_g": delta_g,
+            "delta_ul_water": delta_ul,
+            "cache_path": BALANCE_DELTA_CACHE_PATH,
+        }
 
     @action(auto_prefix=True, description=_EXECUTE_CMD_DOC)
     def execute_command(

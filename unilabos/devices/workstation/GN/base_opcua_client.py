@@ -158,7 +158,17 @@ class BaseOpcUaClient(UniversalDriver):
         
         返回: (节点列表, 英文到中文映射, 中文到英文映射)
         """
-        df = pd.read_csv(file_path)
+        # 兼容 UTF-8(BOM) / GBK：旧版 opcua_gn1.3.9 曾为 GBK，默认 UTF-8 会静默失败
+        last_err: Optional[Exception] = None
+        df = None
+        for enc in ("utf-8-sig", "utf-8", "gbk", "gb18030"):
+            try:
+                df = pd.read_csv(file_path, encoding=enc)
+                break
+            except UnicodeDecodeError as e:
+                last_err = e
+        if df is None:
+            raise last_err or UnicodeDecodeError("utf-8", b"", 0, 1, f"无法解码 CSV: {file_path}")
         df = df.drop_duplicates(subset='Name', keep='first')
         nodes = []
         

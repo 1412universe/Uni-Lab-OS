@@ -110,6 +110,25 @@ TOUCH_TIP_WALLS = ("follow_axis", "left", "right")
 # V04 放液方向（与 ceshi.xml / DispensingDirectionEnum 常用值一致，首版透传字符串）。
 V04_DISPENSING_DIRECTIONS = frozenset({"X", "Y"})
 
+# 离心机 cache_balance_delta_for_liquid_transfer 写入，9320 transfer_liquid 消费（水，Δg→ΔμL 已在缓存内）
+_CENTRIFUGE_BALANCE_DELTA_CACHE = os.path.normpath(
+    os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "..",
+        "..",
+        ".cache",
+        "centrifuge_balance_delta.txt",
+    )
+)
+_BALANCE_DELTA_MIN_UL = 1.0
+# 天平缓存为整板总质量差；移液按 96 孔均分到单孔，单孔上限 1250μL（1250 枪头）
+_BALANCE_WELL_COUNT = 96
+_BALANCE_PER_WELL_MAX_UL = 1250.0
+# 天平差值移液默认：吸/放速率 300、blow_out 20μL、枪头盒 T15
+_BALANCE_DEFAULT_FLOW_RATE = 300.0
+_BALANCE_DEFAULT_BLOW_OUT_UL = 20.0
+_BALANCE_DEFAULT_TIP_SLOT = 15
+
 
 # =============================================================
 # V04 协议支持：Board 数据模型 + 老版本→V04 布局/位置映射
@@ -4083,6 +4102,173 @@ class PRCXI9300Handler(LiquidHandlerAbstract):
     def _clear_transfer_v04_context(self) -> None:
         self._unilabos_backend.clear_transfer_v04_context()
 
+    @staticmethod
+    def _read_centrifuge_balance_delta_ul() -> Optional[float]:
+        path = _CENTRIFUGE_BALANCE_DELTA_CACHE
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = f.read().strip()
+            if not raw:
+                return None
+            data = json.loads(raw)
+            if isinstance(data, dict) and "delta_ul" in data:
+                return float(data["delta_ul"])
+            return float(raw)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _clear_centrifuge_balance_delta_cache() -> None:
+        try:
+            if os.path.isfile(_CENTRIFUGE_BALANCE_DELTA_CACHE):
+                os.remove(_CENTRIFUGE_BALANCE_DELTA_CACHE)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _plan_balance_delta_transfer(
+        delta_ul: float,
+    ) -> Tuple[int, int, List[float], List[float]]:
+        """整板 ΔμL / 96 → 单孔体积（上限 1250μL，保留 1 位小数）。
+
+        吸/放体积均为该单孔量（都不为 0）：
+        Δ>0 吸液：T7→T16；Δ<0 放液：T16→T2。
+        """
+        per_well = abs(float(delta_ul)) / float(_BALANCE_WELL_COUNT)
+        vol = round(min(per_well, _BALANCE_PER_WELL_MAX_UL), 1)
+        if delta_ul > 0:
+            return 7, 16, [vol], [vol]
+        return 16, 2, [vol], [vol]
+
+    def _consumable_at_deck_slot(
+        self,
+        slot_no: int,
+        *,
+        prefer_liquid: bool,
+    ) -> Container:
+        deck = getattr(self, "deck", None)
+        if not isinstance(deck, PRCXI9300Deck):
+            raise ValueError("天平差值移液需要已初始化的 PRCXI deck")
+        for child in list(getattr(deck, "children", None) or []):
+            top = self._top_level_consumable(child) or child
+            physical = self._deck_physical_slot(top)
+            stamped = self._lookup_slot_only_position(top)
+            if stamped is None:
+                stamped = self._get_slot_number(top, deck=deck)
+            if physical != slot_no and stamped != slot_no:
+                continue
+            if isinstance(top, Plate) and not isinstance(top, Well):
+                return self._default_well_for_transfer(top, prefer_liquid=prefer_liquid)
+            return cast(Container, top)
+        raise ValueError(f"天平差值移液：deck 上未找到 T{slot_no} 耗材")
+
+    def _tip_rack_at_deck_slot(self, slot_no: int) -> TipRack:
+        deck = getattr(self, "deck", None)
+        if not isinstance(deck, PRCXI9300Deck):
+            raise ValueError("天平差值移液需要已初始化的 PRCXI deck")
+        for child in list(getattr(deck, "children", None) or []):
+            top = self._top_level_consumable(child) or child
+            if not isinstance(top, TipRack):
+                continue
+            physical = self._deck_physical_slot(top)
+            stamped = self._lookup_slot_only_position(top)
+            if stamped is None:
+                stamped = self._get_slot_number(top, deck=deck)
+            if physical == slot_no or stamped == slot_no:
+                return top
+        raise ValueError(f"天平差值移液：deck 上未找到 T{slot_no} 枪头盒")
+
+    def _maybe_apply_centrifuge_balance_delta_transfer(
+        self,
+        sources: Sequence[Container],
+        targets: Sequence[Container],
+        tip_racks: Sequence[TipRack],
+        asp_vols: Union[List[float], float],
+        dis_vols: Union[List[float], float],
+        asp_flow_rates: Optional[List[Optional[float]]],
+        dis_flow_rates: Optional[List[Optional[float]]],
+        blow_out_air_volume: Optional[List[Optional[float]]],
+        source_slots: Optional[Union[List[int], int]],
+        target_slots: Optional[Union[List[int], int]],
+        tip_rack_slots: Optional[Union[List[int], int]],
+    ) -> Tuple[
+        List[Container],
+        List[Container],
+        List[TipRack],
+        Union[List[float], float],
+        Union[List[float], float],
+        Optional[List[Optional[float]]],
+        Optional[List[Optional[float]]],
+        Optional[List[Optional[float]]],
+        Optional[Union[List[int], int]],
+        Optional[Union[List[int], int]],
+        Optional[Union[List[int], int]],
+        bool,
+    ]:
+        delta_ul = self._read_centrifuge_balance_delta_ul()
+        if delta_ul is None:
+            return (
+                list(sources),
+                list(targets),
+                list(tip_racks),
+                asp_vols,
+                dis_vols,
+                asp_flow_rates,
+                dis_flow_rates,
+                blow_out_air_volume,
+                source_slots,
+                target_slots,
+                tip_rack_slots,
+                False,
+            )
+        per_well_ul = abs(float(delta_ul)) / float(_BALANCE_WELL_COUNT)
+        if per_well_ul < _BALANCE_DELTA_MIN_UL:
+            return (
+                list(sources),
+                list(targets),
+                list(tip_racks),
+                asp_vols,
+                dis_vols,
+                asp_flow_rates,
+                dis_flow_rates,
+                blow_out_air_volume,
+                source_slots,
+                target_slots,
+                tip_rack_slots,
+                False,
+            )
+        src_slot, tgt_slot, new_asp, new_dis = self._plan_balance_delta_transfer(delta_ul)
+        src = self._consumable_at_deck_slot(src_slot, prefer_liquid=True)
+        tgt = self._consumable_at_deck_slot(tgt_slot, prefer_liquid=False)
+        tip_slot = _BALANCE_DEFAULT_TIP_SLOT
+        tip = self._tip_rack_at_deck_slot(tip_slot)
+        flow = _BALANCE_DEFAULT_FLOW_RATE
+        blow = _BALANCE_DEFAULT_BLOW_OUT_UL
+        direction = "吸液" if delta_ul > 0 else "放液"
+        well_vol = float(new_asp[0])
+        print(
+            f"[PRCXI] 离心机天平差值移液：{direction} 整板Δ={abs(delta_ul):.1f}μL"
+            f" → 单孔吸/放各 {well_vol:.1f}μL（/96，上限{_BALANCE_PER_WELL_MAX_UL:g}）"
+            f" T{src_slot}→T{tgt_slot}，枪头 T{tip_slot}，"
+            f"速率={flow}，blow_out={blow}μL"
+        )
+        return (
+            [src],
+            [tgt],
+            [tip],
+            new_asp,
+            new_dis,
+            [flow],
+            [flow],
+            [blow],
+            [src_slot],
+            [tgt_slot],
+            [tip_slot],
+            True,
+        )
+
     async def transfer_liquid(
         self,
         sources: Sequence[Container],
@@ -4155,8 +4341,6 @@ class PRCXI9300Handler(LiquidHandlerAbstract):
             self._first_transfer_done = True
         if self.step_mode:
             await self.create_protocol(f"transfer_liquid{time.time()}")
-        _asp_list = asp_vols if isinstance(asp_vols, list) else [asp_vols]
-        _dis_list = dis_vols if isinstance(dis_vols, list) else [dis_vols]
         sources = await self._resolve_to_plr_resources(sources)
         targets = await self._resolve_to_plr_resources(targets)
         tip_racks = list(await self._resolve_to_plr_resources(tip_racks))
@@ -4164,6 +4348,34 @@ class PRCXI9300Handler(LiquidHandlerAbstract):
         sources = self._attach_resources_to_deck_if_needed(list(sources))
         targets = self._attach_resources_to_deck_if_needed(list(targets))
         tip_racks = self._attach_resources_to_deck_if_needed(tip_racks)
+        (
+            sources,
+            targets,
+            tip_racks,
+            asp_vols,
+            dis_vols,
+            asp_flow_rates,
+            dis_flow_rates,
+            blow_out_air_volume,
+            source_slots,
+            target_slots,
+            tip_rack_slots,
+            balance_cache_used,
+        ) = self._maybe_apply_centrifuge_balance_delta_transfer(
+            sources,
+            targets,
+            tip_racks,
+            asp_vols,
+            dis_vols,
+            asp_flow_rates,
+            dis_flow_rates,
+            blow_out_air_volume,
+            source_slots,
+            target_slots,
+            tip_rack_slots,
+        )
+        _asp_list = asp_vols if isinstance(asp_vols, list) else [asp_vols]
+        _dis_list = dis_vols if isinstance(dis_vols, list) else [dis_vols]
         # 退化的空 transfer：workflow 偶发下发 sources/targets/tip_racks/asp_vols/dis_vols
         # 全为 None 的占位节点（runtime 实测：真实 transfer 前后各夹了一个全 None 的 goal）。
         # 这类「无源无目标」的传输本质是 no-op，直接返回空结果，避免整个 action 因后续
@@ -4234,7 +4446,7 @@ class PRCXI9300Handler(LiquidHandlerAbstract):
         # is_96_well=True：选定 pip_setting 中 channels==96 的轴写入 backend._active_axis，
         # 设定该轴 tip 高度，跳过 8 通道扁平化 / 逐列展开，直接走抽象层的整板 96 头 API。
         if is_96_well:
-            return await self._transfer_liquid_96well_route(
+            res = await self._transfer_liquid_96well_route(
                 sources,
                 targets,
                 tip_racks,
@@ -4277,6 +4489,9 @@ class PRCXI9300Handler(LiquidHandlerAbstract):
                 mix_tip_touch_height=mix_tip_touch_height,
                 mix_tip_touch_offset_x=mix_tip_touch_offset_x,
             )
+            if balance_cache_used:
+                self._clear_centrifuge_balance_delta_cache()
+            return res
 
         # === P1 v5：8 通道扁平化 ===
         # 设计文档：product_designs/protocol_convert/01-multi-channel-flatten.md
@@ -4441,6 +4656,8 @@ class PRCXI9300Handler(LiquidHandlerAbstract):
             )
             if self.step_mode:
                 await self.run_protocol()
+            if balance_cache_used:
+                self._clear_centrifuge_balance_delta_cache()
             return res
         except Exception:
             # 中途失败（构建期 super().transfer_liquid 或执行期 run_protocol）：清理残留 tip +

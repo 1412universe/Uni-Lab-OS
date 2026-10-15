@@ -1,0 +1,286 @@
+{
+  "target_lab_uuid": "803298d7-ba98-4cd5-a546-b7ca08b4cb12",
+  "name": "离心机配平移液",
+  "data": {
+    "workflow_uuid": "c3ef2a68-e6bc-4815-8646-dbc49e2781e2",
+    "workflow_name": "离心机配平移液",
+    "nodes": [
+      {
+        "uuid": "1056a768-83f5-47b7-bb85-cfb72b84cf3d",
+        "parent_uuid": "",
+        "name": "auto-cache_balance_delta_for_liquid_transfer",
+        "type": "ILab",
+        "icon": "",
+        "pose": {
+          "layout": "x-y",
+          "position": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "position_3d": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "size": {
+            "width": 0,
+            "height": 0,
+            "depth": 0
+          },
+          "scale": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "extra": null,
+          "cross_section_type": "rectangle"
+        },
+        "param": {
+          "timeout": 180
+        },
+        "footer": "1.两次cmd11去皮后读稳定重量，Δ=第一次−第二次写入缓存（水，g→μL）",
+        "device_name": "gn_centrifuge",
+        "disabled": false,
+        "minimized": false,
+        "lab_node_type": "Device",
+        "template_uuid": "963dfb8a-db1e-4d9d-9e1d-fd400c8bbe0b",
+        "template_name": "auto-cache_balance_delta_for_liquid_transfer",
+        "resource_name": "gn_centrifuge"
+      },
+      {
+        "uuid": "65f89140-53a9-4122-a10c-e2ee78b32262",
+        "parent_uuid": "",
+        "name": "auto-create_protocol",
+        "type": "ILab",
+        "icon": "",
+        "pose": {
+          "layout": "x-y",
+          "position": {
+            "x": 400,
+            "y": 0,
+            "z": 0
+          },
+          "position_3d": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "size": {
+            "width": 0,
+            "height": 0,
+            "depth": 0
+          },
+          "scale": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "extra": null,
+          "cross_section_type": "rectangle"
+        },
+        "param": {
+          "none_keys": [],
+          "protocol_date": "",
+          "protocol_name": "",
+          "protocol_type": "",
+          "protocol_author": "",
+          "protocol_version": "",
+          "protocol_description": ""
+        },
+        "footer": "2.创建 9320 方案",
+        "device_name": "PRCXI",
+        "disabled": false,
+        "minimized": false,
+        "lab_node_type": "Device",
+        "template_uuid": "cc5476e6-7c2e-40f7-878f-c7903ba16a3b",
+        "template_name": "auto-create_protocol",
+        "resource_name": "liquid_handler.prcxi"
+      },
+      {
+        "uuid": "6021e5b9-8911-46db-897e-edbb6b69e61d",
+        "parent_uuid": "",
+        "name": "transfer_liquid",
+        "type": "ILab",
+        "icon": "",
+        "pose": {
+          "layout": "x-y",
+          "position": {
+            "x": 800,
+            "y": 0,
+            "z": 0
+          },
+          "position_3d": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "size": {
+            "width": 0,
+            "height": 0,
+            "depth": 0
+          },
+          "scale": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "extra": null,
+          "cross_section_type": "rectangle"
+        },
+        "param": {
+          "delays": null,
+          "spread": "wide",
+          "mix_vol": null,
+          "offsets": null,
+          "sources": [
+            {
+              "id": "/gn_workstation/PRCXI/PRCXI_nest_1_troughplate4",
+              "name": "PRCXI_nest_1_troughplate4",
+              "uuid": "bd6f7d88-e96a-4efa-b8c6-f5514aeb7cdf"
+            }
+          ],
+          "targets": [
+            {
+              "id": "/gn_workstation/PRCXI/PRCXI_Deck/PRCXI_96_DeepWell5",
+              "name": "PRCXI_96_DeepWell5",
+              "uuid": "e74c153c-a29f-4653-a665-b9e1cc1711a9"
+            }
+          ],
+          "asp_vols": [
+            0
+          ],
+          "dis_vols": [
+            0
+          ],
+          "mix_rate": null,
+          "mix_stage": "none",
+          "mix_times": null,
+          "none_keys": [],
+          "tip_racks": [
+            {
+              "id": "/gn_workstation/PRCXI/PRCXI_Deck/PRCXI_1250uL_Tips2",
+              "name": "PRCXI_1250uL_Tips2",
+              "uuid": "e7df077f-ec56-48e6-a7af-9fabf569c418"
+            }
+          ],
+          "touch_tip": false,
+          "is_96_well": false,
+          "source_slots": 7,
+          "target_slots": 16,
+          "use_channels": [],
+          "liquid_height": null,
+          "asp_flow_rates": [
+            300
+          ],
+          "dis_flow_rates": [
+            300
+          ],
+          "tip_rack_slots": 15,
+          "mix_liquid_height": null,
+          "blow_out_air_volume": [
+            20
+          ],
+          "blow_out_air_volume_before": null
+        },
+        "footer": "3.读天平缓存：整板Δ/96→单孔吸/放同体积(1位小数,上限1250)；Δ>0 T7→T16；Δ<0 T16→T2；速率300、blow_out=20、枪头T15",
+        "device_name": "PRCXI",
+        "disabled": false,
+        "minimized": false,
+        "lab_node_type": "Device",
+        "template_uuid": "b1f8991e-9f06-4abf-ad40-38406c5e5b0a",
+        "template_name": "transfer_liquid",
+        "resource_name": "liquid_handler.prcxi"
+      },
+      {
+        "uuid": "ca527abd-9184-496d-be34-b46850db952c",
+        "parent_uuid": "",
+        "name": "auto-run_protocol",
+        "type": "ILab",
+        "icon": "",
+        "pose": {
+          "layout": "x-y",
+          "position": {
+            "x": 1200,
+            "y": 0,
+            "z": 0
+          },
+          "position_3d": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "size": {
+            "width": 0,
+            "height": 0,
+            "depth": 0
+          },
+          "scale": {
+            "x": 1,
+            "y": 1,
+            "z": 1
+          },
+          "rotation": {
+            "x": 0,
+            "y": 0,
+            "z": 0
+          },
+          "extra": null,
+          "cross_section_type": "rectangle"
+        },
+        "param": {
+          "protocol_id": null
+        },
+        "footer": "4.下发并执行 9320 方案",
+        "device_name": "PRCXI",
+        "disabled": false,
+        "minimized": false,
+        "lab_node_type": "Device",
+        "template_uuid": "d10989c8-6f47-4328-bec1-bfe911c6dfc1",
+        "template_name": "auto-run_protocol",
+        "resource_name": "liquid_handler.prcxi"
+      }
+    ],
+    "edges": [
+      {
+        "source_node_uuid": "1056a768-83f5-47b7-bb85-cfb72b84cf3d",
+        "target_node_uuid": "65f89140-53a9-4122-a10c-e2ee78b32262",
+        "source_handle_key": "ready",
+        "source_handle_io": "source",
+        "target_handle_key": "ready",
+        "target_handle_io": "target"
+      },
+      {
+        "source_node_uuid": "65f89140-53a9-4122-a10c-e2ee78b32262",
+        "target_node_uuid": "6021e5b9-8911-46db-897e-edbb6b69e61d",
+        "source_handle_key": "ready",
+        "source_handle_io": "source",
+        "target_handle_key": "ready",
+        "target_handle_io": "target"
+      },
+      {
+        "source_node_uuid": "6021e5b9-8911-46db-897e-edbb6b69e61d",
+        "target_node_uuid": "ca527abd-9184-496d-be34-b46850db952c",
+        "source_handle_key": "ready",
+        "source_handle_io": "source",
+        "target_handle_key": "ready",
+        "target_handle_io": "target"
+      }
+    ]
+  }
+}

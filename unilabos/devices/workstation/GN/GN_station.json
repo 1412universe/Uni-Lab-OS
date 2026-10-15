@@ -33,7 +33,7 @@
             },
             "config": {
                 "url": "opc.tcp://192.168.6.6:4840",
-                "csv_path": "opcua_gn1.3.7.csv",
+                "csv_path": "opcua_gn1.4.0.csv",
                 "use_subscription": false,
                 "protocol_type": []
             },
@@ -138,7 +138,7 @@
             },
             "config": {
                 "url": "opc.tcp://192.168.6.6:4840",
-                "csv_path": "opcua_gn1.3.7.csv",
+                "csv_path": "opcua_gn1.4.0.csv",
                 "use_subscription": false
             },
             "data": {}
