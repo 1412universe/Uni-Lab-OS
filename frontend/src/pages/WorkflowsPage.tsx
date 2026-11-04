@@ -18,10 +18,11 @@ import {
   Search,
   ShieldCheck,
   Send,
+  Trash2,
   Workflow as WorkflowIcon,
   X,
 } from 'lucide-react'
-import { createWorkflowTask, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowSource, loadWorkflowTaskGraph, publishWorkflow } from '../lib/edgeClient'
+import { createWorkflowTask, deleteWorkflow, importWorkflowJson, importWorkflowPython, insertCompositeWorkflow, loadPublishedWorkflowContracts, loadWorkflowGraph, loadWorkflowPreflight, loadWorkflowSource, loadWorkflowTaskGraph, publishWorkflow } from '../lib/edgeClient'
 import type { ContractField, MaterialRecord, PageId, WorkflowDefinition, WorkflowTarget, WorkflowTaskPriority } from '../types'
 import { Button, EmptyState, PageHeader, Panel, PanelHeader } from '../components/ui'
 import { CompositeWorkflowParameterEditor, compositeContractFields, compositeParameterDrafts, compositeParameterProblem, serialiseCompositeParameters } from '../components/CompositeWorkflowParameterEditor'
@@ -268,6 +269,42 @@ export function WorkflowsPage({
     },
     onError: (error) => onNotify(`发布失败：${error instanceof Error ? error.message : '未知错误'}`),
   })
+  const [workflowMenu, setWorkflowMenu] = useState<{
+    uuid: string
+    name: string
+    x: number
+    y: number
+  } | null>(null)
+  const deleteWorkflowMutation = useMutation({
+    mutationFn: (payload: { uuid: string; name: string }) => deleteWorkflow(payload.uuid),
+    onSuccess: async (_result, payload) => {
+      onNotify(`已删除工作流“${payload.name}”`)
+      setWorkflowMenu(null)
+      if (selectedId === payload.uuid) setSelectedId('')
+      await queryClient.invalidateQueries({ queryKey: ['edge-snapshot'] })
+    },
+    onError: (error) => onNotify(`删除工作流失败：${error instanceof Error ? error.message : '未知错误'}`),
+  })
+
+  useEffect(() => {
+    if (!workflowMenu) return
+    const close = (event: Event) => {
+      if (event instanceof PointerEvent) {
+        const target = event.target
+        if (target instanceof Element && target.closest('.workflow-library-context-menu')) return
+      }
+      setWorkflowMenu(null)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setWorkflowMenu(null)
+    }
+    window.addEventListener('pointerdown', close)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [workflowMenu])
 
   async function importFile(file: File, kind: 'python' | 'json') {
     if (!connected) return
@@ -393,6 +430,16 @@ export function WorkflowsPage({
                     setSelectedId(workflow.uuid)
                     onSelectWorkflow?.({ workflowUuid: workflow.uuid, revision: workflow.revision })
                   }}
+                  onContextMenu={(event) => {
+                    if (!connected) return
+                    event.preventDefault()
+                    setWorkflowMenu({
+                      uuid: workflow.uuid,
+                      name: workflow.name,
+                      x: event.clientX,
+                      y: event.clientY,
+                    })
+                  }}
                 >
                   <span className="workflow-list-icon"><GitBranch size={17} /></span>
                   <div><strong>{workflow.name}</strong><small>r{workflow.revision} · {hasLoadedNodeCount || workflow.nodeCount > 0 ? `${nodeCount} 节点` : '节点数待加载'}</small></div>
@@ -402,6 +449,29 @@ export function WorkflowsPage({
             })}
             {!visibleWorkflows.length ? <EmptyState title="没有匹配的工作流" description="调整搜索词后重试。" /> : null}
           </div>
+          {workflowMenu ? (
+            <div
+              className="workflow-library-context-menu"
+              role="menu"
+              aria-label={`工作流 ${workflowMenu.name} 操作`}
+              style={{ left: workflowMenu.x, top: workflowMenu.y }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                disabled={deleteWorkflowMutation.isPending}
+                onClick={() => deleteWorkflowMutation.mutate({
+                  uuid: workflowMenu.uuid,
+                  name: workflowMenu.name,
+                })}
+              >
+                <Trash2 size={14} />
+                {deleteWorkflowMutation.isPending ? '删除中…' : '删除工作流'}
+              </button>
+            </div>
+          ) : null}
           <div className="library-summary">
             <div><span>已发布</span><strong>{availableWorkflows.filter((item) => item.status === 'published').length}</strong></div>
             <div><span>输入合同</span><strong>{workflows.reduce((sum, item) => sum + item.inputContract.length, 0)}</strong></div>

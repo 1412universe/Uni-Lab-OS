@@ -12,3 +12,7 @@ workflows:
     source: gn_lab/workflows/gold_tetrahedron_ctac_ctab.py
   - workflow_uuid: 8a15d439-59ab-43a3-928a-1aa8350d260f
     source: gn_lab/workflows/prcxi_9320_transfer.py
+  - workflow_uuid: 82ab3216-76b0-45be-9b18-4f1cb93c90db
+    source: gn_lab/workflows/workflow_82ab321676b045be9b184f1cb93c90db.py
+  - workflow_uuid: d8f94f99-d73f-476b-9cdd-1f9c8590e03a
+    source: gn_lab/workflows/workflow_d8f94f99d73f476b9cdd1f9c8590e03a.py

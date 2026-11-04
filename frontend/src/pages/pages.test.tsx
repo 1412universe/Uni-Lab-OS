@@ -1161,7 +1161,8 @@ describe('TasksPage', () => {
 
     const dialog = await screen.findByRole('dialog', { name: '删除任务' })
     expect(await within(dialog).findByText(/仍有 1 个人工干预未关闭/)).toBeInTheDocument()
-    expect(within(dialog).getByRole('button', { name: '确认删除' })).toBeDisabled()
+    expect(within(dialog).queryByRole('button', { name: '确认删除' })).not.toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '强制删除' })).toBeDisabled()
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/workflow-tasks/${listProjectedTask.uuid}/delete-eligibility`,
       expect.objectContaining({ headers: { Accept: 'application/json' } }),
@@ -1226,6 +1227,70 @@ describe('TasksPage', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/v1/workflow-tasks/${deletableTask.uuid}`,
       expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('force-deletes a running task after the operator confirms the floor is safe', async () => {
+    const runningTask = {
+      ...demoTasks[0],
+      uuid: 'running-task',
+      status: 'running' as const,
+      executionStatus: 'running' as const,
+      canDelete: undefined,
+      deleteBlockers: undefined,
+    }
+    const notify = vi.fn()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith(`/workflow-tasks/${runningTask.uuid}/delete-eligibility`)) {
+        return response({
+          code: 0,
+          data: {
+            workflow_task_uuid: runningTask.uuid,
+            can_delete: false,
+            already_deleted: false,
+            delete_blockers: ['任务状态为 running，尚未进入终态'],
+            status: 'running',
+            cleanup_status: 'none',
+          },
+        })
+      }
+      if (url.endsWith(`/workflow-tasks/${runningTask.uuid}/force-delete`) && init?.method === 'POST') {
+        return response({
+          code: 0,
+          data: { status: 'deleted', workflow_task_uuid: runningTask.uuid, forced: true },
+        })
+      }
+      return response({ code: 0, data: { items: [], total: 0 } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderWithQuery(
+      <TasksPage
+        tasks={[runningTask]}
+        workflows={demoWorkflows}
+        materials={demoMaterials}
+        connected
+        onRefresh={vi.fn()}
+        onNotify={notify}
+        onOpenWorkflow={vi.fn()}
+      />,
+    )
+
+    const deleteButton = screen.getByRole('button', { name: '删除任务' })
+    expect(deleteButton).toBeEnabled()
+    fireEvent.click(deleteButton)
+    const dialog = await screen.findByRole('dialog', { name: '删除任务' })
+    const forceButton = await within(dialog).findByRole('button', { name: '强制删除' })
+    expect(forceButton).toBeDisabled()
+    fireEvent.click(within(dialog).getByLabelText(/我已确认设备已停止/))
+    await waitFor(() => expect(forceButton).toBeEnabled())
+    fireEvent.click(forceButton)
+
+    await waitFor(() => expect(notify).toHaveBeenCalledWith('任务已删除。'))
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/workflow-tasks/${runningTask.uuid}/force-delete`,
+      expect.objectContaining({ method: 'POST' }),
     )
   })
 

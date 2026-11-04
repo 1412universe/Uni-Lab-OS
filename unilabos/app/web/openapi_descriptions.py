@@ -224,6 +224,7 @@ OPERATION_DESCRIPTIONS = {
     ("POST", "/api/v1/debug/workflow-tasks/{task_uuid}/commands"): "向调试工作流任务提交继续、暂停或其他已支持的控制命令。重复请求使用同一个防重复编号时，不会重复执行。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}"): "查询一条工作流任务的当前状态和运行信息。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}/delete-eligibility"): "查询一条工作流任务当前是否可以删除，以及暂时不能删除的原因。",
+    ("POST", "/api/v1/workflow-tasks/{task_uuid}/force-delete"): "在操作员确认设备已停止且现场安全后，强制收口未终态作业与占用并软删除任务；不会向设备补发停止命令。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}/jobs"): "查询指定工作流任务拆分出的全部节点任务。",
     ("PATCH", "/api/v1/workflow-tasks/{task_uuid}/jobs/{job_uuid}/param"): "在任务暂停期间修改尚未派发节点任务的参数；已下发作业和工作流拓扑不可修改。",
     ("GET", "/api/v1/workflow-tasks/{task_uuid}/execution-locks"): "查询指定工作流任务当前活动的设备、物料和库位执行锁，并返回人工释放资格。",

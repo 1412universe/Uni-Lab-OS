@@ -152,6 +152,103 @@ def test_delete_eligibility_endpoint_rejects_unknown_task(tmp_path):
     store.close()
 
 
+def test_force_delete_requires_physical_confirmation(tmp_path):
+    client, store = _client(tmp_path)
+    task_uuid = _task(client, store)
+
+    missing = client.post(
+        f"/api/v1/workflow-tasks/{task_uuid}/force-delete",
+        json={"reason": "清理卡住任务", "physical_settlement_confirmed": False},
+    )
+    assert missing.json()["code"] == 3003
+    assert store._conn.execute(
+        "SELECT deleted_at FROM workflow_task WHERE uuid=?", (task_uuid,)
+    ).fetchone()["deleted_at"] is None
+    store.close()
+
+
+def test_force_delete_settles_running_job_and_open_intervention(tmp_path):
+    client, store = _client(tmp_path)
+    task_uuid = _task(client, store)
+    now = utc_now()
+    job_uuid = str(uuid4())
+    with store.transaction() as connection:
+        ensure_intervention_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO workflow_node_job(
+                uuid, create_time, update_time, meta_data, workflow_task_uuid,
+                workflow_node_uuid, feedback_sequence, topological_index,
+                executor_kind, execution_policy, execution_timeout_seconds,
+                status, attempt, param, feedback_data, return_info,
+                control_data, error_info, finished_at
+            ) VALUES (?, ?, ?, '{}', ?, 'node-1', 0, 0, 'robot', '{}', 0,
+                      'running', 1, '{}', '{}', '{}', '{}', '[]', NULL)
+            """,
+            (job_uuid, now, now, task_uuid),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_lock_lease(
+                uuid, create_time, update_time, meta_data, workflow_task_uuid,
+                workflow_node_job_uuid, lock_key, scope, state, acquired_at
+            ) VALUES (?, ?, ?, '{}', ?, ?, '/devices/arm', 'device', 'running', ?)
+            """,
+            (str(uuid4()), now, now, task_uuid, job_uuid, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO execution_claim(
+                claim_uuid, create_time, update_time, workflow_task_uuid,
+                workflow_node_job_uuid, attempt, resource_keys, state, acquired_at
+            ) VALUES (?, ?, ?, ?, ?, 1, '[]', 'running', ?)
+            """,
+            (str(uuid4()), now, now, task_uuid, job_uuid, now),
+        )
+        connection.execute(
+            """
+            INSERT INTO workflow_intervention(
+                uuid, create_time, update_time, workflow_task_uuid,
+                workflow_node_job_uuid, decision_id, revision, status,
+                options, resume_control_status, opened_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, 'open', '[]', 'paused', ?)
+            """,
+            (str(uuid4()), now, now, task_uuid, job_uuid, str(uuid4()), now),
+        )
+
+    blocked = client.delete(f"/api/v1/workflow-tasks/{task_uuid}")
+    assert blocked.json()["code"] == 3003
+
+    deleted = client.post(
+        f"/api/v1/workflow-tasks/{task_uuid}/force-delete",
+        json={"reason": "现场确认机械手未动作", "physical_settlement_confirmed": True},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["status"] == "deleted"
+    assert deleted.json()["data"]["forced"] is True
+    assert client.get(f"/api/v1/workflow-tasks/{task_uuid}").json()["code"] == 3002
+    job = store._conn.execute(
+        "SELECT status, uncertainty_reason FROM workflow_node_job WHERE uuid=?",
+        (job_uuid,),
+    ).fetchone()
+    assert job["status"] == "canceled"
+    assert not job["uncertainty_reason"]
+    assert store._conn.execute(
+        "SELECT state FROM execution_lock_lease WHERE workflow_task_uuid=?",
+        (task_uuid,),
+    ).fetchone()["state"] == "released"
+    assert store._conn.execute(
+        "SELECT status FROM workflow_intervention WHERE workflow_task_uuid=?",
+        (task_uuid,),
+    ).fetchone()["status"] == "superseded"
+    repeated = client.post(
+        f"/api/v1/workflow-tasks/{task_uuid}/force-delete",
+        json={"reason": "现场确认机械手未动作", "physical_settlement_confirmed": True},
+    )
+    assert repeated.json()["data"]["status"] == "already_deleted"
+    store.close()
+
+
 def test_open_intervention_is_reported_as_delete_blocker(tmp_path):
     client, store = _client(tmp_path)
     task_uuid = _task(client, store)

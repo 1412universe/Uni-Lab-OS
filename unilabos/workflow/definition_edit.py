@@ -70,6 +70,9 @@ def _optional_uuid(value: Any, field: str) -> str | None:
 
     if value is None:
         return None
+    # ChemWorldModel 等导出常把缺失父节点写成空字符串，与 ``None`` 同义。
+    if isinstance(value, str) and not value.strip():
+        return None
     try:
         return validate_uuid(value)
     except (TypeError, ValueError):

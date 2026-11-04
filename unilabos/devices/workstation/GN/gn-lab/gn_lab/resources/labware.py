@@ -51,3 +51,43 @@ def prcxi_1250ul_tips(name: str = "PRCXI_1250uL_Tips") -> PRCXI9300TipRack:
 )
 def prcxi_trash(name: str = "trash"):
     return _PRCXI_trash(name)
+
+
+@resource(
+    id="trash",
+    displayname="废液槽",
+    category=["gn_lab", "prcxi", "trash"],
+    description="台面 content_type=trash 对应的废液槽模板。",
+)
+def trash(name: str = "trash"):
+    return _PRCXI_trash(name)
+
+
+@resource(
+    id="trough",
+    displayname="储液槽",
+    category=["gn_lab", "prcxi", "plates"],
+    description="台面 content_type=trough 对应的储液槽模板。",
+)
+def trough(name: str = "PRCXI_nest_1_troughplate") -> PRCXI9300Plate:
+    return _PRCXI_nest_1_troughplate(name)
+
+
+@resource(
+    id="tip_rack",
+    displayname="枪头盒",
+    category=["gn_lab", "prcxi", "tip_racks"],
+    description="台面 content_type=tip_rack 对应的枪头盒模板。",
+)
+def tip_rack(name: str = "PRCXI_1250uL_Tips") -> PRCXI9300TipRack:
+    return _PRCXI_1250uL_Tips(name)
+
+
+@resource(
+    id="96_well_plate",
+    displayname="96孔酶标板",
+    category=["gn_lab", "prcxi", "plates"],
+    description="台面 content_type=96_well_plate 对应的 96 孔板模板。",
+)
+def well_96_plate(name: str = "PRCXI_96_DeepWell") -> PRCXI9300Plate:
+    return _PRCXI_96_DeepWell(name)

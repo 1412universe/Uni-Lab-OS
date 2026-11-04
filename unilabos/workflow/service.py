@@ -66,6 +66,12 @@ from unilabos.workflow.definition_edit import (
 from unilabos.workflow.definition_edit import (
     patch_node as build_patched_node,
 )
+from unilabos.workflow.legacy_json_import import (
+    empty_as_none,
+    normalize_imported_action_name,
+    resolve_catalog_action,
+    resolve_handle_uuid,
+)
 from unilabos.workflow.device_action_run import (
     DeviceActionRunConflict,
     DeviceActionRunInputError,
@@ -2340,6 +2346,72 @@ class WorkflowService:
         with self._active_sources_lock:
             return workflow_uuid in self._active_source_workflow_uuids
 
+    def _existing_authoring_function_names(
+        self,
+        *,
+        exclude_workflow_uuid: str | None = None,
+    ) -> set[str]:
+        """收集领域包内已占用的作者函数名。"""
+
+        occupied: set[str] = set()
+        if self._source_target is None:
+            return occupied
+        page = 1
+        while True:
+            listed = self._definition_store.list_workflows(
+                page=page,
+                page_size=100,
+            )
+            for workflow in listed["items"]:
+                if (
+                    exclude_workflow_uuid is not None
+                    and str(workflow.get("uuid")) == exclude_workflow_uuid
+                ):
+                    continue
+                meta_data = workflow.get("meta_data")
+                unilab = (
+                    meta_data.get("unilab")
+                    if isinstance(meta_data, Mapping)
+                    else None
+                )
+                existing_name = (
+                    unilab.get("authoring_function_name")
+                    if isinstance(unilab, Mapping)
+                    else None
+                )
+                if not isinstance(existing_name, str) or not existing_name:
+                    existing_name = _safe_identifier(
+                        str(workflow.get("name") or "workflow"), fallback="workflow"
+                    )
+                occupied.add(existing_name)
+            if page * 100 >= int(listed["total"]):
+                break
+            page += 1
+        return occupied
+
+    def _allocate_unique_import_workflow_name(self, name: str) -> str:
+        """JSON 导入时若展示名会撞作者函数名，则自动追加时间后缀。"""
+
+        base = name.strip() or "workflow"
+        with self._authoring_function_name_lock:
+            occupied = self._existing_authoring_function_names()
+            candidate = base
+            function_name = _safe_identifier(candidate, fallback="workflow")
+            if function_name not in occupied:
+                return candidate
+            stamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
+            candidate = f"{base}_{stamp}"
+            function_name = _safe_identifier(candidate, fallback="workflow")
+            if function_name not in occupied:
+                return candidate
+            # 同一秒内重复导入时再拼短后缀，避免仍冲突。
+            for index in range(2, 100):
+                candidate = f"{base}_{stamp}_{index}"
+                function_name = _safe_identifier(candidate, fallback="workflow")
+                if function_name not in occupied:
+                    return candidate
+            return f"{base}_{stamp}_{uuid4().hex[:8]}"
+
     def _ensure_authoring_function_name_available(
         self,
         *,
@@ -2352,35 +2424,11 @@ class WorkflowService:
             return
         normalized_name = _safe_identifier(function_name, fallback="workflow")
         with self._authoring_function_name_lock:
-            page = 1
-            while True:
-                listed = self._definition_store.list_workflows(
-                    page=page,
-                    page_size=100,
-                )
-                for workflow in listed["items"]:
-                    if str(workflow.get("uuid")) == workflow_uuid:
-                        continue
-                    meta_data = workflow.get("meta_data")
-                    unilab = (
-                        meta_data.get("unilab")
-                        if isinstance(meta_data, Mapping)
-                        else None
-                    )
-                    existing_name = (
-                        unilab.get("authoring_function_name")
-                        if isinstance(unilab, Mapping)
-                        else None
-                    )
-                    if not isinstance(existing_name, str) or not existing_name:
-                        existing_name = _safe_identifier(
-                            str(workflow.get("name") or "workflow"), fallback="workflow"
-                        )
-                    if existing_name == normalized_name:
-                        raise WorkflowConflict("source_function_conflict")
-                if page * 100 >= int(listed["total"]):
-                    break
-                page += 1
+            occupied = self._existing_authoring_function_names(
+                exclude_workflow_uuid=workflow_uuid
+            )
+            if normalized_name in occupied:
+                raise WorkflowConflict("source_function_conflict")
 
     @staticmethod
     def _authoring_function_name_from_source(
@@ -2918,7 +2966,13 @@ class WorkflowService:
                     "字符串或空值"
                 ),
             )
-        name_value = definition.get("name") or definition.get("workflow_name")
+        # ChemWorldModel 常把展示名放在根对象 ``name``，图本体在 ``data`` 内。
+        name_value = (
+            definition.get("name")
+            or definition.get("workflow_name")
+            or payload.get("name")
+            or payload.get("workflow_name")
+        )
         if not isinstance(name_value, str) or not name_value.strip():
             raise WorkflowError(
                 "invalid_input",
@@ -2959,6 +3013,22 @@ class WorkflowService:
             raise WorkflowError("template_catalog_unavailable")
 
         old_to_new: dict[str, str] = {}
+        # ChemWorldModel 等外源导出的 template_uuid 往往不在本机目录；按设备+动作
+        # 回落到本地模板，并把 ready 等句柄键补成 Handle UUID。
+        catalog_actions = ()
+        provider = getattr(
+            self._definition_store, "_template_snapshot_provider", None
+        )
+        if provider is not None:
+            try:
+                catalog_actions = provider.snapshot().actions
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                catalog_actions = ()
+        if not catalog_actions and self.compiler is not None:
+            catalog = getattr(self.compiler, "_catalog", None)
+            if catalog is not None:
+                catalog_actions = getattr(catalog, "actions", ()) or ()
+        node_catalog_actions: dict[str, Any] = {}
         nodes: list[dict[str, Any]] = []
         try:
             for index, source in enumerate(source_nodes):
@@ -2975,10 +3045,18 @@ class WorkflowService:
                         f"nodes[{index}].uuid 与前面的节点重复（UUID：{old_uuid}）"
                     )
                 node_payload = dict(source)
-                node_payload["workflow_node_template_uuid"] = source.get(
-                    "workflow_node_template_uuid"
-                ) or source.get("template_uuid")
+                node_payload["parent_uuid"] = empty_as_none(
+                    node_payload.get("parent_uuid")
+                )
+                node_payload["material_uuid"] = empty_as_none(
+                    node_payload.get("material_uuid")
+                )
+                node_payload["workflow_node_template_uuid"] = empty_as_none(
+                    source.get("workflow_node_template_uuid")
+                    or source.get("template_uuid")
+                )
                 template = None
+                catalog_action = None
                 template_uuid = node_payload.get("workflow_node_template_uuid")
                 if template_uuid is not None:
                     try:
@@ -2993,13 +3071,52 @@ class WorkflowService:
                             template_uuid
                         )
                     except StoreNotFound:
-                        raise WorkflowError(
-                            "not_found",
-                            message=(
-                                f"nodes[{index}] 引用的工作流节点模板不存在"
-                                f"（模板 UUID：{template_uuid}）"
-                            ),
-                        ) from None
+                        catalog_action = resolve_catalog_action(
+                            catalog_actions, source
+                        )
+                        if catalog_action is None:
+                            raise WorkflowError(
+                                "not_found",
+                                message=(
+                                    f"nodes[{index}] 引用的工作流节点模板不存在"
+                                    f"（模板 UUID：{template_uuid}）；"
+                                    "也无法按 device_name + 动作名映射到本机目录"
+                                ),
+                            ) from None
+                        template = catalog_action.detached_template()
+                        template_uuid = str(template["uuid"])
+                    else:
+                        if catalog_actions:
+                            for action in catalog_actions:
+                                if str(action.template.get("uuid")) == template_uuid:
+                                    catalog_action = action
+                                    break
+                else:
+                    catalog_action = resolve_catalog_action(catalog_actions, source)
+                    if catalog_action is not None:
+                        template = catalog_action.detached_template()
+                        template_uuid = str(template["uuid"])
+                if template_uuid is not None:
+                    node_payload["workflow_node_template_uuid"] = template_uuid
+                if template is not None:
+                    # CWM 常用 ``auto-<action>`` 作节点名；对齐到模板展示名，
+                    # 避免后续 Python 生成因“自定义标题无描述”关闭导入。
+                    action_name = str(template.get("name") or "").strip()
+                    display_name = str(
+                        template.get("display_name") or action_name
+                    ).strip()
+                    raw_name = str(node_payload.get("name") or "").strip()
+                    if (
+                        action_name
+                        and normalize_imported_action_name(raw_name) == action_name
+                    ):
+                        node_payload["name"] = display_name or action_name
+                    if empty_as_none(node_payload.get("description")) is None:
+                        template_description = empty_as_none(
+                            template.get("description")
+                        )
+                        if template_description is not None:
+                            node_payload["description"] = template_description
                 try:
                     node = build_workflow_node(
                         payload=node_payload,
@@ -3010,6 +3127,8 @@ class WorkflowService:
                         f"nodes[{index}] 校验失败：{error}"
                     ) from None
                 old_to_new[old_uuid] = node["uuid"]
+                if catalog_action is not None:
+                    node_catalog_actions[old_uuid] = catalog_action
                 nodes.append(node)
             # JSON 导入会为每个节点重建身份；控制区域参数和嵌套组合元数据中
             # 的节点引用也必须同步重映射，否则候选图校验会看到已不存在的旧 UUID。
@@ -3023,7 +3142,7 @@ class WorkflowService:
                     old_to_new,
                 )
             for index, source in enumerate(source_nodes):
-                parent_uuid = source.get("parent_uuid")
+                parent_uuid = empty_as_none(source.get("parent_uuid"))
                 if parent_uuid is not None:
                     try:
                         parent_identity = validate_uuid(str(parent_uuid))
@@ -3042,6 +3161,8 @@ class WorkflowService:
                 if not isinstance(source, Mapping):
                     raise WorkflowDefinitionInvalid(f"edges[{index}] 必须是对象")
                 edge_payload = dict(source)
+                old_source_node = None
+                old_target_node = None
                 for field in ("source_node_uuid", "target_node_uuid"):
                     try:
                         node_identity = validate_uuid(str(source.get(field)))
@@ -3054,7 +3175,50 @@ class WorkflowService:
                             f"edges[{index}].{field} 引用了不存在的节点"
                             f"（UUID：{node_identity}）"
                         )
+                    if field == "source_node_uuid":
+                        old_source_node = node_identity
+                    else:
+                        old_target_node = node_identity
                     edge_payload[field] = old_to_new[node_identity]
+                # CWM 导出多用 source_handle_key/target_handle_key，本机图需要 UUID。
+                source_handle = empty_as_none(edge_payload.get("source_handle_uuid"))
+                target_handle = empty_as_none(edge_payload.get("target_handle_uuid"))
+                if source_handle is None:
+                    source_handle = resolve_handle_uuid(
+                        node_catalog_actions.get(old_source_node or ""),
+                        handle_key=str(
+                            source.get("source_handle_key")
+                            or source.get("source_handle")
+                            or "ready"
+                        ),
+                        io_type=str(
+                            source.get("source_handle_io")
+                            or source.get("source_io_type")
+                            or "source"
+                        ),
+                    )
+                if target_handle is None:
+                    target_handle = resolve_handle_uuid(
+                        node_catalog_actions.get(old_target_node or ""),
+                        handle_key=str(
+                            source.get("target_handle_key")
+                            or source.get("target_handle")
+                            or "ready"
+                        ),
+                        io_type=str(
+                            source.get("target_handle_io")
+                            or source.get("target_io_type")
+                            or "target"
+                        ),
+                    )
+                if source_handle is None or target_handle is None:
+                    raise WorkflowDefinitionInvalid(
+                        f"edges[{index}] 缺少可解析的 Handle UUID；"
+                        "请提供 source_handle_uuid/target_handle_uuid，"
+                        "或确保节点模板可映射到本机目录以便按 handle_key 补全"
+                    )
+                edge_payload["source_handle_uuid"] = source_handle
+                edge_payload["target_handle_uuid"] = target_handle
                 try:
                     edges.append(build_workflow_edge(edge_payload))
                 except WorkflowDefinitionInvalid as error:
@@ -3143,9 +3307,11 @@ class WorkflowService:
             file_name=DomainWorkflowSourceTarget.default_file_name(identity),
             workflow_type=workflow_type,
         )
+        # 重复导入同名 CWM/JSON 时自动改名，避免作者函数名冲突打断导入。
+        import_name = self._allocate_unique_import_workflow_name(name_value.strip())
         return self._commit_domain_workflow_creation(
             registration=registration,
-            name=name_value.strip(),
+            name=import_name,
             tags=tags,
             description=self._optional_text(definition.get("description")),
             meta_data=public_meta_data,
@@ -4955,6 +5121,41 @@ class WorkflowService:
             raise WorkflowError("not_found") from None
         except StoreConflict as error:
             raise WorkflowConflict("conflict", message=str(error)) from None
+
+    def force_delete_workflow_task(
+        self,
+        task_uuid: str,
+        *,
+        reason: str,
+        physical_settlement_confirmed: bool,
+    ) -> dict[str, Any]:
+        """在操作员确认现场安全后强制软删除仍占用资源的任务。"""
+
+        try:
+            identity = validate_uuid(task_uuid)
+        except ValueError:
+            raise WorkflowError("invalid_input") from None
+        try:
+            result = self._store.force_delete_task(
+                identity,
+                reason=reason,
+                physical_settlement_confirmed=physical_settlement_confirmed,
+            )
+        except StoreNotFound:
+            raise WorkflowError("not_found") from None
+        except StoreConflict as error:
+            raise WorkflowConflict("conflict", message=str(error)) from None
+        reschedule = (
+            getattr(self._task_scheduler_bridge, "reschedule", None)
+            if self._task_scheduler_bridge is not None
+            else None
+        )
+        if result.get("status") == "deleted" and callable(reschedule):
+            try:
+                reschedule()
+            except Exception:
+                logger.warning("强制删除任务后调度器唤醒失败", exc_info=True)
+        return result
 
     def _project_manual_review_attention(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """展示资格独立于持久控制状态，不清除任何未结算事实。"""

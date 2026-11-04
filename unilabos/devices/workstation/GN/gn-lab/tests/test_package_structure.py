@@ -108,6 +108,10 @@ def test_ast_scan_finds_all_gn_devices() -> None:
     assert "prcxi_nest_1_troughplate" in resources
     assert "prcxi_96_deepwell" in resources
     assert "prcxi_1250ul_tips" in resources
+    assert "trash" in resources
+    assert "trough" in resources
+    assert "tip_rack" in resources
+    assert "96_well_plate" in resources
     prcxi = result["devices"]["gn_prcxi"]
     for action_name in ("create_protocol", "run_protocol"):
         assert action_name in prcxi.get("actions", {})

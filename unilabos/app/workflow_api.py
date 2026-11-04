@@ -819,6 +819,13 @@ class ManualConfirmationDecisionRequest(_StrictModel):
     action: Literal["approve", "reject"]
 
 
+class WorkflowTaskForceDeleteRequest(_StrictModel):
+    """工作流任务强制删除请求；必须携带物理安全确认和原因。"""
+
+    reason: str = Field(min_length=1, max_length=500)
+    physical_settlement_confirmed: StrictBool
+
+
 class WorkflowTaskExecutionLockReleaseRequest(_StrictModel):
     """工作流任务执行锁人工释放请求；必须携带物理安全确认和并发快照。"""
 
@@ -1917,6 +1924,29 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """
 
         return _success(service.delete_workflow_task(task_uuid))
+
+    @router.post(
+        "/workflow-tasks/{task_uuid}/force-delete",
+        summary="强制删除工作流任务",
+        description="在操作员确认设备已停止且现场安全后，收口未终态 Job、锁、Claim 和干预，再软删除任务；不向设备补发停止命令。",
+    )
+    def force_delete_workflow_task(
+        task_uuid: str,
+        body: WorkflowTaskForceDeleteRequest,
+    ) -> JSONResponse:
+        """强制软删除仍在运行或资源未收敛的 Edge 任务。
+
+        普通 DELETE 仍保留终态与资源门禁。本接口只在 ``physical_settlement_confirmed``
+        为真时生效，重复请求保持幂等 ``already_deleted``。
+        """
+
+        return _success(
+            service.force_delete_workflow_task(
+                task_uuid,
+                reason=body.reason,
+                physical_settlement_confirmed=body.physical_settlement_confirmed,
+            )
+        )
 
     @router.get("/workflow-tasks/{task_uuid}/step-state")
     def get_workflow_task_step_state(task_uuid: str) -> JSONResponse:

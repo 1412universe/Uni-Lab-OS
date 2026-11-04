@@ -1942,6 +1942,11 @@ export async function deleteExperimentOperation(workflowUuid: string) {
   return writeData<unknown>('DELETE', `/workflows/${encodeURIComponent(workflowUuid)}`)
 }
 
+/** 删除整条工作流定义（与实验操作删除共用同一后端入口）。 */
+export async function deleteWorkflow(workflowUuid: string) {
+  return deleteExperimentOperation(workflowUuid)
+}
+
 /** 设备动作（Action）输入来源：工作流参数写入节点元数据，上游输出写入 workflow_edge。 */
 export type OperationInputBinding =
   | { parameter: string }
@@ -3226,6 +3231,24 @@ export async function loadWorkflowTaskDeleteEligibility(
  * 软删除一个已经完成且资源事实已收敛的 Edge 任务。
  * Edge 会在事务内再次检查删除资格；页面上的 can_delete 只用于交互提示。
  */
+export async function forceDeleteWorkflowTask(
+  taskUuid: string,
+  request: { reason: string; physicalSettlementConfirmed: boolean },
+): Promise<WorkflowTaskDeletionResult> {
+  const result = await postData<RawRecord>(
+    `/workflow-tasks/${encodeURIComponent(taskUuid)}/force-delete`,
+    {
+      reason: request.reason,
+      physical_settlement_confirmed: request.physicalSettlementConfirmed,
+    },
+  )
+  return {
+    status: String(result.status || 'deleted') as WorkflowTaskDeletionResult['status'],
+    workflowTaskUuid: result.workflow_task_uuid ? String(result.workflow_task_uuid) : taskUuid,
+    deletedAt: result.deleted_at ? String(result.deleted_at) : undefined,
+  }
+}
+
 export async function deleteWorkflowTask(taskUuid: string): Promise<WorkflowTaskDeletionResult> {
   const path = `/workflow-tasks/${encodeURIComponent(taskUuid)}`
   const response = await fetch(`${EDGE_API_BASE}${path}`, {

@@ -2785,6 +2785,265 @@ class WorkflowStore:
                 "deleted_at": now,
             }
 
+    def force_delete_task(
+        self,
+        task_uuid: str,
+        *,
+        reason: str,
+        physical_settlement_confirmed: bool,
+    ) -> Dict[str, Any]:
+        """操作员确认现场安全后，收口占用并软删除仍在运行或卡住的任务。
+
+        参数：``task_uuid`` 是稳定任务 UUID；``reason`` 是强制删除原因；
+        ``physical_settlement_confirmed`` 必须为真，表示操作员已确认设备停止。
+        返回：与普通删除相同的 ``deleted`` / ``already_deleted`` 结果。异常：
+        缺少确认或原因为空抛 ``StoreConflict``；任务不存在抛 ``StoreNotFound``。
+        状态不变量：只软删根任务，Job 与运行历史保留；不向设备补发停止命令。
+        """
+
+        normalized_reason = str(reason or "").strip()
+        if not physical_settlement_confirmed:
+            raise StoreConflict("必须确认设备已停止且物理现场已安全")
+        if not normalized_reason or len(normalized_reason) > 500:
+            raise StoreConflict("强制删除必须填写 1-500 字原因")
+
+        now = utc_now()
+        terminal_jobs = tuple(_JOB_DELETE_TERMINAL_STATUSES)
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?",
+                (task_uuid,),
+            ).fetchone()
+            if row is None:
+                raise StoreNotFound(f"workflow task {task_uuid} not found")
+            eligibility = self._task_delete_eligibility(connection, row)
+            if eligibility["already_deleted"]:
+                return {
+                    "status": "already_deleted",
+                    "workflow_task_uuid": task_uuid,
+                    "deleted_at": eligibility["deleted_at"],
+                }
+            previous_status = str(eligibility["status"] or "")
+            self._force_settle_task_for_delete(
+                connection,
+                task_uuid=task_uuid,
+                now=now,
+                reason=normalized_reason,
+                terminal_jobs=terminal_jobs,
+            )
+            settled = connection.execute(
+                "SELECT * FROM workflow_task WHERE uuid = ?",
+                (task_uuid,),
+            ).fetchone()
+            settled_eligibility = self._task_delete_eligibility(connection, settled)
+            if not settled_eligibility["can_delete"]:
+                raise StoreConflict(
+                    "强制删除后仍不能收口："
+                    + "；".join(settled_eligibility["delete_blockers"]),
+                )
+            self._append_runtime_event(
+                connection,
+                task_uuid=task_uuid,
+                kind="task_transition",
+                now=now,
+                from_status=previous_status,
+                to_status="canceled",
+                data={
+                    "event": "task_force_deleted",
+                    "status": "canceled",
+                    "cleanup_status": "settled",
+                    "reason": normalized_reason,
+                    "physical_settlement_confirmed": True,
+                    "previous_blockers": list(eligibility["delete_blockers"]),
+                },
+            )
+            updated = connection.execute(
+                """
+                UPDATE workflow_task
+                SET deleted_at = ?, update_time = ?
+                WHERE uuid = ? AND deleted_at IS NULL
+                """,
+                (now, now, task_uuid),
+            ).rowcount
+            if updated != 1:
+                raise StoreConflict("任务状态已变化，请刷新后重试")
+            self._append_event(
+                connection,
+                event="workflow.runtime.changed",
+                data={
+                    "workflow_task_uuid": task_uuid,
+                    "event": "task_force_deleted",
+                },
+                now=now,
+            )
+            return {
+                "status": "deleted",
+                "workflow_task_uuid": task_uuid,
+                "deleted_at": now,
+                "forced": True,
+            }
+
+    def _force_settle_task_for_delete(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        task_uuid: str,
+        now: str,
+        reason: str,
+        terminal_jobs: tuple[str, ...],
+    ) -> None:
+        """在删除事务内把任务占用收敛到可软删状态。"""
+
+        placeholders = ",".join("?" for _ in terminal_jobs)
+        connection.execute(
+            f"""
+            UPDATE workflow_node_job
+            SET status = CASE
+                    WHEN status NOT IN ({placeholders}) THEN 'canceled'
+                    ELSE status
+                END,
+                uncertainty_reason = NULL,
+                wait_reason = '{{}}',
+                finished_at = COALESCE(finished_at, ?),
+                update_time = ?
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+            """,
+            (*terminal_jobs, now, now, task_uuid),
+        )
+
+        def optional(sql: str, values: tuple[Any, ...]) -> None:
+            try:
+                connection.execute(sql, values)
+            except sqlite3.OperationalError as error:
+                if "no such table" in str(error).lower() or "no such column" in str(error).lower():
+                    return
+                raise
+
+        optional(
+            """
+            UPDATE execution_lock_lease
+            SET state = 'released', released_at = ?, update_time = ?
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+              AND state IN ('reserved', 'running', 'uncertain')
+            """,
+            (now, now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE execution_claim
+            SET state = 'released', released_at = ?, update_time = ?
+            WHERE workflow_task_uuid = ?
+              AND state IN ('reserved', 'running', 'uncertain')
+            """,
+            (now, now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE execution_lock_waiter
+            SET state = 'released', released_at = ?, update_time = ?
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND state = 'waiting'
+            """,
+            (now, now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE task_device_tenancy
+            SET state = 'released',
+                released_at = ?,
+                released_by_job_uuid = COALESCE(released_by_job_uuid, acquired_by_job_uuid),
+                update_time = ?
+            WHERE workflow_task_uuid = ? AND state = 'active'
+            """,
+            (now, now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE workflow_task_material_claim
+            SET status = 'released', released_at = ?, revision = revision + 1, update_time = ?
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND status = 'active'
+            """,
+            (now, now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE workflow_intervention
+            SET status = 'superseded', update_time = ?
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL
+              AND status IN ('open', 'selected')
+            """,
+            (now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE workflow_manual_confirmation
+            SET status = 'canceled', decided_at = ?, resolution_reason = ?
+            WHERE workflow_task_uuid = ? AND status IN ('pending', 'approved')
+            """,
+            (now, reason, task_uuid),
+        )
+        optional(
+            """
+            UPDATE workflow_task_command
+            SET status = 'rejected', result = ?, consumed_at = ?, update_time = ?
+            WHERE workflow_task_uuid = ? AND deleted_at IS NULL AND status = 'pending'
+            """,
+            (
+                _json({"rejected": "force_delete", "reason": reason}),
+                now,
+                now,
+                task_uuid,
+            ),
+        )
+        optional(
+            """
+            UPDATE workflow_task_debug_command
+            SET status = 'rejected', result = ?, consumed_at = ?, update_time = ?
+            WHERE workflow_task_uuid = ? AND status = 'pending'
+            """,
+            (
+                _json({"rejected": "force_delete", "reason": reason}),
+                now,
+                now,
+                task_uuid,
+            ),
+        )
+        optional(
+            """
+            UPDATE workflow_node_admission_hold
+            SET status = 'canceled', update_time = ?
+            WHERE workflow_task_uuid = ? AND status = 'open'
+            """,
+            (now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE workflow_inventory_allocation
+            SET status = 'released', released_at = ?, revision = revision + 1
+            WHERE workflow_task_uuid = ? AND status = 'reserved'
+            """,
+            (now, task_uuid),
+        )
+        optional(
+            """
+            UPDATE workflow_inventory_saga
+            SET status = 'settled', update_time = ?
+            WHERE workflow_task_uuid = ? AND status != 'settled'
+            """,
+            (now, task_uuid),
+        )
+        connection.execute(
+            """
+            UPDATE workflow_task
+            SET status = 'canceled',
+                cleanup_status = 'settled',
+                finished_at = COALESCE(finished_at, ?),
+                attention_reason = NULL,
+                update_time = ?
+            WHERE uuid = ? AND deleted_at IS NULL
+            """,
+            (now, now, task_uuid),
+        )
+
     def get_station_task_by_invocation(
         self,
         *,

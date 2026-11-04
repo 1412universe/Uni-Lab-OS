@@ -11,6 +11,7 @@ import {
   createReagentInfo,
   deleteReagentInfo,
   deleteWorkflowTask,
+  forceDeleteWorkflowTask,
   EdgeApiError,
   DeviceActionRunRequestError,
   TaskCommandRequestError,
@@ -68,6 +69,26 @@ describe('deleteWorkflowTask', () => {
   it('does not treat an HTTP 200 conflict as a successful deletion', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => response({ code: 3003, error: { msg: '仍有 1 个执行锁租约未释放' } })))
     await expect(deleteWorkflowTask('task-1')).rejects.toThrow('仍有 1 个执行锁租约未释放')
+  })
+})
+
+describe('forceDeleteWorkflowTask', () => {
+  it('posts the operator confirmation to the force-delete endpoint', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({
+      code: 0,
+      data: { status: 'deleted', workflow_task_uuid: 'task-1', forced: true },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(forceDeleteWorkflowTask('task-1', {
+      reason: '现场已停机，清理卡住任务',
+      physicalSettlementConfirmed: true,
+    })).resolves.toMatchObject({ status: 'deleted', workflowTaskUuid: 'task-1' })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/workflow-tasks/task-1/force-delete')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      reason: '现场已停机，清理卡住任务',
+      physical_settlement_confirmed: true,
+    })
   })
 })
 

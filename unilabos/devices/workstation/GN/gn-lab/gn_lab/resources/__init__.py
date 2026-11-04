@@ -6,6 +6,10 @@ from gn_lab.resources.labware import (
     prcxi_96_deepwell,
     prcxi_nest_1_troughplate,
     prcxi_trash,
+    tip_rack,
+    trash,
+    trough,
+    well_96_plate,
 )
 
 __all__ = [
@@ -15,4 +19,8 @@ __all__ = [
     "prcxi_96_deepwell",
     "prcxi_1250ul_tips",
     "prcxi_trash",
+    "trash",
+    "trough",
+    "tip_rack",
+    "well_96_plate",
 ]
