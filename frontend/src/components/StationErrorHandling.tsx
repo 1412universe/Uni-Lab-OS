@@ -1,4 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+
+/**
+ * 已自动提示过的错误（`decision_id:stage`）。
+ *
+ * 为什么要持久化：组件内的 `seen` 是 ref，刷新即清空。没有这份记录时，
+ * 工站里只要还留着历史错误，每次刷新页面都会把同一个旧错误当成新故障弹出来。
+ * 用 localStorage 记住「提示过」，就能做到——新错误照常自动弹，旧的不再重复。
+ */
+const NOTIFIED_STORAGE_KEY = 'unilab_station_error_notified_v1'
+
+function loadNotified(): Set<string> {
+  try {
+    const raw = localStorage.getItem(NOTIFIED_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return new Set(Array.isArray(parsed) ? parsed.filter((item) => typeof item === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+function persistNotified(values: Set<string>) {
+  try {
+    // 只保留最近 200 条，避免 localStorage 无限增长。
+    localStorage.setItem(NOTIFIED_STORAGE_KEY, JSON.stringify([...values].slice(-200)))
+  } catch {
+    // 隐私模式不可写：退化为纯内存提示，不影响处置功能。
+  }
+}
+
+
 import { createPortal } from 'react-dom'
 import { AlertCircle, ExternalLink, Pause, RefreshCw, X } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
@@ -55,6 +85,7 @@ export function StationErrorHandling({ controller, materials, tasks, openRequest
   const [open, setOpen] = useState(Boolean(unconfirmed))
   const [decisionId, setDecisionId] = useState('')
   const seen = useRef(new Set<string>())
+  const notifiedBefore = useRef<Set<string>>(loadNotified())
   const dialogRef = useRef<HTMLElement>(null)
   const pendingRef = useRef(pending)
   pendingRef.current = pending
@@ -63,12 +94,24 @@ export function StationErrorHandling({ controller, materials, tasks, openRequest
 
   useEffect(() => {
     if (!snapshot) return
+    // 自动弹出规则（区分「还在处理」和「已处理过」）：
+    // · 有待决策错误（DECISION_REQUIRED）或活动会话 → 必须弹出。用户可能刷新了
+    //   页面但没处理完，把面板藏起来会让工站看起来「卡住」而无从下手；
+    // · 已提示过且不处于待决策状态的历史错误 → 不再重复弹。`seen` 是 ref，
+    //   刷新即清空，没有这份持久记录时同一个旧错误会在每次刷新时重新弹一遍。
+    const previouslyNotified = new Set(notifiedBefore.current)
     const fresh = snapshot.errors.filter((item) => !seen.current.has(`${item.decision_id}:${item.stage}`))
     snapshot.errors.forEach((item) => seen.current.add(`${item.decision_id}:${item.stage}`))
-    if (fresh.length) {
-      setDecisionId(snapshot.active_session?.decision_id || fresh[0].decision_id)
-      setOpen(true)
-    }
+    if (!fresh.length) return
+    fresh.forEach((item) => notifiedBefore.current.add(`${item.decision_id}:${item.stage}`))
+    persistNotified(notifiedBefore.current)
+    const needsAttention = Boolean(snapshot.active_session) || fresh.some((item) => (
+      item.stage === 'DECISION_REQUIRED' || item.stage === 'MANUAL_HANDLING'
+    ))
+    const firstTimeSeen = fresh.some((item) => !previouslyNotified.has(`${item.decision_id}:${item.stage}`))
+    if (!needsAttention && !firstTimeSeen) return
+    setDecisionId(snapshot.active_session?.decision_id || fresh[0].decision_id)
+    setOpen(true)
   }, [snapshot])
   useEffect(() => {
     if (!openRequest || lastOpenRequest.current === openRequest) return

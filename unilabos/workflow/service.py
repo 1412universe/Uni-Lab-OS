@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
+import sqlite3
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
@@ -69,6 +71,12 @@ from unilabos.workflow.definition_edit import (
 from unilabos.workflow.legacy_json_import import (
     empty_as_none,
     normalize_imported_action_name,
+    normalize_imported_edge_uuid,
+    normalize_imported_material_refs,
+    normalize_imported_node_type,
+    normalize_imported_node_uuid,
+    normalize_imported_station_param,
+    prune_undeclared_params,
     resolve_catalog_action,
     resolve_handle_uuid,
 )
@@ -88,6 +96,7 @@ from unilabos.workflow.graph_validation import GraphValidationError
 from unilabos.workflow.intervention import WorkflowInterventionStore
 from unilabos.workflow.job_evidence import JobEvidenceStore
 from unilabos.workflow.manual_confirmation import ManualConfirmationStore
+from unilabos.workflow.parallel_normalization import implicit_parallel_nodes
 from unilabos.workflow.models import (
     CandidateChangeset,
     CandidateCompilation,
@@ -559,6 +568,73 @@ class WorkflowInterventionDelivery(Protocol):
 
 def _sha256(data: bytes) -> str:
     return f"sha256:{hashlib.sha256(data).hexdigest()}"
+
+
+def _normalize_station_like_params(
+    param: Any,
+    *,
+    template: Mapping[str, Any],
+) -> Any:
+    """按模板 schema 把 CWM 的站号整数换算成站点名。
+
+    参数：``param`` 是节点参数字典，``template`` 是本地动作模板。返回：新的参数
+    字典（不修改入参）；模板没有可用 schema 时原样返回。异常：无——schema 解析
+    失败时保留原值，交给后续校验给出准确诊断。
+    """
+
+    if not isinstance(param, Mapping):
+        return param
+    raw_schema = template.get("schema")
+    if not isinstance(raw_schema, str) or not raw_schema.strip():
+        return param
+    try:
+        schema = json.loads(raw_schema)
+    except (TypeError, ValueError):
+        return param
+    properties = schema.get("properties") if isinstance(schema, Mapping) else None
+    if not isinstance(properties, Mapping):
+        return param
+    station_schema = properties.get("station")
+    if not isinstance(station_schema, Mapping):
+        return param
+    normalized = dict(param)
+    normalized["station"] = normalize_imported_station_param(
+        normalized.get("station"),
+        declared_type=station_schema.get("type"),
+    )
+    return normalized
+
+
+def _validation_error_details(error: "ValidationError") -> list[dict[str, Any]]:
+    """把 pydantic 校验错误压成可安全回传的最小诊断列表。
+
+    参数：``error`` 是 pydantic 的校验异常。返回：每条错误的字段路径、类型码
+    与原始消息，供前端定位具体节点/字段。异常：无。
+    """
+
+    return [
+        {
+            "path": ".".join(str(part) for part in item.get("loc", ())),
+            "type": str(item.get("type", "")),
+            "message": str(item.get("msg", "")),
+        }
+        for item in error.errors()
+    ]
+
+
+def _first_validation_message(error: "ValidationError") -> str:
+    """取首条校验错误的人类可读摘要。
+
+    参数：``error`` 是 pydantic 的校验异常。返回：形如 ``nodes.0.name: ...``
+    的单行摘要；没有错误项时退回异常本身。异常：无。
+    """
+
+    details = _validation_error_details(error)
+    if not details:
+        return str(error)
+    first = details[0]
+    path = first["path"] or "<root>"
+    return f"{path}: {first['message']}"
 
 
 def _mtime_rfc3339(timestamp: float) -> str:
@@ -1518,6 +1594,51 @@ class WorkflowService:
                     )
                 )
 
+    def patch_workflow(
+        self,
+        workflow_uuid: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[Any] | None = None,
+        clear_description: bool = False,
+    ) -> dict[str, Any]:
+        """局部更新工作流根字段，未提供的字段保持原值。
+
+        参数：``name``/``description``/``tags`` 是可选的新值；``None`` 表示本次
+        不修改该项。``clear_description`` 为真时把描述清空——因为 ``None`` 已经
+        用于表达「未提供」，清空必须由调用方单独显式声明。返回：更新后的公开
+        工作流读模型。异常：名称为空白、身份非法或源码写回失败映射为稳定
+        工作流错误；失败不留下部分更新。
+
+        与 :meth:`update_workflow` 的区别是**不做完整替换**。完整替换要求调用方
+        回传 ``meta_data``，而编辑器重命名时手里只有列表页的摘要字段；一旦用它
+        拼出载荷，服务端保留的编排元数据（``unilab`` 下的输入/输出合同、
+        来源登记等）就会被清掉。这里改为先读当前权威值再合并，调用方只需给出
+        真正要改的字段。
+        """
+
+        current = self.get_workflow(workflow_uuid)
+        identity = current["uuid"]
+        effective_name = current["name"] if name is None else name
+        effective_tags = current["tags"] if tags is None else tags
+        if clear_description:
+            effective_description: str | None = ""
+        elif description is None:
+            effective_description = current.get("description")
+        else:
+            effective_description = description
+        # 复用完整更新语义：它已经负责类型不可变、类别引用校验、源码回写与
+        # ``unilab`` 元数据保留，局部更新不应另起一条旁路。
+        return self.update_workflow(
+            identity,
+            name=effective_name,
+            tags=effective_tags,
+            description=effective_description,
+            meta_data=dict(current.get("meta_data") or {}),
+            workflow_type=None,
+        )
+
     def delete_workflow(self, workflow_uuid: str) -> None:
         """删除工作流定义并注销其领域包来源和发布合同。
 
@@ -1572,6 +1693,94 @@ class WorkflowService:
         except (StoreNotFound, ValueError):
             raise WorkflowError("not_found") from None
         return self._validated_applied_backend_graph(graph)
+
+    def get_editor_graph(self, workflow_uuid: str) -> dict[str, Any]:
+        """读取供编辑器展示的工作流图，并叠加持久化的画布落点。
+
+        参数：``workflow_uuid`` 是工作流稳定身份。返回：叠加过落点的完整图。
+        异常：与 :meth:`get_graph` 相同。
+
+        为什么不在 :meth:`get_graph` 里叠加：那张图是执行、发布和源码固定点的
+        权威输入，``pose`` 参与图语义摘要，往里面注入展示偏好会让同一次修订
+        产生两个不同的语义指纹。这里只服务于「把图摆上画布」这一件事。
+        """
+
+        graph = self.get_graph(workflow_uuid)
+        return self._overlay_canvas_layout(graph)
+
+    def save_canvas_layout(
+        self,
+        workflow_uuid: str,
+        positions: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """持久化画布落点，不推进工作流修订。
+
+        参数：``workflow_uuid`` 是工作流稳定身份，``positions`` 是
+        ``{node_uuid: {"x": number, "y": number}}``。返回：
+        ``{"workflow_uuid": .., "node_count": n}``。异常：工作流不存在抛
+        ``not_found``；坐标非法或写库失败抛稳定错误。
+
+        落点纯属展示偏好：它不进图、不改修订、不参与源码固定点。正因如此，
+        删除节点后的孤儿坐标也必须在这里清掉——调用方每次提交的都是完整画布。
+        """
+
+        identity = self.get_workflow(workflow_uuid)["uuid"]
+        try:
+            count = self._store.write_canvas_layout(identity, positions)
+        except StoreConflict as error:
+            raise WorkflowError("invalid_input", message=str(error)) from None
+        return {"workflow_uuid": identity, "node_count": count}
+
+    def _overlay_canvas_layout(self, graph: dict[str, Any]) -> dict[str, Any]:
+        """把持久落点填回图中缺少 ``pose.position`` 的节点。
+
+        参数：``graph`` 是后端形状的完整图。返回：新的图对象；已有坐标的节点
+        保持原样，因此本次会话里刚拖动过的位置不会被旧落点覆盖。异常：布局表
+        读取失败时退回原图，让展示降级而不是让编辑器整页报错。
+        """
+
+        workflow = graph.get("workflow")
+        if not isinstance(workflow, Mapping):
+            return graph
+        try:
+            layout = self._store.read_canvas_layout(str(workflow["uuid"]))
+        except (KeyError, TypeError, sqlite3.Error):
+            return graph
+        if not layout:
+            return graph
+        overlaid: list[dict[str, Any]] = []
+        changed = False
+        for node in graph.get("nodes") or []:
+            if not isinstance(node, dict):
+                overlaid.append(node)
+                continue
+            position = (node.get("pose") or {}).get("position")
+            if isinstance(position, Mapping):
+                try:
+                    if math.isfinite(float(position.get("x"))) and math.isfinite(
+                        float(position.get("y"))
+                    ):
+                        overlaid.append(node)
+                        continue
+                except (TypeError, ValueError):
+                    pass
+            stored = layout.get(str(node.get("uuid")))
+            if stored is None:
+                overlaid.append(node)
+                continue
+            overlaid.append(
+                {
+                    **node,
+                    "pose": {
+                        **(node.get("pose") or {}),
+                        "position": {"x": stored["x"], "y": stored["y"]},
+                    },
+                }
+            )
+            changed = True
+        if not changed:
+            return graph
+        return {**graph, "nodes": overlaid}
 
     def publish_workflow_contract(
         self,
@@ -2239,6 +2448,38 @@ class WorkflowService:
             protect_reserved_metadata=True,
         )
 
+    def _normalize_implicit_parallel(
+        self,
+        *,
+        nodes: list[WorkflowNodeWrite],
+        edges: list[WorkflowEdgeWrite],
+    ) -> tuple[list[WorkflowNodeWrite], bool]:
+        """把互不相连的顶层动作自动包进 ``with parallel()``。
+
+        参数：``nodes``/``edges`` 是已通过 DTO 校验的完整替换集合。返回：可能被
+        包裹后的节点与「是否发生包裹」标记；没有两个以上孤立动作时原样返回。
+
+        为什么放在保存入口而不是编译器：这是**用户意图的解释**，属于图写入语义；
+        编译器只负责把图忠实地转成源码。放在这里也让所有写入路径（编辑器整图
+        保存、API 建节点、服务端生成的图）得到一致行为。
+
+        异常：节点身份无法生成时抛 ``WorkflowError``，不写出半成品图。
+        """
+
+        try:
+            raw_nodes = [item.model_dump(exclude_none=True) for item in nodes]
+            raw_edges = [item.model_dump(exclude_none=True) for item in edges]
+            normalized, changed = implicit_parallel_nodes(
+                nodes=raw_nodes,
+                edges=raw_edges,
+                make_uuid=lambda: str(uuid4()),
+            )
+        except ValueError as error:
+            raise WorkflowError("invalid_input", message=str(error)) from None
+        if not changed:
+            return nodes, False
+        return [WorkflowNodeWrite.model_validate(item) for item in normalized], True
+
     def _save_server_generated_graph(
         self,
         workflow_uuid: str,
@@ -2299,6 +2540,15 @@ class WorkflowService:
                     else WorkflowEdgeWrite.model_validate(item)
                     for item in edges
                 ]
+                # 「不连线」在画布上表示并行，但作者源码模型里相邻平铺语句天然
+                # 串行、编译器还会把那条 ready 边补回来。这里在保存前把互不相连
+                # 的顶层动作包进 with parallel()，让调用方只需不连线即得到并行。
+                # 归一化是幂等的：已带 parent_uuid 的节点不会再被包裹。
+                if protect_reserved_metadata:
+                    node_values, _parallelized = self._normalize_implicit_parallel(
+                        nodes=node_values,
+                        edges=edge_values,
+                    )
                 if self._has_active_source(identity):
                     candidate = self._definition_store.preview_graph_replacement(
                         identity,
@@ -2323,16 +2573,26 @@ class WorkflowService:
                     workflow_meta_data=workflow_meta_data,
                     validate_workflow_io_contract=True,
                 )
-            except ValidationError:
-                raise WorkflowError("invalid_input") from None
+            except ValidationError as error:
+                # 不要把校验细节吞成无信息的 invalid_input：调用方拿到的
+                # 「请求参数不符合接口要求」完全无法定位是哪个节点、哪个字段
+                # 不合法。这里保留首条错误的路径与原因。
+                raise WorkflowError(
+                    "invalid_input",
+                    message=f"工作流图参数不合法：{_first_validation_message(error)}",
+                    details={"errors": _validation_error_details(error)},
+                ) from None
             except StoreRevisionConflict:
                 raise WorkflowConflict("conflict") from None
             except StoreNotFound:
                 raise WorkflowError("not_found") from None
             except StoreAuthoringConflict as error:
                 raise WorkflowError(error.code) from None
-            except StoreConflict:
-                raise WorkflowError("invalid_input") from None
+            except StoreConflict as error:
+                raise WorkflowError(
+                    "invalid_input",
+                    message=f"工作流图与既有定义冲突：{error}",
+                ) from None
 
     def _has_active_source(self, workflow_uuid: str) -> bool:
         """返回当前定义是否由本次启动的领域包 Python 目标拥有。
@@ -3029,13 +3289,19 @@ class WorkflowService:
             if catalog is not None:
                 catalog_actions = getattr(catalog, "actions", ()) or ()
         node_catalog_actions: dict[str, Any] = {}
+        # 被丢弃的本机未声明参数；随导入结果一并返回，避免静默改数据。
+        dropped_import_params: list[dict[str, Any]] = []
         nodes: list[dict[str, Any]] = []
         try:
             for index, source in enumerate(source_nodes):
                 if not isinstance(source, Mapping):
                     raise WorkflowDefinitionInvalid(f"nodes[{index}] 必须是对象")
                 try:
-                    old_uuid = validate_uuid(str(source.get("uuid")))
+                    # CWM 组合工作流把祖先路径拼进节点身份
+                    # （<根>__<子流程>__<节点>）；取末段即该节点自身 UUID。
+                    old_uuid = validate_uuid(
+                        normalize_imported_node_uuid(source.get("uuid"))
+                    )
                 except (TypeError, ValueError):
                     raise WorkflowDefinitionInvalid(
                         f"nodes[{index}].uuid 必须是有效且非空的 UUID"
@@ -3045,6 +3311,13 @@ class WorkflowService:
                         f"nodes[{index}].uuid 与前面的节点重复（UUID：{old_uuid}）"
                     )
                 node_payload = dict(source)
+                # CWM 用 ``Group``/``Condition`` 这类首字母大写类型名，本机词表
+                # 是小写；不归一化会被判成「无模板节点的 type 不受支持」。
+                normalized_type = normalize_imported_node_type(
+                    node_payload.get("type")
+                )
+                if normalized_type:
+                    node_payload["type"] = normalized_type
                 node_payload["parent_uuid"] = empty_as_none(
                     node_payload.get("parent_uuid")
                 )
@@ -3117,6 +3390,31 @@ class WorkflowService:
                         )
                         if template_description is not None:
                             node_payload["description"] = template_description
+                if template is not None:
+                    # CWM 的 {id, name, uuid} 物料引用先收敛成 {uuid}，
+                    # 否则本机 additionalProperties:false 会整图拒绝。
+                    node_payload["param"] = normalize_imported_material_refs(
+                        node_payload.get("param")
+                    )
+                    # CWM 工站用模块号整数，本机驱动用站点名；按模板 schema
+                    # 只在字段声明为字符串时换算（表内站号才转）。
+                    node_payload["param"] = _normalize_station_like_params(
+                        node_payload.get("param"),
+                        template=template,
+                    )
+                    kept_param, dropped_param = prune_undeclared_params(
+                        node_payload.get("param"),
+                        template=template,
+                    )
+                    if dropped_param:
+                        node_payload["param"] = kept_param
+                        dropped_import_params.append(
+                            {
+                                "node_uuid": old_uuid,
+                                "node_name": str(node_payload.get("name") or ""),
+                                "params": dropped_param,
+                            }
+                        )
                 try:
                     node = build_workflow_node(
                         payload=node_payload,
@@ -3145,7 +3443,9 @@ class WorkflowService:
                 parent_uuid = empty_as_none(source.get("parent_uuid"))
                 if parent_uuid is not None:
                     try:
-                        parent_identity = validate_uuid(str(parent_uuid))
+                        parent_identity = validate_uuid(
+                            normalize_imported_node_uuid(parent_uuid)
+                        )
                     except (TypeError, ValueError):
                         raise WorkflowDefinitionInvalid(
                             f"nodes[{index}].parent_uuid 必须是有效 UUID"
@@ -3165,7 +3465,9 @@ class WorkflowService:
                 old_target_node = None
                 for field in ("source_node_uuid", "target_node_uuid"):
                     try:
-                        node_identity = validate_uuid(str(source.get(field)))
+                        node_identity = validate_uuid(
+                            normalize_imported_node_uuid(source.get(field))
+                        )
                     except (TypeError, ValueError):
                         raise WorkflowDefinitionInvalid(
                             f"edges[{index}].{field} 必须是有效 UUID"
@@ -3309,7 +3611,7 @@ class WorkflowService:
         )
         # 重复导入同名 CWM/JSON 时自动改名，避免作者函数名冲突打断导入。
         import_name = self._allocate_unique_import_workflow_name(name_value.strip())
-        return self._commit_domain_workflow_creation(
+        imported = self._commit_domain_workflow_creation(
             registration=registration,
             name=import_name,
             tags=tags,
@@ -3323,6 +3625,12 @@ class WorkflowService:
             output_bindings=output_bindings,
             inline_expanded_composites=True,
         )
+        if dropped_import_params:
+            # 如实告知被丢弃的参数：本机动作合同没有这些字段，静默删掉会让用户
+            # 以为参数还在。前端据此提示"哪些节点少了哪些参数"。
+            imported = dict(imported)
+            imported["dropped_undeclared_params"] = dropped_import_params
+        return imported
 
     def _commit_domain_workflow_creation(
         self,
@@ -4159,12 +4467,15 @@ class WorkflowService:
         revision_fingerprint: str | None = None,
         deadline: str | None = None,
         frozen_graph: dict[str, Any] | None = None,
+        action_mode: str | None = None,
     ) -> dict[str, Any]:
         """从已应用工作流图创建一次工作流任务（WorkflowTask）及其作业。
 
         参数：``workflow_uuid`` 是工作流定义身份；``run_mode`` 是普通、单步或
         单节点运行模式；``target_node_uuid`` 是单节点运行目标；``input_value``
         是任务输入；``description`` 与 ``meta_data`` 是用户说明和公开元数据；
+        ``action_mode`` 可把本次任务固定为 ``simulate``（只校验软件下发链路、
+        不打开设备会话）或 ``real``，省略则沿用后端进程级档位；
         ``inventory_bindings`` 把本次执行的逻辑数量需求绑定到具体试剂或当前
         内容物库存；``priority`` 接受 ``normal``/``high`` 字符串枚举并随任务
         持久化，调度顺序由后续调度器实现；可选 Backend Task、调用键和请求指纹
@@ -4184,6 +4495,11 @@ class WorkflowService:
             raise WorkflowError("invalid_input") from None
         except StoreNotFound:
             raise WorkflowError("not_found") from None
+        # 任务级档位只允许两个稳定取值；非法值不能静默当成 real 或 simulate。
+        if action_mode is not None:
+            action_mode = str(action_mode).strip().lower()
+            if action_mode not in {"simulate", "real"}:
+                raise WorkflowError("invalid_input") from None
         run_mode = "normal" if run_mode == "" else run_mode
         if run_mode not in {"normal", "step", "single_node"}:
             raise WorkflowError("invalid_input")
@@ -4203,6 +4519,20 @@ class WorkflowService:
         except ValueError:
             raise WorkflowError("invalid_input") from None
         description = self._optional_text(description)
+        if action_mode is not None:
+            # 任务级档位随任务公开元数据持久化：Edge 在拉取 Job 时读取它，
+            # 从而在**不改进程级配置**的前提下按次选择仿真或真机。
+            meta_data = {
+                **meta_data,
+                "unilab": {
+                    **(
+                        meta_data.get("unilab")
+                        if isinstance(meta_data.get("unilab"), Mapping)
+                        else {}
+                    ),
+                    "action_mode": action_mode,
+                },
+            }
         task_uuid = str(uuid4())
 
         if run_mode == "step":

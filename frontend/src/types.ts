@@ -1,4 +1,4 @@
-export type PageId = 'overview' | 'materials' | 'devices' | 'reagents' | 'operations' | 'workflows' | 'tasks'
+export type PageId = 'overview' | 'materials' | 'devices' | 'reagents' | 'operations' | 'workflows' | 'workflow-editor' | 'tasks'
 
 export type ConnectionMode = 'loading' | 'connected' | 'reconnecting' | 'demo' | 'error'
 

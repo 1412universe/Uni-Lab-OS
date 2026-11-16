@@ -41,7 +41,7 @@ unilab workspace start \
   --wait 300
 ```
 
-OPC 节点表 `opcua_gn1.3.7.csv` 等仍放在 `../`（GN 目录）；驱动里相对路径会按 GN 驱动文件所在目录解析。
+OPC 节点表 `opcua_gn1.4.3.csv` 等仍放在 `../`（GN 目录）；驱动里相对路径会按 GN 驱动文件所在目录解析。
 
 ## 更新启动图 / 工作流
 

@@ -426,6 +426,54 @@ class WorkflowUpdateRequest(WorkflowWriteRequest):
     )
 
 
+class WorkflowPatchRequest(_StrictModel):
+    """局部更新工作流根字段；只处理显式提供的字段。
+
+    与 PUT 的完整替换语义不同，这里省略的字段一律保持原值。前端重命名只需要
+    改 `name`，不该被要求回传完整的 `meta_data`：一旦回传不完整的元数据，
+    服务端保留的编排元数据就会被覆盖掉。
+    """
+
+    name: Optional[str] = Field(
+        default=None,
+        description="新的显示名称；省略时保持原值",
+        examples=["金四面体 · 第三次离心"],
+    )
+    description: Optional[str] = Field(
+        default=None,
+        description="新的用途说明；省略时保持原值，传 null 表示清空",
+        examples=["完成称量、溶解和转运"],
+    )
+    tags: Optional[List[Any]] = Field(
+        default=None,
+        description="新的标签集合；省略时保持原值",
+        examples=[["chemistry"]],
+    )
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _json_array(cls, value: Any) -> Optional[List[Any]]:
+        return None if value is None else normalize_json_array(value)
+
+
+class CanvasLayoutWriteRequest(_StrictModel):
+    """画布落点写入载荷：完整替换该工作流的全部节点坐标。
+
+    语义是整体替换而非合并：调用方每次提交的都是当前画布，未出现的节点视为
+    已删除，因此孤儿坐标会被清掉。
+    """
+
+    positions: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="节点 UUID 到 {x, y} 的映射；省略等同于清空全部落点",
+    )
+
+    @field_validator("positions", mode="before")
+    @classmethod
+    def _json_object(cls, value: Any) -> Dict[str, Any]:
+        return normalize_json_object(value)
+
+
 class GraphWriteRequest(_BackendModel):
     revision: int = Field(ge=1, le=_INT64_MAX, strict=True)
     nodes: List[WorkflowNodeWrite] = Field(default_factory=list)
@@ -596,10 +644,35 @@ class WorkflowTaskCreateRequest(_BackendModel):
     )
     input: Dict[str, Any] = Field(default_factory=dict)
     inventory_bindings: List[WorkflowInventoryBindingRequest] = Field(
-        default_factory=list
+        default_factory=list,
     )
     description: Optional[str] = None
     meta_data: Dict[str, Any] = Field(default_factory=dict)
+    action_mode: Optional[str] = Field(
+        default=None,
+        description=(
+            "本次任务的动作执行档位：simulate 只校验软件下发链路、不打开设备会话；"
+            "real 真实驱动。省略时沿用后端进程级 --action_mode，不可用其他值。"
+        ),
+        examples=["simulate"],
+    )
+
+    @field_validator("action_mode")
+    @classmethod
+    def _action_mode(cls, value: Optional[str]) -> Optional[str]:
+        """把任务级执行档位限制在 simulate / real 两个稳定取值。
+
+        参数：``value`` 是请求里的档位字段。返回：规范化后的档位或 ``None``。
+        异常：非法取值抛 ``ValueError``，由请求校验映射为参数错误——档位决定
+        是否驱动硬件，不能静默降级成其它含义。
+        """
+
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if normalized not in {"simulate", "real"}:
+            raise ValueError("action_mode 只能是 simulate 或 real")
+        return normalized
 
     @field_validator("input", "meta_data", mode="before")
     @classmethod
@@ -1025,6 +1098,10 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             service_provider=lambda: getattr(service, "error_handling", None),
         )
     )
+    # 工作流编辑器内嵌 Agent：只返回候选图，不直接写库。
+    from unilabos.app.workflow_agent_api import create_workflow_agent_router
+
+    router.include_router(create_workflow_agent_router())
 
     def _with_workflow_status(payload: Any) -> Any:
         """给包含工作流图的公共响应补充当前源码/已发布状态。
@@ -1417,6 +1494,30 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
             payload.pop("operation_category_uuid", None)
         return _success(service.update_workflow(workflow_uuid, **payload))
 
+    @router.patch(
+        "/workflows/{workflow_uuid}",
+        summary="局部更新工作流或实验操作",
+        response_model=WorkflowSuccessResponse | BackendErrorResponse,
+    )
+    def patch_workflow(
+        workflow_uuid: WorkflowUUIDPath,
+        body: WorkflowPatchRequest,
+    ) -> JSONResponse:
+        """只更新显式提供的根字段，省略的字段保持原值。
+
+        参数：路径 UUID 定位工作流，``body`` 携带可选的新名称/描述/标签。返回：
+        更新后工作流。异常：名称为空白、修订或源码写回冲突由服务层统一处理。
+        状态不变量：未出现在请求中的字段（尤其 ``meta_data``）不会被改动。
+        """
+
+        payload = body.model_dump(exclude_unset=True)
+        # ``None`` 已用于表达「本次不修改」，因此显式 null 必须翻译成一个单独
+        # 的清除标记，否则「把说明删掉」这个意图会在合并时丢失。
+        if "description" in payload and payload["description"] is None:
+            payload.pop("description")
+            payload["clear_description"] = True
+        return _success(service.patch_workflow(workflow_uuid, **payload))
+
     @router.delete(
         "/workflows/{workflow_uuid}",
         summary="删除工作流或实验操作",
@@ -1436,7 +1537,32 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
         """
 
         _visible_workflow(workflow_uuid)
-        return _success(_with_workflow_status(service.get_graph(workflow_uuid)))
+        return _success(
+            _with_workflow_status(service.get_editor_graph(workflow_uuid))
+        )
+
+    @router.put(
+        "/workflows/{workflow_uuid}/canvas-layout",
+        summary="保存工作流画布落点",
+    )
+    def save_canvas_layout(
+        workflow_uuid: str,
+        body: CanvasLayoutWriteRequest,
+    ) -> JSONResponse:
+        """保存画布落点；不推进工作流修订，也不改图。
+
+        参数：``workflow_uuid`` 是工作流 UUID，``body.positions`` 是
+        ``{node_uuid: {x, y}}`` 完整画布。返回：写入的节点数量。异常：工作流
+        不存在或坐标非法时返回稳定业务错误。
+
+        落点纯属展示偏好。它必须和整图保存分开：一次「拖动节点」不应该推进
+        工作流修订，否则预检、发布合同和源码固定点都会被纯视觉调整牵动。
+        """
+
+        _visible_workflow(workflow_uuid)
+        return _success(
+            service.save_canvas_layout(workflow_uuid, body.positions)
+        )
 
     @router.put("/workflows/{workflow_uuid}/graph")
     def save_graph(
@@ -1710,6 +1836,7 @@ def create_workflow_router(service: WorkflowService) -> APIRouter:
                 input_value=body.input,
                 description=body.description,
                 meta_data=body.meta_data,
+                action_mode=body.action_mode,
                 inventory_bindings=[
                     binding.model_dump() for binding in body.inventory_bindings
                 ],

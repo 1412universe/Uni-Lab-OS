@@ -24,7 +24,7 @@ from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, not_action
 from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.6.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.3.csv")
 
 STACK_ROTATE_SPEED = 300
 STACK_R_STEP = 300         # 每列间隔（30°/列）

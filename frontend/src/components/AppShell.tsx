@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Workflow,
   FlaskRound,
+  Hammer,
   TestTubes,
 } from 'lucide-react'
 import type { ConnectionMode, PageId } from '../types'
@@ -25,6 +26,7 @@ const navigation: { page: PageId; label: string; icon: typeof LayoutDashboard }[
   { page: 'reagents', label: '试剂', icon: TestTubes },
   { page: 'operations', label: '实验室操作', icon: FlaskRound },
   { page: 'workflows', label: '工作流', icon: Workflow },
+  { page: 'workflow-editor', label: '工作流编辑', icon: Hammer },
   { page: 'tasks', label: '任务', icon: ListChecks },
 ]
 
@@ -35,6 +37,7 @@ const pageLabels: Record<PageId, string> = {
   reagents: '试剂',
   operations: '实验室操作',
   workflows: '工作流',
+  'workflow-editor': '工作流编辑',
   tasks: '任务',
 }
 
@@ -81,6 +84,7 @@ export function AppShell({
   onNavigate,
   onNotify,
   onStartupModeClick,
+  immersive = false,
   children,
 }: PropsWithChildren<{
   page: PageId
@@ -90,11 +94,26 @@ export function AppShell({
   onNavigate: (page: PageId) => void
   onNotify: (message: string) => void
   onStartupModeClick?: () => void
+  /**
+   * 沉浸模式：隐藏运营侧栏与顶栏，让子页面独占视口。
+   *
+   * 工作流编辑器用它把画布撑到最大——侧栏 228px + 顶栏在编辑时都是纯损耗，
+   * 与 CWM 的整页编辑体验对齐。页面自己负责提供返回控制台的入口。
+   */
+  immersive?: boolean
 }>) {
   const modePresentation = startupMode
     ? startupModePresentation[startupMode]
     : unknownStartupModePresentation
   const StartupModeIcon = modePresentation.icon
+
+  if (immersive) {
+    return (
+      <div className="app-shell app-shell-immersive">
+        <div className="app-main">{children}</div>
+      </div>
+    )
+  }
 
   return (
     <div className="app-shell">

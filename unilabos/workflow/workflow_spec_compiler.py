@@ -284,6 +284,9 @@ class WorkflowSpecCompiler:
             submitted_at=self._submitted_at(task.get("create_time")),
             lab_id=str(task.get("lab_id") or "").strip(),
             run_mode=str(task.get("run_mode") or plan.get("run_mode") or "normal"),
+            # 任务级动作档位：从任务公开元数据读取，供 Edge 逐作业决定是否
+            # 走仿真。空值沿用 Edge 进程级 --action_mode。
+            action_mode=_task_action_mode(task),
             trace_context=normalize_trace_context(
                 task.get("trace_context")
                 if isinstance(task.get("trace_context"), Mapping)
@@ -315,7 +318,6 @@ class WorkflowSpecCompiler:
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.timestamp()
-
     def _compile_nodes(
         self,
         *,
@@ -1097,6 +1099,29 @@ class WorkflowSpecCompiler:
                 "edge_handle_identity_mismatch", "计划边端点与节点作用域不一致"
             )
         return handle_uuid, handle
+
+
+def _task_action_mode(task: Mapping[str, Any]) -> str:
+    """读取任务级动作档位（``simulate`` / ``real``）。
+
+    参数：``task`` 是持久任务投影。返回：档位字符串，未指定时为空串——空串表示
+    沿用 Edge 进程级 ``--action_mode``，从而保持旧任务行为完全不变。异常：无；
+    非法值直接忽略并回落为空串，因为档位的权威校验在任务创建入口已完成，这里
+    只是把它带进调度 spec。
+
+    兼容两种落点：任务根级 ``action_mode``（旧读模型），以及
+    ``meta_data.unilab.action_mode``（当前写入位置）。
+    """
+
+    direct = task.get("action_mode")
+    if isinstance(direct, str) and direct.strip().lower() in {"simulate", "real"}:
+        return direct.strip().lower()
+    meta = task.get("meta_data")
+    unilab = meta.get("unilab") if isinstance(meta, Mapping) else None
+    nested = unilab.get("action_mode") if isinstance(unilab, Mapping) else None
+    if isinstance(nested, str) and nested.strip().lower() in {"simulate", "real"}:
+        return nested.strip().lower()
+    return ""
 
 
 __all__ = ["WorkflowSpecCompilationError", "WorkflowSpecCompiler"]

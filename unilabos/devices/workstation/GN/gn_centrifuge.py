@@ -1,25 +1,31 @@
 """
 离心机 设备驱动
 
-协议：opcua_gn1.3.7.csv「离心机」（前缀 Centrifuge_）。
+协议：opcua_gn1.4.3.csv「离心机」（前缀 Centrifuge_）。
 
 对外仅暴露 execute_command（Centrifuge_CmdType + 写参）；测试流程 yaml 预设供本地调试。
 
-指令类型 (Centrifuge_CmdType)：
+指令类型 (Centrifuge_CmdType，OPC UA 1.4.3)：
     1=Y向左 2=Y向右 3=Z向左 4=Z向右
     5=放入物料 6=运行离心机 7=取出物料 8=复位
-    9=夹爪张开 10=夹爪夹紧
+    9=夹爪张开 10=夹爪夹紧 11=配重天平去皮
 
 YAML 字段 → CSV 节点映射：
     YPos   → Centrifuge_YPosSet
     Z1Pos  → Centrifuge_ZPosSet（台面Z）
     Z2Pos  → Centrifuge_InnerZPosSet（离心机内Z）
     RPM    → Centrifuge_RPM
-    Time   → Centrifuge_Time
+    Time   → Centrifuge_Time（分钟）/ Centrifuge_Time_Hour（小时，1.4.3 新增）
     YSpeed → Centrifuge_YSpeed
     ZSpeed → Centrifuge_ZSpeed
     PlateNo→ Centrifuge_PlateNo
-    Temperature → iTemperature（1.3.7 新增）
+    Temperature → iTemperature
+
+1.4.3 相对 1.3.9 的离心机相关变化：
+    + Centrifuge_CmdType 11 = 配重天平去皮（新增动作）
+    + Centrifuge_Time_Hour  离心机时间小时（与 Centrifuge_Time 分钟并存）
+    + Tare_the_scale / scale_weight  称重天平去皮与重量反馈
+    - Centrifuge_Temperature_feedback  温度反馈点位已从协议移除
 """
 
 import os
@@ -33,9 +39,9 @@ from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, not_action
 from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.7.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.3.csv")
 
-# Centrifuge_CmdType（与 CSV 表头一致）
+# Centrifuge_CmdType（与 CSV 表头一致，OPC UA 1.4.3）
 CENTRIFUGE_CMD_LABELS = {
     1: "Y向左",
     2: "Y向右",
@@ -47,11 +53,12 @@ CENTRIFUGE_CMD_LABELS = {
     8: "复位",
     9: "夹爪张开",
     10: "夹爪夹紧",
+    11: "配重天平去皮",
 }
 
 
 class CentrifugeCommand(int, Enum):
-    """离心机指令类型 (Centrifuge_CmdType)"""
+    """离心机指令类型 (Centrifuge_CmdType，OPC UA 1.4.3)"""
 
     Y_LEFT = 1
     Y_RIGHT = 2
@@ -63,6 +70,7 @@ class CentrifugeCommand(int, Enum):
     RESET = 8
     JAW_OPEN = 9
     JAW_CLAMP = 10
+    TARE_SCALE = 11
 
 
 # 离心机模块测试流程 yaml 预设（本地 run_test_flow，非注册动作）
@@ -85,8 +93,9 @@ TEST_FLOW_PRESETS = [
 _EXECUTE_CMD_DOC = (
     "按 Centrifuge_CmdType 执行 OPC 指令。"
     "1=Y左 2=Y右 3=Z左 4=Z右 5=放入物料 6=运行离心机 7=取出物料 "
-    "8=复位 9=夹爪张开 10=夹爪夹紧。"
-    "写 y_pos/z_pos/inner_z_pos/rpm/time_minutes/y_speed/z_speed/plate_no/temperature。"
+    "8=复位 9=夹爪张开 10=夹爪夹紧 11=配重天平去皮。"
+    "写 y_pos/z_pos/inner_z_pos/rpm/time_minutes/time_hours/"
+    "y_speed/z_speed/plate_no/temperature。"
 )
 
 
@@ -98,6 +107,10 @@ class CentrifugeDevice(GNStationClient):
     CMD_TRIG_NODE = "Centrifuge_CmdTrig"
     COMPLETE_NODE = "Centrifuge_CompleteFB"
     TEMPERATURE_SET_NODE = "iTemperature"
+    TIME_MINUTE_NODE = "Centrifuge_Time"
+    TIME_HOUR_NODE = "Centrifuge_Time_Hour"
+    SCALE_WEIGHT_NODE = "scale_weight"
+    SCALE_TARE_NODE = "Tare_the_scale"
 
     POSITION_NODES = {
         "Centrifuge_YPosSet": "Centrifuge_YPosFB",
@@ -119,7 +132,8 @@ class CentrifugeDevice(GNStationClient):
             "Centrifuge_YSpeed", "Centrifuge_ZSpeed", "Centrifuge_PlateNo",
         }),
         int(CentrifugeCommand.RUN): frozenset({
-            "Centrifuge_RPM", "Centrifuge_Time", "Centrifuge_PlateNo", "iTemperature",
+            "Centrifuge_RPM", "Centrifuge_Time", "Centrifuge_Time_Hour",
+            "Centrifuge_PlateNo", "iTemperature",
         }),
         int(CentrifugeCommand.UNLOAD_MATERIAL): frozenset({
             "Centrifuge_YPosSet", "Centrifuge_ZPosSet", "Centrifuge_InnerZPosSet",
@@ -128,6 +142,8 @@ class CentrifugeDevice(GNStationClient):
         int(CentrifugeCommand.RESET): frozenset(),
         int(CentrifugeCommand.JAW_OPEN): frozenset(),
         int(CentrifugeCommand.JAW_CLAMP): frozenset(),
+        # 1.4.3 新增：去皮不写任何设定值，只靠 CmdType=11 + CompleteFB 握手
+        int(CentrifugeCommand.TARE_SCALE): frozenset(),
     }
     _INTERNAL_CMDS = frozenset({
         int(CentrifugeCommand.RESET),
@@ -178,6 +194,7 @@ class CentrifugeDevice(GNStationClient):
         z_speed: Optional[int] = None,
         plate_no: Optional[int] = None,
         temperature: Optional[int] = None,
+        time_hours: Optional[int] = None,
         timeout: float = 120.0,
     ) -> dict:
         """唯一注册动作：持锁间隔 → 清 CompleteFB → 写参 → CmdType → CmdTrig → 等 CompleteFB。
@@ -189,11 +206,12 @@ class CentrifugeDevice(GNStationClient):
         effective_timeout = timeout
         if cmd == int(CentrifugeCommand.RUN) and timeout == 120.0:
             minutes = time_minutes if time_minutes is not None else 1
-            effective_timeout = minutes * 60 + 180
+            hours = time_hours or 0
+            effective_timeout = (hours * 3600) + (minutes * 60) + 180
         setpoints = self._build_setpoints(
             cmd_type=cmd,
             y_pos=y_pos, z_pos=z_pos, inner_z_pos=inner_z_pos,
-            rpm=rpm, time_minutes=time_minutes,
+            rpm=rpm, time_minutes=time_minutes, time_hours=time_hours,
             y_speed=y_speed, z_speed=z_speed, plate_no=plate_no,
             temperature=temperature,
         )
@@ -218,16 +236,36 @@ class CentrifugeDevice(GNStationClient):
         minutes: int = 10,
         plate_no: int = 2,
         temperature: Optional[int] = None,
+        hours: int = 0,
         timeout: float = 120.0,
     ) -> dict:
         return self.execute_command(
             cmd_type=int(CentrifugeCommand.RUN),
             rpm=rpm,
             time_minutes=minutes,
+            time_hours=hours,
             plate_no=plate_no,
             temperature=temperature,
             timeout=timeout,
         )
+
+    @action(description="配重天平去皮 (cmd 11，1.4.3 新增)")
+    def tare_scale(self, timeout: float = 60.0) -> dict:
+        """配重天平去皮。
+
+        1.4.3 把去皮做成离心机模块的正式指令（CmdType=11），不再需要外部
+        直接写 ``Tare_the_scale`` 节点，因此这里走完整握手：PLC 置
+        ``Centrifuge_CompleteFB=1`` 才算完成。
+        """
+        return self.execute_command(
+            cmd_type=int(CentrifugeCommand.TARE_SCALE),
+            timeout=timeout,
+        )
+
+    @not_action
+    def get_scale_weight(self):
+        """读称重天平当前重量（1.4.3 新增 ``scale_weight``）。"""
+        return self.get_node_value(self.SCALE_WEIGHT_NODE, force_read=True)
 
     @not_action
     def _build_setpoints(
@@ -242,17 +280,20 @@ class CentrifugeDevice(GNStationClient):
         z_speed: Optional[int] = None,
         plate_no: Optional[int] = None,
         temperature: Optional[int] = None,
+        time_hours: Optional[int] = None,
     ) -> dict:
         mapping = {
             "Centrifuge_YPosSet": y_pos,
             "Centrifuge_ZPosSet": z_pos,
             "Centrifuge_InnerZPosSet": inner_z_pos,
             "Centrifuge_RPM": rpm,
-            "Centrifuge_Time": time_minutes,
+            self.TIME_MINUTE_NODE: time_minutes,
             "Centrifuge_YSpeed": y_speed,
             "Centrifuge_ZSpeed": z_speed,
             "Centrifuge_PlateNo": plate_no,
             self.TEMPERATURE_SET_NODE: temperature,
+            # 1.4.3 新增：小时级时长；与分钟位并存，PLC 侧两者相加
+            self.TIME_HOUR_NODE: time_hours,
         }
         raw: dict = {}
         for node, val in mapping.items():
@@ -410,15 +451,25 @@ class CentrifugeDevice(GNStationClient):
     ) -> bool:
         if int(cmd_type) in self._INTERNAL_CMDS:
             return self._wait_internal_command_complete(description, timeout)
+        if int(cmd_type) == int(CentrifugeCommand.TARE_SCALE):
+            # 去皮不产生任何轴运动，Y/Z 反馈稳定兜底对它无意义；
+            # 只认 CompleteFB=1。
+            return self._wait_until_true(
+                self.COMPLETE_NODE,
+                timeout=timeout,
+                interval=0.05,
+                description=f"{description}完成",
+            )
         if int(cmd_type) == int(CentrifugeCommand.RUN):
-            minutes = int(setpoints.get("Centrifuge_Time") or 1)
+            minutes = int(setpoints.get(self.TIME_MINUTE_NODE) or 0)
+            hours = int(setpoints.get(self.TIME_HOUR_NODE) or 0)
             run_timeout = max(
                 timeout,
-                minutes * 60 + self._RUN_SPIN_BUFFER_S,
+                hours * 3600 + minutes * 60 + self._RUN_SPIN_BUFFER_S,
             )
             logger.info(
                 f"运行离心机：等待 CompleteFB=1（PLC 离心完成后置位，"
-                f"设定 {minutes} 分钟，超时 {run_timeout:.0f}s）..."
+                f"设定 {hours} 小时 {minutes} 分钟，超时 {run_timeout:.0f}s）..."
             )
             return self._wait_until_true(
                 self.COMPLETE_NODE,
@@ -615,7 +666,10 @@ class CentrifugeDevice(GNStationClient):
     def _log_positions(self, prefix: str = "位置反馈") -> None:
         pos = self.get_positions()
         complete = self.get_node_value(self.COMPLETE_NODE, force_read=True)
-        logger.info(f"{prefix}: Y={pos['Y']} Z={pos['Z']} 完成={complete}")
+        weight = self.get_scale_weight()
+        logger.info(
+            f"{prefix}: Y={pos['Y']} Z={pos['Z']} 完成={complete} 天平={weight}"
+        )
 
 
 if __name__ == "__main__":

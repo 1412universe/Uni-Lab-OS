@@ -1,5 +1,5 @@
 """
-机械手 设备驱动（OPC UA 1.3.6，前缀 Robot_）
+机械手 设备驱动（OPC UA 1.4.3，前缀 Robot_）
 
 职责：只负责在各工站抓 / 放。参数 = 工站(station) + 物料(item_type) + 抓取数字(number)。
 流程（各步逐个触发、等 FinishFB=1 完成后再下一步）：
@@ -8,11 +8,11 @@
   2)（旋转堆栈）按 number 转到对应列，等旋转到位；
   3) 抓/放：写模块号+板位到对应寄存器 → CmdType=3(夹料)/4(放料) → 触发，等 FinishFB 完成。
 
-抓放协议（1.3.6）：
+抓放协议（1.4.3）：
     Robot_ModuleNoSet 选工站 → Robot_<工站>=number（工位号）→ Robot_CmdType(3/4)
     → Robot_CmdTrig 触发 → 等 Robot_FinishFB 先转 0(忙) 再回 1(完成) → CmdTrig 置 0。
     （Robot_FinishFB：1=就绪/空闲，0=执行中；上电即为 1 表示空闲可运行。
-      1.3.6 已删除各工站独立的 *_Done 节点，统一用 Robot_FinishFB 的忙→闲边沿判完成。）
+      1.3.6 起已删除各工站独立的 *_Done 节点，统一用 Robot_FinishFB 的忙→闲边沿判完成。）
 
 旋转堆栈(stack)：旋转与抓取是两个独立动作，由抓放驱动组合——机械手抓取前先请求
     旋转堆栈（rotary_stack.rotate_for_number：按 number 转到对应列→等旋转到位），
@@ -38,7 +38,7 @@ from unilabos.registry.decorators import action, not_action
 from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 from unilabos.devices.workstation.GN import rotary_stack
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.6.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.3.csv")
 
 ITEM_PLATE = "plate"    # 孔板/板位
 ITEM_BOTTLE = "bottle"  # 瓶位
@@ -47,7 +47,7 @@ X_REACH_TOL = 0         # X 到位容差（Robot_XPosFB 与目标绝对坐标之
 
 
 class RobotCommand(int, Enum):
-    """机械手指令类型 (Robot_CmdType，1.3.6)。
+    """机械手指令类型 (Robot_CmdType，1.4.3)。
     注意：X 小车移动统一用 CmdType=2 + 带符号的相对距离，方向由距离正负体现，
     不再按左右分 1/2。X_LEFT 仅作协议对照保留。"""
 
@@ -79,7 +79,7 @@ class Station:
         return self.x_bottle if item_type == ITEM_BOTTLE else self.x_plate
 
 
-# 工站表（键为前端可选名）。module_no 严格对应 1.3.6 Robot_ModuleNoSet（模块号相较 1.3.5 已重排）。
+# 工站表（键为前端可选名）。module_no 严格对应 Robot_ModuleNoSet（模块号相较 1.3.5 已重排）。
 STATIONS: dict = {
     "locking":       Station(2,  -13278, -13278, "Robot_Locking_mechanism"),
     "quick_change":  Station(3,  -10478, -10478, "Robot_Quick_change_mechanism"),
@@ -329,7 +329,7 @@ class RoboticArmDevice(GNStationClient):
             "cmd_type": self.get_node_value("Robot_CmdType", force_read=True),
             "cmd_trig": self.get_node_value("Robot_CmdTrig", force_read=True),
             "module_no": self.get_node_value("Robot_ModuleNoSet", force_read=True),
-            # PLC 固件暂未支持以下 1.3.6 新增节点，先注释忽略，升级后再启用
+            # 这些 Robot_* 状态节点在 1.4.3 协议表里仍未给出读写方向，先注释忽略
             # "system_ready": self.get_node_value("System_IsReady", force_read=True),
             "reset_complete": self.get_node_value("System_ResetCompleteFB", force_read=True),
             "error_code": self.get_node_value("Robot_Error_code", force_read=True),

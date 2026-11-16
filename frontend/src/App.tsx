@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { AppShell } from './components/AppShell'
+import { ToastBar } from './components/ToastBar'
 import { StartupModeDialog } from './components/StartupModeDialog'
 import { StationErrorHandling } from './components/StationErrorHandling'
 import { useEdgeData } from './hooks/useEdgeData'
@@ -11,6 +12,7 @@ import { LiveMaterialsPage } from './pages/LiveMaterialsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { TasksPage } from './pages/TasksPage'
 import { WorkflowsPage } from './pages/WorkflowsPage'
+import { WorkflowEditorPage } from './pages/WorkflowEditorPage'
 import { OperationsPage } from './pages/OperationsPage'
 import { ReagentsPage } from './pages/ReagentsPage'
 import { DevicesPage } from './pages/DevicesPage'
@@ -31,6 +33,9 @@ export default function App() {
 
   useEffect(() => {
     if (!toast) return
+    // 错误类提示常驻，直到用户关闭或复制：一条带 UUID 的报错在 3 秒内消失，
+    // 用户既读不完也来不及复制。成功类提示维持原来的自动消失。
+    if (/失败|错误|异常|无法|不可用|未就绪|拒绝|超时|failed|error/i.test(toast)) return
     const timer = window.setTimeout(() => setToast(''), 3200)
     return () => window.clearTimeout(timer)
   }, [toast])
@@ -128,6 +133,9 @@ export default function App() {
       onNavigate={navigate}
       onNotify={setToast}
       onStartupModeClick={connection === 'connected' ? openModeDialog : undefined}
+      // 工作流编辑器独占视口：侧栏与顶栏在编辑时是纯损耗，隐藏后画布可用
+      // 面积最大化；返回控制台的入口由编辑器自己提供。
+      immersive={page === 'workflow-editor'}
     >
       {connection === 'error' ? (
         <div className="connection-alert" role="alert">
@@ -185,6 +193,13 @@ export default function App() {
           targetWorkflow={workflowTarget}
           startupMode={snapshot.startupMode}
         />
+      ) : page === 'workflow-editor' ? (
+        <WorkflowEditorPage
+          workflows={snapshot.workflows}
+          connected={connection === 'connected'}
+          onNotify={setToast}
+          onRefresh={refresh}
+        />
       ) : (
         <TasksPage
           tasks={snapshot.tasks}
@@ -201,7 +216,7 @@ export default function App() {
           onViewResources={openResources}
         />
       )}
-      <div className={`toast ${toast ? 'show' : ''}`} role="status" aria-live="polite">{toast}</div>
+      <ToastBar message={toast} onDismiss={() => setToast('')} />
       {modeDialogOpen ? (
         <StartupModeDialog
           currentMode={snapshot.startupMode}

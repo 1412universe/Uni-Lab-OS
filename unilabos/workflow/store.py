@@ -58,6 +58,7 @@ from unilabos.workflow.models import (
     WorkflowTaskPriority,
 )
 from unilabos.workflow.store_migrations import (
+    ensure_canvas_layout_schema,
     ensure_device_action_run_schema,
     ensure_ephemeral_workflow_reference_schema,
     ensure_execution_lock_schema,
@@ -723,6 +724,7 @@ class WorkflowStore:
                     ensure_execution_lock_schema(self._conn)
                     ensure_local_cancellation_schema(self._conn)
                     ensure_workflow_inventory_schema(self._conn)
+                    ensure_canvas_layout_schema(self._conn)
                     from unilabos.workflow.error_control import ensure_error_control_schema
 
                     ensure_error_control_schema(self._conn)
@@ -1190,6 +1192,80 @@ class WorkflowStore:
                 ).fetchone()
                 is not None
             )
+
+    def read_canvas_layout(self, workflow_uuid: str) -> Dict[str, Dict[str, float]]:
+        """读取画布落点持久表，按节点 UUID 索引。
+
+        参数：``workflow_uuid`` 是工作流稳定身份。返回：``{node_uuid: {"x": ..,
+        "y": ..}}``；没有记录时为空字典。异常：数据库读取错误原样传播。
+
+        这张表与图分开保存：图由领域包源码在每次启动时重建，生成器不写
+        ``pose``，因此 ``workflow_node.pose`` 里的坐标活不过一次重启。
+        """
+
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT node_uuid, position_x, position_y
+                FROM workflow_canvas_layout
+                WHERE workflow_uuid = ?
+                """,
+                (workflow_uuid,),
+            ).fetchall()
+        return {
+            str(row["node_uuid"]): {
+                "x": float(row["position_x"]),
+                "y": float(row["position_y"]),
+            }
+            for row in rows
+        }
+
+    def write_canvas_layout(
+        self,
+        workflow_uuid: str,
+        positions: Mapping[str, Any],
+    ) -> int:
+        """以节点 UUID 为键覆盖写入画布落点。
+
+        参数：``workflow_uuid`` 是工作流稳定身份，``positions`` 是
+        ``{node_uuid: {"x": number, "y": number}}``。返回：实际写入的行数。
+        异常：坐标不是有限数值时抛 ``StoreConflict``，不写入任何行。
+
+        语义是**整体替换**：调用方传进来的就是完整的当前画布，未出现的节点
+        视为已被删除。这样删除节点后不会留下永久孤儿坐标。
+        """
+
+        normalized: Dict[str, tuple[float, float]] = {}
+        for node_uuid, value in positions.items():
+            if not isinstance(value, Mapping):
+                raise StoreConflict("画布落点必须是对象")
+            try:
+                x = float(value.get("x"))
+                y = float(value.get("y"))
+            except (TypeError, ValueError):
+                raise StoreConflict("画布落点坐标必须是数值") from None
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise StoreConflict("画布落点坐标必须是有限数值")
+            normalized[str(node_uuid)] = (x, y)
+        now = utc_now()
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_canvas_layout WHERE workflow_uuid = ?",
+                (workflow_uuid,),
+            )
+            if normalized:
+                conn.executemany(
+                    """
+                    INSERT INTO workflow_canvas_layout(
+                        workflow_uuid, node_uuid, position_x, position_y, update_time
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (workflow_uuid, node_uuid, x, y, now)
+                        for node_uuid, (x, y) in normalized.items()
+                    ],
+                )
+        return len(normalized)
 
     def get_graph(
         self,

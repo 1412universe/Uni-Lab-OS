@@ -1,7 +1,7 @@
 """
 常规烘箱 设备驱动
 
-协议：opcua_gn1.3.7.csv「常规烘箱」(前缀 Oven_)。
+协议：opcua_gn1.4.3.csv「常规烘箱」(前缀 Oven_)。
 对外仅暴露 execute_command（Oven_CmdType + 写参 + 开关门）。
 
 指令类型 (Oven_CmdType)：
@@ -41,7 +41,7 @@ from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 from unilabos.devices.workstation.GN.base_opcua_client import OpcUaNode
 from unilabos.device_comms.opcua_client.node.uniopcua import NodeType, DataType
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.7.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.3.csv")
 
 # CSV 中 DataType=bool 无法被通用加载器识别，在此手动注册开关门节点
 _DOOR_OPC_NODES = (
@@ -80,7 +80,7 @@ class OvenCommand(int, Enum):
 
 
 _EXECUTE_CMD_DOC = (
-    "按 Oven_CmdType 执行 OPC 指令（opcua_gn1.3.7）。"
+    "按 Oven_CmdType 执行 OPC 指令（opcua_gn1.4.3）。"
     "1=启动：写 Oven_TempSet←temperature、Oven_TimeHourSet←hours、"
     "Oven_TimeMinuteSet←minutes，再触发 Oven_CmdTrig。"
     "2=复位/停止。"
@@ -207,7 +207,7 @@ class StandardOvenDevice(GNStationClient):
 
     @not_action
     def _run_door(self, cmd_type: int, description: str) -> dict:
-        """1.3.7 开关门：写 OPEN_DOOR / COHSE_DOOR bool 节点为 1。"""
+        """开关门：写 OPEN_DOOR / COHSE_DOOR bool 节点为 1。"""
         node = (
             self.OPEN_DOOR_NODE
             if int(cmd_type) == OvenCommand.OPEN_DOOR

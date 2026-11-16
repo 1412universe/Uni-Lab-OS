@@ -209,6 +209,9 @@ class WorkflowSpec:
     # WorkflowSpecCompiler 写入，spec_from_dict 不接收；区间完成判断只能跳过
     # 这个显式集合，不能把任意缺失物理节点都推断成成功。
     resource_coordinator_node_ids: List[str] = field(default_factory=list)
+    # 任务级动作档位：'simulate' 只校验软件下发链路、不打开设备会话；'real' 真实
+    # 驱动；空值沿用 Edge 进程级 --action_mode。逐任务下发，不改进程配置。
+    action_mode: str = ""
 
     def __post_init__(self) -> None:
         if not self.task_id:
@@ -431,6 +434,7 @@ def spec_from_dict(data: Dict[str, Any]) -> WorkflowSpec:
         lab_id=str(data.get("lab_id", "") or ""),
         task_id=str(data.get("task_id", "") or ""),
         run_mode=str(data.get("run_mode", "normal") or "normal"),
+        action_mode=str(data.get("action_mode", "") or ""),
         resource_plan=(
             dict(data["resource_plan"])
             if isinstance(data.get("resource_plan"), Mapping)

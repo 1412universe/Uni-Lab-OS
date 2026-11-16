@@ -254,7 +254,10 @@ def build_run_preflight_report(
                         check_type="device_selection",
                         status="deferred",
                         code="device_instance_selected_at_dispatch",
-                        message="未装配设备注册读取端口，将在派发门禁复核",
+                        message=(
+                            "预检不读取设备实时状态；该节点由派发门禁复核"
+                            "设备在线、健康、动作能力与占用后再下发"
+                        ),
                         node_uuid=node_uuid,
                         node_name=node_name,
                     )
@@ -284,7 +287,7 @@ def build_run_preflight_report(
                         check_type="device",
                         status="deferred",
                         code="device_dispatch_recheck_required",
-                        message="设备在线状态与动作能力将在派发时原子复核",
+                        message="设备物料已确认；设备在线状态与动作能力在派发时复核",
                         node_uuid=node_uuid,
                         node_name=node_name,
                         details={"material_uuid": material_uuid},
@@ -296,8 +299,8 @@ def build_run_preflight_report(
             status="deferred",
             code="resource_admission_at_dispatch",
             message=(
-                "静态资源取得顺序已验证；设备、库位、物料条件和当前占用只能在"
-                "派发门禁的库存事务中原子复核"
+                "静态资源取得顺序已确认不会死锁；设备、库位、物料和当前占用"
+                "在派发时的库存事务里一次性复核"
             ),
         )
     )

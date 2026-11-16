@@ -9,6 +9,8 @@ from unilabos.workflow.authoring_kernel import AuthoringCatalogSnapshot
 from unilabos.workflow.legacy_json_import import (
     empty_as_none,
     normalize_imported_action_name,
+    normalize_imported_edge_uuid,
+    normalize_imported_node_uuid,
     resolve_catalog_action,
     resolve_handle_uuid,
 )
@@ -234,3 +236,41 @@ def test_import_chemworldmodel_json_remaps_template_and_handles(
         assert second["workflow"]["uuid"] != imported["workflow"]["uuid"]
     finally:
         service.close()
+
+
+def test_compound_cwm_node_uuid_falls_back_to_last_segment() -> None:
+    """CWM 组合工作流把祖先路径拼进节点身份，导入时取末段作为节点 UUID。
+
+    形如 ``<根>__<子流程>__<节点>`` 的三段串共 112 个字符，直接当成 UUID 校验
+    必然失败；末段是该节点自身 UUID，且同一导出内唯一，取它既稳定又能让
+    ``edges`` 端点一一对上。
+    """
+
+    root = "30884c7e-c13e-48b7-9560-a97992f78c95"
+    child = "cb54a6be-9014-4225-8b4d-f237936edcde"
+    node = "6b9be2ee-7240-4e34-bd48-ffc64bd7f89c"
+
+    assert normalize_imported_node_uuid(f"{root}__{child}__{node}") == node
+    # 本来就是标准 UUID 的原样返回（大小写归一）
+    assert normalize_imported_node_uuid(node) == node
+    assert normalize_imported_node_uuid(node.upper()) == node
+
+
+def test_compound_cwm_node_uuid_rejects_unparseable_values() -> None:
+    """末段不是合法 UUID 时必须失败关闭，不能静默编造身份。"""
+
+    for bad in (None, "", "not-a-uuid", "a__b__c"):
+        try:
+            normalize_imported_node_uuid(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"应当拒绝：{bad!r}")
+
+
+def test_composite_edge_label_has_no_standalone_uuid() -> None:
+    """CWM 的 ``<源>><目标>`` 边标识不含独立 UUID，交给调用方重新生成。"""
+
+    assert normalize_imported_edge_uuid(
+        "30884c7e-c13e-48b7-9560-a97992f78c95__cb54a6be-9014-4225-8b4d-f237936edcde"
+        "__5470da9e-f659-4b98-a9a8-a1b72429b7c2>64932934-d435-4d54-b68a-7e65f50c32be"
+    ) is None

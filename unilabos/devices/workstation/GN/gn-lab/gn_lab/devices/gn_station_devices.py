@@ -458,6 +458,7 @@ class CentrifugeDevice(_CentrifugeDevice):
         z_speed: Optional[int] = None,
         plate_no: Optional[int] = None,
         temperature: Optional[int] = None,
+        time_hours: Optional[int] = None,
         timeout: float = 120.0,
     ) -> dict:
         return super().execute_command(
@@ -471,8 +472,13 @@ class CentrifugeDevice(_CentrifugeDevice):
             z_speed=z_speed,
             plate_no=plate_no,
             temperature=temperature,
+            time_hours=time_hours,
             timeout=timeout,
         )
+
+    @action(parent=True, auto_prefix=True)
+    def tare_scale(self, timeout: float = 60.0) -> dict:
+        return super().tare_scale(timeout=timeout)
 
 
 @device(
@@ -619,6 +625,7 @@ class LockingMechanismDevice(_LockingMechanismDevice):
         z2_speed: Optional[int] = None,
         jaw_position: Optional[float] = None,
         jaw_force: Optional[float] = None,
+        pre_turns: Optional[int] = None,
         timeout: float = 180.0,
     ) -> dict:
         return super().execute_command(
@@ -633,5 +640,6 @@ class LockingMechanismDevice(_LockingMechanismDevice):
             z2_speed=z2_speed,
             jaw_position=jaw_position,
             jaw_force=jaw_force,
+            pre_turns=pre_turns,
             timeout=timeout,
         )

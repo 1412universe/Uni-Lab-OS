@@ -2,15 +2,21 @@
 锁紧模块 设备驱动
 
 基于 gn_solid_weighing / gn_standard_oven 同构 OPC 握手；
-单点调试逻辑对齐 locking_mechanism.py；协议 opcua_gn1.3.9.csv「锁紧模块」（前缀 Lock_）。
+单点调试逻辑对齐 locking_mechanism.py；协议 opcua_gn1.4.3.csv「锁紧模块」（前缀 Lock_）。
 
 对外仅暴露 execute_command（Lock_CmdType + 写参）；测试流程预设供本地调试。
 
-指令类型 (Lock_CmdType)：
+指令类型 (Lock_CmdType，OPC UA 1.4.3)：
     1=X向左 2=X向右 3=Y向左 4=Y向右
     5=Z1向左 6=Z1向右 7=Z2向左 8=Z2向右
-    9=夹爪夹取 10=夹爪放置 11=电批拧紧 12=电批拧松
-    13=夹爪夹紧 14=夹爪松开 16=复位
+    9=夹爪夹取 10=夹爪放置 11=电批终锁(扭矩锁死) 12=电批拧松
+    13=夹爪夹紧 14=夹爪松开 15=电批预锁(按圈数，不锁死) 16=复位
+
+预锁 / 终锁（1.4.3 起 11 的语义变化）：
+    1.3.9 的 11 只叫「电批拧紧」；1.4.3 把它明确成**终锁**（扭矩锁死），
+    并新增 15 = **预锁**（按圈数转到位但不锁死）。工艺要求先对角预锁四角，
+    再逐颗终锁，否则一颗打满后盖子会翘、后面锁不上（见协议附表
+    「锁紧预锁说明」）。预锁圈数写 ``Lock_PreTurnsSet``，单位 0.1 圈。
 """
 
 import os
@@ -30,10 +36,10 @@ _JAW_FLOAT_NODES = ("Lock_JawPosition", "Lock_JawForce")
 
 DEFAULT_XLSX_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.9.csv",
+    "opcua_gn1.4.3.csv",
 )
 
-# OPC UA 1.3.9 Lock_CmdType
+# OPC UA 1.4.3 Lock_CmdType
 LOCK_CMD_LABELS = {
     1: "X向左",
     2: "X向右",
@@ -45,16 +51,17 @@ LOCK_CMD_LABELS = {
     8: "Z2向右",
     9: "夹爪夹取",
     10: "夹爪放置",
-    11: "电批拧紧",
+    11: "电批终锁(扭矩锁死)",
     12: "电批拧松",
     13: "夹爪夹紧",
     14: "夹爪松开",
+    15: "电批预锁(按圈数,不锁死)",
     16: "复位",
 }
 
 
 class LockCommand(int, Enum):
-    """锁紧模块指令类型 (Lock_CmdType)"""
+    """锁紧模块指令类型 (Lock_CmdType，OPC UA 1.4.3)"""
 
     X_LEFT = 1
     X_RIGHT = 2
@@ -66,11 +73,16 @@ class LockCommand(int, Enum):
     Z2_RIGHT = 8
     JAW_PICK = 9
     JAW_PLACE = 10
-    SCREW_TIGHTEN = 11
+    SCREW_FINAL_TIGHTEN = 11
     SCREW_LOOSEN = 12
     JAW_CLAMP = 13
     JAW_RELEASE = 14
+    SCREW_PRE_TIGHTEN = 15
     RESET = 16
+
+    # 1.4.3 之前 CmdType=11 只叫「电批拧紧」。保留旧名作为枚举别名，
+    # 既有工作流/脚本按旧名引用时仍能拿到同一个成员。
+    SCREW_TIGHTEN = 11
 
 
 # 锁紧模块测试流程预设（本地 run_test_flow，非注册动作）
@@ -100,7 +112,14 @@ TEST_FLOW_PRESETS = [
         x_speed=500, y_speed=500, z1_speed=500, z2_speed=500,
         jaw_position=0.0, jaw_force=0.0,
     )),
-    ("6.拧螺丝（拧紧）", LockCommand.SCREW_TIGHTEN, dict(
+    # 1.4.3：先按圈数预锁（不锁死），再扭矩终锁。同一组 XY，只换 CmdType。
+    ("6.电批预锁（2.0圈）", LockCommand.SCREW_PRE_TIGHTEN, dict(
+        x_pos=1270, y_pos=2030, z1_pos=1065, z2_pos=0,
+        x_speed=500, y_speed=500, z1_speed=500, z2_speed=500,
+        jaw_position=0.0, jaw_force=0.0,
+        pre_turns=20,
+    )),
+    ("7.电批终锁（扭矩锁死）", LockCommand.SCREW_FINAL_TIGHTEN, dict(
         x_pos=1270, y_pos=2030, z1_pos=1065, z2_pos=0,
         x_speed=500, y_speed=500, z1_speed=500, z2_speed=500,
         jaw_position=0.0, jaw_force=0.0,
@@ -109,10 +128,12 @@ TEST_FLOW_PRESETS = [
 
 
 _EXECUTE_CMD_DOC = (
-    "按 Lock_CmdType 执行 OPC UA 1.3.9 指令。"
+    "按 Lock_CmdType 执行 OPC UA 1.4.3 指令。"
     "1=X左 2=X右 3=Y左 4=Y右 5=Z1左 6=Z1右 7=Z2左 8=Z2右 "
-    "9=夹爪夹取 10=夹爪放置 11=电批拧紧 12=电批拧松 13=夹爪夹紧 14=夹爪松开 16=复位。"
-    "轴运动写对应 PosSet/Speed；夹取/放置/电批另写 jaw_position/jaw_force。"
+    "9=夹爪夹取 10=夹爪放置 11=电批终锁(扭矩锁死) 12=电批拧松 "
+    "13=夹爪夹紧 14=夹爪松开 15=电批预锁(按圈数,不锁死) 16=复位。"
+    "轴运动写对应 PosSet/Speed；夹取/放置/电批另写 jaw_position/jaw_force；"
+    "预锁(15)必写 pre_turns（单位 0.1 圈，20=2.0 圈）。"
 )
 
 
@@ -180,16 +201,28 @@ class LockingMechanismDevice(GNStationClient):
         z2_speed: Optional[int] = None,
         jaw_position: Optional[float] = None,
         jaw_force: Optional[float] = None,
+        pre_turns: Optional[int] = None,
         timeout: float = 180.0,
     ) -> dict:
-        """唯一注册动作：写参 → CmdType → CmdTrig → 等 CompleteFB。"""
+        """唯一注册动作：写参 → CmdType → CmdTrig → 等 CompleteFB。
+
+        ``pre_turns`` 只对 CmdType=15（电批预锁）有意义，单位 0.1 圈：20 = 2.0 圈。
+        协议附表明确「预锁 Type=15 必写，≤0 拒收」，因此这里在下发前就拦掉，
+        避免 PLC 静默拒收后卡到超时。
+        """
         cmd = int(cmd_type)
         if timeout is None or float(timeout) <= 0:
             timeout = 180.0
+        if cmd == int(LockCommand.SCREW_PRE_TIGHTEN):
+            if pre_turns is None:
+                raise ValueError("预锁(CmdType=15)必须提供 pre_turns（单位 0.1 圈，20=2.0 圈）")
+            if int(pre_turns) <= 0:
+                raise ValueError(f"pre_turns 必须大于 0，收到 {pre_turns}")
         setpoints = self._build_setpoints(
             x_pos=x_pos, y_pos=y_pos, z1_pos=z1_pos, z2_pos=z2_pos,
             x_speed=x_speed, y_speed=y_speed, z1_speed=z1_speed, z2_speed=z2_speed,
             jaw_position=jaw_position, jaw_force=jaw_force,
+            pre_turns=pre_turns,
         )
         label = LOCK_CMD_LABELS.get(cmd, f"CmdType={cmd}")
         return self._run(cmd, label, setpoints, timeout=float(timeout))
@@ -217,6 +250,7 @@ class LockingMechanismDevice(GNStationClient):
         z2_speed: Optional[int] = None,
         jaw_position: Optional[float] = None,
         jaw_force: Optional[float] = None,
+        pre_turns: Optional[int] = None,
     ) -> dict:
         mapping = {
             "Lock_XPosSet": x_pos,
@@ -230,6 +264,8 @@ class LockingMechanismDevice(GNStationClient):
             # 显式 float，配合节点 DataType.FLOAT
             "Lock_JawPosition": float(jaw_position) if jaw_position is not None else None,
             "Lock_JawForce": float(jaw_force) if jaw_force is not None else None,
+            # 1.4.3 新增：预锁圈数（0.1 圈为单位），四颗螺丝共用
+            "Lock_PreTurnsSet": int(pre_turns) if pre_turns is not None else None,
         }
         return {node: val for node, val in mapping.items() if val is not None}
 

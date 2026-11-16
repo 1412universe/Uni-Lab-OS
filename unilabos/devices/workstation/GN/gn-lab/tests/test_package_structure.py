@@ -87,11 +87,17 @@ def test_dry_run_graph_disables_hardware_connect() -> None:
     } <= device_ids
     locking = next(node for node in devices if node["id"] == "gn_locking_mechanism")
     assert locking["class"] == "community.gn_lab.gn_locking_mechanism"
-    assert "opcua_gn1.3.9.csv" in {
+    assert "opcua_gn1.4.3.csv" in {
         node.get("config", {}).get("csv_path") or node.get("config", {}).get("xlsx_path")
         for node in devices
         if node["id"] != "PRCXI"
     }
+    # 1.4.3 是唯一被引用的协议表：不再混用 1.3.x
+    assert not {
+        node.get("config", {}).get("csv_path") or node.get("config", {}).get("xlsx_path")
+        for node in devices
+        if node["id"] != "PRCXI"
+    } - {"opcua_gn1.4.3.csv"}
 
 
 def test_ast_scan_finds_all_gn_devices() -> None:

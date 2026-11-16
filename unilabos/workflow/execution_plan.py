@@ -1729,6 +1729,13 @@ class ExecutionPlanBuilder:
         frozen_template_type = str(template.get("type") or "").strip()
         if not action_type and frozen_template_type.startswith("UniLabJsonCommand"):
             action_type = frozen_template_type
+        # ``action_name`` 是派发用的动作业务名，属于必需合同；但已应用图可能因
+        # 旧数据或固定点合并把它收敛为 null（``_retained_node_entity`` 会保留旧
+        # wire 形状）。此时模板名就是该动作的权威业务名，缺失即回退到它，否则
+        # 计划本身能用、编译器却在 ``invalid_action_contract`` 处失败。
+        action_name = str(node.get("action_name") or "").strip()
+        if not action_name:
+            action_name = str(template.get("name") or "").strip()
         template_metadata = template.get("meta_data")
         template_unilab = (
             template_metadata.get("unilab")
@@ -1738,7 +1745,7 @@ class ExecutionPlanBuilder:
         return {
             "device_id": device_id,
             "device_selector": device_selector,
-            "action_name": node.get("action_name"),
+            "action_name": action_name,
             "action_type": action_type or "UniLabJsonCommand",
             "always_free": bool(
                 template_unilab.get("always_free", False)

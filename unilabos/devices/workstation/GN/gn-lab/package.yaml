@@ -1,18 +1,15 @@
 package:
   name: gn_lab
-
 workflows:
-  - workflow_uuid: 900f9f79-7dfb-42f2-89ce-f70e86d6b68c
-    source: gn_lab/workflows/quick_change_debug.py
-  - workflow_uuid: 5d2b64d1-2666-4459-a587-708aadf0a5b3
-    source: gn_lab/workflows/gold_tetrahedron_after_first_centrifuge.py
-  - workflow_uuid: 4b868761-9468-46ec-86c5-7ab64b6b8854
-    source: gn_lab/workflows/gold_tetrahedron_aa_mix.py
-  - workflow_uuid: a138bc18-9c16-4552-8696-e4f43903b9ad
-    source: gn_lab/workflows/gold_tetrahedron_ctac_ctab.py
-  - workflow_uuid: 8a15d439-59ab-43a3-928a-1aa8350d260f
-    source: gn_lab/workflows/prcxi_9320_transfer.py
-  - workflow_uuid: 82ab3216-76b0-45be-9b18-4f1cb93c90db
-    source: gn_lab/workflows/workflow_82ab321676b045be9b184f1cb93c90db.py
-  - workflow_uuid: d8f94f99-d73f-476b-9cdd-1f9c8590e03a
-    source: gn_lab/workflows/workflow_d8f94f99d73f476b9cdd1f9c8590e03a.py
+- workflow_uuid: 5d2b64d1-2666-4459-a587-708aadf0a5b3
+  source: gn_lab/workflows/gold_tetrahedron_after_first_centrifuge.py
+- workflow_uuid: 4b868761-9468-46ec-86c5-7ab64b6b8854
+  source: gn_lab/workflows/gold_tetrahedron_aa_mix.py
+- workflow_uuid: 8a15d439-59ab-43a3-928a-1aa8350d260f
+  source: gn_lab/workflows/prcxi_9320_transfer.py
+- workflow_uuid: 82ab3216-76b0-45be-9b18-4f1cb93c90db
+  source: gn_lab/workflows/workflow_82ab321676b045be9b184f1cb93c90db.py
+- workflow_uuid: b16d9e95-8f38-4f3f-9647-a152bf0c40e1
+  source: gn_lab/workflows/workflow_b16d9e958f384f3f9647a152bf0c40e1.py
+- workflow_uuid: c06b676e-d983-43dd-847e-4dd5f7a9420c
+  source: gn_lab/workflows/workflow_c06b676ed98343dd847e4dd5f7a9420c.py

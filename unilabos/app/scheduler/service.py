@@ -138,6 +138,20 @@ logger = logging.getLogger(__name__)
 logger.propagate = True
 
 
+def _simulate_kwarg(simulate: bool) -> dict[str, Any]:
+    """仅在需要仿真时返回关键字参数，保持旧解析器签名兼容。
+
+    参数：``simulate`` 表示本次是否为仿真派发。返回：空字典或
+    ``{"simulate": True}``。异常：无。
+
+    为什么不能无条件传：``device_target_resolver`` 是可替换端口，既有替身与
+    扩展实现只接受三个位置参数；无条件传关键字会让它们直接 TypeError。仿真为
+    假时（绝大多数调用）必须保持完全相同的调用形状。
+    """
+
+    return {"simulate": True} if simulate else {}
+
+
 def _merge_param_patch(
     current: Mapping[str, Any],
     patch: Mapping[str, Any],
@@ -2805,6 +2819,9 @@ class EdgeScheduler:
                     task.node,
                     busy - continuation_keys,
                     continuation_keys=continuation_keys,
+                    # 任务级仿真档：只放宽设备物理状态检查，让软件链路
+                    # 在没接真机时也能走通；能力/模板/忙碌仍照查。
+                    simulate=str(getattr(run.spec, "action_mode", "") or "") == "simulate",
                 )
             except DeviceTargetUnavailable as error:
                 self._notify_job_execution_wait(
@@ -3348,6 +3365,7 @@ class EdgeScheduler:
                 action_type=task.node.action_type,
                 action_args=resolved_args,
                 always_free=task.node.always_free,
+                action_mode=run.spec.action_mode,
             )
             # 预估基于 sjson 覆写后的 resolved 参数：父节点经 gjson/sjson 传下来的
             # 实际值（如 time）直接决定声明式预估结果
@@ -3763,8 +3781,13 @@ class EdgeScheduler:
         busy_keys: set[str],
         *,
         continuation_keys: set[str] | None = None,
+        simulate: bool = False,
     ) -> ResolvedDeviceTarget:
-        """返回固定设备，或按冻结类型从当前注册选择首个可用实例。"""
+        """返回固定设备，或按冻结类型从当前注册选择首个可用实例。
+
+        ``simulate`` 为真时只放宽**物理状态**检查（离线/不健康/待对账），
+        动作能力、设备模板与忙碌状态仍照查——仿真要验证的是软件层是否成立。
+        """
 
         device_id = str(getattr(node, "device_id", "") or "").strip()
         if device_id:
@@ -3779,6 +3802,7 @@ class EdgeScheduler:
                     str(getattr(node, "action_name", "") or ""),
                     set(busy_keys)
                     | (self._held_resource_locks() - set(continuation_keys or ())),
+                    **_simulate_kwarg(simulate),
                 )
             if self.physical_dispatch_enabled:
                 raise DeviceTargetUnavailable(
@@ -3805,6 +3829,7 @@ class EdgeScheduler:
             str(getattr(node, "action_name", "") or ""),
             set(busy_keys)
             | (self._held_resource_locks() - set(continuation_keys or ())),
+            **_simulate_kwarg(simulate),
         )
 
     def preflight_device_target(

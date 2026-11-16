@@ -941,7 +941,6 @@ def _append_action_source(
         node,
         result_names=result_names,
         result_name_by_uuid=allocated_names,
-        uniquify=inline_expanded_composites,
     )
     metadata_comment = _node_metadata_comment(node=node, action=action)
     if metadata_comment is not None:
@@ -1156,9 +1155,20 @@ def _allocate_result_name(
     *,
     result_names: set[str],
     result_name_by_uuid: dict[str, str],
-    uniquify: bool,
 ) -> str:
-    """分配节点 Python 结果变量；内联组合时允许为冲突名追加稳定后缀。"""
+    """分配节点 Python 结果变量，冲突时追加稳定后缀。
+
+    参数说明：``node`` 是待生成节点，``result_names`` 是已占用变量名集合，
+    ``result_name_by_uuid`` 缓存已分配结果。返回该节点的唯一 Python 局部名，
+    并原地登记。
+
+    为什么冲突必须自动消解而不是报错：结果变量名只是**同一次生成**里的 Python
+    局部标识，节点身份始终是 UUID。同一个动作模板放两个、参数不同，是完全合法
+    的编排（编辑器里拖两个「取料」很常见）；它们的业务语义由 ``param`` 与执行
+    边区分，与变量名无关。因此这里只做去重，让后出现的节点带上由其 UUID 派生
+    的后缀，保证生成源码可编译、且重复渲染同一张图得到同一份源码
+    （后缀取自 UUID，不随遍历顺序漂移）。
+    """
 
     node_uuid = str(node["uuid"])
     existing = result_name_by_uuid.get(node_uuid)
@@ -1166,8 +1176,6 @@ def _allocate_result_name(
         return existing
     name = _node_result_name(node)
     if name in result_names:
-        if not uniquify:
-            raise AuthoringGraphError("candidate_invalid", "节点作者结果变量重复")
         suffix = node_uuid.replace("-", "")[:8]
         candidate = _safe_identifier(f"{name}_{suffix}", fallback="result")
         extra = 2
@@ -1975,16 +1983,76 @@ def _topological_nodes(
     return ordered
 
 
+def _topological_nodes_stable(
+    nodes: Mapping[str, dict[str, Any]],
+    edges: list[Any],
+    *,
+    priority,
+) -> list[dict[str, Any]]:
+    """按依赖排序，并用外部优先级稳定同层节点的相对次序。
+
+    参数说明：``nodes`` 是节点索引，``edges`` 是完整边数组，``priority`` 接收
+    节点并返回可比较的优先级（``None`` 表示未指定，排在已指定项之后）。
+    返回拓扑序节点列表。异常：边引用未知节点或形成环时抛 ``AuthoringGraphError``。
+
+    与 `_topological_nodes` 的差别只在同层排序键：那里按 UUID 字典序，这里按
+    调用方给的优先级（通常是既有的 `authoring_source_order`），使补齐序号的过程
+    尽量保留作者已排定的相对顺序，而不是把整张图按 UUID 重排。
+    """
+
+    indegree = {identity: 0 for identity in nodes}
+    outgoing: dict[str, set[str]] = defaultdict(set)
+    for value in edges:
+        if not isinstance(value, Mapping):
+            raise AuthoringGraphError("candidate_invalid", "候选边必须是对象")
+        source = str(value.get("source_node_uuid"))
+        target = str(value.get("target_node_uuid"))
+        if source not in nodes or target not in nodes:
+            raise AuthoringGraphError("candidate_invalid", "候选边引用未知节点")
+        if target not in outgoing[source]:
+            outgoing[source].add(target)
+            indegree[target] += 1
+
+    def sort_key(identity: str) -> tuple[int, int, str]:
+        """同层排序键：有优先级的在前，按优先级升序，其余按 UUID 兜底。"""
+
+        value = priority(nodes[identity])
+        if isinstance(value, int) and not isinstance(value, bool):
+            return (0, value, identity)
+        return (1, 0, identity)
+
+    ready = sorted(
+        (identity for identity, count in indegree.items() if count == 0),
+        key=sort_key,
+    )
+    ordered: list[dict[str, Any]] = []
+    while ready:
+        identity = ready.pop(0)
+        ordered.append(nodes[identity])
+        for target in sorted(outgoing[identity]):
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+        ready.sort(key=sort_key)
+    if len(ordered) != len(nodes):
+        raise AuthoringGraphError("candidate_invalid", "候选图包含依赖环")
+    return ordered
+
+
 def _authoring_ordered_nodes(
     nodes: Mapping[str, dict[str, Any]],
     edges: list[Any],
 ) -> list[dict[str, Any]]:
     """优先按可信作者源码顺序排列节点并验证执行依赖方向。
 
-    参数说明：``nodes`` 是候选节点索引，``edges`` 是完整执行边数组。返回：当
-    每个节点都有唯一非负 ``authoring_source_order`` 时返回源码顺序，否则对不含
-    展示分组的旧候选图返回拓扑顺序。异常：展示分组缺少顺序、顺序重复，或源码
-    顺序逆转执行依赖时抛出 ``AuthoringGraphError``。
+    参数说明：``nodes`` 是候选节点索引，``edges`` 是完整执行边数组。返回按源码
+    顺序（或拓扑顺序）排列的节点。异常：顺序号非法或重复、源码顺序逆转执行依赖
+    时抛出 ``AuthoringGraphError``。
+
+    ``authoring_source_order`` 缺失时**不再报错**：它只是「源码里第几条语句」的
+    记账字段，一旦缺失完全可以用拓扑序确定性补齐。此前对结构化图直接失败关闭，
+    导致「并行结构（含 group）+ 编辑器新建节点（不写顺序号）」这种正常组合
+    无法保存——那是把记账字段当成了业务约束。现在统一走补齐路径。
     """
 
     topological = _topological_nodes(nodes, edges)
@@ -2008,17 +2076,18 @@ def _authoring_ordered_nodes(
         if value in source_positions.values():
             raise AuthoringGraphError("candidate_invalid", "作者源码节点顺序不能重复")
         source_positions[node_uuid] = value
-    has_structured_node = any(
-        str(node.get("type")) in {"group", "condition", "repeat_until"}
-        or str(node.get("node_type")) in {"group", "condition", "repeat_until"}
-        for node in nodes.values()
-    )
     if missing_source_order:
-        if has_structured_node:
-            raise AuthoringGraphError(
-                "candidate_invalid", "结构化候选图缺少作者源码顺序"
-            )
-        return topological
+        # 只要有一个节点缺号，就整体重算一次「尊重既有序号的拓扑序」：
+        # 用拓扑排序保证执行依赖永不倒置，用既有序号作为同层优先级，尽量不改动
+        # 作者已排定的相对次序。仅补尾部（max+1…）是不够的——新节点可能是某条
+        # 链的上游，尾部编号会让它排到下游之后，触发「顺序逆转执行依赖」。
+        ordered = _topological_nodes_stable(
+            nodes,
+            edges,
+            priority=lambda node: source_positions.get(str(node["uuid"])),
+        )
+        for position, node in enumerate(ordered):
+            source_positions[str(node["uuid"])] = position
 
     def source_position_sort_key(node: Mapping[str, Any]) -> int:
         """读取候选节点的作者源码位置。

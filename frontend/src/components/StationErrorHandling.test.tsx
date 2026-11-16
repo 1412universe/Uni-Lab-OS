@@ -21,6 +21,9 @@ const notify = vi.fn()
 
 beforeEach(() => {
   state = handlingSnapshot(); posts = []; handler = undefined; sessionStorage.clear()
+  // 自动提示的去重记录跨用例共享会互相干扰（第一条用例标记「已提示」后，
+  // 后续用例就再也不弹了）。每个用例都从干净状态开始。
+  localStorage.clear()
   vi.stubGlobal('fetch', vi.fn(async (input: string, options?: RequestInit) => {
     const path = input.replace('/api/v1/stations/local', '')
     if (options?.method === 'POST') {

@@ -150,12 +150,15 @@ def build_job_start_payload(
     action_type: str,
     action_args: Any,
     always_free: bool = False,
+    action_mode: str = "",
 ) -> DispatchPayload:
     """构造与云端 ``job_start`` 同形状的执行载荷。
 
     参数：前七项描述作业、任务、工作流节点、设备动作及最终参数；
-    ``always_free`` 表示动作不占设备排队锁。返回：可交给执行微后端的载荷。
-    异常：无；身份与参数合同由调用方在越过执行边界前校验。
+    ``always_free`` 表示动作不占设备排队锁；``action_mode`` 是任务级动作档位
+    （``simulate`` 只校验软件下发链路、不打开设备会话），空值表示沿用 Edge
+    进程级配置。返回：可交给执行微后端的载荷。异常：无；身份与参数合同由调用方
+    在越过执行边界前校验。
     """
     payload = DispatchPayload(
         job_id=job_id,
@@ -172,6 +175,9 @@ def build_job_start_payload(
     # 普通动作 wire 形状完全不变。
     if always_free:
         payload["always_free"] = True
+    # 同理：只有任务显式指定档位时才扩展 wire 形状，旧调用方不受影响。
+    if action_mode:
+        payload["action_mode"] = action_mode
     return payload
 
 

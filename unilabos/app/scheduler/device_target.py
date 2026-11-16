@@ -40,20 +40,35 @@ class ResolvedDeviceTarget:
 
 
 def _registered_device_unavailable(
-    device: Mapping[str, Any], *, action_name: str
+    device: Mapping[str, Any],
+    *,
+    action_name: str,
+    simulate: bool = False,
 ) -> tuple[str, str] | None:
-    """返回单个注册设备当前不可派发的稳定原因。"""
+    """返回单个注册设备当前不可派发的稳定原因。
 
-    if device.get("online") is False:
-        return "device_offline", "目标设备当前离线"
-    if str(device.get("dispatch_block_reason") or "").strip():
-        return "device_unhealthy", "目标设备当前健康状态不允许派发"
-    unknown_ids = device.get("unknown_command_ids", [])
-    if not isinstance(unknown_ids, list) or unknown_ids:
-        return (
-            "device_requires_reconciliation",
-            "目标设备仍有结果不明命令，必须先完成物理对账",
-        )
+    参数：``device`` 是 Edge 注册快照中的一个设备声明；``action_name`` 是本次要
+    执行的动作名；``simulate`` 为真表示本次是仿真运行。
+
+    ``simulate`` 只跳过**物理状态**类阻塞（离线、不健康、待物理对账）——那正是
+    「没接真机」时的常态，与软件逻辑无关。但**动作能力**与模板类型等软件层一致性
+    仍然照查，否则仿真就失去意义（无法发现「指令号/动作名写错」）。
+
+    返回：``(wait_code, message)`` 或 ``None``（可用）。异常：无。
+    """
+
+    if not simulate:
+        if device.get("online") is False:
+            return "device_offline", "目标设备当前离线"
+        if str(device.get("dispatch_block_reason") or "").strip():
+            return "device_unhealthy", "目标设备当前健康状态不允许派发"
+        unknown_ids = device.get("unknown_command_ids", [])
+        if not isinstance(unknown_ids, list) or unknown_ids:
+            return (
+                "device_requires_reconciliation",
+                "目标设备仍有结果不明命令，必须先完成物理对账",
+            )
+    # 软件能力合同在仿真下同样必须成立：动作名写错时要能被发现。
     actions = device.get("actions")
     if not isinstance(actions, list) or not any(
         isinstance(action, Mapping)
@@ -71,12 +86,14 @@ def resolve_registered_device_target(
     resource_template_uuid: str,
     action_name: str,
     busy_keys: set[str],
+    simulate: bool = False,
 ) -> ResolvedDeviceTarget:
     """按设备模板、动作能力和忙碌状态选择稳定排序的首个可用实例。
 
     参数：``inventory`` 只提供设备物料匹配接口；``registration`` 是执行进程
-    当前注册快照；模板、动作和 ``busy_keys`` 共同限定候选。返回：稳定排序后
-    首个可用设备身份。异常：选择器、注册或可用性不满足时抛
+    当前注册快照；模板、动作和 ``busy_keys`` 共同限定候选；``simulate`` 为真时
+    跳过物理状态阻塞（离线/不健康/待对账），但保留能力与模板一致性检查。
+    返回：稳定排序后首个可用设备身份。异常：选择器、注册或可用性不满足时抛
     ``DeviceTargetUnavailable``；库存读取错误原样传播并阻止派发。
     """
 
@@ -88,7 +105,17 @@ def resolve_registered_device_target(
             "冻结设备选择器缺少合法资源模板 UUID",
         ) from error
     if not isinstance(registration, Mapping) or not registration.get("connected"):
-        raise DeviceTargetUnavailable("edge_offline", "设备执行进程尚未在线注册")
+        # 仿真运行在没有 Edge 在线注册时无法确定具体实例身份：不猜设备，
+        # 明确报出原因，让调用方知道「软件链路本身还没到设备这一层」。
+        raise DeviceTargetUnavailable(
+            "edge_offline",
+            (
+                "仿真运行需要 Edge 进程已注册设备清单（设备可离线）；"
+                "当前执行进程尚未在线注册"
+                if simulate
+                else "设备执行进程尚未在线注册"
+            ),
+        )
     devices = registration.get("devices")
     if not isinstance(devices, list):
         raise DeviceTargetUnavailable("invalid_edge_registration", "设备注册快照损坏")
@@ -110,6 +137,7 @@ def resolve_registered_device_target(
         unavailable = _registered_device_unavailable(
             device,
             action_name=action_name,
+            simulate=simulate,
         )
         if unavailable is not None:
             wait_code, wait_message = unavailable
@@ -189,11 +217,24 @@ def resolve_registered_fixed_device_target(
     material_uuid: str,
     action_name: str,
     busy_keys: set[str],
+    simulate: bool = False,
 ) -> ResolvedDeviceTarget:
-    """用当前注册快照复核固定设备的在线、健康、能力与忙碌状态。"""
+    """用当前注册快照复核固定设备的在线、健康、能力与忙碌状态。
+
+    ``simulate`` 为真时只跳过物理状态阻塞（离线/不健康/待对账），能力与忙碌
+    仍照查——仿真要验证的正是软件层是否成立。
+    """
 
     if not isinstance(registration, Mapping) or not registration.get("connected"):
-        raise DeviceTargetUnavailable("edge_offline", "设备执行进程尚未在线注册")
+        raise DeviceTargetUnavailable(
+            "edge_offline",
+            (
+                "仿真运行需要 Edge 进程已注册设备清单（设备可离线）；"
+                "当前执行进程尚未在线注册"
+                if simulate
+                else "设备执行进程尚未在线注册"
+            ),
+        )
     devices = registration.get("devices")
     if not isinstance(devices, list):
         raise DeviceTargetUnavailable("invalid_edge_registration", "设备注册快照损坏")
@@ -225,7 +266,11 @@ def resolve_registered_fixed_device_target(
         raise DeviceTargetUnavailable(
             "device_not_registered", "固定设备身份不在当前执行进程注册快照中"
         )
-    unavailable = _registered_device_unavailable(target, action_name=action_name)
+    unavailable = _registered_device_unavailable(
+        target,
+        action_name=action_name,
+        simulate=simulate,
+    )
     if unavailable is not None:
         raise DeviceTargetUnavailable(
             *unavailable,
@@ -269,24 +314,28 @@ def resolve_registered_fixed_device_target(
 def make_registered_device_target_resolver(
     inventory: StationResourceInventory,
     registration_reader: Callable[[], Mapping[str, Any] | None],
-) -> Callable[[Mapping[str, Any], str, set[str]], ResolvedDeviceTarget]:
+) -> Callable[..., ResolvedDeviceTarget]:
     """绑定库存与 Edge 注册读取端口，生成调度器动态设备解析器。
 
     参数：``inventory`` 是工站资源窄接口；``registration_reader`` 每轮返回最新
-    执行进程注册快照。返回：供调度器调用的动态设备解析函数。异常：构造不读取
-    外部状态；调用时的选择错误由内部函数原样传播。
+    执行进程注册快照。返回：供调度器调用的动态设备解析函数（接受可选的
+    ``simulate`` 关键字）。异常：构造不读取外部状态；调用时的选择错误由内部
+    函数原样传播。
     """
 
     def resolve(
         selector: Mapping[str, Any],
         action_name: str,
         busy_keys: set[str],
+        *,
+        simulate: bool = False,
     ) -> ResolvedDeviceTarget:
         """用本轮最新注册和忙碌快照解析一个动态设备目标。
 
         参数：``selector`` 是冻结设备模板选择器；``action_name`` 是动作能力；
-        ``busy_keys`` 是当前不可用资源键。返回：具体设备身份。异常：选择器模式
-        非法或没有可用设备时抛 ``DeviceTargetUnavailable``。
+        ``busy_keys`` 是当前不可用资源键；``simulate`` 为真时跳过物理状态阻塞。
+        返回：具体设备身份。异常：选择器模式非法或没有可用设备时抛
+        ``DeviceTargetUnavailable``。
         """
 
         mode = selector.get("mode")
@@ -303,6 +352,7 @@ def make_registered_device_target_resolver(
                 material_uuid=material_uuid,
                 action_name=action_name,
                 busy_keys=busy_keys,
+                simulate=simulate,
             )
         if mode != "resource_template":
             raise DeviceTargetUnavailable(
@@ -315,6 +365,7 @@ def make_registered_device_target_resolver(
             resource_template_uuid=str(selector.get("resource_template_uuid") or ""),
             action_name=action_name,
             busy_keys=busy_keys,
+            simulate=simulate,
         )
 
     return resolve

@@ -988,7 +988,38 @@ def ensure_workflow_inventory_schema(connection: sqlite3.Connection) -> None:
     )
 
 
+def ensure_canvas_layout_schema(connection: sqlite3.Connection) -> None:
+    """创建画布落点（Canvas Layout）持久表。
+
+    参数：``connection`` 是 ``WorkflowStore`` 初始化事务持有的唯一写连接。返回：
+    无；函数幂等建表，可重复执行。异常：SQLite 结构写入失败由调用方回滚初始化
+    事务。
+
+    为什么需要独立一张表：工作流定义目录在 Local 模式下是**进程内** ``:memory:``，
+    图由领域包里的 Python 源码在每次启动时重建，而生成器不写 ``pose``，因此
+    ``workflow_node.pose`` 里的坐标活不过一次重启。落点又纯属展示偏好，不该
+    进入语义图（否则会改变发布合同与源码固定点）。所以把「节点 UUID → 画布
+    坐标」放进运行事实库这张持久表，读图时按节点身份叠加回去。
+    """
+
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS workflow_canvas_layout (
+            workflow_uuid TEXT NOT NULL,
+            node_uuid TEXT NOT NULL,
+            position_x REAL NOT NULL,
+            position_y REAL NOT NULL,
+            update_time TEXT NOT NULL,
+            PRIMARY KEY (workflow_uuid, node_uuid)
+        );
+        CREATE INDEX IF NOT EXISTS ix_workflow_canvas_layout_workflow
+            ON workflow_canvas_layout(workflow_uuid);
+        """
+    )
+
+
 __all__ = [
+    "ensure_canvas_layout_schema",
     "ensure_device_action_run_schema",
     "ensure_execution_lock_schema",
     "ensure_local_cancellation_schema",

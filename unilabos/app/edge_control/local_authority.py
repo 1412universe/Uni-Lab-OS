@@ -198,6 +198,9 @@ class LocalEdgeAuthorityStore:
                 ("attempt", "INTEGER"),
                 ("fences_json", "TEXT NOT NULL DEFAULT '[]'"),
                 ("resolution_outcome_json", "TEXT"),
+                # 任务级动作档位：'simulate' 表示只校验软件下发链路、不打开设备会话。
+                # 空值沿用后端进程级 --action_mode，保持旧库行为不变。
+                ("action_mode", "TEXT"),
             ):
                 if name not in job_columns:
                     self._connection.execute(
@@ -526,6 +529,10 @@ class LocalEdgeAuthorityStore:
         param = payload.get("action_args") or {}
         if not isinstance(param, dict):
             raise ValueError("action_args must be an object")
+        # 任务级动作档位；空值表示沿用 Edge 进程级 --action_mode。
+        job_action_mode = str(payload.get("action_mode") or "") or None
+        if job_action_mode is not None and job_action_mode not in {"simulate", "real"}:
+            raise ValueError("action_mode must be simulate or real")
         device_action_key = f"/devices/{local_device_id}/{action_name}"
         command_uuid = str(uuid.UUID(_required_text(payload, "command_uuid")))
         execution_source = payload.get("execution_source", "workflow")
@@ -618,6 +625,11 @@ class LocalEdgeAuthorityStore:
                         now,
                     ),
                 )
+                if job_action_mode is not None:
+                    self._connection.execute(
+                        "UPDATE local_edge_job SET action_mode=? WHERE job_uuid=?",
+                        (job_action_mode, job_uuid),
+                    )
                 self._connection.execute("UPDATE local_edge_job SET execution_source=? WHERE job_uuid=?", (execution_source, job_uuid))
                 self._connection.execute(
                     """
@@ -885,6 +897,8 @@ class LocalEdgeAuthorityStore:
             "action_name": str(row["action_name"]),
             "action_type": str(row["action_type"]),
             "param": json.loads(str(row["param_json"])),
+            # 任务级档位；旧库没有该列时按空值处理，沿用进程级配置。
+            "action_mode": _row_action_mode(row),
         }
 
     def requeue_not_started(self, job_uuid: str) -> None:
@@ -2583,6 +2597,21 @@ def _job_result_projection(
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _row_action_mode(row: sqlite3.Row) -> str:
+    """读取作业行的任务级动作档位，兼容尚未迁移的旧库。
+
+    参数：``row`` 是 ``local_edge_job`` 查询结果。返回：``simulate`` / ``real``
+    或空字符串（表示沿用 Edge 进程级配置）。异常：无——旧库没有该列时按空值
+    处理，与迁移前的行为完全一致。
+    """
+
+    try:
+        value = row["action_mode"]
+    except (IndexError, KeyError):
+        return ""
+    return str(value or "")
 
 
 def _current_trace_context() -> dict[str, str]:

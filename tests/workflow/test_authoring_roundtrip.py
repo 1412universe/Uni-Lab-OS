@@ -153,3 +153,56 @@ def test_validate_rejects_source_graph_mismatch(
 
     assert not result.valid
     assert any(item["code"] == "round_trip_mismatch" for item in result.diagnostics)
+
+
+def test_same_template_nodes_with_duplicate_result_names_are_uniquified() -> None:
+    """同模板同结果变量名的两个节点必须自动去重，而不是被判为非法。
+
+    场景：编辑器里拖入两个「取料」节点，只有参数不同。节点身份是 UUID，结果
+    变量只是同一次生成里的 Python 局部名，所以这里只该去重，不该拒绝保存。
+    后缀必须取自节点 UUID，保证重复渲染同一张图得到同一份源码。
+    """
+
+    from unilabos.workflow.authoring_python import _allocate_result_name
+
+    def node(node_uuid: str, result_name: str) -> dict[str, object]:
+        return {
+            "uuid": node_uuid,
+            "name": result_name,
+            "meta_data": {"unilab": {"authoring_result_name": result_name}},
+        }
+
+    names: set[str] = set()
+    by_uuid: dict[str, str] = {}
+    first = _allocate_result_name(
+        node("11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "pick"),
+        result_names=names,
+        result_name_by_uuid=by_uuid,
+    )
+    second = _allocate_result_name(
+        node("22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "pick"),
+        result_names=names,
+        result_name_by_uuid=by_uuid,
+    )
+
+    # 先出现的节点保留原名，后出现的带 UUID 前缀后缀
+    assert first == "pick"
+    assert second == "pick_22222222"
+    assert len(names) == 2
+
+    # 同一节点再次分配必须返回缓存名，不得继续加后缀
+    again = _allocate_result_name(
+        node("22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "pick"),
+        result_names=names,
+        result_name_by_uuid=by_uuid,
+    )
+    assert again == second
+    assert len(names) == 2
+
+    # 第三个同名节点仍然唯一
+    third = _allocate_result_name(
+        node("33333333-cccc-4ccc-8ccc-cccccccccccc", "pick"),
+        result_names=names,
+        result_name_by_uuid=by_uuid,
+    )
+    assert len({first, second, third}) == 3

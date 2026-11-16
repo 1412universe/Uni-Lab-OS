@@ -245,6 +245,8 @@ class EdgeJobContext:
     notebook_id: str = ""
     execution_source: str = "workflow"
     start_guard: Callable[[], str] | None = None
+    # 任务级动作档位（simulate / real）；空值沿用进程级 --action_mode。
+    action_mode: str = ""
 
     @property
     def device_action_key(self) -> str:
@@ -1263,6 +1265,7 @@ class EdgeControlClient(BaseCommunicationClient):
                     trace_context=action_trace_context,
                     execution_source=job.execution_source,
                     start_guard=(lambda: self.begin_execution(job)) if payload.get("station_controlled") else None,
+                    action_mode=str(payload.get("action_mode") or ""),
                 )
                 from unilabos.app.edge_control.execution_start import ExecutionStartDeferred
                 while self._connected.is_set() and not self._stopping.is_set():

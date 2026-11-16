@@ -875,6 +875,8 @@ export function adaptTask(
   knownMaterialUuids?: ReadonlySet<string>,
   traceUiUrl = '',
   waitResourceLabels: WaitResourceLabels = {},
+  /** 资源模板 UUID → 设备类型名；用于把动态设备选择器显示成可读设备。 */
+  deviceTypeLabels: ReadonlyMap<string, string> = new Map(),
 ): WorkflowTask {
   const attentionMessage = typeof raw.attention_reason === 'string'
     ? raw.attention_reason
@@ -918,7 +920,11 @@ export function adaptTask(
       kind: String(node.kind || node.action_type || 'device_action'),
       index: Number(node.topological_index ?? index),
       status: jobNodeStatus(job, status, node),
-      device: node.device_id ? String(node.device_id) : undefined,
+      // 固定绑定的节点直接有 device_id；动态选择器（按资源模板选设备）没有
+      // 具体设备，但可以显示设备**类型**，比「未指定设备」有用得多。
+      device: node.device_id
+        ? String(node.device_id)
+        : deviceTypeLabels.get(String(node.device_selector?.resource_template_uuid || '')) || undefined,
       materialUuid: node.material_uuid ? String(node.material_uuid) : undefined,
       waitReason: presentWaitReason(job?.wait_reason, node, waitResourceLabels),
       job: job ? taskJobEvidence(job) : undefined,
@@ -2911,8 +2917,45 @@ export function materialsWithTaskReferences(
   }))
 }
 
+/**
+ * 框架内部设备标识：注册表为控制流模板注入的宿主执行器。
+ *
+ * 这些名字来自后端投影（`resource_template.name` / `local_id` / `binding.name`），
+ * 不是用户设备，界面上任何设备清单都不该出现。
+ */
+const FRAMEWORK_DEVICE_NAMES = new Set(['host_node'])
+
+function isFrameworkDeviceName(value: unknown): boolean {
+  const raw = String(value ?? '').trim()
+  if (!raw) return false
+  // 兼容 `community.gn_lab.host_node` 这类带命名空间写法。
+  return FRAMEWORK_DEVICE_NAMES.has(raw) || FRAMEWORK_DEVICE_NAMES.has(raw.split('.').pop() || '')
+}
+
+/** 判断设备投影行是否属于框架内部设备。 */
+function isFrameworkDeviceRow(row: RawRecord): boolean {
+  const binding = row.binding
+  const material = row.material
+  return (
+    (binding && typeof binding === 'object'
+      && (isFrameworkDeviceName(binding.local_id) || isFrameworkDeviceName(binding.name)))
+    || (material && typeof material === 'object' && isFrameworkDeviceName(material.name))
+  )
+}
+
+/** 从物料分页结果里剔除框架设备（保持分页形状不变）。 */
+function keepUserMaterials(page: PageData<RawRecord>): PageData<RawRecord> {
+  const items = (page.items || []).filter((item) => !isFrameworkDeviceName(item?.name))
+  return {
+    ...page,
+    items,
+    // 条目被剔除后 total 必须相应下调，否则前端会以为还有下一页而反复请求。
+    total: typeof page.total === 'number' ? Math.max(0, page.total - ((page.items?.length || 0) - items.length)) : page.total,
+  }
+}
+
 export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapshot> {
-  const [readiness, workflowPage, taskRows, materialPage, materialGraph, deviceRows] = await Promise.all([
+  const [readiness, workflowPage, taskRows, rawMaterialPage, materialGraph, rawDeviceRows] = await Promise.all([
     requestJson<RawRecord>('/readiness', signal),
     requestAllPages<RawRecord>('/workflows', signal),
     loadTaskPresentationRows(signal),
@@ -2920,6 +2963,10 @@ export async function loadEdgeSnapshot(signal?: AbortSignal): Promise<EdgeSnapsh
     requestData<RawRecord>('/materials/graph', signal),
     requestData<RawRecord[]>('/devices', signal).catch(() => []),
   ])
+  // `host_node` 是注册表为控制流模板注入的框架执行器，不是用户设备。
+  // 在装配快照时统一剔除，设备页、物料页与 3D 视图一处生效。
+  const materialPage = keepUserMaterials(rawMaterialPage)
+  const deviceRows = rawDeviceRows.filter((row) => !isFrameworkDeviceRow(row))
   if (readiness.status !== 'ready') throw new Error('Edge 工作流运行时尚未就绪')
   const traceUiUrl = typeof readiness.observability?.traceUiUrl === 'string'
     ? readiness.observability.traceUiUrl
@@ -3372,4 +3419,404 @@ export async function decideManualConfirmation(
     `/workflow-node-jobs/${encodeURIComponent(jobUuid)}/manual-confirmation`,
     { action },
   )
+}
+
+/**
+ * 工作流编辑器（Authoring）专用读写封装。
+ *
+ * 编辑器必须保留后端原始 snake_case 形状：适配成驼峰视图模型会丢掉
+ * `meta_data`、句柄模板等字段，回写时被整图替换语义静默抹掉。这里的函数
+ * 一律返回 RawRecord，只有明确的展示字段才在组件内取值。
+ */
+
+export type RawWorkflowNode = Record<string, any>
+export type RawWorkflowEdge = Record<string, any>
+
+/** 节点库条目；`resourceDisplayName` 来自模板内嵌的资源模板投影。 */
+export interface NodeTemplateSummary {
+  uuid: string
+  name: string
+  displayName: string
+  type: string
+  nodeType: string
+  resourceTemplateUuid?: string
+  /** 设备资源模板的稳定 id（如 community.gn_lab.gn_robotic_arm）。 */
+  resourceName?: string
+  /** 设备资源模板的人类可读名（如「机械手」），仅用于展示。 */
+  resourceDisplayName?: string
+}
+
+/** 模板句柄即画布端口；`handleKey` 用于连线语义校验。 */
+export interface NodeTemplateHandle {
+  uuid: string
+  handleKey: string
+  ioType: 'source' | 'target' | string
+  dataKey: string
+  dataSource: string
+  displayName: string
+  type: string
+  required: boolean
+  editorControl?: string
+  valueSchema?: Record<string, unknown>
+  contractOrder?: number
+}
+
+export interface NodeTemplateDetail {
+  template: RawRecord
+  handles: NodeTemplateHandle[]
+}
+
+/** 完整图快照；后端一次返回模板与句柄，画布无需二次拉取。 */
+export interface RawWorkflowGraph {
+  workflow: RawRecord
+  revision: number
+  nodes: RawWorkflowNode[]
+  edges: RawWorkflowEdge[]
+  nodeTemplates: RawRecord[]
+  handleTemplates: RawRecord[]
+}
+
+function adaptNodeTemplateSummary(raw: RawRecord): NodeTemplateSummary {
+  const resource = raw.resource_template && typeof raw.resource_template === 'object'
+    ? raw.resource_template as RawRecord
+    : {}
+  return {
+    uuid: String(raw.uuid || ''),
+    name: String(raw.name || ''),
+    displayName: String(raw.display_name || raw.name || ''),
+    type: String(raw.type || ''),
+    nodeType: String(raw.node_type || ''),
+    resourceTemplateUuid: resource.uuid ? String(resource.uuid) : undefined,
+    resourceName: resource.name ? String(resource.name) : undefined,
+    resourceDisplayName: resource.display_name
+      ? String(resource.display_name)
+      : resource.name ? String(resource.name) : undefined,
+  }
+}
+
+function adaptNodeTemplateHandle(raw: RawRecord): NodeTemplateHandle {
+  const unilab = (raw.meta_data?.unilab && typeof raw.meta_data.unilab === 'object')
+    ? raw.meta_data.unilab as RawRecord
+    : {}
+  const valueSchema = unilab.value_schema && typeof unilab.value_schema === 'object'
+    ? unilab.value_schema as Record<string, unknown>
+    : undefined
+  return {
+    uuid: String(raw.uuid || ''),
+    handleKey: String(raw.handle_key || raw.data_key || ''),
+    ioType: String(raw.io_type || ''),
+    dataKey: String(raw.data_key || raw.handle_key || ''),
+    dataSource: String(raw.data_source || ''),
+    displayName: String(raw.display_name || raw.handle_key || ''),
+    type: String(raw.type || ''),
+    required: Boolean(raw.required),
+    editorControl: unilab.editor_control ? String(unilab.editor_control) : undefined,
+    valueSchema,
+    contractOrder: Number.isFinite(Number(unilab.contract_order)) ? Number(unilab.contract_order) : undefined,
+  }
+}
+
+/** 逐页拉取节点模板摘要，供左侧节点库分组浏览。 */
+export async function loadAllNodeTemplates(signal?: AbortSignal): Promise<NodeTemplateSummary[]> {
+  const page = await requestAllPages<RawRecord>('/workflow-node-templates', signal)
+  return page.items.map(adaptNodeTemplateSummary).filter((item) => item.uuid)
+}
+
+/** 模板详情携带全部端口句柄；连线所需的 handle uuid 只能从这里取。 */
+export async function loadNodeTemplateDetail(
+  templateUuid: string,
+  signal?: AbortSignal,
+): Promise<NodeTemplateDetail> {
+  const raw = await requestData<RawRecord>(
+    `/workflow-node-templates/${encodeURIComponent(templateUuid)}`,
+    signal,
+  )
+  const template = raw.template && typeof raw.template === 'object' ? raw.template as RawRecord : {}
+  const handles = Array.isArray(raw.handles) ? raw.handles.map(adaptNodeTemplateHandle) : []
+  return { template, handles }
+}
+
+/** 读取完整原始图；编辑器以此作为唯一草图基线。 */
+export async function loadWorkflowGraphRaw(
+  workflowUuid: string,
+  signal?: AbortSignal,
+): Promise<RawWorkflowGraph> {
+  const raw = await requestData<RawRecord>(
+    `/workflows/${encodeURIComponent(workflowUuid)}/graph`,
+    signal,
+  )
+  return {
+    workflow: raw.workflow && typeof raw.workflow === 'object' ? raw.workflow as RawRecord : {},
+    revision: Number(raw.workflow?.revision || 1),
+    nodes: Array.isArray(raw.nodes) ? raw.nodes : [],
+    edges: Array.isArray(raw.edges) ? raw.edges : [],
+    nodeTemplates: Array.isArray(raw.node_templates) ? raw.node_templates : [],
+    handleTemplates: Array.isArray(raw.handle_templates) ? raw.handle_templates : [],
+  }
+}
+
+/**
+ * 整图保存：`revision` 是乐观并发基线，服务端以完整替换语义校验环路与句柄。
+ * 返回新图；`workflow_revision_conflict` 由调用方提示重载。
+ */
+export async function saveWorkflowGraph(
+  workflowUuid: string,
+  revision: number,
+  nodes: RawWorkflowNode[],
+  edges: RawWorkflowEdge[],
+): Promise<RawWorkflowGraph> {
+  const raw = await writeData<RawRecord>('PUT', `/workflows/${encodeURIComponent(workflowUuid)}/graph`, {
+    revision,
+    nodes,
+    edges,
+  })
+  return {
+    workflow: raw.workflow && typeof raw.workflow === 'object' ? raw.workflow as RawRecord : {},
+    revision: Number(raw.workflow?.revision || revision + 1),
+    nodes: Array.isArray(raw.nodes) ? raw.nodes : [],
+    edges: Array.isArray(raw.edges) ? raw.edges : [],
+    nodeTemplates: Array.isArray(raw.node_templates) ? raw.node_templates : [],
+    handleTemplates: Array.isArray(raw.handle_templates) ? raw.handle_templates : [],
+  }
+}
+
+/** 新建空白工作流；编辑器随后以整图保存写入节点。 */
+export async function createWorkflowDefinition(
+  name: string,
+  workflowType: 'normal' | 'experiment_operation' = 'normal',
+): Promise<RawRecord> {
+  return writeData<RawRecord>('POST', '/workflows', { name, workflow_type: workflowType })
+}
+
+/**
+ * 保存画布落点。
+ *
+ * 落点单独走一个端点，不走整图保存：拖动节点只是视觉调整，不该推进工作流
+ * 修订（否则一次拖拽就会让预检与发布合同失配）。后端把它存进独立的持久表，
+ * 因此重启后重新生成的图仍能拿回原来的位置。
+ */
+export async function saveCanvasLayout(
+  workflowUuid: string,
+  positions: Record<string, { x: number; y: number }>,
+): Promise<RawRecord> {
+  return writeData<RawRecord>(
+    'PUT',
+    `/workflows/${encodeURIComponent(workflowUuid)}/canvas-layout`,
+    { positions },
+  )
+}
+
+/** 编辑器试运行前的最新预检报告。 */
+export async function loadWorkflowGraphPreflight(
+  workflowUuid: string,
+  signal?: AbortSignal,
+): Promise<RawRecord> {
+  return requestData<RawRecord>(
+    `/workflows/${encodeURIComponent(workflowUuid)}/run-preflight`,
+    signal,
+  )
+}
+
+/**
+ * 以任意旧版 JSON 载荷导入工作流（支持 {name, data:{nodes,edges}} 包装）。
+ *
+ * 与本机目录能对上的模板会正常映射；对不上时后端返回可读的中文原因（缺少
+ * 模板 UUID），前端原样透出，不做静默降级。
+ */
+export async function importWorkflowPayload(payload: Record<string, unknown>): Promise<RawRecord> {
+  return writeData<RawRecord>('POST', '/workflows/import', payload)
+}
+
+/**
+ * 在工作流编辑器中直接发起一次运行。
+ *
+ * 与 WorkflowsPage 的 `createWorkflowTask` 走同一契约（`POST /workflow-tasks`），
+ * 唯一差别是本函数的 `input` 可以为空对象：编辑器场景下公开输入由属性面板
+ * 逐节点配置，入口参数留空的编辑器工作流也能直接跑。
+ */
+export async function startWorkflowRun({
+  workflowUuid,
+  description,
+  input = {},
+  runMode = 'normal',
+  priority = 'normal',
+  actionMode,
+}: {
+  workflowUuid: string
+  description: string
+  input?: Record<string, unknown>
+  runMode?: 'normal' | 'step'
+  priority?: WorkflowTaskPriority
+  /**
+   * 本次任务的动作档位。``simulate`` 只校验软件下发链路、不打开设备会话；
+   * 省略则沿用 Edge 进程级 `--action_mode`。仿真与真机可以并存，不需要重启。
+   */
+  actionMode?: 'simulate' | 'real'
+}): Promise<RawRecord> {
+  return postData<RawRecord>('/workflow-tasks', {
+    workflow_uuid: workflowUuid,
+    run_mode: runMode,
+    priority,
+    input,
+    description,
+    ...(actionMode ? { action_mode: actionMode } : {}),
+    meta_data: { source: 'unilabos-workflow-editor' },
+  })
+}
+
+/**
+ * 读取动作执行档位。
+ *
+ * `action_mode` 是后端**进程级**启动参数（`--action_mode real|simulate`），运行期
+ * 不能按任务切换。因此前端只能如实展示，不能提供一个「切到仿真」的假开关——
+ * 那会让操作员以为按了仿真就安全，实际仍在驱动硬件。
+ */
+export async function loadActionMode(signal?: AbortSignal): Promise<'real' | 'simulate' | 'unknown'> {
+  try {
+    const readiness = await requestJson<RawRecord>('/readiness', signal)
+    const mode = String(readiness.actionMode || readiness.action_mode || '')
+    return mode === 'real' || mode === 'simulate' ? mode : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+/**
+ * 读取单个任务及其 Job，供运行面板画泳道。
+ *
+ * 编辑器只需要「一个任务」的权威状态，不需要整张任务矩阵；因此这里直接走
+ * 详情 + jobs 两个接口，避免为了一个任务去拉全量快照。
+ */
+export async function loadRunTask(
+  taskUuid: string,
+  signal?: AbortSignal,
+): Promise<WorkflowTask> {
+  const [task, jobs, templates] = await Promise.all([
+    requestData<RawRecord>(`/workflow-tasks/${encodeURIComponent(taskUuid)}`, signal),
+    requestData<RawRecord[]>(`/workflow-tasks/${encodeURIComponent(taskUuid)}/jobs`, signal),
+    // 动态设备选择器只带资源模板 UUID；靠模板目录把它显示成设备类型名。
+    loadAllNodeTemplates(signal).catch(() => [] as NodeTemplateSummary[]),
+  ])
+  const frozenWorkflow = task.workflow_snapshot?.workflow
+  const inputContract = adaptContractFields(
+    frozenWorkflow?.meta_data?.unilab?.input_contract?.parameters,
+    'parameters',
+  )
+  return adaptTask(
+    task,
+    jobs,
+    String(frozenWorkflow?.name || task.description || '编辑器运行'),
+    inputContract,
+    undefined,
+    '',
+    emptyWaitResourceLabels([]),
+    deviceTypeLabelIndex(templates),
+  )
+}
+
+/** 资源模板 UUID → 设备类型显示名；未知模板跳过，不编造名称。 */
+function deviceTypeLabelIndex(templates: NodeTemplateSummary[]): Map<string, string> {
+  const index = new Map<string, string>()
+  for (const template of templates) {
+    const uuid = template.resourceTemplateUuid
+    if (!uuid) continue
+    const label = template.resourceDisplayName || template.resourceName
+    if (label && !index.has(uuid)) index.set(uuid, label)
+  }
+  return index
+}
+
+// ── 工作流编辑 Agent ───────────────────────────────────────────────────
+
+export interface WorkflowAgentConfig {
+  defaultModel: string
+  defaultBaseUrl: string
+  hasServerKey: boolean
+  localHint: string
+}
+
+export interface WorkflowAgentTurnResult {
+  ok: boolean
+  reply: string
+  /** 模型给出的候选图；为空表示它只是回答，没有改图意图。 */
+  candidate?: { nodes: RawRecord[]; edges: RawRecord[] } | null
+  model?: string
+  error?: string
+}
+
+/** 读取 Agent 默认模型配置；只含模型名与端点，不含密钥。 */
+export async function loadWorkflowAgentConfig(signal?: AbortSignal): Promise<WorkflowAgentConfig> {
+  const raw = await requestData<RawRecord>('/workflow-agent/config', signal)
+  return {
+    defaultModel: String(raw.defaultModel || 'GLM-4.5-Flash'),
+    defaultBaseUrl: String(raw.defaultBaseUrl || ''),
+    hasServerKey: Boolean(raw.hasServerKey),
+    localHint: String(raw.localHint || 'http://127.0.0.1:11434/v1'),
+  }
+}
+
+/**
+ * 与工作流 Agent 对话。
+ *
+ * Agent 不写库：它只返回候选图，由页面走既有的整图保存流程应用，
+ * 这样撤销栈与 revision 校验都保持一致。
+ */
+export async function sendWorkflowAgentTurn({
+  message,
+  graph,
+  history,
+  model,
+  baseUrl,
+  apiKey,
+}: {
+  message: string
+  graph?: { nodes: RawRecord[]; edges: RawRecord[] }
+  history?: Array<{ role: string; content: string }>
+  model?: string
+  baseUrl?: string
+  apiKey?: string
+}): Promise<WorkflowAgentTurnResult> {
+  const raw = await postData<RawRecord>('/workflow-agent', {
+    message,
+    ...(graph ? { graph } : {}),
+    ...(history?.length ? { history } : {}),
+    ...(model ? { model } : {}),
+    ...(baseUrl ? { base_url: baseUrl } : {}),
+    ...(apiKey ? { api_key: apiKey } : {}),
+  })
+  const candidate = raw.candidate
+  return {
+    ok: Boolean(raw.ok),
+    reply: String(raw.reply || ''),
+    candidate: candidate && typeof candidate === 'object'
+      ? {
+          nodes: Array.isArray(candidate.nodes) ? candidate.nodes : [],
+          edges: Array.isArray(candidate.edges) ? candidate.edges : [],
+        }
+      : null,
+    model: raw.model ? String(raw.model) : undefined,
+    error: raw.error ? String(raw.error) : undefined,
+  }
+}
+
+/**
+ * 重命名工作流。
+ *
+ * 走 `PATCH /workflows/{uuid}`：只提交真正要改的字段，服务端把其余字段按当前
+ * 权威值合并。早先这里用 `PUT`，而 `PUT` 是完整替换语义，必须回传
+ * `meta_data`；列表页手里的摘要字段拼不出完整元数据，于是重命名会顺手把
+ * 服务端保留的编排元数据（输入/输出合同、来源登记）覆盖掉。
+ */
+export async function renameWorkflow(
+  workflowUuid: string,
+  name: string,
+): Promise<RawRecord> {
+  return writeData<RawRecord>('PATCH', `/workflows/${encodeURIComponent(workflowUuid)}`, {
+    name,
+  })
+}
+
+/** 复制工作流（后端从已应用图派生新定义）。 */
+export async function duplicateWorkflow(workflowUuid: string): Promise<RawRecord> {
+  return postData<RawRecord>(`/workflows/${encodeURIComponent(workflowUuid)}/duplicate`, {})
 }

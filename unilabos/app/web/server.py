@@ -222,6 +222,9 @@ def api_readiness() -> Response:
         "phase": "ready" if not required else phase,
         "workflowRuntime": "disabled" if not required else phase,
         "workflowProgress": {"loaded": loaded, "total": total},
+        # 动作执行档位是**进程级**启动参数（`--action_mode`），运行期不能按任务切换。
+        # 前端必须读这里而不是自己猜，否则后端以 real 启动时「仿真」按钮会真的驱动硬件。
+        "actionMode": BasicConfig.action_mode,
     }
     signoz_ui_url = trace_ui_base_url()
     if signoz_ui_url:

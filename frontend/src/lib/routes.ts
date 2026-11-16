@@ -1,6 +1,6 @@
 import type { PageId, WorkflowTarget } from '../types'
 
-const supportedPages = new Set<PageId>(['overview', 'materials', 'devices', 'reagents', 'operations', 'workflows', 'tasks'])
+const supportedPages = new Set<PageId>(['overview', 'materials', 'devices', 'reagents', 'operations', 'workflows', 'workflow-editor', 'tasks'])
 
 export function pageFromSearch(search: string): PageId {
   const page = new URLSearchParams(search).get('page')
@@ -12,10 +12,21 @@ export function searchWithPage(search: string, page: PageId): string {
   params.set('page', page)
   if (page !== 'materials') params.delete('usageTask')
   if (page !== 'devices') params.delete('device')
-  if (page !== 'workflows') {
+  // 工作流编辑器继续沿用 `workflow` 参数，其它页面清除。
+  if (page !== 'workflows' && page !== 'workflow-editor') {
     params.delete('workflow')
     params.delete('revision')
   }
+  return `?${params.toString()}`
+}
+
+/** 直接打开工作流编辑器并定位到指定工作流。 */
+export function searchForWorkflowEditor(search: string, workflowUuid: string): string {
+  const params = new URLSearchParams(search)
+  params.set('page', 'workflow-editor')
+  if (workflowUuid) params.set('workflow', workflowUuid)
+  else params.delete('workflow')
+  params.delete('revision')
   return `?${params.toString()}`
 }
 

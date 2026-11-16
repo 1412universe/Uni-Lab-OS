@@ -26,7 +26,7 @@ from unilabos.devices.workstation.workstation_base import WorkstationBase
 from unilabos.registry.decorators import action, not_action
 from unilabos.utils.log import logger
 
-DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.3.9.csv")
+DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.3.csv")
 
 
 class GNWorkstation(WorkstationBase):

@@ -2,7 +2,7 @@
 旋转堆栈 设备驱动
 
 基于 gn_solid_weighing / gn_standard_oven 同构 OPC 握手；
-业务逻辑对齐 rotary_stack.py；协议 opcua_gn1.3.6.csv「堆栈」（前缀 Stack_）。
+业务逻辑对齐 rotary_stack.py；协议 opcua_gn1.4.3.csv「堆栈」（前缀 Stack_）。
 
 对外仅暴露 execute_command（Stack_CmdType + 写参）；另提供复位/转列/检测便捷动作。
 
@@ -27,7 +27,7 @@ from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
 DEFAULT_XLSX_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.6.csv",
+    "opcua_gn1.4.3.csv",
 )
 
 STACK_ROTATE_SPEED = 300
@@ -102,7 +102,7 @@ TEST_FLOW_PRESETS = [
 
 
 _EXECUTE_CMD_DOC = (
-    "按 Stack_CmdType 执行 OPC UA 1.3.6 指令。"
+    "按 Stack_CmdType 执行 OPC UA 1.4.3 指令。"
     "1=左旋 2=右旋 3=相机Z上 4=相机Z下 5=旋转至目标 6=相机检测 7=复位。"
     "可选写参：r_pos/z_pos/r_speed/z_speed。"
 )

@@ -1,7 +1,7 @@
 """
 快换模块设备驱动。
 
-协议：opcua_gn1.3.7.csv「快换模块」（前缀 QuickChange_）。
+协议：opcua_gn1.4.3.csv「快换模块」（前缀 QuickChange_）。
 
 对外仅暴露 execute_command，执行顺序为：
     清 CompleteFB → 写参数 → QuickChange_CmdType → QuickChange_CmdTrig=1
@@ -28,7 +28,7 @@ from unilabos.utils.log import logger
 
 DEFAULT_CSV_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.7.csv",
+    "opcua_gn1.4.3.csv",
 )
 
 
@@ -106,7 +106,7 @@ TEST_FLOW_PRESETS = {
 
 
 _EXECUTE_CMD_DOC = (
-    "按 QuickChange_CmdType 执行 OPC UA 1.3.7 指令。"
+    "按 QuickChange_CmdType 执行 OPC UA 1.4.3 指令。"
     "1=X左 2=X右 3=Z1左 4=Z1右 5=Z2左 6=Z2右 "
     "7=推轴左 8=推轴右 9=Z3左 10=Z3右 "
     "11=物料顶出 12=物料放置 13=磁力搅拌运行 14=复位。"

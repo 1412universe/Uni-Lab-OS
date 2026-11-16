@@ -1288,8 +1288,12 @@ class HostNode(BaseROS2DeviceNode):
         u = uuid.UUID(item.job_id)
         device_id = item.device_id
         action_name = item.action_name
+        # 任务级档位优先：它让「这一次运行」走仿真（只校验软件下发链路、
+        # 不打开设备会话），而不必改进程级启动参数。空值沿用进程配置。
+        task_action_mode = str(getattr(item, "action_mode", "") or "")
+        effective_action_mode = task_action_mode or BasicConfig.action_mode
 
-        if BasicConfig.action_mode == "simulate":
+        if effective_action_mode == "simulate":
             action_id = f"/devices/{device_id}/{action_name}"
             self.lab_logger().info(
                 f"[SIMULATE ACTION] 模拟执行: {action_id} "

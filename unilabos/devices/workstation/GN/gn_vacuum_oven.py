@@ -4,7 +4,7 @@
 真空烘箱密码：7701
 温度报警：130°C
 
-协议：opcua_gn1.3.6.csv「真空烘箱」(前缀 VacuumOven_)。
+协议：opcua_gn1.4.3.csv「真空烘箱」(前缀 VacuumOven_)。
 对外仅暴露 execute_command（VacuumOven_CmdType + 写参）。
 
 指令类型 (VacuumOven_CmdType)：
@@ -29,7 +29,7 @@ from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
 
 DEFAULT_XLSX_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "opcua_gn1.3.6.csv",
+    "opcua_gn1.4.3.csv",
 )
 
 # OPC 1.3.3 VacuumOven_CmdType（与 Excel 表头一致）

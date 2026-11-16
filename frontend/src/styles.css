@@ -67,6 +67,15 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
   min-height: 100vh;
 }
 
+/* 沉浸模式：不渲染侧栏，主区独占整屏（工作流编辑器用）。
+   必须显式改成单列，否则网格会为不存在的侧栏留 228px 空白。 */
+.app-shell-immersive {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+}
+.app-shell-immersive .app-main { height: 100vh; min-height: 0; overflow: hidden; }
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -408,6 +417,58 @@ code, kbd, time { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 }
 
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* 提示条内部布局：外层保持 pointer-events: none（不挡页面），
+   内容区恢复交互，才能选中文本、点复制与关闭。 */
+.toast-inner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  pointer-events: auto;
+}
+.toast.show .toast-inner { pointer-events: auto; }
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  /* 关键：允许选中，用户才能手动复制 */
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.toast-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-top: -1px;
+}
+
+.toast-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: #cbd5e1;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color .12s ease, background .12s ease;
+}
+.toast-icon:hover { color: #fff; background: rgba(255,255,255,.14); }
+.toast-icon.is-copied { color: #6ee7b7; }
+
+/* 错误类提示常驻，给一点左侧强调色区分「需要处理」 */
+.toast.toast-sticky {
+  border-left: 3px solid #f97066;
+}
 
 /* Materials */
 .materials-stats {

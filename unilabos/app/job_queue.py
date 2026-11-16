@@ -45,6 +45,8 @@ class QueueItem:
     trace_context: dict[str, str] | None = None
     execution_source: str = "workflow"
     start_guard: Callable[[], str] | None = None
+    # 任务级动作档位（simulate / real）；空值沿用进程级 --action_mode。
+    action_mode: str = ""
 
 
 @dataclass
