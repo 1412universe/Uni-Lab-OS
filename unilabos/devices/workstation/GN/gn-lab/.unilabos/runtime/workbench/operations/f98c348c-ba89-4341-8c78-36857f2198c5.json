@@ -1,0 +1,127 @@
+{
+  "command": "backend.start",
+  "error": null,
+  "finishedAt": "2026-11-16T13:54:39Z",
+  "operationId": "f98c348c-ba89-4341-8c78-36857f2198c5",
+  "parameters": {
+    "graphPath": "d:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\deployment\\graphs\\dry-run.json",
+    "runtimeMode": "dry-run",
+    "startupMode": "develop"
+  },
+  "phase": "succeeded",
+  "requestHash": "5bb6880b3cbb68cabaa31eabed7cb978c6013323e1f0e6cef41115c09b4ab17a",
+  "result": {
+    "components": {
+      "backend": {
+        "address": "http://127.0.0.1:52277",
+        "capabilities": [
+          "authoring",
+          "inventory",
+          "workflow-run",
+          "station-scheduler"
+        ],
+        "diagnostic": null,
+        "generation": "91281afa-07d0-40d8-a0fa-3c4e231b78fe",
+        "logPath": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\.unilabos\\logs\\workbench\\91281afa-07d0-40d8-a0fa-3c4e231b78fe-backend.log",
+        "metadata": {
+          "backendUrl": null,
+          "domainMode": "local",
+          "externalDevicesOnly": true,
+          "graphFingerprint": "6117f012a7cc51f0d906b470758fed6bfdd85be75e87d732eaadbedfd7d421ca",
+          "graphPath": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\deployment\\graphs\\dry-run.json",
+          "hostLinkPort": 52278,
+          "localConfigPath": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\deployment\\local_config.py",
+          "packageMounts": {
+            "catalogRevision": "sha256:9896c151e22e7d373d46a3cfdc770758bbf04005f296e381b54399a3fb90357a",
+            "dependencyRevision": "sha256:adc220923740ec9ab01cf2f5a9440cf01e463e91028fcd1b732f03787defd32f",
+            "editablePackageId": "gn_lab",
+            "items": [
+              {
+                "catalogDigest": "sha256:113d82133fa63707ca247f4532159dfe672cdcb1bc3e1e946ea422ac28804486",
+                "contentDigest": "sha256:b7e73a1fa398c13a6143ba2697433fe6d19810a9c7647dbf7ae1f23fa70816ab",
+                "distributionName": "gn-lab",
+                "editable": true,
+                "importRootUri": "file:///D:/Download/UniLabOS-new/unilabos/devices/workstation/GN/gn-lab",
+                "namespace": "community.gn_lab",
+                "packageId": "gn_lab",
+                "packageRootUri": "file:///D:/Download/UniLabOS-new/unilabos/devices/workstation/GN/gn-lab/gn_lab",
+                "readOnly": false,
+                "sourceKind": "workspace",
+                "version": "0.1.0"
+              }
+            ],
+            "mountRevision": "sha256:f09b6ff81d91f2c2f37b1dba38766318ed66f5dff34d997e7be125dc5e937958",
+            "schemaVersion": "workspace-package-mounts/v1"
+          },
+          "runtimeDirectory": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\.unilabos\\runtime\\workbench\\backend\\91281afa-07d0-40d8-a0fa-3c4e231b78fe",
+          "runtimeMode": "dry-run",
+          "schedulerUrl": null,
+          "startupMode": "develop",
+          "stateDirectory": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\.unilabos\\runtime\\workbench\\backend\\local-domain",
+          "validatedGraphPath": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\.unilabos\\runtime\\workbench\\backend\\91281afa-07d0-40d8-a0fa-3c4e231b78fe\\dry-run.json",
+          "workflowProgress": {
+            "loaded": 6,
+            "total": 6
+          },
+          "workflowRuntimePhase": "ready"
+        },
+        "name": "backend",
+        "phase": "ready",
+        "pid": 25728
+      },
+      "edge": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": null,
+        "logPath": null,
+        "name": "edge",
+        "phase": "idle",
+        "pid": null
+      },
+      "plc": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": null,
+        "logPath": null,
+        "name": "plc",
+        "phase": "idle",
+        "pid": null
+      },
+      "renderer": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": null,
+        "logPath": null,
+        "name": "renderer",
+        "phase": "idle",
+        "pid": null
+      }
+    },
+    "configuration": {
+      "backendUrl": null,
+      "domainMode": "local",
+      "externalDevicesOnly": true,
+      "graphPath": null,
+      "runtimeMode": "normal",
+      "schedulerUrl": null
+    },
+    "eventCursor": 13,
+    "host": {
+      "endpoint": "http://127.0.0.1:49549",
+      "phase": "ready",
+      "pid": 3768,
+      "platform": "windows",
+      "tokenPath": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\.unilabos\\runtime\\workbench\\host.token"
+    },
+    "revision": 13,
+    "schemaVersion": "unilab-workspace-host/v1",
+    "updatedAt": "2026-11-16T13:54:39Z",
+    "workspacePath": "D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab"
+  },
+  "schemaVersion": "unilab-workspace-host/v1",
+  "startedAt": "2026-11-16T13:54:30Z",
+  "submittedAt": "2026-11-16T13:54:30Z"
+}

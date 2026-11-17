@@ -1,0 +1,339 @@
+[34m[INFO][0m 已编译工作区（Workspace）注册表运行时: gn_lab (Authoring Worker PID 27280)
+[34m[INFO][0m 开始检查环境依赖...
+[32m[SUCCESS][0m ✓ 所有依赖包检查完成，环境正常
+[34m[INFO][0m 当前工作目录为 D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain
+[37m26-11-16 [21:54:33,259][0m [1;32m[INFO][0m [97m[ENV] 配置文件 D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\deployment\local_config.py 加载成功[37m [load_config:300] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.api_key = ***[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.backend_addr = http://127.0.0.1:52277[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.backend_api_key = ***[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.edge_key = managed-local-cd7ec5b7c19690ec83fff903[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.scheduler_addr = http://127.0.0.1:52277[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;32m[INFO][0m [97m[ENV] 设置 HostLinkConfig.port = 52278[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：OBSERVABILITYCONFIG[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：OBSERVABILITYCONFIG[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,260][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:54:33,262][0m [1;32m[INFO][0m [97m[LOG_FILE] D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\logs\2026-11-16 21-54-33-25728-e58a7365.log[37m [main:1056] [unilabos.utils.log.main][0m
+[37m26-11-16 [21:54:34,268][0m [1;32m[INFO][0m [97m[CommLogger] 通信日志已初始化，文件: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\logs\ws_comm_2026-11-16 21-54-33-25728-178b4729.log[37m [MainThread] [configure_comm_logger:334] [unilabos.comm.log][0m
+[37m26-11-16 [21:54:34,268][0m [1;32m[INFO][0m [97m[COMM_LOG_FILE] D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\logs\ws_comm_2026-11-16 21-54-33-25728-178b4729.log[37m [main:1064] [unilabos.utils.log.main][0m
+[34m[INFO][0m Workspace Backend 拥有本地工站调度；上游模式为 local
+[33m[WARNING][0m 启用模拟动作模式：动作返回模拟成功结果，不调用真实硬件
+[38;5;214m
+  ██╗   ██╗ ███╗   ██╗ ██╗     ██╗      █████╗  ██████╗ [38;5;220m
+  ██║   ██║ ████╗  ██║ ██║     ██║     ██╔══██╗ ██╔══██╗
+  ██║   ██║ ██╔██╗ ██║ ██║     ██║     ███████║ ██████╔╝
+  ██║   ██║ ██║╚██╗██║ ██║     ██║     ██╔══██║ ██╔══██╗
+  ╚██████╔╝ ██║ ╚████║ ██║     ██████╗ ██║  ██║ ██████╔╝[38;5;242m
+    ╚════╝  ╚═╝  ╚═══╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ [0m
+[33mVersion:[0m [92m0.11.4[0m
+[33mSystem:[0m [37mWindows 10[0m
+[33mPython:[0m [37m3.11.14[0m
+[33mTime:[0m [37m2026-11-16 21:54:34[0m
+[97m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[94m[1mConfiguration:[0m
+[36m• Backend:[0m [37mros[0m
+[36m• Bridges:[0m [37mfastapi[0m
+[36m• Graph:[0m [37mD:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\91281afa-07d0-40d8-a0fa-3c4e231b78fe\dry-run.json[0m
+[97m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[34m[INFO][0m 发现 community 设备引用: community.gn_lab.gn_centrifuge, community.gn_lab.gn_centrifuge_tube_liquid_handling, community.gn_lab.gn_locking_mechanism, community.gn_lab.gn_prcxi, community.gn_lab.gn_quick_carrier_exchange, community.gn_lab.gn_robotic_arm, community.gn_lab.gn_rotary_stack, community.gn_lab.gn_solid_weighing, community.gn_lab.gn_standard_oven, community.gn_lab.gn_vacuum_oven, community.gn_lab.gn_workstation, community.gn_lab.prcxi_deck
+[37m26-11-16 [21:54:34,465][0m [1;32m[INFO][0m [97m[UniLab Registry] 构建注册表实例[37m [build_registry:2749] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,525][0m [1;32m[INFO][0m [97m[UniLab Registry] external_only 模式: 仅扫描核心文件 (host_node.py, container.py)[37m [_run_ast_scan:461] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,526][0m [1;32m[INFO][0m [97m[UniLab Registry] AST 缓存统计: 0/2 命中, 2 重新解析[37m [_run_ast_scan:523] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,591][0m [1;32m[INFO][0m [97m[UniLab Registry] entry 构建耗时: 0.07s[37m [_run_ast_scan:563] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,592][0m [1;32m[INFO][0m [97m[UniLab Registry] AST 扫描完成: 1 设备, 0 资源 (耗时 0.13s)[37m [_run_ast_scan:581] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,594][0m [1;32m[INFO][0m [97m[UniLab Registry] external_only 模式: 跳过内置 YAML 注册表加载[37m [setup:249] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,594][0m [1;32m[INFO][0m [97m[UniLab Registry] 类型解析完成: 1 设备 (耗时 0.00s)[37m [resolve_all_types:1836] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:54:34,643][0m [1;32m[INFO][0m [97m正在使用ak sk作为授权信息：[][37m [info:418] [unilabos.utils.log.log][0m
+[37m26-11-16 [21:54:34,643][0m [1;32m[INFO][0m [97mHTTPClient 初始化完成: remote_addr=https://leap-lab.bohrium.com/api/v1[37m [info:418] [unilabos.utils.log.log][0m
+[34m[INFO][0m 12 Resources loaded
+[37m26-11-16 [21:54:34,901][0m [1;32m[INFO][0m [97m[EdgeInventoryIntegration] inventory ready: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\inventory.db[37m [setup_edge_inventory:276] [unilabos.app.scheduler.integration.integration][0m
+[37m26-11-16 [21:54:35,025][0m [1;32m[INFO][0m [97m[EdgeInventoryIntegration] cloud sync disabled; outbox retained locally[37m [setup_edge_inventory:327] [unilabos.app.scheduler.integration.integration][0m
+[34m[INFO][0m 工站物料服务已启用 (SQLite WAL: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\inventory.db)
+[37m26-11-16 [21:54:35,062][0m [1;32m[INFO][0m [97m[EdgeInventoryIntegration] cloud sync disabled; outbox retained locally[37m [setup_edge_inventory:327] [unilabos.app.scheduler.integration.integration][0m
+[37m26-11-16 [21:54:35,070][0m [1;32m[INFO][0m [97m[EdgeSchedulerIntegration] device state store: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\device_state.db[37m [setup_edge_scheduler:423] [unilabos.app.scheduler.integration.integration][0m
+[37m26-11-16 [21:54:35,078][0m [1;32m[INFO][0m [97m[EdgeSchedulerIntegration] workflow history store: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\workflow_history.db[37m [setup_edge_scheduler:443] [unilabos.app.scheduler.integration.integration][0m
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\zlib1.dll...
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\abseil_dll.dll...
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\utf8_validity.dll...
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\re2.dll...
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\libprotobuf.dll...
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\highs.dll...
+load C:\ProgramData\miniforge3\envs\unilab\Lib\site-packages\ortools\.libs\ortools.dll...
+[37m26-11-16 [21:54:35,951][0m [1;32m[INFO][0m [97m[EdgeSchedulerIntegration] edge scheduler ready (ordering=CP-SAT)[37m [setup_edge_scheduler:463] [unilabos.app.scheduler.integration.integration][0m
+[34m[INFO][0m 工站调度器已启用 (DAG 调度 + 设备状态 + 工作流历史)
+[34m[INFO][0m Workspace Backend 常驻提供 Authoring/Inventory/Scheduler；不启动 ROS 或设备驱动
+[37m26-11-16 [21:54:36,484][0m [1;32m[INFO][0m [97m[Web] React 控制台构建产物不存在，跳过挂载: D:\Download\UniLabOS-new\unilabos\app\web\static\console[37m [info:418] [unilabos.utils.log.log][0m
+[37m26-11-16 [21:54:36,529][0m [1;32m[INFO][0m [97m[Web] 启动FastAPI服务器: 0.0.0.0:52277[37m [info:418] [unilabos.utils.log.log][0m
+[37m26-11-16 [21:54:36,591][0m [1;32m[INFO][0m [97m[Uvicorn] Started server process [25728][37m [_serve:91] [uvicorn.server][0m
+[37m26-11-16 [21:54:36,591][0m [1;32m[INFO][0m [97m[Uvicorn] Waiting for application startup.[37m [startup:48] [uvicorn.lifespan.on][0m
+[37m26-11-16 [21:54:36,592][0m [1;32m[INFO][0m [97m[Uvicorn] Application startup complete.[37m [startup:62] [uvicorn.lifespan.on][0m
+[37m26-11-16 [21:54:36,592][0m [1;32m[INFO][0m [97m[Uvicorn] Uvicorn running on http://0.0.0.0:52277 (Press CTRL+C to quit)[37m [_log_started_message:222] [uvicorn.server][0m
+[37m26-11-16 [21:54:37,081][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52346 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:37,388][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52350 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:37,593][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52353 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:37,929][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52356 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:38,313][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52360 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:38,612][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52366 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:38,829][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52369 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:39,034][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52372 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:39,236][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52376 - "GET /api/v1/readiness HTTP/1.1" 503[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:39,537][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52382 - "GET /api/v1/workflow-node-templates HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:39,539][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52384 - "GET /api/v1/workflow-node-templates?page=1&page_size=100&node_type=material_source HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:54:39,542][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52385 - "GET /api/v1/workspace/package-mounts HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:55:03,101][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65452 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,075][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54450 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,080][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54379 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,095][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59831 - "GET /api/v1/materials/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,112][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52293 - "GET /api/v1/workflows?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,128][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52293 - "OPTIONS /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,138][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59831 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,138][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54450 - "GET /api/v1/events HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,140][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54379 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:50,142][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52749 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,809][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54379 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,812][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63729 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,817][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50216 - "GET /api/v1/materials/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,836][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59831 - "GET /api/v1/workflows?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,846][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59831 - "GET /api/v1/events HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,857][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50216 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,858][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63729 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:54,859][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54379 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:57,608][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50639 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:57,614][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50640 - "GET /api/v1/materials?page=1&page_size=50 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:57,619][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50641 - "GET /api/v1/workflow-node-templates?page=1&page_size=500 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:56:59,874][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64692 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:04,888][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:53775 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:04,889][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58670 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:09,900][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55113 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:12,182][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59384 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:12,186][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55599 - "GET /api/v1/workflow-node-templates?page=1&page_size=500 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:14,905][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:53939 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:14,907][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55113 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:19,916][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54356 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:24,928][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64620 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:24,929][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63328 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:25,175][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58014 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:29,947][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58014 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:34,941][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65366 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:34,951][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58014 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:39,962][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58014 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:44,955][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49992 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:44,966][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49992 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:49,983][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60599 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:54,966][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60049 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:54,991][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60049 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:55,166][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60599 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:57:59,996][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63440 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:04,990][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56508 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:04,999][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62987 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,864][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54129 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,872][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58083 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,894][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59690 - "GET /api/v1/materials/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,951][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52716 - "GET /api/v1/workflows?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,969][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52716 - "OPTIONS /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,985][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59690 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,987][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51644 - "GET /api/v1/events HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,993][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59512 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:07,997][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54129 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:10,030][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59498 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:10,134][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59512 - "GET /api/v1/workflows/4b868761-9468-46ec-86c5-7ab64b6b8854/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:11,545][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59690 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:13,020][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52716 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:15,005][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58351 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:15,047][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59498 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,584][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58713 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,592][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58713 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,597][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57335 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,619][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57267 - "GET /api/v1/materials/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,649][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64844 - "GET /api/v1/workflows?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,660][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57335 - "GET /api/v1/events HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:16,661][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57267 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:20,054][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59498 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:21,669][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:53929 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:25,031][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60582 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:25,078][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60582 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:25,175][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59498 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:26,681][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59668 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:30,100][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50457 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:31,689][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59668 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:35,064][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61974 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:35,108][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50457 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:36,709][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49685 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:40,131][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57206 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:41,722][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56345 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:45,080][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50500 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:45,153][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50500 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:46,729][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61616 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:46,968][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50202 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:50,163][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52188 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:51,738][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61749 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:55,107][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64298 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:55,183][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52188 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:55,185][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56447 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:58:56,752][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55744 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:00,219][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57424 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:01,762][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62894 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:05,123][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49946 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:05,230][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57424 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:06,774][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62894 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:10,241][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63350 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:11,778][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62894 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:15,147][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64744 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:15,259][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64744 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:16,782][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62894 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:16,978][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63543 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:20,279][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57687 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:21,788][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62074 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:24,354][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62074 - "GET /api/v1/workflow-node-templates/e82ebb80-df36-5ec0-82a6-8e4720be3c10 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:25,166][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50436 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:25,167][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57184 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:25,301][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57687 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:26,802][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62074 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:30,322][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65533 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:31,808][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58405 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:35,207][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65065 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:35,338][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65065 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:36,814][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58405 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:40,360][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56414 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:41,819][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58405 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:45,233][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60494 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:45,369][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60494 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:46,837][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54621 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:46,980][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63825 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:50,374][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62797 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:51,842][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62121 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:55,171][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63298 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:55,252][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56974 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:55,389][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63298 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [21:59:56,854][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50041 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:00,409][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51607 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:01,868][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58677 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:05,273][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50730 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:05,424][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50730 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:06,879][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58677 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:10,436][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52745 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:11,897][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52212 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:15,283][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62451 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:15,450][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62451 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:16,910][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52212 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:16,965][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57414 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:17,164][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57747 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:17,166][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65447 - "GET /api/v1/workflows?workflow_type=experiment_operation&page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:17,170][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55424 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:17,171][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62469 - "GET /api/v1/experiment-operation-categories HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:17,178][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62469 - "GET /api/v1/workflow-node-templates/e9a83c84-0723-5f75-b298-2d759e169e42 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:17,178][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55424 - "GET /api/v1/workflow-node-templates/092e2f7d-cfb5-59ff-81c6-8486187e6cef HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:19,354][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57747 - "GET /api/v1/reagent-infos?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:19,356][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52658 - "GET /api/v1/reagents?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:19,363][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49716 - "GET /api/v1/resource-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:19,796][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49605 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:19,798][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:53603 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:20,458][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62451 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:21,913][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65193 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:25,171][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54640 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:25,300][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54640 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:25,468][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57459 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:26,931][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65193 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:29,819][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65211 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:30,486][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58892 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:31,946][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65193 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:35,316][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:54150 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:35,497][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58892 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:36,964][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57474 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:39,834][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61496 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:40,504][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58892 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:41,969][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57474 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:45,330][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60683 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:45,513][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58892 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:46,976][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62088 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:46,979][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59371 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:49,859][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56801 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:50,528][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51233 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:51,993][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56801 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:55,163][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51662 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:55,353][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51662 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:55,536][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65071 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:57,005][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56801 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:00:59,883][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59639 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:00,554][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52230 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:02,015][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56801 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:05,368][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65155 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:05,567][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65155 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:06,111][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65155 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:07,026][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51979 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:09,895][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64155 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:11,302][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50875 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:12,035][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64155 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:16,318][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63954 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:16,321][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61982 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:16,989][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55557 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:17,047][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61210 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:19,907][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55557 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:22,062][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61210 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:22,312][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:49820 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:26,303][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51422 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:27,066][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64787 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:27,305][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51422 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:28,300][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57035 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:29,918][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51612 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:32,082][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64787 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:34,304][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52945 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:37,100][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50119 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:38,316][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:62525 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:39,934][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64659 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:40,307][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:52945 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:42,117][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50119 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:46,311][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64600 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:46,979][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61148 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,130][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65260 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,470][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50786 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,473][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:65132 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,479][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50786 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,493][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59182 - "GET /api/v1/materials/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,514][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50889 - "GET /api/v1/workflows?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,525][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50786 - "GET /api/v1/events HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:47,528][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59182 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:49,949][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61148 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:52,136][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61148 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:52,545][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51457 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:57,151][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61331 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:57,560][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56357 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:57,651][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:56185 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:01:59,971][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61985 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:02,155][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61985 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:02,577][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61544 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:07,171][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:53489 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:07,593][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:61170 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:09,981][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58949 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:12,189][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58949 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:12,610][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55351 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:13,178][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:55351 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:16,973][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63367 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:17,200][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50395 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:18,308][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:51530 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,311][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50486 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,709][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50486 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,854][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57540 - "GET /api/v1/workflow-node-templates?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,855][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:57369 - "GET /api/v1/workflow-task-presentations?view=matrix&terminal_limit=20 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,858][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64080 - "GET /api/v1/materials?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,865][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58257 - "GET /api/v1/materials/graph HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,888][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60453 - "GET /api/v1/workflows?page=1&page_size=100 HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,900][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:64601 - "GET /api/v1/events HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,902][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58257 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:19,999][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63367 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:22,206][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50395 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:24,921][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63675 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:27,223][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60975 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:29,926][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63675 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:30,023][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60845 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:32,232][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60845 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:33,244][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:63675 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:37,243][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:60845 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:38,312][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:50324 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:40,039][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58421 - "GET /api/v1/authoring/device-catalog HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:42,253][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:58421 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m
+[37m26-11-16 [22:02:44,315][0m [1;32m[INFO][0m [97m[Uvicorn.HTTP] 127.0.0.1:59647 - "GET /api/v1/stations/local/error-handling HTTP/1.1" 200[37m [send:482] [uvicorn.protocols.http.h11_impl][0m

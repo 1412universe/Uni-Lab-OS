@@ -1,0 +1,20 @@
+{
+  "command": "backend.start",
+  "error": {
+    "code": "backend_start_failed",
+    "message": "Backend 在 /api/v1/readiness 就绪前退出"
+  },
+  "finishedAt": "2026-11-04T13:32:49Z",
+  "operationId": "4478b5bf-a698-427d-bb93-5a55f876e291",
+  "parameters": {
+    "graphPath": "d:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\deployment\\graphs\\dry-run.json",
+    "runtimeMode": "dry-run",
+    "startupMode": "develop"
+  },
+  "phase": "failed",
+  "requestHash": "06f620a2e6ee57e1758d5104b9b6f7eceeb6f95db2a912dfc10c3f234856d24f",
+  "result": null,
+  "schemaVersion": "unilab-workspace-host/v1",
+  "startedAt": "2026-11-04T13:32:46Z",
+  "submittedAt": "2026-11-04T13:32:46Z"
+}

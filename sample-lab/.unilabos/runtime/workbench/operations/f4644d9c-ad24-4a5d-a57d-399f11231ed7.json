@@ -1,0 +1,118 @@
+{
+  "command": "workspace.stop",
+  "error": null,
+  "finishedAt": "2026-11-04T13:30:28Z",
+  "operationId": "f4644d9c-ad24-4a5d-a57d-399f11231ed7",
+  "parameters": {},
+  "phase": "succeeded",
+  "requestHash": "b816d07650701610f68544b422a9a71fc2e3ae2dd22c1515d0ee9e0a5594f8ca",
+  "result": {
+    "components": {
+      "backend": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": "e05fa60b-93e4-402d-b73a-529ec4af6b02",
+        "logPath": "D:\\Download\\UniLabOS-new\\sample-lab\\.unilabos\\logs\\workbench\\e05fa60b-93e4-402d-b73a-529ec4af6b02-backend.log",
+        "metadata": {
+          "backendUrl": null,
+          "domainMode": "local",
+          "externalDevicesOnly": true,
+          "graphFingerprint": "d5e92a8b0b531aa6557671e6117f80ff06b3cc2b19e8ddbe4c60bfb37fc4e69a",
+          "graphPath": "D:\\Download\\UniLabOS-new\\sample-lab\\deployment\\graphs\\dry-run.json",
+          "hostLinkPort": 61801,
+          "localConfigPath": "D:\\Download\\UniLabOS-new\\sample-lab\\deployment\\local_config.py",
+          "packageMounts": {
+            "catalogRevision": "sha256:7a4069b4c6b2f77bbf2184831516c5bf64bef7077bf77c3e9fe6603126311966",
+            "dependencyRevision": "sha256:adc220923740ec9ab01cf2f5a9440cf01e463e91028fcd1b732f03787defd32f",
+            "editablePackageId": "sample_lab",
+            "items": [
+              {
+                "catalogDigest": "sha256:308890b40a061ce357f84f914ead38bc41310fe5c97f647e9f21cfea75010e67",
+                "contentDigest": "sha256:893b2742aa6da3e3eb2cade034c83c754c7750e1c30bc1f7732b36180e60fa6d",
+                "distributionName": "sample-lab",
+                "editable": true,
+                "importRootUri": "file:///D:/Download/UniLabOS-new/sample-lab",
+                "namespace": "community.sample_lab",
+                "packageId": "sample_lab",
+                "packageRootUri": "file:///D:/Download/UniLabOS-new/sample-lab/sample_lab",
+                "readOnly": false,
+                "sourceKind": "workspace",
+                "version": "0.1.0"
+              }
+            ],
+            "mountRevision": "sha256:4de0f38bf99827d17aa8042ca8f47eb9e967af46076296e5dcf4d0ebdc162748",
+            "schemaVersion": "workspace-package-mounts/v1"
+          },
+          "runtimeDirectory": "D:\\Download\\UniLabOS-new\\sample-lab\\.unilabos\\runtime\\workbench\\backend\\e05fa60b-93e4-402d-b73a-529ec4af6b02",
+          "runtimeMode": "dry-run",
+          "schedulerUrl": null,
+          "startupMode": "develop",
+          "stateDirectory": "D:\\Download\\UniLabOS-new\\sample-lab\\.unilabos\\runtime\\workbench\\backend\\local-domain",
+          "validatedGraphPath": "D:\\Download\\UniLabOS-new\\sample-lab\\.unilabos\\runtime\\workbench\\backend\\e05fa60b-93e4-402d-b73a-529ec4af6b02\\dry-run.json",
+          "workflowProgress": {
+            "loaded": 1,
+            "total": 1
+          },
+          "workflowRuntimePhase": "ready"
+        },
+        "name": "backend",
+        "phase": "idle",
+        "pid": null
+      },
+      "edge": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": null,
+        "logPath": null,
+        "name": "edge",
+        "phase": "idle",
+        "pid": null
+      },
+      "plc": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": null,
+        "logPath": null,
+        "name": "plc",
+        "phase": "idle",
+        "pid": null
+      },
+      "renderer": {
+        "address": null,
+        "capabilities": [],
+        "diagnostic": null,
+        "generation": null,
+        "logPath": null,
+        "name": "renderer",
+        "phase": "idle",
+        "pid": null
+      }
+    },
+    "configuration": {
+      "backendUrl": null,
+      "domainMode": "local",
+      "externalDevicesOnly": true,
+      "graphPath": null,
+      "runtimeMode": "normal",
+      "schedulerUrl": null
+    },
+    "eventCursor": 9,
+    "host": {
+      "endpoint": "http://127.0.0.1:61796",
+      "phase": "ready",
+      "pid": 20456,
+      "platform": "windows",
+      "tokenPath": "D:\\Download\\UniLabOS-new\\sample-lab\\.unilabos\\runtime\\workbench\\host.token"
+    },
+    "revision": 9,
+    "schemaVersion": "unilab-workspace-host/v1",
+    "updatedAt": "2026-11-04T13:30:28Z",
+    "workspacePath": "D:\\Download\\UniLabOS-new\\sample-lab"
+  },
+  "schemaVersion": "unilab-workspace-host/v1",
+  "startedAt": "2026-11-04T13:30:28Z",
+  "submittedAt": "2026-11-04T13:30:28Z"
+}

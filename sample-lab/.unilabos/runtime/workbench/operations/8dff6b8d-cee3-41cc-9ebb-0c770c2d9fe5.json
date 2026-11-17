@@ -1,0 +1,13 @@
+{
+  "command": "workspace.stop",
+  "error": null,
+  "finishedAt": null,
+  "operationId": "8dff6b8d-cee3-41cc-9ebb-0c770c2d9fe5",
+  "parameters": {},
+  "phase": "pending",
+  "requestHash": "d5ed89572c022ca6a5231890bf87e224bd1f9c9e30472ec0fadef8a24b25d236",
+  "result": null,
+  "schemaVersion": "unilab-workspace-host/v1",
+  "startedAt": null,
+  "submittedAt": "2026-11-04T13:13:57Z"
+}

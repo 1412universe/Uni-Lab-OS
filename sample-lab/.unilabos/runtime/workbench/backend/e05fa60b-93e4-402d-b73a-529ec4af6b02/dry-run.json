@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {
+      "id": "demo_device_01",
+      "uuid": "579acffc-36dd-55bb-b3bf-90a1800b114e",
+      "name": "示例设备",
+      "class": "community.sample_lab.demo_device",
+      "type": "device",
+      "config": {},
+      "data": {}
+    }
+  ],
+  "links": []
+}

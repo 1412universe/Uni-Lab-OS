@@ -1,0 +1,17 @@
+{
+  "command": "backend.start",
+  "error": null,
+  "finishedAt": null,
+  "operationId": "8e28927d-d852-4999-9ec9-8703df726aae",
+  "parameters": {
+    "graphPath": "d:\\Download\\UniLabOS-new\\sample-lab\\deployment\\graphs\\dry-run.json",
+    "runtimeMode": "dry-run",
+    "startupMode": "develop"
+  },
+  "phase": "running",
+  "requestHash": "eaa7b458acc7199645fa88ea5a6656d52c3694b63c128d2158478458aa5506b0",
+  "result": null,
+  "schemaVersion": "unilab-workspace-host/v1",
+  "startedAt": "2026-11-04T13:11:41Z",
+  "submittedAt": "2026-11-04T13:11:41Z"
+}

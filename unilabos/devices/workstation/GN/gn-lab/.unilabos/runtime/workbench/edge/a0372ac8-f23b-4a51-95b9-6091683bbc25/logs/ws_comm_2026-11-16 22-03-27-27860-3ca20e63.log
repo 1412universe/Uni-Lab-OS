@@ -1,0 +1,3 @@
+26-11-16 [22:03:28,635675] [INFO] [CommLogger] 通信日志已初始化，文件: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\edge\a0372ac8-f23b-4a51-95b9-6091683bbc25\logs\ws_comm_2026-11-16 22-03-27-27860-3ca20e63.log [MainThread] [configure_comm_logger:334] [unilabos.comm.log]
+26-11-16 [22:03:32,334622] [INFO] [EdgeControl] 已注册生产控制面，Edge=bd7ddd8d，设备数=12 [asyncio_0] [_register:550] [unilabos.comm.client]
+26-11-16 [22:03:32,358550] [INFO] [EdgeControl] 已连接生产控制面: ws://127.0.0.1:54002/api/v1/edge/ws [EdgeControlClient] [_connect_once:679] [unilabos.comm.client]

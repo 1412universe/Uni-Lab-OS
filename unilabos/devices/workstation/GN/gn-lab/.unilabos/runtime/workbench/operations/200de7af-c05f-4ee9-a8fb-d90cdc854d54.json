@@ -1,0 +1,20 @@
+{
+  "command": "backend.start",
+  "error": {
+    "code": "config_not_found",
+    "message": "文件不存在：D:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\deployment\\local_config.py"
+  },
+  "finishedAt": "2026-11-04T13:30:41Z",
+  "operationId": "200de7af-c05f-4ee9-a8fb-d90cdc854d54",
+  "parameters": {
+    "graphPath": "d:\\Download\\UniLabOS-new\\unilabos\\devices\\workstation\\GN\\gn-lab\\deployment\\graphs\\dry-run.json",
+    "runtimeMode": "dry-run",
+    "startupMode": "develop"
+  },
+  "phase": "failed",
+  "requestHash": "5a08d9b275d9f68578429177100df2049800d5543c5745d41c07a62002219e07",
+  "result": null,
+  "schemaVersion": "unilab-workspace-host/v1",
+  "startedAt": "2026-11-04T13:30:41Z",
+  "submittedAt": "2026-11-04T13:30:41Z"
+}

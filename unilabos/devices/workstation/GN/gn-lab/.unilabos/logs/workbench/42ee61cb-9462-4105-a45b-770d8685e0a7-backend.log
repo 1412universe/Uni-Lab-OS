@@ -1,0 +1,74 @@
+[34m[INFO][0m 已编译工作区（Workspace）注册表运行时: gn_lab (Authoring Worker PID 29632)
+[34m[INFO][0m 开始检查环境依赖...
+[32m[SUCCESS][0m ✓ 所有依赖包检查完成，环境正常
+[34m[INFO][0m 当前工作目录为 D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 配置文件 D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\deployment\local_config.py 加载成功[37m [load_config:300] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.api_key = ***[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.backend_addr = http://127.0.0.1:49553[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.backend_api_key = ***[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.edge_key = managed-local-cd7ec5b7c19690ec83fff903[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 设置 EdgeControlConfig.scheduler_addr = http://127.0.0.1:49553[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;32m[INFO][0m [97m[ENV] 设置 HostLinkConfig.port = 49554[37m [_update_config_from_env:262] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：OBSERVABILITYCONFIG[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,628][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：OBSERVABILITYCONFIG[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,629][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,629][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,629][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,629][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,629][0m [1;33m[WARNING][0m [33m[ENV] 未找到类：WORKBENCH[37m [_update_config_from_env:220] [unilabos.utils.log.config][0m
+[37m26-11-16 [21:53:44,630][0m [1;32m[INFO][0m [97m[LOG_FILE] D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\logs\2026-11-16 21-53-44-19048-d59ea356.log[37m [main:1056] [unilabos.utils.log.main][0m
+[37m26-11-16 [21:53:45,647][0m [1;32m[INFO][0m [97m[CommLogger] 通信日志已初始化，文件: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\logs\ws_comm_2026-11-16 21-53-44-19048-96be1761.log[37m [MainThread] [configure_comm_logger:334] [unilabos.comm.log][0m
+[37m26-11-16 [21:53:45,648][0m [1;32m[INFO][0m [97m[COMM_LOG_FILE] D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\logs\ws_comm_2026-11-16 21-53-44-19048-96be1761.log[37m [main:1064] [unilabos.utils.log.main][0m
+[34m[INFO][0m Workspace Backend 拥有本地工站调度；上游模式为 local
+[33m[WARNING][0m 启用模拟动作模式：动作返回模拟成功结果，不调用真实硬件
+[38;5;214m
+  ██╗   ██╗ ███╗   ██╗ ██╗     ██╗      █████╗  ██████╗ [38;5;220m
+  ██║   ██║ ████╗  ██║ ██║     ██║     ██╔══██╗ ██╔══██╗
+  ██║   ██║ ██╔██╗ ██║ ██║     ██║     ███████║ ██████╔╝
+  ██║   ██║ ██║╚██╗██║ ██║     ██║     ██╔══██║ ██╔══██╗
+  ╚██████╔╝ ██║ ╚████║ ██║     ██████╗ ██║  ██║ ██████╔╝[38;5;242m
+    ╚════╝  ╚═╝  ╚═══╝ ╚═╝     ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ [0m
+[33mVersion:[0m [92m0.11.4[0m
+[33mSystem:[0m [37mWindows 10[0m
+[33mPython:[0m [37m3.11.14[0m
+[33mTime:[0m [37m2026-11-16 21:53:45[0m
+[97m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+[94m[1mConfiguration:[0m
+[36m• Backend:[0m [37mros[0m
+[36m• Bridges:[0m [37mfastapi[0m
+[36m• Graph:[0m [37mD:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\42ee61cb-9462-4105-a45b-770d8685e0a7\dry-run.json[0m
+[97m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[0m
+
+[34m[INFO][0m 发现 community 设备引用: community.gn_lab.gn_centrifuge, community.gn_lab.gn_centrifuge_tube_liquid_handling, community.gn_lab.gn_locking_mechanism, community.gn_lab.gn_prcxi, community.gn_lab.gn_quick_carrier_exchange, community.gn_lab.gn_robotic_arm, community.gn_lab.gn_rotary_stack, community.gn_lab.gn_solid_weighing, community.gn_lab.gn_standard_oven, community.gn_lab.gn_vacuum_oven, community.gn_lab.gn_workstation, community.gn_lab.prcxi_deck
+[37m26-11-16 [21:53:45,852][0m [1;32m[INFO][0m [97m[UniLab Registry] 构建注册表实例[37m [build_registry:2749] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:45,934][0m [1;32m[INFO][0m [97m[UniLab Registry] external_only 模式: 仅扫描核心文件 (host_node.py, container.py)[37m [_run_ast_scan:461] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:45,935][0m [1;32m[INFO][0m [97m[UniLab Registry] AST 缓存统计: 1/2 命中, 1 重新解析[37m [_run_ast_scan:523] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:46,030][0m [1;32m[INFO][0m [97m[UniLab Registry] entry 构建耗时: 0.10s[37m [_run_ast_scan:563] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:46,032][0m [1;32m[INFO][0m [97m[UniLab Registry] AST 扫描完成: 1 设备, 0 资源 (耗时 0.18s)[37m [_run_ast_scan:581] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:46,033][0m [1;32m[INFO][0m [97m[UniLab Registry] external_only 模式: 跳过内置 YAML 注册表加载[37m [setup:249] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:46,034][0m [1;32m[INFO][0m [97m[UniLab Registry] 类型解析完成: 1 设备 (耗时 0.00s)[37m [resolve_all_types:1836] [unilabos.utils.log.registry][0m
+[37m26-11-16 [21:53:46,084][0m [1;32m[INFO][0m [97m正在使用ak sk作为授权信息：[][37m [info:418] [unilabos.utils.log.log][0m
+[37m26-11-16 [21:53:46,085][0m [1;32m[INFO][0m [97mHTTPClient 初始化完成: remote_addr=https://leap-lab.bohrium.com/api/v1[37m [info:418] [unilabos.utils.log.log][0m
+[34m[INFO][0m 12 Resources loaded
+[37m26-11-16 [21:53:46,475][0m [1;32m[INFO][0m [97m[EdgeInventoryIntegration] inventory ready: D:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\.unilabos\runtime\workbench\backend\local-domain\inventory.db[37m [setup_edge_inventory:276] [unilabos.app.scheduler.integration.integration][0m
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\Download\UniLabOS-new\unilabos\app\main.py", line 1684, in <module>
+    main()
+  File "D:\Download\UniLabOS-new\unilabos\app\main.py", line 1559, in main
+    control_plane_runtime = start_control_plane_runtime(
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Download\UniLabOS-new\unilabos\app\control_plane.py", line 89, in start_control_plane_runtime
+    return start_embedded_scheduler_runtime(context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Download\UniLabOS-new\unilabos\app\scheduler\runtime.py", line 40, in start_embedded_scheduler_runtime
+    setup_edge_inventory(
+  File "D:\Download\UniLabOS-new\unilabos\app\scheduler\integration.py", line 302, in setup_edge_inventory
+    bootstrap_local_resource_graph(
+  File "D:\Download\UniLabOS-new\unilabos\app\scheduler\inventory\resource_graph_bootstrap.py", line 93, in bootstrap_local_resource_graph
+    status = _commit_projection(store, source_name, fingerprint, projection)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Download\UniLabOS-new\unilabos\app\scheduler\inventory\resource_graph_bootstrap.py", line 603, in _commit_projection
+    raise ResourceGraphBootstrapError(
+unilabos.app.scheduler.inventory.resource_graph_bootstrap.ResourceGraphBootstrapError: 既有库存权威与资源图来源或指纹（fingerprint）冲突
