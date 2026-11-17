@@ -37,7 +37,7 @@ from typing import Optional, Sequence
 
 from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, not_action
-from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
+from unilabos.devices.workstation.GN.gn_station_base import GNStationClient, process_timeout
 
 DEFAULT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "opcua_gn1.4.3.csv")
 
@@ -151,7 +151,7 @@ class CentrifugeDevice(GNStationClient):
         int(CentrifugeCommand.JAW_CLAMP),
     })
     _FEEDBACK_STABLE_NODES = ("Centrifuge_YPosFB", "Centrifuge_ZPosFB")
-    # RUN：PLC CompleteFB=1 表示离心结束（非受理）；超时 = Centrifuge_Time + 缓冲
+    # RUN：PLC CompleteFB=1 表示离心结束（非受理）；超时 = Centrifuge_Time + 缓冲，上限 300h
     _RUN_SPIN_BUFFER_S = 3.0
     # 云端 goal_default 常带 0，表示未指定，不写 PLC
     _ZERO_SKIP_SETPOINTS = frozenset({"Centrifuge_PlateNo", "iTemperature"})
@@ -207,7 +207,8 @@ class CentrifugeDevice(GNStationClient):
         if cmd == int(CentrifugeCommand.RUN) and timeout == 120.0:
             minutes = time_minutes if time_minutes is not None else 1
             hours = time_hours or 0
-            effective_timeout = (hours * 3600) + (minutes * 60) + 180
+            # 离心时长可长可短，按设定值 + 缓冲推导，并统一夹到 300h 上限。
+            effective_timeout = process_timeout((hours * 3600) + (minutes * 60) + 180)
         setpoints = self._build_setpoints(
             cmd_type=cmd,
             y_pos=y_pos, z_pos=z_pos, inner_z_pos=inner_z_pos,
@@ -463,10 +464,10 @@ class CentrifugeDevice(GNStationClient):
         if int(cmd_type) == int(CentrifugeCommand.RUN):
             minutes = int(setpoints.get(self.TIME_MINUTE_NODE) or 0)
             hours = int(setpoints.get(self.TIME_HOUR_NODE) or 0)
-            run_timeout = max(
+            run_timeout = process_timeout(max(
                 timeout,
                 hours * 3600 + minutes * 60 + self._RUN_SPIN_BUFFER_S,
-            )
+            ))
             logger.info(
                 f"运行离心机：等待 CompleteFB=1（PLC 离心完成后置位，"
                 f"设定 {hours} 小时 {minutes} 分钟，超时 {run_timeout:.0f}s）..."
@@ -645,7 +646,7 @@ class CentrifugeDevice(GNStationClient):
             timeout = 120.0
             if int(cmd_type) == int(CentrifugeCommand.RUN):
                 minutes = preset.get("time_minutes", 1)
-                timeout = minutes * 60 + 180
+                timeout = process_timeout(minutes * 60 + 180)
             self._run(
                 int(cmd_type), f"{step_name}/{label}",
                 self._build_setpoints(cmd_type=int(cmd_type), **preset),
@@ -725,7 +726,7 @@ if __name__ == "__main__":
             kwargs = dict(cmd_type=int(cmd_type), **preset)
             if int(cmd_type) == int(CentrifugeCommand.RUN):
                 minutes = preset.get("time_minutes", 1)
-                kwargs["timeout"] = minutes * 60 + 180
+                kwargs["timeout"] = process_timeout(minutes * 60 + 180)
             dev.execute_command(**kwargs)
         else:
             print("无效的操作序号，请重新输入。")

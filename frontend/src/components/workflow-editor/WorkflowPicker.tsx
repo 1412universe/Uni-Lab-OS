@@ -9,10 +9,10 @@
  * 菜单做两件事：贴边自动翻转（不超出视口），以及点外部 / Esc 关闭。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Copy, FilePlus2, Pencil, Trash2, Workflow } from 'lucide-react'
+import { Copy, FilePlus2, Layers, Pencil, Trash2, Workflow } from 'lucide-react'
 import type { WorkflowDefinition } from '../../types'
 
-type MenuAction = 'new' | 'rename' | 'duplicate' | 'delete'
+type MenuAction = 'new' | 'rename' | 'duplicate' | 'delete' | 'template'
 
 interface MenuState {
   x: number
@@ -30,6 +30,8 @@ export interface WorkflowPickerProps {
   onRename: (workflow: WorkflowDefinition, name: string) => Promise<void>
   onDuplicate: (workflow: WorkflowDefinition) => Promise<void>
   onDelete: (workflow: WorkflowDefinition) => Promise<void>
+  /** 存为本地模板：只记 uuid 引用，插入到其他工作流时现读最新图。 */
+  onSaveAsTemplate: (workflow: WorkflowDefinition) => void
 }
 
 export function WorkflowPicker({
@@ -41,6 +43,7 @@ export function WorkflowPicker({
   onRename,
   onDuplicate,
   onDelete,
+  onSaveAsTemplate,
 }: WorkflowPickerProps) {
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [editing, setEditing] = useState<{ uuid: string; value: string } | null>(null)
@@ -85,6 +88,11 @@ export function WorkflowPicker({
       setEditing({ uuid: target.uuid, value: target.name })
       return
     }
+    if (action === 'template') {
+      // 纯本地引用，不触发网络与草稿变更，因此不进 busy。
+      onSaveAsTemplate(target)
+      return
+    }
     setBusy(true)
     try {
       if (action === 'duplicate') await onDuplicate(target)
@@ -92,7 +100,7 @@ export function WorkflowPicker({
     } finally {
       setBusy(false)
     }
-  }, [busy, closeMenu, menu?.workflow, onDelete, onDuplicate])
+  }, [busy, closeMenu, menu?.workflow, onDelete, onDuplicate, onSaveAsTemplate])
 
   const submitCreate = useCallback(async () => {
     const name = (creating || '').trim()
@@ -198,9 +206,9 @@ export function WorkflowPicker({
           className="wf-ctx-menu"
           ref={menuRef}
           style={{
-            // 贴边翻转：菜单宽约 132px、每项 26px 高。
+            // 贴边翻转：菜单宽约 132px；有目标时 5 项 × 26px。
             left: Math.min(menu.x, window.innerWidth - 140),
-            top: Math.min(menu.y, window.innerHeight - (menu.workflow ? 128 : 40)),
+            top: Math.min(menu.y, window.innerHeight - (menu.workflow ? 150 : 40)),
           }}
           role="menu"
         >
@@ -209,6 +217,9 @@ export function WorkflowPicker({
           </button>
           {menu.workflow ? (
             <>
+              <button type="button" role="menuitem" onClick={() => void run('template')}>
+                <Layers size={12} />存为模板
+              </button>
               <button type="button" role="menuitem" onClick={() => void run('rename')}>
                 <Pencil size={12} />重命名
               </button>

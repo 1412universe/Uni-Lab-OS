@@ -37,7 +37,7 @@ from typing import Optional
 
 from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, not_action
-from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
+from unilabos.devices.workstation.GN.gn_station_base import GNStationClient, process_timeout
 from unilabos.devices.workstation.GN.base_opcua_client import OpcUaNode
 from unilabos.device_comms.opcua_client.node.uniopcua import NodeType, DataType
 
@@ -85,7 +85,7 @@ _EXECUTE_CMD_DOC = (
     "Oven_TimeMinuteSet←minutes，再触发 Oven_CmdTrig。"
     "2=复位/停止。"
     "开关门请调用 open_door / close_door（OPEN_DOOR / COHSE_DOOR=1）。"
-    "启动 wait=True 时等待 CompleteFB；timeout 默认 program_timeout=设定时长+300。"
+    "启动 wait=True 时等待 CompleteFB；timeout 默认 program_timeout=设定时长+300，上限 300 小时。"
 )
 
 _OPEN_DOOR_DOC = "烘箱开门：写 OPEN_DOOR(bool)=1（独立节点，非 Oven_CmdType）。"
@@ -160,7 +160,8 @@ class StandardOvenDevice(GNStationClient):
         )
 
         if cmd == OvenCommand.START:
-            program_timeout = (
+            # 烘箱程序可能跑数十小时；默认超时 = 设定时长 + 300s 缓冲，上限 300h。
+            program_timeout = process_timeout(
                 timeout if timeout is not None else (hours * 3600 + minutes * 60) + 300.0
             )
             ack_timeout = 60.0

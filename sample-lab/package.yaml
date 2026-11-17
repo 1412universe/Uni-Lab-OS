@@ -1,0 +1,6 @@
+package:
+  name: sample_lab
+
+workflows:
+  - workflow_uuid: f0e636c3-021e-5833-a9d5-da041f66fd8a
+    source: sample_lab/workflows/demo_workflow.py

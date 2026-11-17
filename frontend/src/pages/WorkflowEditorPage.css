@@ -21,10 +21,11 @@
   bottom: 0;
   left: 0;
   z-index: 30;
-  display: grid;
-  /* 首行工具条与末行状态条都不允许被内容撑破：整页高度固定为视口高度，
-     中间画布吃掉剩余空间。缺省 auto 会被内容顶大，导致整页溢出视口。 */
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  /* 用纵向 flex 而不是固定行数的 grid：冲突/未连接提示条是按需渲染的，
+     行数会随状态变化；此前写死 4 行但实际只有 3 个子元素时，状态条会
+     吃到 1fr 被拉成一整屏，画布反被压扁。 */
+  display: flex;
+  flex-direction: column;
   /* 宽度也必须夹住：工具栏内容超宽时 min-content 会把整页顶出视口。 */
   width: 100vw;
   max-width: 100vw;
@@ -33,7 +34,7 @@
   overflow: hidden;
 }
 
-.wf-editor-page > * { min-height: 0; }
+.wf-editor-page > * { min-height: 0; flex: none; }
 
 /* fixed + top/right/bottom/left 已确定高度，但网格行仍会按内容撑开。
    显式写 height 让 1fr 行真正只吃剩余空间。 */
@@ -142,10 +143,13 @@
 /* ── 三栏主体 ─────────────────────────────────────────────── */
 
 .wf-editor-main {
-  /* 画布独占整行；两侧栏变成浮层抽屉，不再挤压它。 */
+  /* 画布独占整行；两侧栏变成浮层抽屉，不再挤压它。
+     flex: 1 1 auto + min-height: 0 让这里独占剩余高度。 */
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 auto;
   min-height: 0;
 }
 
@@ -527,6 +531,7 @@
 /* ── 状态条 ───────────────────────────────────────────────── */
 
 .wf-editor-status {
+  flex: none;
   min-height: 0;
   display: flex;
   align-items: center;
@@ -787,6 +792,55 @@
   border-radius: 999px;
   font-size: 9px;
 }
+
+/* ── 本地模板库（引用式） ─────────────────────────────────── */
+
+.wf-template-section { display: grid; gap: 6px; }
+.wf-template-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wf-template-head strong { color: var(--ink); font-size: 10.5px; font-weight: 800; }
+.wf-template-head small { color: var(--subtle); font-size: 9px; }
+
+.wf-template-list { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.wf-template-list > li { display: flex; align-items: stretch; gap: 3px; }
+.wf-template-list > li.is-active .wf-template-pick {
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-color: rgba(59, 103, 242, .35);
+}
+
+.wf-template-pick {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  padding: 5px 8px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.wf-template-pick span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-template-pick em { color: var(--subtle); font-size: 9px; font-style: normal; }
+
+.wf-template-remove {
+  flex: none;
+  width: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.wf-template-remove:hover { color: var(--red); border-color: var(--red); }
+
+/* ── 多选批量操作面板 ─────────────────────────────────────── */
+
+.wf-bulk-actions { display: grid; gap: 6px; }
 
 /* ── 3D 仿真空间 ──────────────────────────────────────────── */
 
@@ -1474,7 +1528,10 @@
   white-space: nowrap;
 }
 
-.wf-drawer-body {
+/* 注意：这条规则必须限定在 .wf-drawer-side 内。弹出式抽屉（.wf-drawer 对话框，
+   如导入导出 / 插入模板）同用 .wf-drawer-body 这个类名，之前的裸选择器
+   display:none 会把它们的正文整块隐藏，只剩一个标题条。 */
+.wf-drawer-side .wf-drawer-body {
   display: none;
   flex: 1;
   min-width: 0;
@@ -1536,6 +1593,10 @@
   padding: 0;
   list-style: none;
   max-height: 168px;
+  /* 只用纵向滚动：工作流名普遍很长，若允许横向滚动会出现一条几乎占满
+     整行的横向滚动条，看着像“异常长条且点不动”。名称由 .wf-picker-name
+     省略号截断。 */
+  overflow-x: hidden;
   overflow-y: auto;
 }
 .wf-picker-item {
@@ -1677,3 +1738,11 @@
 
 /* 抽屉内节点库需可滚动 */
 .wf-drawer-body > * { flex: none; }
+/* 节点库是抽屉里唯一需要吃掉剩余高度并自己滚动的区块；
+   若也按 flex:none，它会被 40 多个模板撑到近 1600px，把抽屉顶穿。 */
+.wf-drawer-side.is-left .wf-drawer-body > .wf-lib {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+}

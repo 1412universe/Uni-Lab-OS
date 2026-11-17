@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { Ban, Info, Trash2 } from 'lucide-react'
+import { Ban, ClipboardPaste, Copy, Info, Trash2 } from 'lucide-react'
+import { Button } from '../ui'
 import type { NodeTemplateHandle } from '../../lib/edgeClient'
 import { describeParameter, sortHandlesForPanel } from '../../lib/workflowParameterLabels'
 import { READY_KEY, type EditorEdge, type EditorNode } from '../../lib/workflowEditorModel'
@@ -7,9 +8,15 @@ import { READY_KEY, type EditorEdge, type EditorNode } from '../../lib/workflowE
 interface PropertyPanelProps {
   node?: EditorNode
   edge?: EditorEdge
+  /** 当前选中节点数；>1 时面板显示批量概览而不是单个节点属性。 */
+  selectedCount?: number
   onPatchNode: (patch: { name?: string; description?: string; param?: Record<string, unknown>; disabled?: boolean }) => void
   onDeleteNode: () => void
   onDeleteEdge: () => void
+  /** 批量操作入口由页面提供（复制/粘贴/删除）；缺省时按钮不渲染。 */
+  onCopySelection?: () => void
+  onPaste?: () => void
+  onDeleteSelection?: () => void
 }
 
 type ParamValue = unknown
@@ -104,7 +111,47 @@ function ParameterField({
  * 也能看到该动作完整可填的字段，中文名与单位由 `workflowParameterLabels`
  * 补齐。
  */
-export function PropertyPanel({ node, edge, onPatchNode, onDeleteNode, onDeleteEdge }: PropertyPanelProps) {
+export function PropertyPanel({
+  node,
+  edge,
+  selectedCount = 0,
+  onPatchNode,
+  onDeleteNode,
+  onDeleteEdge,
+  onCopySelection,
+  onPaste,
+  onDeleteSelection,
+}: PropertyPanelProps) {
+  // 多选优先：此时 node 只是「第一个」选中项，展示它的参数会误导用户在批量
+  // 场景下以为只操作了一个节点。
+  if (selectedCount > 1) {
+    return (
+      <aside className="wf-props" aria-label="批量操作">
+        <div className="wf-props-head"><span>批量操作</span><small>{selectedCount} 个节点</small></div>
+        <div className="wf-props-body">
+          <p className="wf-props-empty">
+            已选中 {selectedCount} 个节点。复制会连同「两端都在选中集合内」的连线一起拷走，
+            跨选中的连线不会带走。删除会同时清掉这些节点的所有连线。
+          </p>
+          <div className="wf-bulk-actions">
+            {onCopySelection ? (
+              <Button icon={<Copy size={13} />} onClick={onCopySelection}>复制 {selectedCount} 个</Button>
+            ) : null}
+            {onPaste ? (
+              <Button icon={<ClipboardPaste size={13} />} onClick={onPaste}>粘贴</Button>
+            ) : null}
+            {onDeleteSelection ? (
+              <button type="button" className="wf-danger-btn" onClick={onDeleteSelection}>
+                <Trash2 size={13} />删除 {selectedCount} 个节点
+              </button>
+            ) : null}
+          </div>
+          <p className="wf-io-hint">快捷键：Ctrl/⌘ + C 复制，Ctrl/⌘ + V 粘贴，Delete 删除。</p>
+        </div>
+      </aside>
+    )
+  }
+
   if (edge) {
     const raw = edge.data?.raw || {}
     return (

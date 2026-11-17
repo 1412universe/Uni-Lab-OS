@@ -1,0 +1,15 @@
+rem GN 真机模式：192.168.6.6:4840 (OPC UA) + 192.168.6.99:9999 (PRCXI)
+rem 注意：后端端口由 Host 动态分配，每次启动后看 --json 输出里的 backend.address。
+conda activate unilab
+
+rem 1) 启动后端（真机图），并把库存权威切到 gn-station.json
+python -m unilabos.app.main workspace reset-local --workspace "d:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab" --graph "d:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab\deployment\graphs\gn-station.json" --runtime-mode normal --yes --wait 300 --json
+
+rem 2) 启动 Edge（真正连 PLC/PRCXI 的驱动进程）
+python -m unilabos.app.main workspace start --workspace "d:\Download\UniLabOS-new\unilabos\devices\workstation\GN\gn-lab" --component os --wait 300 --json
+
+rem 3) 前端：VITE_EDGE_API_URL 换成上一步结果里的 backend.address
+set "PATH=C:\Program Files\nodejs;%PATH%"
+cd /d d:\Download\UniLabOS-new\frontend
+set "VITE_EDGE_API_URL=http://127.0.0.1:54002"
+npm run dev -- --host 127.0.0.1 --port 4174

@@ -25,7 +25,7 @@ from unilabos.utils.log import logger
 from unilabos.registry.decorators import action, not_action
 
 # 组合式基类：通过 self.plc 复用 GN 工站单例 OPC UA 会话
-from unilabos.devices.workstation.GN.gn_station_base import GNStationClient
+from unilabos.devices.workstation.GN.gn_station_base import GNStationClient, process_timeout
 
 DEFAULT_XLSX_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -56,7 +56,7 @@ _EXECUTE_CMD_DOC = (
     "启动时可写六段程序：temperature_1..6 / minutes_1..6 / "
     "vacuum_high_1..6 / vacuum_low_1..6（对应 VacuumOven_TempSet_N 等）。"
     "未传的段参数跳过不写；启动 wait=False 仅触发不等待；"
-    "wait=True 时 timeout 默认 sum(minutes_*)*60+600。"
+    "wait=True 时 timeout 默认 sum(minutes_*)*60+600，上限 300 小时。"
 )
 
 
@@ -171,7 +171,8 @@ class VacuumOvenDevice(GNStationClient):
         effective_timeout = timeout
         if effective_timeout is None and cmd == VacuumOvenCommand.START:
             total_minutes = sum(m or 0 for _, m, _, _ in segment_params)
-            effective_timeout = total_minutes * 60.0 + 600.0
+            # 六段程序累计时长可能很长；默认等待 = 总分钟数 + 600s 缓冲，上限 300h。
+            effective_timeout = process_timeout(total_minutes * 60.0 + 600.0)
         if effective_timeout is None:
             effective_timeout = 120.0
 

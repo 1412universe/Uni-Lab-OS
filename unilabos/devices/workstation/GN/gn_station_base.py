@@ -38,6 +38,27 @@ from unilabos.devices.workstation.GN.gn_plc_client import GnPlcClient, ReachChec
 # 区分 "未传 done_node" 与 "显式 done_node=None（不等布尔完成，只看 reach_checks）"
 _UNSET = object()
 
+# 长时工艺（离心 / 烘箱 / 真空烘箱）的等待上限：300 小时。
+# 这些设备的 CompleteFB 要等工艺真正结束才置位，设定时长动辄数十小时，
+# 因此超时必须按「设定时长 + 缓冲」算，并允许一路到 300h 才判超时。
+MAX_PROCESS_TIMEOUT_S: float = 300.0 * 3600.0
+
+
+def process_timeout(seconds: float) -> float:
+    """把按设定时长算出的等待秒数夹到 [0, 300h]。
+
+    参数：``seconds`` 是设定时长推导出的等待秒数（可为负或异常大）。
+    返回：合法的等待秒数，最大 300 小时；非有限值按 300h 处理。
+    """
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return MAX_PROCESS_TIMEOUT_S
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / ±inf
+        return MAX_PROCESS_TIMEOUT_S
+    return max(0.0, min(value, MAX_PROCESS_TIMEOUT_S))
+
+
 
 def _skip_hardware_connect() -> bool:
     """dry-run / action_mode=simulate 时不连现场 OPC。"""
@@ -465,4 +486,4 @@ class GNStationClient:
         return {alias: self.plc.get_node_value(node, force_read=True) for alias, node in nodes.items()}
 
 
-__all__ = ["GNStationClient", "ReachCheck"]
+__all__ = ["GNStationClient", "ReachCheck", "MAX_PROCESS_TIMEOUT_S", "process_timeout"]

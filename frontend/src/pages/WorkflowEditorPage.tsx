@@ -13,6 +13,7 @@ import {
   ArrowLeft,
   CheckCircle2,
   CircleSlash,
+  ClipboardPaste,
   Copy,
   FileJson,
   FlaskConical,
@@ -82,6 +83,12 @@ import {
   type EditorSnapshot,
 } from '../lib/workflowEditorModel'
 import type { WorkflowDefinition, WorkflowTask } from '../types'
+import {
+  addWorkflowTemplate,
+  loadWorkflowTemplates,
+  removeWorkflowTemplate,
+  type WorkflowTemplateRef,
+} from '../lib/workflowTemplateStore'
 import {
   RUN_STATE_LABEL,
   buildRunNodeViews,
@@ -209,6 +216,8 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
   const [dataPortMode, setDataPortMode] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [insertOpen, setInsertOpen] = useState(false)
+  /** 本地模板库（引用式：只记来源 uuid，插入时现读最新图）。 */
+  const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowTemplateRef[]>(() => loadWorkflowTemplates())
   const [simOpen, setSimOpen] = useState(false)
   /**
    * 后端实际的动作执行档位。
@@ -238,6 +247,16 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
 
   const pendingSnapshot = useRef<EditorSnapshot | null>(null)
   const snapshotTimer = useRef<number | undefined>(undefined)
+
+  /**
+   * 节点剪贴板。
+   *
+   * 用模块内 ref 而不是系统剪贴板：要保留 `meta_data.unilab`（作者序号、设备绑定）
+   * 与 `param` 原值，序列化成文本再解析会丢类型。同一浏览器内复制粘贴足够。
+   */
+  const clipboard = useRef<{ nodes: RawWorkflowNode[]; edges: RawWorkflowEdge[] } | null>(null)
+  /** 每次粘贴递增，作为坐标级联偏移，避免连点多次粘贴全叠在同一处。 */
+  const pasteCount = useRef(0)
 
   const currentNode = useMemo(
     () => (selection.nodeId ? nodes.find((node) => node.id === selection.nodeId) : undefined),
@@ -610,15 +629,26 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
     markDirty()
   }, [beginEdit, markDirty, setNodes])
 
-  const deleteNode = useCallback((nodeId: string) => {
-    if (!nodeId) return
+  /**
+   * 批量删除节点。
+   *
+   * 只删节点不够：任何一端落在被删集合里的连线都必须同时清掉，否则整图保存时
+   * 后端会因为「边指向不存在的节点」拒绝。
+   */
+  const deleteNodes = useCallback((nodeIds: string[]) => {
+    const targets = new Set(nodeIds.filter(Boolean))
+    if (!targets.size) return
     beginEdit()
-    setNodes((current) => current.filter((node) => node.id !== nodeId))
-    setEdges((current) => current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId))
+    setNodes((current) => current.filter((node) => !targets.has(node.id)))
+    setEdges((current) => current.filter((edge) => !targets.has(edge.source) && !targets.has(edge.target)))
     setSelection({})
     markDirty()
     commitEdit()
   }, [beginEdit, commitEdit, setNodes, setEdges])
+
+  const deleteNode = useCallback((nodeId: string) => {
+    deleteNodes([nodeId])
+  }, [deleteNodes])
 
   /** 角标的禁用/启用：离散动作，立即入撤销栈。 */
   const toggleNodeDisabled = useCallback((nodeId: string) => {
@@ -646,6 +676,66 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
     markDirty()
     commitEdit()
   }, [beginEdit, commitEdit, setEdges])
+
+  /**
+   * 复制选中节点到内部剪贴板。
+   *
+   * 只带走**两端都在选中集合内**的连线：跨选中的边连向未复制的节点，拷过去
+   * 会变成指向原节点的悬空边，整图保存必被后端拒绝。
+   */
+  const copySelection = useCallback(() => {
+    const ids = new Set((selection.nodeIds || []).filter(Boolean))
+    if (!ids.size) return 0
+    const rawNodes = toRawNodes(nodes, baselineNodesRef.current).filter((node) => ids.has(String(node.uuid)))
+    const rawEdges = toRawEdges(edges, baselineEdgesRef.current).filter((edge) => (
+      ids.has(String(edge.source_node_uuid || '')) && ids.has(String(edge.target_node_uuid || ''))
+    ))
+    clipboard.current = { nodes: rawNodes, edges: rawEdges }
+    pasteCount.current = 0
+    return rawNodes.length
+  }, [edges, nodes, selection.nodeIds])
+
+  /**
+   * 把剪贴板内容粘贴进当前图。
+   *
+   * 复用 `cloneGraphInto`：UUID 换新、坐标偏移、作者序号平移到当前最大值之后
+   * （否则后端报 3003「作者源码节点顺序不能重复」）。设备绑定与参数原样保留，
+   * 由用户自己确认目标工站是否一致。
+   */
+  const pasteClipboard = useCallback(() => {
+    const payload = clipboard.current
+    if (!payload || !payload.nodes.length) return 0
+    pasteCount.current += 1
+    const step = 40 * pasteCount.current
+    const currentRaws = toRawNodes(nodes, baselineNodesRef.current)
+    const cloned = cloneGraphInto(
+      payload.nodes,
+      payload.edges,
+      { x: step, y: step },
+      newUuid,
+      nextAuthoringOrder(currentRaws),
+    )
+    beginEdit()
+    const mergedHandles = new Map(handlesByTemplate)
+    applyRawGraph([...currentRaws, ...cloned.nodes], toRawEdges(edges, baselineEdgesRef.current).concat(cloned.edges), templateMap, mergedHandles)
+    setBaselineNodes((current) => {
+      const next = new Map(current)
+      for (const node of cloned.nodes) next.set(String(node.uuid), node)
+      return next
+    })
+    setBaselineEdges((current) => {
+      const next = new Map(current)
+      for (const edge of cloned.edges) next.set(String(edge.uuid), edge)
+      return next
+    })
+    markDirty()
+    commitEdit()
+    setSelection({ nodeIds: cloned.nodes.map((node) => String(node.uuid)) })
+    return cloned.nodes.length
+  }, [
+    applyRawGraph, beginEdit, commitEdit, edges, handlesByTemplate, markDirty,
+    nodes, setBaselineEdges, setBaselineNodes, templateMap,
+  ])
 
   const runLayout = useCallback(() => {
     beginEdit()
@@ -726,17 +816,42 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
       } else if (meta && (event.key.toLowerCase() === 'y' || (event.key.toLowerCase() === 'z' && event.shiftKey))) {
         event.preventDefault()
         redo()
-      } else if ((event.key === 'Backspace' || event.key === 'Delete') && selection.nodeId) {
+      } else if (meta && event.key.toLowerCase() === 'c') {
+        // 多选时复制整组；单选沿用同一入口。
+        const count = copySelection()
+        if (count) {
+          event.preventDefault()
+          onNotify(`已复制 ${count} 个节点（Ctrl+V 粘贴）`)
+        }
+      } else if (meta && event.key.toLowerCase() === 'v') {
         event.preventDefault()
-        deleteNode(selection.nodeId)
-      } else if ((event.key === 'Backspace' || event.key === 'Delete') && selection.edgeId) {
-        event.preventDefault()
-        deleteEdge(selection.edgeId)
+        const count = pasteClipboard()
+        if (count) onNotify(`已粘贴 ${count} 个节点，保存后生效`)
+        else onNotify('剪贴板为空：先选中节点按 Ctrl+C')
+      } else if ((event.key === 'Backspace' || event.key === 'Delete')) {
+        // 批量优先：多选时删整组，单选时删除单个节点。
+        const ids = (selection.nodeIds || []).filter(Boolean)
+        if (ids.length > 1) {
+          event.preventDefault()
+          deleteNodes(ids)
+          onNotify(`已删除 ${ids.length} 个节点`)
+          return
+        }
+        if (selection.nodeId) {
+          event.preventDefault()
+          deleteNodes([selection.nodeId])
+        } else if (selection.edgeId) {
+          event.preventDefault()
+          deleteEdge(selection.edgeId)
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [deleteEdge, deleteNode, redo, selection.edgeId, selection.nodeId, undo])
+  }, [
+    copySelection, deleteEdge, deleteNodes, onNotify, pasteClipboard, redo,
+    selection.edgeId, selection.nodeId, selection.nodeIds, undo,
+  ])
 
   const save = useCallback(async () => {
     if (!workflowUuid || saving) return
@@ -1028,6 +1143,27 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
     }
   }, [onNotify, onRefresh, setSearchParams, workflowUuid])
 
+  /**
+   * 把工作流存成本地模板引用（右键菜单入口）。
+   *
+   * 只记录 uuid + 名称：插入时现读该工作流最新图，因此源工作流后续的修改会
+   * 反映到模板插入结果里。同名同源已存在时直接提示，不重复添加。
+   */
+  const saveWorkflowAsTemplate = useCallback((workflow: WorkflowDefinition) => {
+    const before = loadWorkflowTemplates()
+    const existed = before.some((item) => item.sourceWorkflowUuid === workflow.uuid)
+    const entry = addWorkflowTemplate(workflow)
+    setWorkflowTemplates(loadWorkflowTemplates())
+    onNotify(existed
+      ? `「${workflow.name}」已在模板库中（${entry.name}）`
+      : `已存为模板「${entry.name}」，其他工作流可用「插入模板」复用`)
+  }, [onNotify])
+
+  const removeTemplateFromLibrary = useCallback((template: WorkflowTemplateRef) => {
+    setWorkflowTemplates(removeWorkflowTemplate(template.id))
+    onNotify(`已移除模板「${template.name}」`)
+  }, [onNotify])
+
   const selectWorkflow = useCallback((uuid: string) => {
     if (dirty && !window.confirm('当前有未保存改动，切换工作流会丢弃它们。继续？')) return
     setSearchParams((current) => {
@@ -1079,6 +1215,24 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
         <div className="wf-bar-right">
           <Button icon={<Undo2 size={14} />} disabled={!history.past.length} onClick={undo} title="撤销 ⌘Z">撤销</Button>
           <Button icon={<Redo2 size={14} />} disabled={!history.future.length} onClick={redo} title="重做 ⇧⌘Z">重做</Button>
+          <Button
+            icon={<Copy size={14} />}
+            disabled={!workflowUuid || !(selection.nodeIds || []).length}
+            onClick={() => {
+              const count = copySelection()
+              onNotify(count ? `已复制 ${count} 个节点（Ctrl+V 粘贴）` : '没有可复制的节点')
+            }}
+            title="复制选中节点 ⌘C（Shift 可多选）"
+          >复制</Button>
+          <Button
+            icon={<ClipboardPaste size={14} />}
+            disabled={!workflowUuid}
+            onClick={() => {
+              const count = pasteClipboard()
+              onNotify(count ? `已粘贴 ${count} 个节点，保存后生效` : '剪贴板为空：先选中节点再复制')
+            }}
+            title="粘贴到画布 ⌘V"
+          >粘贴</Button>
           <Button
             icon={<FileJson size={14} />}
             onClick={() => setTransferOpen(true)}
@@ -1163,6 +1317,7 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
             onRename={renameWorkflowFromPicker}
             onDuplicate={duplicateWorkflowFromPicker}
             onDelete={deleteWorkflowFromPicker}
+            onSaveAsTemplate={saveWorkflowAsTemplate}
           />
           <NodeLibraryPanel
             templates={templates}
@@ -1212,12 +1367,26 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
           <PropertyPanel
             node={currentNode}
             edge={currentEdge}
+            selectedCount={(selection.nodeIds || []).length}
             onPatchNode={(patch) => {
               if (!selection.nodeId) return
               patchNode(selection.nodeId, patch)
             }}
             onDeleteNode={() => deleteNode(selection.nodeId || '')}
             onDeleteEdge={() => deleteEdge(selection.edgeId || '')}
+            onCopySelection={() => {
+              const count = copySelection()
+              onNotify(count ? `已复制 ${count} 个节点（Ctrl+V 粘贴）` : '没有可复制的节点')
+            }}
+            onPaste={() => {
+              const count = pasteClipboard()
+              onNotify(count ? `已粘贴 ${count} 个节点，保存后生效` : '剪贴板为空')
+            }}
+            onDeleteSelection={() => {
+              const ids = (selection.nodeIds || []).filter(Boolean)
+              deleteNodes(ids)
+              onNotify(`已删除 ${ids.length} 个节点`)
+            }}
           />
         </SideDrawer>
       </div>
@@ -1317,9 +1486,11 @@ export function WorkflowEditorPage({ workflows, connected, onNotify, onRefresh }
       {insertOpen ? (
         <TemplateInsertPanel
           workflows={workflows}
+          templates={workflowTemplates}
           currentWorkflowUuid={workflowUuid || undefined}
           onClose={() => setInsertOpen(false)}
           onNotify={onNotify}
+          onRemoveTemplate={removeTemplateFromLibrary}
           onInsert={insertGraph}
         />
       ) : null}
